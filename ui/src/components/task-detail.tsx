@@ -234,17 +234,19 @@ export function TaskDetailPage({
               ariaLabel="Due date"
             />
           </Prop>
+          {/* Shown, not editable, and it was never really editable: `update_task` has no
+              project_id parameter, so this was a dropdown that let you choose, updated
+              optimistically, and was ignored by the server.
+
+              It should not be editable either. A task's milestone belongs to a project, so
+              changing the project underneath it would leave the task pointing at a milestone
+              in a different one — which is the inconsistency set_task_milestone exists to
+              prevent. The way to move work is the milestone, which is the field next to
+              this one. */}
           <Prop label="Project">
-            <Dropdown
-              value={task.project_id == null ? "none" : String(task.project_id)}
-              onChange={(v) => patch({ project_id: v === "none" ? null : Number(v) })}
-              options={[
-                { value: "none", label: "No project" },
-                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
-              ]}
-              className="w-full"
-              ariaLabel="Project"
-            />
+            <span className="text-muted-foreground block truncate py-1.5 text-sm">
+              {projects.find((one) => one.id === task.project_id)?.name ?? "No project"}
+            </span>
           </Prop>
           {/* The field that decides when he gets to it. It was not on this page at all, which
             meant the one attribute that gates the work was the one you could not see. */}
