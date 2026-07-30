@@ -16,7 +16,7 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-from kith.services import custom_tools
+from kith.services import custom_tools, permissions
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
     computer,
     curiosity,
@@ -59,6 +59,16 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path) -> dict:
     if entry is not None:
         try:
             return {"ok": True, "result": entry.run(agent_db_path, arguments or {})}
+        except permissions.Denied as denied:
+            # Not a failure — a question. The request rides along so the interface can put
+            # an Allow button on this very tool result, instead of making someone hunt for
+            # a settings page while he waits.
+            request = denied.decision.request
+            return {
+                "ok": False,
+                "error": str(denied),
+                "permission": request.public() if request else None,
+            }
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

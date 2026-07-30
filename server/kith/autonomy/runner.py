@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from kith.autonomy import directives
 from kith.config import AGENT_DB_PATH, default_config, ollama_host
 from kith.domain import clock, stall
-from kith.infra import sandbox
+from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import memory_context, tuning
 from kith.services.agent_loop import stream_agent

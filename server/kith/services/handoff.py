@@ -32,7 +32,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from kith.infra import default_app, sandbox
+from kith.infra import default_app
+from kith.infra import workspace as sandbox
 
 #: Where handed-off files land. Visible and obvious on purpose: the point is that they
 #: stop being trapped, so they go somewhere you would think to look, not a temp dir

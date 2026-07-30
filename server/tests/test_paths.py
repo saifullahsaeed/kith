@@ -1,7 +1,7 @@
 """On-disk locations must survive a file being moved.
 
 Modules used to walk up from their own ``__file__`` to find things — the persona
-directory, the sandbox build context. That works until the module moves into a
+directory, the workspace folder. That works until the module moves into a
 subpackage, at which point the path silently resolves somewhere empty. It happened:
 moving ``persona.py`` into ``services/`` made Kith start with NO personality, and
 the only sign was a "0 fragment(s)" line in a startup log nobody was reading.
@@ -13,7 +13,7 @@ failure mode is silence, not an exception.
 from __future__ import annotations
 
 from kith import settings
-from kith.infra import sandbox
+from kith.infra import workspace
 from kith.services.persona import fragment_paths, load_persona
 
 
@@ -35,11 +35,24 @@ def test_persona_actually_loads_text() -> None:
     assert len(load_persona()) > 200
 
 
-def test_sandbox_build_context_exists() -> None:
-    """Without it, rebuilding his machine fails — and only when the image is missing,
-    which is exactly when you least want a second problem."""
-    assert sandbox._BUILD_CONTEXT.is_dir()
-    assert (sandbox._BUILD_CONTEXT / "Dockerfile").is_file()
+def test_the_workspace_is_created_on_demand() -> None:
+    """His folder replaced a Docker container, so nothing builds it in advance — the
+    first call has to bring it into existence or every file tool fails at once."""
+    here = workspace.root()
+    assert here.is_dir()
+    assert workspace.internal().is_dir()
+
+
+def test_a_relative_path_lands_in_the_workspace() -> None:
+    """The anchor that keeps "write notes.md" from writing to the server's cwd."""
+    assert workspace.resolve("notes.md") == str(workspace.root() / "notes.md")
+    assert workspace.resolve("") == str(workspace.root())
+
+
+def test_an_absolute_path_is_kept_not_rewritten() -> None:
+    """Refusing them here would make "read ~/Downloads/report.pdf" impossible rather
+    than merely gated; the permission check is the gate, and it can be answered."""
+    assert workspace.resolve("/etc/hosts") == "/etc/hosts"
 
 
 def test_data_dir_resolves_under_the_server() -> None:

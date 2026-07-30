@@ -7,7 +7,8 @@ from pathlib import Path
 from flask import jsonify, request
 
 from kith.api.blueprint import api
-from kith.infra import default_app, sandbox
+from kith.infra import default_app
+from kith.infra import workspace as sandbox
 from kith.services import handoff
 
 

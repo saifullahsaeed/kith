@@ -37,7 +37,7 @@ import requests
 from kith import settings
 from kith.config import Config, default_config
 from kith.domain.search import SearchKind
-from kith.infra import sandbox
+from kith.infra import workspace as sandbox
 from kith.infra.db import config_store
 from kith.llm import openai_compat
 from kith.services import tuning

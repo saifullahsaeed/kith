@@ -77,8 +77,14 @@ PERSONA_DIR = _text("KITH_PERSONA_DIR")
 #: Where the bundled persona fragments live when PERSONA_DIR is unset.
 DEFAULT_PERSONA_DIR = SERVER_ROOT / "persona"
 
-#: Build context for Kith's sandbox image.
-SANDBOX_BUILD_DIR = SERVER_ROOT / "sandbox"
+#: The folder he works in, on your machine. Empty = ``~/Kith``.
+#:
+#: This replaced a Docker container. Kith is a desktop app that friends should be able to
+#: run without installing anything, and "first install Docker" was the single largest thing
+#: standing between the project and that — while also being what stopped him reading a file
+#: you pointed at or using a program you already have. What the container enforced is now
+#: enforced by kith.services.permissions instead.
+WORKSPACE_DIR = _text("KITH_WORKSPACE")
 
 #: Replaces the whole persona with one inline prompt. For experiments — it bypasses
 #: the ``persona/`` fragments entirely rather than adding to them.

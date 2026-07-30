@@ -21,7 +21,7 @@ import requests
 from kith.config import ollama_host
 from kith.domain.connection import Connection
 from kith.domain.search import SearchKind, SearchSetup
-from kith.infra import sandbox
+from kith.infra import workspace as sandbox
 from kith.services import tuning
 from kith.services.connections.providers import ProviderError
 from kith.services.connections.providers.ollama import OllamaProvider

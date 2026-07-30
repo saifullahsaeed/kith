@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.infra import sandbox, websearch
+from kith.infra import websearch
+from kith.infra import workspace as sandbox
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 

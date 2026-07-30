@@ -164,22 +164,63 @@ def describe() -> dict:
 
 
 def _paths() -> list[dict]:
-    from kith import settings
+    """Every folder Kith uses, with what is in it.
 
+    Sizes and counts are here because this is a desktop app and "where are my files and
+    how much room are they taking" is a question about a folder on a disk, not a
+    configuration value. ``open`` marks the ones worth a reveal-in-Finder button.
+    """
+    from kith import settings
+    from kith.infra import workspace
+
+    here = workspace.root()
     return [
-        {"label": "His databases", "value": str(settings.DATA_DIR), "env": "KITH_DATA_DIR"},
+        {
+            "label": "His folder",
+            "value": str(here),
+            "env": "KITH_WORKSPACE",
+            "bytes": _folder_size(here),
+            "entries": sum(1 for item in here.iterdir() if item.name != workspace.INTERNAL_DIR),
+            "open": True,
+            "note": "Where he works. Everything he makes lands here.",
+        },
+        {
+            "label": "His databases",
+            "value": str(settings.DATA_DIR),
+            "env": "KITH_DATA_DIR",
+            "bytes": _folder_size(settings.DATA_DIR),
+            "open": True,
+            "note": "Memory, tasks, notes, the flight recorder.",
+        },
+        {
+            "label": "Conversations",
+            "value": str(here / workspace.INTERNAL_DIR / "conversations"),
+            "env": "",
+            "bytes": _folder_size(here / workspace.INTERNAL_DIR / "conversations"),
+            "open": True,
+            "note": "One readable transcript per conversation, never overwritten.",
+        },
         {
             "label": "Persona fragments",
             "value": settings.PERSONA_DIR or str(settings.DEFAULT_PERSONA_DIR),
             "env": "KITH_PERSONA_DIR",
+            "open": True,
+            "note": "Who he is, in markdown you can edit.",
         },
         {
             "label": "Interface served from",
             "value": settings.UI_DIST or "(served elsewhere)",
             "env": "KITH_UI_DIST",
         },
-        {"label": "Sandbox build context", "value": str(settings.SANDBOX_BUILD_DIR), "env": ""},
     ]
+
+
+def _folder_size(path: Path) -> int:
+    """Bytes on disk, or 0 for a folder that is not there yet."""
+    try:
+        return sum(item.stat().st_size for item in Path(path).rglob("*") if item.is_file())
+    except OSError:
+        return 0
 
 
 def data_dir() -> Path:

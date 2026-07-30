@@ -17,7 +17,7 @@ import json
 import shlex
 from pathlib import Path
 
-from kith.infra import sandbox
+from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 
 

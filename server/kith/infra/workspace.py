@@ -1,0 +1,463 @@
+"""His computer — which is now your computer.
+
+This replaces the Docker sandbox. The container was a real machine of his own with root
+inside it and no way out, and the trade it made was total: nothing of yours was reachable,
+and neither was anything of yours he might have been useful with. He could not open a file
+you pointed at, could not use the tools you already have installed, and everything he made
+had to be copied out through ``docker cp`` before you could see it. Dropping it also drops
+a dependency nobody should have to install to run a desktop app.
+
+So he works here instead, in one folder you choose (``~/Kith`` by default), with your
+shell, your PATH, and your installed programs. What used to be enforced by a container
+boundary is now enforced by :mod:`kith.services.permissions`: inside the workspace he is
+unrestricted, and outside it — or anything destructive anywhere — needs your yes.
+
+Two things worth knowing:
+
+**Every path goes through :func:`resolve`, and every command through the permission
+check.** There is no second way in. A relative path anchors in the workspace; an absolute
+one is honoured but gated, because "read /Users/you/Documents/thing.pdf" is a reasonable
+request and should be answerable with a click rather than impossible.
+
+**Commands run under a login shell** (``bash -lc``) with the workspace as the working
+directory. That is what makes "use the tools already on this machine" true — his ``python3``
+is your python3, his ``git`` is your git — and it is the whole point of moving him here.
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import urllib.parse
+from dataclasses import dataclass
+from pathlib import Path
+
+from kith import settings
+from kith.infra import renderer
+from kith.services import permissions
+
+SEARCH_URL = settings.SEARCH_URL
+
+#: Where his work lives. A short path with no space in it, because he writes shell
+#: commands about it all day and every space is a quoting bug waiting to happen.
+DEFAULT_ROOT = Path.home() / "Kith"
+
+#: Bookkeeping that is his, not his work: conversation transcripts and the like. Dotted so
+#: it stays out of the way in Finder and out of the file browser's default view.
+INTERNAL_DIR = ".kith"
+
+_EXEC_TIMEOUT = 900
+_OUTPUT_LIMIT = 8_000
+_MAX_WRITE = 5_000_000
+_READ_DEFAULT_LINES = 400
+_MAX_UI_READ = 2_000_000
+
+
+class WorkspaceError(RuntimeError):
+    """Anything that went wrong doing work on the machine."""
+
+
+#: The old name. Kept because a dozen call sites catch it by name and because a tool
+#: raising an error the loop does not recognise ends a turn instead of informing him.
+SandboxError = WorkspaceError
+
+
+@dataclass
+class ExecResult:
+    exit_code: int
+    output: str
+
+
+# --------------------------------------------------------------------------- #
+# Where we are
+# --------------------------------------------------------------------------- #
+
+
+def root() -> Path:
+    """The workspace folder, created if it is not there yet.
+
+    Read fresh rather than captured at import: it is a setting someone can change, and a
+    module-level constant would mean a restart to take effect.
+    """
+    configured = str(settings.WORKSPACE_DIR or "").strip()
+    chosen = Path(configured).expanduser() if configured else DEFAULT_ROOT
+    try:
+        chosen.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(f"Can't use {chosen} as his folder: {exc}") from None
+    return chosen
+
+
+def internal() -> Path:
+    """Where Kith keeps its own records inside the workspace."""
+    directory = root() / INTERNAL_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+#: Legacy alias. The container's home was ``/home/kith``; a few places still ask for
+#: "HOME" to strip a prefix or anchor a path.
+def _home() -> str:
+    return str(root())
+
+
+HOME = str(DEFAULT_ROOT)
+
+
+def resolve(path: str) -> str:
+    """Anchor a relative path in the workspace; keep an absolute one as given.
+
+    Absolute paths are deliberately not rejected here. Refusing them would make "look at
+    ~/Downloads/report.pdf" impossible rather than merely gated, and the gate is the
+    permission check — which can be answered — not this function.
+    """
+    text = (path or "").strip()
+    if not text:
+        return str(root())
+    expanded = Path(text).expanduser()
+    if expanded.is_absolute():
+        return str(expanded)
+    return str(root() / expanded)
+
+
+def status() -> dict:
+    """What the interface shows about where he works."""
+    here = root()
+    return {
+        "root": str(here),
+        "exists": here.exists(),
+        "mode": str(permissions.mode()),
+        "bytes": _tree_size(here),
+        "entries": sum(1 for _ in here.iterdir()) if here.exists() else 0,
+    }
+
+
+def ensure_ready() -> None:
+    """Kept for the call sites that used to guarantee a container was up.
+
+    Now it only guarantees the folder exists, which :func:`root` already does — but the
+    name is load-bearing at a dozen call sites and a no-op is cheaper than a rename that
+    touches all of them.
+    """
+    root()
+
+
+# --------------------------------------------------------------------------- #
+# Doing things
+# --------------------------------------------------------------------------- #
+
+
+def run_command(command: str, timeout: int = _EXEC_TIMEOUT) -> ExecResult:
+    """Run a shell command in the workspace.
+
+    A *login* shell, so he inherits the PATH you actually use — homebrew, pyenv, node,
+    whatever you have — rather than the stunted environment a GUI app starts with. This is
+    the difference between "he can use the tools on this machine" being true and being a
+    claim in a docstring.
+    """
+    permissions.require_command(command, root())
+    here = root()
+    try:
+        proc = subprocess.run(
+            ["bash", "-lc", command],
+            capture_output=True,
+            timeout=timeout,
+            cwd=str(here),
+            env={**os.environ, "KITH_WORKSPACE": str(here)},
+        )
+    except FileNotFoundError:
+        raise WorkspaceError("No bash on this machine — can't run commands.") from None
+    except subprocess.TimeoutExpired:
+        raise WorkspaceError(
+            f"That took longer than {timeout}s and was stopped. Anything long-running "
+            "(a server, a watcher, a big build) should be started in the background with "
+            "`nohup … &`, which returns straight away."
+        ) from None
+    combined = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
+    return ExecResult(exit_code=proc.returncode, output=_clip(combined))
+
+
+def read_file(path: str, offset: int | None = None, limit: int | None = None) -> str:
+    """Read a file, line-numbered and windowed, so it composes with grep and cannot
+    dump a huge file into context."""
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.exists():
+        raise WorkspaceError(f"there's no {path}")
+    if target.is_dir():
+        raise WorkspaceError(f"{path} is a folder, not a file")
+    start = max(1, offset or 1)
+    count = limit if (limit and limit > 0) else _READ_DEFAULT_LINES
+    end = start + count - 1
+    try:
+        lines = target.read_text(errors="replace").splitlines()
+    except OSError as exc:
+        raise WorkspaceError(f"cannot read {path}: {exc}") from None
+    window = lines[start - 1 : end]
+    body = "\n".join(f"{start + i:6d}\t{line}" for i, line in enumerate(window))
+    if len(lines) > end:
+        body += f"\n… [showing lines {start}-{min(end, len(lines))} of {len(lines)}; read with offset={end + 1} for more]"
+    return _clip(body)
+
+
+def read_raw(path: str, max_bytes: int = _MAX_UI_READ) -> str:
+    """The file exactly as it is, for the viewer — no line numbers, no window."""
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.exists():
+        raise WorkspaceError(f"there's no {path}")
+    size = target.stat().st_size
+    if size > max_bytes:
+        raise WorkspaceError(f"that file is too big to open here ({size} bytes; max {max_bytes})")
+    try:
+        return target.read_text()
+    except UnicodeDecodeError as exc:
+        raise WorkspaceError("that looks like a binary file, not text") from exc
+    except OSError as exc:
+        raise WorkspaceError(f"cannot read {path}: {exc}") from None
+
+
+def grep(pattern: str, path: str = ".", glob: str | None = None, max_matches: int = 60) -> str:
+    """Search with ripgrep if it is installed, grep if it is not.
+
+    Falling back matters more here than it did in the container: there we shipped the
+    image and knew rg was in it. On your machine it is whatever you happen to have.
+    """
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if shutil.which("rg"):
+        args = ["rg", "--line-number", "--no-heading", "--color", "never", "--max-columns", "300"]
+        if glob:
+            args += ["--glob", glob]
+        args += ["-e", pattern, str(target)]
+    else:
+        args = ["grep", "-rIn", "--color=never"]
+        if glob:
+            args += [f"--include={glob}"]
+        args += ["-e", pattern, str(target)]
+    result = run_command(f"{shlex.join(args)} 2>/dev/null | head -n {int(max_matches)}", timeout=60)
+    out = result.output.strip()
+    if not out:
+        return f"No matches for {pattern!r} under {path}."
+    lines = out.splitlines()
+    tail = (
+        f"\n… [showing first {max_matches} matches; narrow the pattern or set a path for the rest]"
+        if len(lines) >= max_matches
+        else ""
+    )
+    return _clip(out + tail)
+
+
+def write_file(path: str, content: str) -> str:
+    data = content.encode()
+    if len(data) > _MAX_WRITE:
+        raise WorkspaceError(f"content too large ({len(data)} bytes; max {_MAX_WRITE})")
+    target = Path(resolve(path))
+    permissions.require_path("write", target, root())
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    except OSError as exc:
+        raise WorkspaceError(f"cannot write {path}: {exc}") from None
+    return f"wrote {len(data)} bytes to {target}"
+
+
+def list_files(path: str = ".") -> str:
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.exists():
+        raise WorkspaceError(f"there's no {path}")
+    return _clip(run_command(f"ls -la {shlex.quote(str(target))}").output)
+
+
+def list_dir(path: str = ".") -> list[dict]:
+    """One level, structured, for the file browser — with modification times, because
+    "what did he touch last" is how anyone finds work in progress."""
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.is_dir():
+        raise WorkspaceError(f"cannot list {path}")
+    entries = []
+    for child in sorted(target.iterdir(), key=lambda item: item.name):
+        # His own bookkeeping is not his work; it would only be clutter in the browser.
+        if child.name == INTERNAL_DIR:
+            continue
+        try:
+            info = child.stat()
+        except OSError:
+            continue
+        entries.append(
+            {
+                "name": child.name,
+                "type": "dir" if child.is_dir() else "file",
+                "size": info.st_size if child.is_file() else 0,
+                "modified": int(info.st_mtime),
+            }
+        )
+    return entries
+
+
+def make_dir(path: str) -> None:
+    target = Path(resolve(path))
+    permissions.require_path("write", target, root())
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(f"cannot create {path}: {exc}") from None
+
+
+def move(source: str, destination: str) -> None:
+    src, dst = Path(resolve(source)), Path(resolve(destination))
+    permissions.require_path("write", src, root())
+    permissions.require_path("write", dst, root())
+    if dst.exists():
+        raise WorkspaceError(f"{dst.name} already exists here.")
+    try:
+        src.rename(dst)
+    except OSError as exc:
+        raise WorkspaceError(f"cannot rename {source}: {exc}") from None
+
+
+def remove(path: str) -> None:
+    """Delete a file or a folder. Refuses the workspace root itself."""
+    target = Path(resolve(path))
+    if target.resolve() == root().resolve():
+        raise WorkspaceError("that's his whole folder — not that.")
+    permissions.require_path("delete", target, root())
+    try:
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink(missing_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(f"cannot delete {path}: {exc}") from None
+
+
+def kind_of(path: str) -> str:
+    """``"file"``, ``"dir"``, or ``""`` when there is nothing there."""
+    target = Path(resolve(path))
+    if target.is_dir():
+        return "dir"
+    return "file" if target.exists() else ""
+
+
+def copy_out(source_path: str, destination: Path) -> None:
+    """Copy something to somewhere else on the machine.
+
+    A plain copy now that both ends are the same filesystem. It exists at all because the
+    file browser still offers "put a copy somewhere I choose", which is a reasonable thing
+    to want even when the original is already reachable in Finder.
+    """
+    src = Path(resolve(source_path))
+    permissions.require_path("read", src, root())
+    permissions.require_path("write", Path(destination), root())
+    try:
+        if src.is_dir():
+            shutil.copytree(src, Path(destination) / src.name, dirs_exist_ok=True)
+        else:
+            Path(destination).mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, destination)
+    except OSError as exc:
+        raise WorkspaceError(f"cannot copy {source_path}: {exc}") from None
+
+
+# --------------------------------------------------------------------------- #
+# The web
+# --------------------------------------------------------------------------- #
+
+
+def fetch_url(url: str) -> str:
+    target = url.strip()
+    if not re.match(r"^https?://", target):
+        raise WorkspaceError("url must start with http:// or https://")
+    result = run_command(f"curl -sL --max-time 25 -A 'Mozilla/5.0 (Kith)' {shlex.quote(target)}", timeout=30)
+    if result.exit_code != 0 and not result.output:
+        raise WorkspaceError("fetch failed (is this machine online?)")
+    return _html_to_text(result.output)
+
+
+def browse_page(url: str) -> str:
+    """Render a page in a real browser and return its visible text.
+
+    Uses the desktop app's Chromium when it is running — already installed, already
+    updated with Electron. Without it there is no fallback any more: the container carried
+    a Playwright install and this machine may not have one, so the honest answer is to say
+    so and let him use fetch_url.
+    """
+    target = url.strip()
+    if not re.match(r"^https?://", target):
+        raise WorkspaceError("url must start with http:// or https://")
+    rendered = renderer.render(target)
+    if rendered is not None:
+        return _clip(rendered)
+    raise WorkspaceError(
+        "No browser renderer available — the desktop app provides it, so this needs Kith "
+        "running in the app rather than a bare server. Try fetch_url for a static page."
+    )
+
+
+def searx_search(query: str, limit: int = 5) -> list[dict]:
+    """Search via a SearXNG instance (JSON API), if one is reachable."""
+    encoded = urllib.parse.quote(query)
+    result = run_command(f"curl -sL --max-time 10 '{SEARCH_URL}/search?q={encoded}&format=json'", timeout=15)
+    try:
+        data = json.loads(result.output)
+    except (ValueError, TypeError):
+        raise WorkspaceError(
+            f"SearXNG at {SEARCH_URL} did not return JSON (is it up, with the JSON format enabled?)"
+        ) from None
+    hits = [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": (item.get("content") or "")[:300],
+        }
+        for item in (data.get("results") or [])[:limit]
+    ]
+    if hits:
+        return hits
+    blocked = data.get("unresponsive_engines") or []
+    if blocked:
+        detail = ", ".join(
+            f"{item[0]}: {item[1]}" for item in blocked if isinstance(item, list) and len(item) > 1
+        )
+        raise WorkspaceError(f"every SearXNG engine was blocked ({detail})")
+    return []
+
+
+# --------------------------------------------------------------------------- #
+
+
+def _tree_size(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _html_to_text(markup: str) -> str:
+    if "<" not in markup:
+        return _clip(markup)
+    text = re.sub(r"(?is)<(script|style|head|noscript|svg)[^>]*>.*?</\1>", " ", markup)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
+    return _clip(text.strip())
+
+
+def _clip(text: str) -> str:
+    if len(text) > _OUTPUT_LIMIT:
+        return text[:_OUTPUT_LIMIT] + f"\n… [truncated, {len(text)} chars total]"
+    return text
