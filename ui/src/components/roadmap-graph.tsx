@@ -54,16 +54,27 @@ export function RoadmapGraph({
   selected,
   onSelect,
   onChanged,
+  onRoadmap,
 }: {
   projectId: number;
   /** Which milestone's work is being shown below. Null means "everything available". */
   selected: number | null;
   onSelect: (milestoneId: number | null) => void;
   onChanged?: () => void;
+  /** The graph as the server computes it. The page needs the real `ready`/`blocked_by`: its
+   *  own first attempt at deriving them marked every unfinished milestone as waiting, which
+   *  told you the work you could do was held back. */
+  onRoadmap?: (roadmap: Roadmap) => void;
 }) {
   return (
     <ReactFlowProvider>
-      <Canvas projectId={projectId} selected={selected} onSelect={onSelect} onChanged={onChanged} />
+      <Canvas
+        projectId={projectId}
+        selected={selected}
+        onSelect={onSelect}
+        onChanged={onChanged}
+        onRoadmap={onRoadmap}
+      />
     </ReactFlowProvider>
   );
 }
@@ -103,11 +114,13 @@ function Canvas({
   selected,
   onSelect,
   onChanged,
+  onRoadmap,
 }: {
   projectId: number;
   selected: number | null;
   onSelect: (milestoneId: number | null) => void;
   onChanged?: () => void;
+  onRoadmap?: (roadmap: Roadmap) => void;
 }) {
   const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
   const [error, setError] = useState("");
@@ -121,6 +134,10 @@ function Canvas({
   }, [projectId]);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    if (roadmap) onRoadmap?.(roadmap);
+  }, [roadmap, onRoadmap]);
 
   // Re-read while any milestone has work in progress. This is the point of the canvas being
   // the page: you can watch him move through the graph rather than refresh to find out.

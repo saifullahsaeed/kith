@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Check,
   ArrowUp,
-  ArrowUpRight,
   BellRing,
   Brain,
   ChevronDown,
@@ -14,7 +13,6 @@ import {
   Expand,
   ExternalLink,
   FileText,
-  Flame,
   Folder,
   FolderKanban,
   FolderOpen,
@@ -38,7 +36,6 @@ import {
   User,
   Wrench,
   X,
-  Zap,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -66,6 +63,7 @@ import {
   rename as renameEntry,
 } from "@/lib/files";
 import { RoadmapGraph } from "@/components/roadmap-graph";
+import type { Roadmap } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import {
   createBrainItem,
@@ -135,18 +133,9 @@ const KIND_ICON: Record<TimelineKind, ReactNode> = {
   curiosity: <Sparkles className="size-3.5 text-teal-400" />,
   tool: <Wrench className="size-3.5 text-rose-500" />,
 };
-const TASK_COLUMNS = ["backlog", "todo", "doing", "waiting", "done"] as const;
 const TASK_STATUSES = ["backlog", "todo", "doing", "waiting", "done", "dropped"];
-const TASK_PRIORITIES = ["high", "normal", "low"];
 const PROJECT_STATUSES = ["active", "done", "paused", "archived"];
 const CURIOSITY_STATUSES = ["open", "exploring", "explored", "dropped"];
-const COLUMN_LABEL: Record<string, string> = {
-  backlog: "Backlog",
-  todo: "To do",
-  doing: "Doing",
-  waiting: "Waiting on you",
-  done: "Done",
-};
 /** How each kind reads in a "Delete this …?" question. */
 const KIND_LABEL: Record<string, string> = {
   memory: "memory",
@@ -205,10 +194,15 @@ export function ControlPanel({
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
-  const [live, setLive] = useState(true);
+  const [freshAt, setFreshAt] = useState<number>(() => Date.now());
   // Work drills down: projects list → one project → one task.
   const [openProject, setOpenProject] = useState<ProjectRef | null>(null);
   const searchBox = useRef<HTMLInputElement>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 10_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -216,6 +210,7 @@ export function ControlPanel({
       const [s, t] = await Promise.all([fetchBrain(), fetchTimeline()]);
       setSnap(s);
       setTimeline(t);
+      setFreshAt(Date.now());
     } catch {
       /* keep last-known */
     } finally {
@@ -227,11 +222,36 @@ export function ControlPanel({
     load();
   }, [load]);
 
+  // Always live, at a pace set by whether anything is actually happening.
+  //
+  // There used to be a Live toggle and a Refresh button, and on a desktop app both were the
+  // wrong idea: what is on screen should simply be current, and a control that exists to
+  // make it current is an admission that it might not be. The reason a toggle existed at all
+  // was cost — polling the whole snapshot every six seconds forever — and the fix for that
+  // is to poll at the rate the situation deserves rather than to make someone manage it.
+  const busy = Boolean(snap?.tasks?.some((task) => task.status === "doing"));
   useEffect(() => {
-    if (!live) return;
-    const id = window.setInterval(load, 6000);
+    const id = window.setInterval(load, busy ? 3_000 : 20_000);
     return () => window.clearInterval(id);
-  }, [live, load]);
+  }, [busy, load]);
+
+  // The two desktop idioms that replace the button: coming back to the window refreshes,
+  // and Cmd-R refreshes. Both are what someone would try without being told.
+  useEffect(() => {
+    const onFocus = () => load();
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        load();
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [load]);
 
   const remove = async (kind: string, key: string | number, label: string) => {
     const ok = await confirm({
@@ -313,6 +333,14 @@ export function ControlPanel({
   }, [query, onClose]);
 
   const counts = snap?.counts ?? {};
+  const seconds = Math.max(0, Math.round((now - freshAt) / 1000));
+  const freshness =
+    seconds < 30
+      ? "up to date"
+      : seconds < 90
+        ? "a minute ago"
+        : `${Math.round(seconds / 60)}m ago`;
+
   const props = { snap, query, refresh: load, remove, relevel, create, update };
 
   return (
@@ -347,19 +375,26 @@ export function ControlPanel({
           </kbd>
         </div>
         <div className="flex-1" />
-        <Button
-          variant={live ? "default" : "outline"}
-          size="sm"
-          onClick={() => setLive((v) => !v)}
-          title="Auto-refresh while he acts"
-          className={live ? "shadow-[0_0_16px_-4px_var(--kith)]" : ""}
+
+        {/* What replaced the Live button and the Refresh button: a statement rather than a
+            control. It says the screen is current and, while he is mid-task, that it is
+            keeping up — which is the only thing the toggle was ever really telling you. */}
+        <span
+          className="text-muted-foreground/70 hidden items-center gap-1.5 font-mono text-[11px] tabular-nums sm:flex"
+          title={
+            busy
+              ? "He's working — refreshing every few seconds"
+              : "Refreshes on its own, and whenever you come back to the window"
+          }
         >
-          <Zap className={`size-3.5 ${live ? "animate-pulse" : ""}`} />
-          Live
-        </Button>
-        <Button variant="ghost" size="icon" className="size-8" onClick={load} aria-label="Refresh">
-          <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
-        </Button>
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              loading ? "bg-kith animate-pulse" : busy ? "bg-kith" : "bg-muted-foreground/40",
+            )}
+          />
+          {busy ? "keeping up" : freshness}
+        </span>
         <Button
           variant="ghost"
           size="icon"
@@ -1654,17 +1689,23 @@ function ProjectPage({
         />
       ) : null}
 
-      <section className={project ? "mt-7" : ""}>
-        <SectionLabel hint={`${tasks.length}`}>Tasks</SectionLabel>
-        <TaskBoard
-          tasks={tasks}
-          projectId={project ? project.id : null}
-          remove={remove}
-          update={update}
-          create={create}
-          onOpenTask={onOpenTask}
-        />
-      </section>
+      {/* Only the loose tray needs this: a project's work is shown inside its workflow,
+          selected from the graph. */}
+      {project ? null : (
+        <section>
+          <SectionLabel hint={`${tasks.length}`}>Tasks</SectionLabel>
+          <TaskLane
+            tasks={tasks}
+            milestones={[]}
+            blocked={new Set()}
+            projectId={null}
+            create={create}
+            update={update}
+            remove={remove}
+            onOpenTask={onOpenTask}
+          />
+        </section>
+      )}
     </>
   );
 }
@@ -1724,6 +1765,7 @@ function Roadmap({
 } & Pick<Handlers, "create" | "update" | "remove">) {
   const [ms, setMs] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
+  const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
 
   const addMilestone = () => {
     if (!ms.trim()) return;
@@ -1732,10 +1774,12 @@ function Roadmap({
   };
 
   const chosen = project.milestones.find((m) => m.id === selected) ?? null;
-  // With a milestone selected: its work. Without: the work that is actually available, which
-  // is the only list worth showing by default.
+  // Which milestones are actually waiting, from the server's own graph. Derived here once
+  // and it was wrong: "every milestone that is not done" marked available work as held.
   const blockedMilestones = new Set(
-    project.milestones.filter((m) => m.status !== "done").map((m) => m.id),
+    (roadmap?.milestones ?? [])
+      .filter((one) => one.status !== "done" && !one.ready)
+      .map((one) => one.id),
   );
   const shown = selected
     ? tasks.filter((task) => task.milestone_id === selected)
@@ -1752,6 +1796,7 @@ function Roadmap({
         selected={selected}
         onSelect={setSelected}
         onChanged={refresh}
+        onRoadmap={setRoadmap}
       />
 
       <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-card/40 p-1.5 pl-3 focus-within:border-ring/60">
@@ -1790,6 +1835,8 @@ function Roadmap({
           tasks={shown}
           milestones={project.milestones}
           blocked={blockedMilestones}
+          projectId={project.id}
+          create={create}
           update={update}
           remove={remove}
           onOpenTask={onOpenTask}
@@ -1811,6 +1858,8 @@ function TaskLane({
   tasks,
   milestones,
   blocked,
+  projectId,
+  create,
   update,
   remove,
   onOpenTask,
@@ -1818,8 +1867,18 @@ function TaskLane({
   tasks: BrainSnapshot["tasks"];
   milestones: BrainSnapshot["projects"][number]["milestones"];
   blocked: Set<number>;
+  /** Where a task added from here lands. Undefined hides the add row. */
+  projectId?: number | null;
   onOpenTask: (id: number) => void;
-} & Pick<Handlers, "update" | "remove">) {
+} & Pick<Handlers, "create" | "update" | "remove">) {
+  const [goal, setGoal] = useState("");
+  const add = () => {
+    if (!goal.trim()) return;
+    const data: Record<string, unknown> = { goal };
+    if (projectId != null) data.project_id = projectId;
+    create("task", data);
+    setGoal("");
+  };
   const titleOf = (id: number | null | undefined) =>
     milestones.find((m) => m.id === id)?.title ?? null;
 
@@ -1831,67 +1890,99 @@ function TaskLane({
   };
   const ordered = [...tasks].sort((a, b) => rank(a) - rank(b));
 
+  const addRow =
+    projectId === undefined ? null : (
+      <div className="mt-2 flex items-center gap-2 rounded-xl border border-border/60 bg-card/40 p-1.5 pl-3 focus-within:border-ring/60">
+        <input
+          value={goal}
+          onChange={(event) => setGoal(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && add()}
+          placeholder="Add a task…"
+          className={`${FIELD} flex-1 text-xs`}
+        />
+        <Button size="xs" variant="outline" onClick={add}>
+          <Plus className="size-3.5" />
+          Add
+        </Button>
+      </div>
+    );
+
   if (ordered.length === 0) {
     return (
-      <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-center text-sm">
-        Nothing open here.
-      </p>
+      <>
+        <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-center text-sm">
+          Nothing open here.
+        </p>
+        {addRow}
+      </>
     );
   }
 
   return (
-    <ul className="divide-y rounded-xl border">
-      {ordered.map((task) => {
-        const held = Boolean(task.milestone_id && blocked.has(task.milestone_id));
-        return (
-          <li key={task.id} className="group flex items-center gap-3 px-3 py-2.5">
-            <button
-              onClick={() =>
-                update("task", task.id, { status: task.status === "done" ? "todo" : "done" })
-              }
-              aria-label={task.status === "done" ? "Reopen" : "Mark done"}
-              className={cn(
-                "flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
-                task.status === "done"
-                  ? "border-kith bg-kith text-primary-foreground"
-                  : "border-muted-foreground/40 hover:border-kith",
-              )}
-            >
-              {task.status === "done" ? <Check className="size-3" /> : null}
-            </button>
+    <>
+      <ul className="divide-y rounded-xl border">
+        {ordered.map((task) => {
+          const held = Boolean(task.milestone_id && blocked.has(task.milestone_id));
+          return (
+            <li key={task.id} className="group flex items-center gap-3 px-3 py-2.5">
+              <button
+                onClick={() =>
+                  update("task", task.id, { status: task.status === "done" ? "todo" : "done" })
+                }
+                aria-label={task.status === "done" ? "Reopen" : "Mark done"}
+                className={cn(
+                  "flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+                  task.status === "done"
+                    ? "border-kith bg-kith text-primary-foreground"
+                    : "border-muted-foreground/40 hover:border-kith",
+                )}
+              >
+                {task.status === "done" ? <Check className="size-3" /> : null}
+              </button>
 
-            <button
-              onClick={() => onOpenTask(task.id)}
-              className="min-w-0 flex-1 text-left"
-              title="Open this task"
-            >
-              <span className="block truncate text-sm">{task.goal}</span>
-              <span className="text-muted-foreground/70 flex items-center gap-1.5 text-[10px]">
-                {task.status === "doing" ? <span className="text-kith">working on it</span> : null}
-                {task.status === "waiting" ? (
-                  <span className="text-orange-400/90">waiting on you</span>
-                ) : null}
-                {held ? <span>held until “{titleOf(task.milestone_id)}” is ready</span> : null}
-                {!held && task.milestone_id ? <span>{titleOf(task.milestone_id)}</span> : null}
-              </span>
-            </button>
+              <button
+                onClick={() => onOpenTask(task.id)}
+                className="min-w-0 flex-1 text-left"
+                title="Open this task"
+              >
+                <span className="block truncate text-sm">{task.goal}</span>
+                <span className="text-muted-foreground/70 flex items-center gap-1.5 text-[10px]">
+                  {task.status === "doing" ? (
+                    <span className="text-kith">working on it</span>
+                  ) : null}
+                  {task.status === "waiting" ? (
+                    <span className="text-orange-400/90">waiting on you</span>
+                  ) : null}
+                  {held ? <span>held until “{titleOf(task.milestone_id)}” is ready</span> : null}
+                  {!held && task.milestone_id ? <span>{titleOf(task.milestone_id)}</span> : null}
+                </span>
+              </button>
 
-            {task.priority && task.priority !== "normal" ? (
-              <span className="text-muted-foreground/60 shrink-0 font-mono text-[10px]">
-                {task.priority}
-              </span>
-            ) : null}
-            <button
-              onClick={() => remove("task", task.id, task.goal)}
-              className="text-muted-foreground shrink-0 opacity-0 transition group-hover:opacity-100 hover:text-destructive"
-              aria-label="Delete task"
-            >
-              <X className="size-3.5" />
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+              {task.priority && task.priority !== "normal" ? (
+                <span className="text-muted-foreground/60 shrink-0 font-mono text-[10px]">
+                  {task.priority}
+                </span>
+              ) : null}
+              <Dropdown
+                value={task.status}
+                onChange={(next) => update("task", task.id, { status: next })}
+                options={TASK_STATUSES}
+                className="w-24 shrink-0"
+                ariaLabel="Task status"
+              />
+              <button
+                onClick={() => remove("task", task.id, task.goal)}
+                className="text-muted-foreground shrink-0 opacity-0 transition group-hover:opacity-100 hover:text-destructive"
+                aria-label="Delete task"
+              >
+                <X className="size-3.5" />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {addRow}
+    </>
   );
 }
 
@@ -1928,173 +2019,6 @@ function ProgressRing({ pct, size = 52 }: { pct: number; size?: number }) {
 }
 
 /* ── The task board — always scoped to one project (or the loose tray) ───── */
-
-function TaskBoard({
-  tasks,
-  projectId,
-  remove,
-  create,
-  update,
-  onOpenTask,
-}: {
-  tasks: BrainSnapshot["tasks"];
-  /** The project new tasks join. `null` = the loose tray. */
-  projectId: number | null;
-  onOpenTask: (id: number) => void;
-} & Pick<Handlers, "remove" | "create" | "update">) {
-  const [goal, setGoal] = useState("");
-  const [priority, setPriority] = useState("normal");
-
-  const add = () => {
-    if (!goal.trim()) return;
-    const data: Record<string, unknown> = { goal, priority };
-    if (projectId != null) data.project_id = projectId;
-    create("task", data);
-    setGoal("");
-  };
-  const rank = (p: string) => (p === "high" ? 0 : p === "low" ? 2 : 1);
-  const byColumn = (col: string) =>
-    tasks.filter((t) => t.status === col).sort((a, b) => rank(a.priority) - rank(b.priority));
-
-  return (
-    <div>
-      <div
-        className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card/40 p-2 pl-3.5 shadow-sm focus-within:border-ring/60"
-        onKeyDown={(e) => e.key === "Enter" && add()}
-      >
-        <ListChecks className="size-4 shrink-0 text-emerald-500" />
-        <input
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          placeholder="Add a task to this project…"
-          className={`${FIELD} min-w-48 flex-1`}
-        />
-        <Dropdown
-          value={priority}
-          onChange={setPriority}
-          options={TASK_PRIORITIES}
-          className="w-28"
-          ariaLabel="Priority"
-        />
-        <Button size="sm" onClick={add}>
-          <Plus className="size-4" />
-          Add
-        </Button>
-      </div>
-      <div className="flex gap-3 overflow-x-auto pb-2">
-        {TASK_COLUMNS.map((col) => {
-          const cards = byColumn(col);
-          return (
-            <div
-              key={col}
-              className="flex w-68 shrink-0 flex-col rounded-xl border border-border/50 bg-muted/25"
-            >
-              <div className="flex items-center gap-2 border-b border-border/40 px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <span>{COLUMN_LABEL[col]}</span>
-                <span className="rounded-full bg-background/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums">
-                  {cards.length}
-                </span>
-              </div>
-              <div className="min-h-24 flex-1 space-y-2 p-2">
-                {cards.length === 0 ? (
-                  <p className="px-2 py-6 text-center text-xs text-muted-foreground/50">Empty</p>
-                ) : (
-                  cards.map((t) => (
-                    <TaskCard
-                      key={t.id}
-                      task={t}
-                      remove={remove}
-                      update={update}
-                      onOpen={() => onOpenTask(t.id)}
-                    />
-                  ))
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function TaskCard({
-  task,
-  remove,
-  update,
-  onOpen,
-}: {
-  task: BrainSnapshot["tasks"][number];
-  onOpen: () => void;
-} & Pick<Handlers, "remove" | "update">) {
-  const accent =
-    task.priority === "high"
-      ? "border-l-red-400"
-      : task.priority === "low"
-        ? "border-l-transparent"
-        : "border-l-amber-400";
-  return (
-    // The whole card opens the task; the pencil, dropdowns and delete stop the
-    // click so they still do their own thing.
-    <div
-      onClick={onOpen}
-      className={cn(
-        "group cursor-pointer rounded-xl border border-l-[3px] bg-card p-3 text-sm shadow-sm transition-all hover:border-kith/30 hover:shadow-md",
-        accent,
-      )}
-    >
-      <div className="flex items-start gap-2">
-        {task.priority === "high" ? (
-          <Flame className="mt-0.5 size-3.5 shrink-0 text-red-400" />
-        ) : null}
-        <span className="min-w-0 flex-1 font-medium leading-snug">
-          <EditableText value={task.goal} onSave={(v) => update("task", task.id, { goal: v })} />
-        </span>
-        <span
-          className="shrink-0 text-muted-foreground/50 transition-colors group-hover:text-kith"
-          title="Open task"
-        >
-          <ArrowUpRight className="size-4" />
-        </span>
-        <DeleteButton onClick={() => remove("task", task.id, task.goal)} />
-      </div>
-      {task.description ? (
-        <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-          <MarkdownInline>{task.description}</MarkdownInline>
-        </div>
-      ) : null}
-      {task.due_at || task.created_by === "user" ? (
-        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          {task.due_at ? <span>due {task.due_at.slice(0, 10)}</span> : null}
-          {task.created_by === "user" ? <span>· yours</span> : null}
-        </div>
-      ) : null}
-      <div
-        className="mt-2 flex items-center gap-1 border-t border-border/60 pt-2"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Dropdown
-          value={task.status}
-          onChange={(v) => update("task", task.id, { status: v })}
-          options={TASK_STATUSES.map((s) => ({ value: s, label: COLUMN_LABEL[s] ?? s }))}
-          variant="bare"
-          className="w-28"
-          ariaLabel="Move column"
-        />
-        <Dropdown
-          value={task.priority}
-          onChange={(v) => update("task", task.id, { priority: v })}
-          options={TASK_PRIORITIES}
-          variant="bare"
-          className="w-20"
-          ariaLabel="Priority"
-        />
-      </div>
-    </div>
-  );
-}
-
-/* ── Reminders (one-off, time-emphasised) ───────────────────────────────── */
 
 function Reminders({
   snap,
