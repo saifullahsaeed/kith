@@ -51,7 +51,13 @@ export function ModelTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, connection.kind, connection.baseUrl]);
 
-  const dirty = model !== (connection.model ?? "") || kind !== connection.kind;
+  // A pasted key is a change on its own. Leaving it out meant the only way to save a
+  // new key was to also change the model or the provider — which is what someone was
+  // reduced to doing.
+  const keyEdited = probe.apiKey.trim().length > 0;
+  const urlEdited = probe.baseUrl.trim() !== (connection.baseUrl ?? "");
+  const dirty =
+    model !== (connection.model ?? "") || kind !== connection.kind || keyEdited || urlEdited;
 
   async function save() {
     setSaving(true);
@@ -64,6 +70,9 @@ export function ModelTab({
         model,
       });
       setSaved(true);
+      // Drop the plaintext now it's stored: the form goes back to a locked field, and
+      // the key stops sitting in component state for the rest of the session.
+      probe.setApiKey("");
       onSaved();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -138,9 +147,11 @@ export function ModelTab({
         <span className="text-muted-foreground text-xs">
           {saved && !dirty
             ? "Saved. He'll use it on his next message."
-            : dirty
-              ? "Unsaved change."
-              : "Nothing to save."}
+            : keyEdited && model === (connection.model ?? "")
+              ? "New key — save to use it."
+              : dirty
+                ? "Unsaved change."
+                : "Nothing to save."}
         </span>
         <div className="flex-1" />
         <Button onClick={save} disabled={!dirty || !model || saving || !probe.probe.usable}>

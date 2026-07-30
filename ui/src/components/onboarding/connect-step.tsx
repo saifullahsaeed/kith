@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import { AlertCircle, CheckCircle2, ExternalLink, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertCircle, CheckCircle2, ExternalLink, Loader2, Lock } from "lucide-react";
 
 import type { ProbeOutcome, ProviderCard } from "@/lib/backend";
 
@@ -37,6 +37,9 @@ export function ConnectStep({
   onContinue: () => void;
 }) {
   const first = useRef<HTMLInputElement>(null);
+  // Whether the saved key is being swapped for a new one. Local, because it's about
+  // what this form is showing, not about what will be saved.
+  const [replacing, setReplacing] = useState(false);
 
   // Focus what has to be filled in first, so a pasted key needs no click.
   useEffect(() => first.current?.focus(), []);
@@ -66,34 +69,76 @@ export function ConnectStep({
       ) : null}
 
       {provider.needsKey ? (
-        <Field
-          label={keyStored ? "API key — one is already saved" : "API key"}
-          hint={
-            provider.signupUrl ? (
-              <a
-                href={provider.signupUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-kith hover:underline"
+        keyStored && !replacing ? (
+          // A saved key is shown as a filled, locked field rather than an empty box
+          // with a hint in the placeholder. Empty-looking read as "no key here", and
+          // the only way to find out otherwise was to type into it.
+          <Field
+            label="API key"
+            hint={
+              <button
+                type="button"
+                onClick={() => setReplacing(true)}
+                className="text-kith hover:underline"
               >
-                Get a key <ExternalLink className="size-3" />
-              </a>
-            ) : (
-              "Stored on this machine, never sent anywhere else"
-            )
-          }
-        >
-          <input
-            ref={provider.needsBaseUrl ? undefined : first}
-            type="password"
-            className={inputClass}
-            placeholder={keyStored ? "•••••••• saved — type to replace it" : "sk-…"}
-            value={apiKey}
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(event) => onApiKey(event.target.value)}
-          />
-        </Field>
+                Replace it
+              </button>
+            }
+          >
+            <div className="relative">
+              <input
+                readOnly
+                disabled
+                value={"•".repeat(28)}
+                className={`${inputClass} cursor-default tracking-[0.2em] opacity-70`}
+                aria-label="A key is saved"
+              />
+              <Lock className="text-muted-foreground/50 pointer-events-none absolute top-1/2 right-3 size-3.5 -translate-y-1/2" />
+            </div>
+          </Field>
+        ) : (
+          <Field
+            label={keyStored ? "New API key" : "API key"}
+            hint={
+              keyStored ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Clearing it is what makes the probe fall back to the saved key.
+                    onApiKey("");
+                    setReplacing(false);
+                  }}
+                  className="text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  Keep the saved one
+                </button>
+              ) : provider.signupUrl ? (
+                <a
+                  href={provider.signupUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-kith inline-flex items-center gap-1 hover:underline"
+                >
+                  Get a key <ExternalLink className="size-3" />
+                </a>
+              ) : (
+                "Stored on this machine, never sent anywhere else"
+              )
+            }
+          >
+            <input
+              ref={provider.needsBaseUrl ? undefined : first}
+              autoFocus={replacing}
+              type="password"
+              className={inputClass}
+              placeholder="sk-…"
+              value={apiKey}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => onApiKey(event.target.value)}
+            />
+          </Field>
+        )
       ) : null}
 
       {needsNothing ? (
