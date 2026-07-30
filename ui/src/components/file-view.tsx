@@ -467,6 +467,50 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
   );
 });
 
+/** Markdown on one line.
+ *
+ * The block renderer wraps everything in `<p>` with margins, which in a timeline row
+ * or beside a timestamp pushes the rest of the line away and breaks the layout. This
+ * keeps emphasis, code and links — the things he actually uses in a short line — and
+ * renders paragraphs as spans.
+ *
+ * Headings and lists are deliberately flattened rather than honoured: a heading inside
+ * a one-line summary is a mistake in the text, not something to lay out.
+ */
+export const MarkdownInline = memo(function MarkdownInline({ children }: { children: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_INLINE}>
+      {children}
+    </ReactMarkdown>
+  );
+});
+
+const MD_INLINE: Components = {
+  p: (p) => <span {...p} />,
+  h1: (p) => <span className="font-semibold" {...p} />,
+  h2: (p) => <span className="font-semibold" {...p} />,
+  h3: (p) => <span className="font-semibold" {...p} />,
+  ul: (p) => <span {...p} />,
+  ol: (p) => <span {...p} />,
+  li: (p) => <span className="before:content-['·_']" {...p} />,
+  strong: (p) => <strong className="font-semibold" {...p} />,
+  em: (p) => <em className="italic" {...p} />,
+  code: (p) => <code className="bg-muted rounded px-1 py-0.5 font-mono text-[0.9em]" {...p} />,
+  pre: (p) => <span {...p} />,
+  a: ({ href, ...rest }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-kith underline decoration-dotted"
+      {...rest}
+    />
+  ),
+  blockquote: (p) => <span className="text-muted-foreground italic" {...p} />,
+  hr: () => null,
+  br: () => <> </>,
+};
+
 const MD: Components = {
   h1: (p) => <h1 className="mt-7 mb-3 text-xl font-semibold tracking-tight first:mt-0" {...p} />,
   h2: (p) => (

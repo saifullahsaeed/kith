@@ -20,7 +20,8 @@ import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/presence";
-import { FilePreviewDialog, Markdown } from "@/components/file-view";
+import { FilePreviewDialog, Markdown, MarkdownInline } from "@/components/file-view";
+import { EditableText } from "@/components/ui/editable-text";
 import { handOffAndOpen } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import {
@@ -224,15 +225,21 @@ export function TaskDetailPage({
         <div className="space-y-6 lg:col-span-3">
           <section>
             <H>Description</H>
-            <textarea
-              value={task.description}
-              onChange={(e) => setTask({ ...task, description: e.target.value })}
-              onBlur={(e) =>
-                e.target.value !== task.description && patch({ description: e.target.value })
-              }
-              placeholder="What this task is, and what 'done' looks like…"
-              className={`${FIELD_INPUT} min-h-24 w-full resize-y rounded-xl px-3.5 py-2.5 leading-relaxed`}
-            />
+            {/* Click to edit, so the Markdown he writes here is actually seen. This was
+                a permanent textarea, which made the field he writes most Markdown into
+                the one place it could never render. */}
+            <div className="rounded-xl border border-border/60 bg-card/30 px-3.5 py-2.5">
+              <EditableText
+                value={task.description}
+                multiline
+                placeholder="What this task is, and what 'done' looks like…"
+                render={(v) => <Markdown>{v}</Markdown>}
+                onSave={(v) => {
+                  setTask({ ...task, description: v });
+                  patch({ description: v });
+                }}
+              />
+            </div>
           </section>
 
           <section>
@@ -271,7 +278,7 @@ export function TaskDetailPage({
                   <span
                     className={cn("min-w-0 flex-1", c.done && "text-muted-foreground line-through")}
                   >
-                    {c.text}
+                    <MarkdownInline>{c.text}</MarkdownInline>
                   </span>
                   <button
                     onClick={() => del("checklist_item", c.id)}
