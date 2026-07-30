@@ -150,12 +150,7 @@ function PickCard({
       <span className="mt-2 truncate text-xs font-medium" title={model.id}>
         {shortName(model.id)}
       </span>
-      <span className="text-muted-foreground mt-0.5 font-mono text-[11px]">
-        {formatPrice(model.promptPerMTok)}
-        <span className="text-muted-foreground/60"> in</span> ·{" "}
-        {formatPrice(model.completionPerMTok)}
-        <span className="text-muted-foreground/60"> out</span>
-      </span>
+      <Prices model={model} />
 
       <span className="mt-2 flex flex-wrap gap-1">
         {model.agenticIndex !== null ? (
@@ -172,6 +167,68 @@ function PickCard({
       </span>
     </button>
   );
+}
+
+/**
+ * What a model costs, all four numbers.
+ *
+ * Input alone was the headline for a while and it is not the price of anything: a turn
+ * bills output at four to five times input, and Kith caches every request, so most of a
+ * warm round's prompt is billed at the read rate instead of the input rate. On
+ * claude-opus-5 those are $5 in, $25 out, $0.50 cache read, $6.25 cache write — quoting
+ * the $5 makes the dearest model in the list look like the cheapest thing on the card.
+ *
+ * Cache prices are omitted rather than zeroed when a provider does not quote them, which
+ * is the honest reading: several cache automatically and charge nothing for it, and a
+ * "$0.00" there would be a claim nobody made.
+ */
+export function Prices({ model }: { model: ModelOption }) {
+  return (
+    <span className="text-muted-foreground mt-0.5 flex flex-wrap font-mono text-[11px] leading-relaxed">
+      <span className="whitespace-nowrap">
+        {formatPrice(model.promptPerMTok)}
+        <span className="text-muted-foreground/60"> in</span>
+      </span>
+      <span className="text-muted-foreground/40 px-1">·</span>
+      <span className="whitespace-nowrap">
+        {formatPrice(model.completionPerMTok)}
+        <span className="text-muted-foreground/60"> out</span>
+      </span>
+      {model.cacheReadPerMTok !== null ? (
+        <>
+          <span className="text-muted-foreground/40 px-1">·</span>
+          <span className="whitespace-nowrap" title="What a cached prompt token costs to read back">
+            {formatPrice(model.cacheReadPerMTok)}
+            <span className="text-muted-foreground/60"> cached</span>
+          </span>
+        </>
+      ) : null}
+      {model.cacheWritePerMTok !== null ? (
+        <>
+          <span className="text-muted-foreground/40 px-1">·</span>
+          <span className="whitespace-nowrap" title="What it costs to put a prompt into the cache">
+            {formatPrice(model.cacheWritePerMTok)}
+            <span className="text-muted-foreground/60"> to cache</span>
+          </span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+/** The full price on hover, for the list rows where only in/out fit. */
+function priceTitle(option: ModelOption): string {
+  const parts = [
+    `${formatPrice(option.promptPerMTok)} in`,
+    `${formatPrice(option.completionPerMTok)} out`,
+  ];
+  if (option.cacheReadPerMTok !== null) {
+    parts.push(`${formatPrice(option.cacheReadPerMTok)} cached read`);
+  }
+  if (option.cacheWritePerMTok !== null) {
+    parts.push(`${formatPrice(option.cacheWritePerMTok)} cache write`);
+  }
+  return `${parts.join(" · ")} — per million tokens`;
 }
 
 function Badge({ children, title }: { children: React.ReactNode; title?: string }) {
@@ -224,8 +281,13 @@ function Row({
       <span className="text-muted-foreground shrink-0 font-mono text-xs">
         {formatContext(option.context)}
       </span>
-      <span className="text-muted-foreground w-16 shrink-0 text-right font-mono text-xs">
+      <span
+        className="text-muted-foreground w-32 shrink-0 text-right font-mono text-xs"
+        title={priceTitle(option)}
+      >
         {formatPrice(option.promptPerMTok)}
+        <span className="text-muted-foreground/50"> / </span>
+        {formatPrice(option.completionPerMTok)}
       </span>
       <span className="w-4 shrink-0">{active ? <Check className="size-4 text-kith" /> : null}</span>
     </button>

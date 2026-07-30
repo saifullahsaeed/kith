@@ -28,6 +28,12 @@ export interface ModelOption {
   name: string;
   promptPerMTok: number | null;
   completionPerMTok: number | null;
+  /** What a cached prompt token costs to read back, and to put there. Kith caches every
+   *  request, so a warm round bills most of its prompt at the read rate — usually a
+   *  tenth of input — while a write is 1.25x. Null where the provider does not quote it,
+   *  which includes the ones that cache automatically at no extra charge. */
+  cacheReadPerMTok: number | null;
+  cacheWritePerMTok: number | null;
   context: number | null;
   supportsTools: boolean | null;
   /** Artificial Analysis' agentic index: how well it sustains multi-step tool use.

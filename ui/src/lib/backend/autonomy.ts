@@ -1,5 +1,7 @@
 /** Client for the autonomy API — status, control, and the live activity feed. */
 
+import type { Usage } from "@/lib/tokens";
+
 export interface AutonomyStatus {
   running: boolean;
   intervalSeconds: number;
@@ -7,6 +9,14 @@ export interface AutonomyStatus {
   ticking: boolean;
   lastTick: string | null;
   current: string | null;
+  ticks?: number;
+  /** Everything he was shown, which counts a cached prefix again on every round. */
+  tokensIn?: number;
+  tokensOut?: number;
+  /** The prompt side with cache hits removed — what a provider actually had to read. */
+  tokensUncached?: number;
+  lastTickTokens?: number;
+  lastTickUncached?: number;
 }
 
 export interface ActivityItem {
@@ -22,9 +32,12 @@ export interface ActivityItem {
     | "reminder"
     | "done"
     | "error"
-    | "status";
+    | "status"
+    | "tokens";
   text: string;
   at: string;
+  /** Present on "tokens" items only: what one model request within the tick cost. */
+  tokens?: Usage & { round: number };
 }
 
 export type AutonomyAction = "start" | "stop" | "tick";

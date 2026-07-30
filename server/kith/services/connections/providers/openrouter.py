@@ -161,6 +161,11 @@ def _to_model_info(entry: Any) -> ModelInfo:
         name=entry.name or entry.id,
         prompt_per_mtok=_per_million(getattr(pricing, "prompt", None)),
         completion_per_mtok=_per_million(getattr(pricing, "completion", None)),
+        # Absent on the providers that cache automatically and charge nothing extra for
+        # it, and on the ones that do not cache at all — so None means "not quoted",
+        # which the picker shows as nothing rather than as free.
+        cache_read_per_mtok=_per_million(getattr(pricing, "input_cache_read", None)),
+        cache_write_per_mtok=_per_million(getattr(pricing, "input_cache_write", None)),
         context=entry.context_length,
         supports_tools="tools" in (entry.supported_parameters or []),
         agentic_index=_number(scores.get("agentic_index")),

@@ -3,6 +3,7 @@
 import { UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
 import {
   Reasoning,
   ReasoningContent,
@@ -19,6 +20,7 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { PresenceOrb } from "@/components/presence";
+import { USAGE_PART } from "@/lib/backend/adapter";
 import { cn } from "@/lib/utils";
 import {
   ActionBarMorePrimitive,
@@ -408,6 +410,11 @@ const AssistantMessage: FC = () => {
               case "tool-call":
                 return part.toolUI ?? <ToolFallbackComponent {...part} />;
               case "data":
+                // The adapter turns each round's stats event into one of these; every
+                // other data part is somebody else's and keeps the library's renderer.
+                if (part.name === USAGE_PART) {
+                  return <TurnTokens usage={part.data as TurnUsage} />;
+                }
                 return part.dataRendererUI;
               case "indicator":
                 return (

@@ -326,6 +326,15 @@ def _migrations():
             """
         )
 
+    def v20_tick_tokens_uncached(conn):
+        # tokens_in counts every token he was SHOWN, which re-counts a cached prefix on
+        # every round of a tick — on a warm cache that is more than ten times the tokens
+        # a provider actually had to read, so the flight recorder was reading like he
+        # spends a fortune per step. This column is the honest figure. Nullable rather
+        # than DEFAULT 0: rows written before this existed genuinely don't know, and 0
+        # would be indistinguishable from a tick that was entirely cache hits.
+        conn.execute("ALTER TABLE tick_log ADD COLUMN tokens_uncached INTEGER")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -346,6 +355,7 @@ def _migrations():
         v17_source_chunks,
         v18_milestone_link_and_notify,
         v19_tick_log,
+        v20_tick_tokens_uncached,
     ]
 
 

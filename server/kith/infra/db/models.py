@@ -254,5 +254,7 @@ class TickLog(Base):
     tools: Mapped[str | None] = mapped_column(Text, nullable=True)
     tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Prompt tokens with cache hits removed. None on rows written before v20.
+    tokens_uncached: Mapped[int | None] = mapped_column(Integer, nullable=True)
     seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     outcome: Mapped[str | None] = mapped_column(Text, nullable=True)

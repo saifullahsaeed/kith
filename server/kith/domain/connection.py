@@ -53,6 +53,13 @@ class ModelInfo:
     name: str = ""
     prompt_per_mtok: float | None = None
     completion_per_mtok: float | None = None
+    #: What a cached prompt token costs to read back, and to put there in the first
+    #: place. Kith caches every request, so for him these are not a footnote: a warm
+    #: round bills most of its prompt at the read rate, typically a tenth of the input
+    #: price, while the write is 1.25x. A model chosen on input price alone can lose to
+    #: a dearer one that caches better. ``None`` where the provider does not say.
+    cache_read_per_mtok: float | None = None
+    cache_write_per_mtok: float | None = None
     context: int | None = None
     supports_tools: bool | None = None
     #: Artificial Analysis' agentic index, where the provider publishes one: how well
@@ -100,6 +107,8 @@ class ModelInfo:
             "name": self.label,
             "promptPerMTok": self.prompt_per_mtok,
             "completionPerMTok": self.completion_per_mtok,
+            "cacheReadPerMTok": self.cache_read_per_mtok,
+            "cacheWritePerMTok": self.cache_write_per_mtok,
             "context": self.context,
             "supportsTools": self.supports_tools,
             "agenticIndex": self.agentic_index,

@@ -81,7 +81,8 @@ def _build_messages(messages, config):
         '- `{"type":"delta","role":"reasoning"|"text","text":"..."}`\n'
         '- `{"type":"tool_call","id":"...","name":"...","arguments":{...}}`\n'
         '- `{"type":"tool_result","id":"...","name":"...","result":{...}}`\n'
-        '- `{"type":"stats","stats":{...}}` (once, at the end)\n'
+        '- `{"type":"stats","stats":{...}}` (one per model request, so several per turn — '
+        "`uncachedTokens` is the prompt with cache hits removed)\n"
         '- `{"type":"error","message":"..."}`\n'
         '- `{"type":"done"}` (terminal)'
     ),

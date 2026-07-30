@@ -1,5 +1,8 @@
 import type { ChatModelAdapter, ThreadAssistantMessagePart } from "@assistant-ui/react";
 
+import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
+import type { Usage } from "@/lib/tokens";
+
 import { readEvents, toWireMessages } from "./stream";
 import type { JsonObject, JsonValue, ServerConfig } from "./types";
 
@@ -29,6 +32,9 @@ type Piece =
  * Config is read fresh on each run via `getConfig`, so settings changes take effect
  * without recreating the runtime.
  */
+/** Name on the data part carrying a round's token count, shared with the renderer. */
+export const USAGE_PART = "round-usage";
+
 export function createBackendAdapter(getConfig: () => ServerConfig): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
@@ -56,6 +62,9 @@ export function createBackendAdapter(getConfig: () => ServerConfig): ChatModelAd
 
       const pieces: Piece[] = [];
       const toolById = new Map<string, ToolPart>();
+      // One entry per model request. Kept out of `pieces` because the total belongs at
+      // the foot of the message, not wherever its round happened to land.
+      const rounds: Usage[] = [];
 
       /** Append to the piece being written, or start a new one when the channel
        *  changed — which is what keeps consecutive deltas from each becoming a part. */
@@ -65,8 +74,8 @@ export function createBackendAdapter(getConfig: () => ServerConfig): ChatModelAd
         else pieces.push({ kind, text });
       };
 
-      const snapshot = (): ThreadAssistantMessagePart[] =>
-        pieces.flatMap((piece): ThreadAssistantMessagePart[] => {
+      const snapshot = (): ThreadAssistantMessagePart[] => {
+        const parts = pieces.flatMap((piece): ThreadAssistantMessagePart[] => {
           if (piece.kind === "tool") {
             const tool = piece.tool;
             return [
@@ -84,6 +93,13 @@ export function createBackendAdapter(getConfig: () => ServerConfig): ChatModelAd
           if (!piece.text) return [];
           return [{ type: piece.kind === "reasoning" ? "reasoning" : "text", text: piece.text }];
         });
+        // Last, so it reads as the message's footer and stays put as rounds arrive.
+        if (rounds.length > 0) {
+          const usage: TurnUsage = { rounds };
+          parts.push({ type: "data", name: USAGE_PART, data: usage });
+        }
+        return parts;
+      };
 
       try {
         for await (const event of readEvents(response)) {
@@ -98,8 +114,16 @@ export function createBackendAdapter(getConfig: () => ServerConfig): ChatModelAd
           } else if (event.type === "tool_result") {
             const tool = toolById.get(event.id);
             if (tool) tool.result = event.result;
+          } else if (event.type === "stats") {
+            // One of these lands per model request, so the total grows a round at a
+            // time and the footer counts up while he works.
+            rounds.push({
+              uncached: event.stats.uncachedTokens ?? 0,
+              cached: event.stats.cachedTokens ?? 0,
+              out: event.stats.responseTokens ?? 0,
+            });
           } else {
-            continue; // stats / done
+            continue; // done
           }
 
           yield { content: snapshot() };

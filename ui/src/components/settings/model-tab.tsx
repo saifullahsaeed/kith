@@ -3,7 +3,7 @@ import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConnectStep } from "@/components/onboarding/connect-step";
-import { ModelStep } from "@/components/onboarding/model-step";
+import { ModelStep, Prices } from "@/components/onboarding/model-step";
 import { ProviderChoice } from "@/components/onboarding/provider-choice";
 import { useConnectionProbe } from "@/hooks/use-connection-probe";
 import {
@@ -43,6 +43,7 @@ export function ModelTab({
 
   const provider = providers.find((entry) => entry.kind === kind) ?? null;
   const probe = useConnectionProbe({ provider });
+  const active = probe.probe.models.find((entry) => entry.id === connection.model) ?? null;
   // Pre-fill the endpoint when editing the provider already in use, so a probe runs
   // immediately and the model list is there without anyone typing anything.
   useEffect(() => {
@@ -108,6 +109,23 @@ export function ModelTab({
           />
         ) : null}
       </Section>
+
+      {connection.model ? (
+        <Section
+          title="Right now"
+          hint={
+            model && model !== connection.model
+              ? `Unsaved — save to switch him to ${model}.`
+              : "What he is thinking with at this moment."
+          }
+        >
+          <div className="rounded-lg border bg-card/60 px-3 py-2.5">
+            <div className="font-mono text-sm break-all">{connection.model}</div>
+            {/* Only once a probe has returned; the catalogue is where prices live. */}
+            {active ? <Prices model={active} /> : null}
+          </div>
+        </Section>
+      ) : null}
 
       {provider ? (
         <Section title="Connection">

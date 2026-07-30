@@ -153,8 +153,32 @@ _usage = {
     "responseTokens": 0,
     "cachedTokens": 0,
     "cacheWriteTokens": 0,
+    "uncachedTokens": 0,
     "calls": 0,
 }
+
+
+def measured(stats: dict | None) -> dict | None:
+    """Add what a request actually had to read, as opposed to what it was shown.
+
+    ``promptTokens`` counts the whole prompt, and on a warm cache most of that is a
+    re-read of bytes the provider already holds — 10,949 of 19,494 on a measured turn.
+    Sixteen rounds of it looks like a quarter of a million tokens spent when the real
+    figure is a fraction of that. ``uncachedTokens`` is the part that was new.
+
+    One place for the subtraction, because it is the number people will read and two
+    surfaces disagreeing about it would be worse than not showing it. Every model call
+    in the process passes through here, chat and ticks alike.
+
+    Ollama needs no special case: ``prompt_eval_count`` is already only the part it had
+    to evaluate, and it reports no cache field, so the subtraction is a no-op and the
+    number means the same thing on both transports.
+    """
+    if not stats:
+        return stats
+    prompt = int(stats.get("promptTokens") or 0)
+    cached = int(stats.get("cachedTokens") or 0)
+    return {**stats, "uncachedTokens": max(prompt - cached, 0)}
 
 
 def usage_snapshot() -> dict:
@@ -169,6 +193,9 @@ def usage_snapshot() -> dict:
     never a read, and the hit rate reported that as an unremarkable 0% — identical to
     having no caching at all, while actually costing 25% more. `cacheEfficiency` is the
     ratio that makes it visible: above 1 means reads are outrunning writes.
+
+    `uncachedTokens` is the prompt side with the cache hits taken out — the tokens he
+    actually made a provider read.
     """
     snap = dict(_usage)
     prompt = snap["promptTokens"] or 1
@@ -184,6 +211,7 @@ def _record(stats: dict | None) -> None:
     _usage["responseTokens"] += int(stats.get("responseTokens") or 0)
     _usage["cachedTokens"] += int(stats.get("cachedTokens") or 0)
     _usage["cacheWriteTokens"] += int(stats.get("cacheWriteTokens") or 0)
+    _usage["uncachedTokens"] += int(stats.get("uncachedTokens") or 0)
     _usage["calls"] += 1
 
 
@@ -237,7 +265,15 @@ def stream_agent(
     agent_db_path: Path,
     max_rounds: int | None = None,
     allow: set[str] | None = None,
+    expect_durable: bool = False,
 ) -> Iterator[dict]:
+    """Run the tool loop.
+
+    ``expect_durable`` says whether a turn that records nothing is a failure. For an
+    autonomy tick it is — the whole point of a tick is to leave something behind, and one
+    that finishes empty means the next tick redoes the work. For a chat turn it is the
+    normal outcome: answering a question is the deliverable, and there is nothing to file.
+    """
     convo = list(messages)
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
@@ -291,19 +327,27 @@ def stream_agent(
 
         # Count and surface every round's tokens — tool rounds are the bulk of the
         # cost, so counting only final answers hides almost all of it.
+        stats = measured(stats)
         _record(stats)
         if stats:
             yield {"type": "stats", "stats": stats}
 
         if not tool_calls:
-            # He's finished talking. But a turn that ends having recorded nothing is
-            # a turn that never happened: the next one starts from the same blank
-            # slate and redoes the same work. Measured on real ticks — every one that
-            # produced durable output was one that ran out of rounds and hit the
+            # He's finished talking. For a TICK, a turn that ends having recorded
+            # nothing is a turn that never happened: the next one starts from the same
+            # blank slate and redoes the same work. Measured on real ticks — every one
+            # that produced durable output was one that ran out of rounds and hit the
             # landing phase by accident; every early-finishing turn produced nothing.
             # So the reserve can't be gated on exhausting the budget. Spend it here,
             # once, and only when there's genuinely nothing to show.
-            if persisted or landing or nudged or round_index >= budget - 1:
+            #
+            # In CHAT it is the opposite. Saying "why what?" is a complete answer and
+            # there is nothing to file, so nudging him to land work he never started
+            # doubled the cost of every trivial message — two model requests each
+            # carrying the full persona and 51 tool schemas, ~18,500 tokens to answer
+            # one word — and the second reply was him puzzling at a directive that made
+            # no sense: "I haven't been researching anything this turn."
+            if not expect_durable or persisted or landing or nudged or round_index >= budget - 1:
                 return
             nudged = True
             landing = True
@@ -447,6 +491,7 @@ def _final_answer(
     tail = scrub.flush()
     if tail:
         yield {"type": "delta", "role": "text", "text": tail}
+    stats = measured(stats)
     _record(stats)
     if stats:
         yield {"type": "stats", "stats": stats}

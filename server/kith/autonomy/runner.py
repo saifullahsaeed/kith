@@ -195,10 +195,15 @@ class AutonomyRunner:
         self._last_tick_at: str | None = None
         self._current: str | None = None
         self._tick_count = 0
-        # Running token tally so 24/7 cloud spend is visible at a glance.
+        # Running token tally so 24/7 cloud spend is visible at a glance. `_in` is
+        # every token he was shown, which counts a cached prefix again on every round;
+        # `_uncached` is what a provider actually had to read. On a warm cache the two
+        # differ by more than 10x over a tick, so the second is the honest one.
         self._tokens_in = 0
         self._tokens_out = 0
+        self._tokens_uncached = 0
         self._last_tick_tokens = 0
+        self._last_tick_uncached = 0
         # Loop detection + reply bookkeeping.
         self._recent_sigs: deque[frozenset] = deque(maxlen=6)
         self._recent_shapes: deque[frozenset] = deque(maxlen=6)
@@ -256,7 +261,9 @@ class AutonomyRunner:
             "ticks": self._tick_count,
             "tokensIn": self._tokens_in,
             "tokensOut": self._tokens_out,
+            "tokensUncached": self._tokens_uncached,
             "lastTickTokens": self._last_tick_tokens,
+            "lastTickUncached": self._last_tick_uncached,
         }
 
     def _record_failed_tick(self, exc: Exception) -> None:
@@ -475,13 +482,21 @@ class AutonomyRunner:
         tick_config = replace(config, num_predict=min(config.num_predict, tuning.value("tick_max_tokens")))
 
         final_text = ""
-        tick_in = tick_out = 0
+        tick_in = tick_out = tick_uncached = 0
+        rounds = 0
         tools_used: list[str] = []
         error_msg: str | None = None
         started = time.monotonic()
         journal_before = _latest_journal_id()
         for event in stream_agent(
-            messages, tick_config, ollama_host(), AGENT_DB_PATH, max_rounds=16, allow=_ALLOW.get(mode)
+            messages,
+            tick_config,
+            ollama_host(),
+            AGENT_DB_PATH,
+            max_rounds=16,
+            allow=_ALLOW.get(mode),
+            # A tick that leaves nothing behind is a tick that will be repeated.
+            expect_durable=True,
         ):
             kind = event["type"]
             if kind == "tool_call":
@@ -490,15 +505,32 @@ class AutonomyRunner:
             elif kind == "delta" and event["role"] == "text":
                 final_text += event["text"]
             elif kind == "stats":
+                # One of these per model request, so this is where a tick's rounds
+                # become visible individually rather than as a single lump at the end.
                 stats = event.get("stats") or {}
+                fresh = int(stats.get("uncachedTokens") or 0)
                 tick_in += int(stats.get("promptTokens") or 0)
                 tick_out += int(stats.get("responseTokens") or 0)
+                tick_uncached += fresh
+                rounds += 1
+                self._emit(
+                    "tokens",
+                    f"{fresh + int(stats.get('responseTokens') or 0):,} tokens",
+                    tokens={
+                        "round": rounds,
+                        "uncached": fresh,
+                        "cached": int(stats.get("cachedTokens") or 0),
+                        "out": int(stats.get("responseTokens") or 0),
+                    },
+                )
             elif kind == "error":
                 error_msg = event["message"]
                 self._emit("error", event["message"])
         self._tokens_in += tick_in
         self._tokens_out += tick_out
+        self._tokens_uncached += tick_uncached
         self._last_tick_tokens = tick_in + tick_out
+        self._last_tick_uncached = tick_uncached + tick_out
 
         if final_text.strip():
             self._emit("thought", final_text.strip()[:600])
@@ -535,6 +567,7 @@ class AutonomyRunner:
                 tick_out,
                 round(time.monotonic() - started, 2),
                 outcome,
+                tokens_uncached=tick_uncached,
             )
         except Exception:
             pass
@@ -579,8 +612,17 @@ class AutonomyRunner:
             self._recent_sigs.clear()
             self._recent_shapes.clear()
 
-    def _emit(self, kind: str, text: str) -> None:
+    def _emit(self, kind: str, text: str, tokens: dict | None = None) -> None:
+        """Push one line onto the live Mind feed.
+
+        ``tokens`` rides alongside the text rather than being formatted into it, so the
+        interface can show a per-request count as a quiet figure on the line instead of
+        another sentence in the stream. Feed items are a flat {kind, text, at} shape and
+        older readers ignore a key they don't know, so this stays additive.
+        """
         item = {"kind": kind, "text": text, "at": _now()}
+        if tokens:
+            item["tokens"] = tokens
         self._buffer.append(item)
         with self._state_lock:
             subscribers = list(self._subscribers)

@@ -70,7 +70,15 @@ class AutonomyStatusSchema(Schema):
     ticks = Integer(metadata={"description": "Total self-directed ticks run this session"})
     tokensIn = Integer(metadata={"description": "Prompt tokens spent by autonomy this session"})
     tokensOut = Integer(metadata={"description": "Response tokens spent by autonomy this session"})
+    # A field absent from this schema is dropped from the response, silently — which is
+    # how the two below shipped as zeros to a UI that was reading them correctly.
+    tokensUncached = Integer(
+        metadata={"description": "Prompt tokens with cache hits removed — what was actually read"}
+    )
     lastTickTokens = Integer(metadata={"description": "Tokens spent on the most recent tick"})
+    lastTickUncached = Integer(
+        metadata={"description": "Tokens the most recent tick actually had to read plus write"}
+    )
 
 
 class AutonomyControlSchema(Schema):

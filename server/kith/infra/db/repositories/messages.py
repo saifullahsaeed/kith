@@ -101,8 +101,15 @@ def add_tick_log(
     tokens_out: int,
     seconds: float,
     outcome: str | None,
+    tokens_uncached: int | None = None,
 ) -> None:
-    """Record one autonomy tick to the durable flight recorder."""
+    """Record one autonomy tick to the durable flight recorder.
+
+    ``tokens_uncached`` comes last with a default deliberately: both callers pass every
+    other argument positionally, so a parameter inserted mid-signature would slide
+    ``seconds`` into ``outcome`` — and the call sites sit inside a bare ``except: pass``,
+    so nothing would have told us.
+    """
     with session(path) as db:
         db.add(
             TickLog(
@@ -112,6 +119,7 @@ def add_tick_log(
                 tools=json.dumps(tools or []),
                 tokens_in=int(tokens_in),
                 tokens_out=int(tokens_out),
+                tokens_uncached=None if tokens_uncached is None else int(tokens_uncached),
                 seconds=float(seconds),
                 outcome=outcome,
             )
@@ -152,11 +160,12 @@ def tick_log_summary(path: Path, limit: int = _SUMMARY_WINDOW) -> dict:
 
     by_mode: dict[str, int] = {}
     tools: dict[str, int] = {}
-    tokens_in = tokens_out = errors = 0
+    tokens_in = tokens_out = tokens_uncached = errors = 0
     for record in rows:
         by_mode[record["mode"]] = by_mode.get(record["mode"], 0) + 1
         tokens_in += record.get("tokens_in") or 0
         tokens_out += record.get("tokens_out") or 0
+        tokens_uncached += record.get("tokens_uncached") or 0
         if (record.get("outcome") or "").startswith("error:"):
             errors += 1
         for name in record.get("tools") or []:
@@ -169,5 +178,8 @@ def tick_log_summary(path: Path, limit: int = _SUMMARY_WINDOW) -> dict:
         "topTools": dict(sorted(tools.items(), key=lambda kv: -kv[1])[:_TOP_TOOLS]),
         "tokensIn": tokens_in,
         "tokensOut": tokens_out,
+        # Cache hits removed — what these ticks actually made a provider read. Rows from
+        # before v20 contribute nothing, so a window spanning the upgrade reads low.
+        "tokensUncached": tokens_uncached,
         "errors": errors,
     }
