@@ -155,7 +155,7 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None) ->
     bounded window (with a hint to page on) rather than dumping the whole thing
     into context."""
     ensure_ready()
-    target = _resolve(path)
+    target = resolve(path)
     start = max(1, offset or 1)
     count = limit if (limit and limit > 0) else _READ_DEFAULT_LINES
     end = start + count - 1
@@ -196,7 +196,7 @@ def read_raw(path: str, max_bytes: int = _MAX_UI_READ) -> str:
     file. Comes back base64 so nothing is mangled in transit.
     """
     ensure_ready()
-    target = _resolve(path)
+    target = resolve(path)
     script = (
         f"size=$(stat -c %s {shlex.quote(target)}) || exit 1; "
         f'if [ "$size" -gt {int(max_bytes)} ]; then echo "@@TOOBIG@@ $size" >&2; exit 3; fi; '
@@ -220,7 +220,7 @@ def grep(pattern: str, path: str = ".", glob: str | None = None, max_matches: in
     file:line numbers — so he can locate what he needs and then read just that
     slice, instead of loading whole files into context."""
     ensure_ready()
-    target = _resolve(path)
+    target = resolve(path)
     args = ["rg", "--line-number", "--no-heading", "--color", "never", "--max-columns", "300"]
     if glob:
         args += ["--glob", glob]
@@ -245,7 +245,7 @@ def write_file(path: str, content: str) -> str:
     data = content.encode()
     if len(data) > _MAX_WRITE:
         raise SandboxError(f"content too large ({len(data)} bytes; max {_MAX_WRITE})")
-    target = _resolve(path)
+    target = resolve(path)
     encoded = base64.b64encode(data).decode()
     directory = shlex.quote(str(Path(target).parent))
     script = f"mkdir -p {directory} && printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(target)}"
@@ -257,7 +257,7 @@ def write_file(path: str, content: str) -> str:
 
 def list_files(path: str = ".") -> str:
     ensure_ready()
-    proc = _docker(["exec", CONTAINER, "bash", "-lc", f"ls -la {shlex.quote(_resolve(path))}"], timeout=30)
+    proc = _docker(["exec", CONTAINER, "bash", "-lc", f"ls -la {shlex.quote(resolve(path))}"], timeout=30)
     if proc.returncode != 0:
         raise SandboxError(_tail(proc.stderr) or f"cannot list {path}")
     return _clip(proc.stdout.decode(errors="replace"))
@@ -266,7 +266,7 @@ def list_files(path: str = ".") -> str:
 def list_dir(path: str = ".") -> list[dict]:
     """Structured one-level listing of his workspace, for the file browser."""
     ensure_ready()
-    target = _resolve(path)
+    target = resolve(path)
     script = (
         f"find {shlex.quote(target)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%P\\n' 2>/dev/null | sort"
     )
@@ -410,7 +410,7 @@ def _container_state() -> str | None:
     return proc.stdout.decode().strip() if proc.returncode == 0 else None
 
 
-def _resolve(path: str) -> str:
+def resolve(path: str) -> str:
     """A bare relative path is anchored at Kith's home; absolute paths are kept."""
     p = (path or "").strip()
     if not p:
@@ -455,3 +455,16 @@ def _unwrap(href: str) -> str:
     """DuckDuckGo wraps result links in a redirect; pull out the real URL."""
     match = re.search(r"[?&]uddg=([^&]+)", href)
     return urllib.parse.unquote(match.group(1)) if match else href
+
+
+def copy_out(container_path: str, destination: Path) -> None:
+    """Copy one file from his home out to the host.
+
+    ``docker cp`` rather than ``cat``: it preserves the bytes exactly, which matters
+    for the files this exists for — a spreadsheet or an image that the text viewer
+    cannot show is precisely the reason someone wants it on their own machine.
+    """
+    ensure_ready()
+    proc = _docker(["cp", f"{CONTAINER}:{container_path}", str(destination)], timeout=120)
+    if proc.returncode != 0:
+        raise SandboxError(_tail(proc.stderr) or f"cannot copy {container_path}")

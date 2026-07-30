@@ -69,6 +69,38 @@ _LANDING_TOOLS = frozenset(
     }
 )
 
+# Handing work to himself for later. Creating a task or a project is a decision that
+# the work happens *on a future tick* — so continuing to research it in the same turn
+# is doing the thing he just decided to defer, and doing it with the rounds he has
+# left rather than the whole budget a tick would give it. He would file a task and then
+# burn nineteen tool calls on it immediately, which is neither delegating nor finishing.
+_DELEGATION_TOOLS = frozenset({"add_task", "create_project"})
+
+# What he may still do once he has delegated: finish describing the plan and tell you
+# about it. Gathering is over — that is the point.
+_PLANNING_TOOLS = frozenset(
+    {
+        "add_milestone",
+        "add_checklist_item",
+        "update_project",
+        "update_task",
+        "view_task",
+        "list_tasks",
+        "comment_on_task",
+        "ask_on_task",
+        "take_note",
+        "journal",
+        "remember",
+    }
+)
+
+_DELEGATED_DIRECTIVE = (
+    "(You've handed that to yourself as work for later, so stop working on it now — "
+    "that's what the task is for, and you'll have a whole tick's budget for it. "
+    "Finish describing the plan if it needs it, then tell them what you've set up and "
+    "what you'll do first.)"
+)
+
 # Anything that leaves a trace behind after the turn ends. Broader than the loop
 # detector's notion of progress in autonomy.py — that one deliberately excludes
 # write_file (he "wrote files" while looping, but they were raw page dumps). Here
@@ -195,6 +227,7 @@ def stream_agent(
     budget = max_rounds or tuning.value("max_rounds")
     reserve = min(tuning.value("landing_reserve"), max(2, budget // 3))
     landing = False
+    delegated = False  # did he hand this to a future tick?
     persisted = False  # did anything this turn leave a trace?
     nudged = False  # the "don't walk away empty-handed" nudge fires at most once
 
@@ -216,6 +249,12 @@ def stream_agent(
             convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
         if landing:
             schemas = [s for s in schemas if s["function"]["name"] in _LANDING_TOOLS]
+        elif delegated:
+            # Not the same as landing: he keeps his remaining rounds and may still
+            # flesh out the plan. What he loses is the ability to *do* the work —
+            # no searching, no fetching, no shell.
+            allowed = _LANDING_TOOLS | _PLANNING_TOOLS
+            schemas = [s for s in schemas if s["function"]["name"] in allowed]
 
         content = ""
         tool_calls: list[dict] = []
@@ -298,8 +337,15 @@ def stream_agent(
 
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
             for step, result in zip(batch, results, strict=True):
-                if step["name"] in _PERSISTED_TOOLS and isinstance(result, dict) and result.get("ok", True):
+                worked = isinstance(result, dict) and result.get("ok", True)
+                if step["name"] in _PERSISTED_TOOLS and worked:
                     persisted = True
+                if step["name"] in _DELEGATION_TOOLS and worked and not delegated:
+                    delegated = True
+                    if tuning.value("stop_after_delegating"):
+                        convo.append({"role": "user", "content": _DELEGATED_DIRECTIVE})
+                    else:
+                        delegated = False  # the guardrail is switched off
                 yield {"type": "tool_result", "id": step["id"], "name": step["name"], "result": result}
                 convo.append({"role": "tool", "tool_name": step["name"], "content": json.dumps(result)})
 

@@ -23,6 +23,12 @@ from kith.services.persona import fragment_paths
 __all__ = ["create_app"]
 
 
+#: The dev server, on both spellings of loopback. A page on the public internet
+#: cannot forge its Origin, so listing these costs nothing.
+_DEV_PORTS = (5173, 4173)
+_ALLOWED_ORIGINS = [f"http://{host}:{port}" for host in ("localhost", "127.0.0.1") for port in _DEV_PORTS]
+
+
 def create_app() -> APIFlask:
     app = APIFlask(
         __name__,
@@ -36,9 +42,17 @@ def create_app() -> APIFlask:
         "and chat config, and streams reasoning + answer as NDJSON."
     )
 
-    # Allow any local origin so the API is usable independently (curl, other
-    # tools, a browser hitting it directly), not just via the frontend's proxy.
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    # NOT "*", which is what this was. A wildcard here means every website you
+    # visit while Kith is running can read his files, his config and his memory,
+    # and can POST as you — a page at evil.example was answered with
+    # `Access-Control-Allow-Origin: https://evil.example` and got the lot. Being
+    # bound to loopback is no protection: the browser is on loopback too.
+    #
+    # Nothing legitimate needed the wildcard. The desktop app serves the interface
+    # from this same process, so it is same-origin and sends no CORS preflight at
+    # all; the only real cross-origin caller is the Vite dev server. curl and other
+    # tools send no Origin header and are unaffected by any of this.
+    CORS(app, resources={r"/api/*": {"origins": _ALLOWED_ORIGINS}})
 
     app.register_blueprint(api, url_prefix="/api")
 

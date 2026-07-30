@@ -13,6 +13,7 @@ import { type FC, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { looksLikeHisFile, useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
 const MarkdownTextImpl = () => {
@@ -41,12 +42,8 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
         {language}
       </span>
       <TooltipIconButton tooltip="Copy" onClick={onCopy}>
-        {!isCopied && (
-          <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
-        )}
-        {isCopied && (
-          <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-        )}
+        {!isCopied && <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />}
+        {isCopied && <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />}
       </TooltipIconButton>
     </div>
   );
@@ -115,30 +112,18 @@ const defaultComponents = memoizeMarkdownComponents({
   ),
   h5: ({ className, ...props }) => (
     <h5
-      className={cn(
-        "aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0",
-        className,
-      )}
+      className={cn("aui-md-h5 mt-3 mb-1 text-sm font-semibold first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
   h6: ({ className, ...props }) => (
     <h6
-      className={cn(
-        "aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0",
-        className,
-      )}
+      className={cn("aui-md-h6 mt-3 mb-1 text-sm font-medium first:mt-0 last:mb-0", className)}
       {...props}
     />
   ),
   p: ({ className, ...props }) => (
-    <p
-      className={cn(
-        "aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0",
-        className,
-      )}
-      {...props}
-    />
+    <p className={cn("aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
   ),
   a: ({ className, ...props }) => (
     <a
@@ -177,10 +162,7 @@ const defaultComponents = memoizeMarkdownComponents({
     />
   ),
   hr: ({ className, ...props }) => (
-    <hr
-      className={cn("aui-md-hr border-muted-foreground/20 my-3", className)}
-      {...props}
-    />
+    <hr className={cn("aui-md-hr border-muted-foreground/20 my-3", className)} {...props} />
   ),
   table: ({ className, ...props }) => (
     <table
@@ -222,16 +204,10 @@ const defaultComponents = memoizeMarkdownComponents({
     <li className={cn("aui-md-li leading-relaxed", className)} {...props} />
   ),
   strong: ({ className, ...props }) => (
-    <strong
-      className={cn("aui-md-strong font-semibold", className)}
-      {...props}
-    />
+    <strong className={cn("aui-md-strong font-semibold", className)} {...props} />
   ),
   sup: ({ className, ...props }) => (
-    <sup
-      className={cn("aui-md-sup [&>a]:text-xs [&>a]:no-underline", className)}
-      {...props}
-    />
+    <sup className={cn("aui-md-sup [&>a]:text-xs [&>a]:no-underline", className)} {...props} />
   ),
   pre: ({ className, ...props }) => (
     <pre
@@ -242,8 +218,27 @@ const defaultComponents = memoizeMarkdownComponents({
       {...props}
     />
   ),
-  code: function Code({ className, ...props }) {
+  code: function Code({ className, children, ...props }) {
     const isCodeBlock = useIsMarkdownCodeBlock();
+    const openFile = useFileViewer((state) => state.open);
+    const text = typeof children === "string" ? children : "";
+
+    // A path he wrote in backticks becomes something you can click. Only inline code,
+    // and only a recognised file shape — see lib/files.ts for why scanning prose or
+    // fenced blocks would be worse than not doing this at all.
+    if (!isCodeBlock && looksLikeHisFile(text)) {
+      return (
+        <button
+          type="button"
+          onClick={() => openFile(text)}
+          title={`Open ${text.trim()}`}
+          className="aui-md-file-mention bg-kith-soft text-kith decoration-kith/40 hover:decoration-kith cursor-pointer rounded-md px-1.5 py-0.5 font-mono text-[0.85em] underline decoration-dotted underline-offset-2"
+        >
+          {children}
+        </button>
+      );
+    }
+
     return (
       <code
         className={cn(
@@ -252,7 +247,9 @@ const defaultComponents = memoizeMarkdownComponents({
           className,
         )}
         {...props}
-      />
+      >
+        {children}
+      </code>
     );
   },
   CodeHeader,

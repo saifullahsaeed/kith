@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/app-header";
 import { ControlPanel } from "@/components/control-panel";
 import { SettingsPage } from "@/components/settings/settings-page";
+import { WorkspaceFileViewer } from "@/components/workspace-file-viewer";
 import { InboxPanel } from "@/components/inbox-panel";
 import { MindPanel } from "@/components/mind-panel";
 import { useAutonomy } from "@/hooks/use-autonomy";
@@ -139,6 +140,9 @@ export function Workspace({
             </div>
           </div>
         </div>
+        {/* One viewer for the whole app — a path in a message, a deliverable, and the
+            file browser all open this. */}
+        <WorkspaceFileViewer />
         {inboxOpen ? <InboxPanel inbox={inbox} onClose={() => setInboxOpen(false)} /> : null}
         {route.settingsTab ? (
           <SettingsPage

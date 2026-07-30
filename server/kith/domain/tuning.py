@@ -36,15 +36,15 @@ class Tunable:
     label: str
     #: What it does, then what breaks at the extremes.
     help: str
-    default: int | float | str
+    default: int | float | str | bool
     group: str
-    kind: Literal["int", "float", "text"] = "int"
+    kind: Literal["int", "float", "text", "bool"] = "int"
     minimum: float | None = None
     maximum: float | None = None
     #: A unit for the UI to render after the field ("rounds", "seconds", "ticks").
     unit: str = ""
 
-    def coerce(self, raw: object) -> int | float | str:
+    def coerce(self, raw: object) -> int | float | str | bool:
         """Read a value of this knob's type, or raise ValueError saying why not.
 
         Bounds are clamped rather than rejected: a slider that refuses is annoying,
@@ -53,6 +53,12 @@ class Tunable:
         """
         if self.kind == "text":
             return str(raw).strip()
+        if self.kind == "bool":
+            # Tolerant on the way in: a checkbox sends a real boolean, but the
+            # environment can only ever send a string.
+            if isinstance(raw, bool):
+                return raw
+            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
         try:
             value = float(raw) if self.kind == "float" else int(float(raw))
         except (TypeError, ValueError):
@@ -157,6 +163,18 @@ TUNABLES: tuple[Tunable, ...] = (
         minimum=1,
         maximum=16,
         unit="calls",
+    ),
+    Tunable(
+        key="stop_after_delegating",
+        env="KITH_STOP_AFTER_DELEGATING",
+        label="Stop working once he's delegated",
+        help="When he files a task or starts a project, that's a decision the work "
+        "happens later — so he stops researching it and tells you what he set up. Off, "
+        "and he files a task and then immediately spends the rest of the turn on it, "
+        "which is neither delegating nor finishing.",
+        default=True,
+        group="turn",
+        kind="bool",
     ),
     # -- memory ------------------------------------------------------------- #
     Tunable(

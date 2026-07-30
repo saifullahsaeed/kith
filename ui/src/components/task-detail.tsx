@@ -1,11 +1,27 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowUpRight, Check, ChevronRight, Download, Expand, FileCode2, FileText, Link2, ListChecks, MessageCircle, Plus, Send, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Check,
+  ChevronRight,
+  Download,
+  Expand,
+  FileCode2,
+  FileText,
+  Link2,
+  ListChecks,
+  MessageCircle,
+  Plus,
+  Send,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/presence";
 import { FilePreviewDialog } from "@/components/file-view";
+import { handOffAndOpen } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import {
   createBrainItem,
@@ -18,10 +34,16 @@ import {
 
 const STATUSES = ["backlog", "todo", "doing", "waiting", "done", "dropped"];
 const STATUS_LABEL: Record<string, string> = {
-  backlog: "Backlog", todo: "To do", doing: "Doing", waiting: "Waiting on you", done: "Done", dropped: "Dropped",
+  backlog: "Backlog",
+  todo: "To do",
+  doing: "Doing",
+  waiting: "Waiting on you",
+  done: "Done",
+  dropped: "Dropped",
 };
 const PRIORITIES = ["high", "normal", "low"];
-const FIELD_INPUT = "rounded-lg border bg-card/40 px-3 py-1.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/25";
+const FIELD_INPUT =
+  "rounded-lg border bg-card/40 px-3 py-1.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/25";
 
 /** The full-page view of one task: description, checklist, deliverables, and the
  * comment thread (you + him). Rendered in place of the tab content, not a panel. */
@@ -46,7 +68,9 @@ export function TaskDetailPage({
   const [item, setItem] = useState("");
 
   const load = useCallback(() => {
-    fetchTaskDetail(taskId).then(setTask).catch(() => {});
+    fetchTaskDetail(taskId)
+      .then(setTask)
+      .catch(() => {});
   }, [taskId]);
   useEffect(() => {
     load();
@@ -103,13 +127,18 @@ export function TaskDetailPage({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = (d.title || "deliverable").replace(/\s+/g, "_") + (d.kind === "file" ? "" : ".txt");
+    a.download =
+      (d.title || "deliverable").replace(/\s+/g, "_") + (d.kind === "file" ? "" : ".txt");
     a.click();
     URL.revokeObjectURL(url);
   };
 
   if (!task) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading task…</div>;
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        Loading task…
+      </div>
+    );
   }
 
   const done = task.checklist.filter((c) => c.done).length;
@@ -147,18 +176,32 @@ export function TaskDetailPage({
         </div>
         <div className="mt-4 ml-12 flex flex-wrap gap-3">
           <Field label="Status">
-            <Dropdown value={task.status} onChange={(v) => patch({ status: v })} className="w-36"
-              options={STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))} ariaLabel="Status" />
+            <Dropdown
+              value={task.status}
+              onChange={(v) => patch({ status: v })}
+              className="w-36"
+              options={STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))}
+              ariaLabel="Status"
+            />
           </Field>
           <Field label="Priority">
-            <Dropdown value={task.priority} onChange={(v) => patch({ priority: v })} options={PRIORITIES} className="w-28" ariaLabel="Priority" />
+            <Dropdown
+              value={task.priority}
+              onChange={(v) => patch({ priority: v })}
+              options={PRIORITIES}
+              className="w-28"
+              ariaLabel="Priority"
+            />
           </Field>
           <Field label="Project">
             {/* Tasks live under projects now, so this is how one moves house. */}
             <Dropdown
               value={task.project_id == null ? "none" : String(task.project_id)}
               onChange={(v) => patch({ project_id: v === "none" ? null : Number(v) })}
-              options={[{ value: "none", label: "No project" }, ...projects.map((p) => ({ value: String(p.id), label: p.name }))]}
+              options={[
+                { value: "none", label: "No project" },
+                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+              ]}
               className="w-44"
               ariaLabel="Project"
             />
@@ -167,7 +210,9 @@ export function TaskDetailPage({
             <input
               type="date"
               value={task.due_at ? task.due_at.slice(0, 10) : ""}
-              onChange={(e) => patch({ due_at: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })}
+              onChange={(e) =>
+                patch({ due_at: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })
+              }
               className={FIELD_INPUT}
             />
           </Field>
@@ -182,7 +227,9 @@ export function TaskDetailPage({
             <textarea
               value={task.description}
               onChange={(e) => setTask({ ...task, description: e.target.value })}
-              onBlur={(e) => e.target.value !== task.description && patch({ description: e.target.value })}
+              onBlur={(e) =>
+                e.target.value !== task.description && patch({ description: e.target.value })
+              }
               placeholder="What this task is, and what 'done' looks like…"
               className={`${FIELD_INPUT} min-h-24 w-full resize-y rounded-xl px-3.5 py-2.5 leading-relaxed`}
             />
@@ -194,7 +241,10 @@ export function TaskDetailPage({
               {task.checklist.length ? (
                 <span className="ml-2 inline-flex items-center gap-2 font-normal normal-case tracking-normal text-muted-foreground">
                   <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
-                    <span className="block h-full rounded-full bg-kith transition-all" style={{ width: `${pct}%` }} />
+                    <span
+                      className="block h-full rounded-full bg-kith transition-all"
+                      style={{ width: `${pct}%` }}
+                    />
                   </span>
                   {done}/{task.checklist.length}
                 </span>
@@ -202,27 +252,49 @@ export function TaskDetailPage({
             </H>
             <ul className="space-y-1">
               {task.checklist.map((c) => (
-                <li key={c.id} className="group flex items-center gap-2.5 rounded-md px-1 py-1 text-sm hover:bg-accent/40">
+                <li
+                  key={c.id}
+                  className="group flex items-center gap-2.5 rounded-md px-1 py-1 text-sm hover:bg-accent/40"
+                >
                   <button
                     onClick={() => toggleItem(c.id, !c.done)}
                     className={cn(
                       "flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
-                      c.done ? "border-kith bg-kith text-primary-foreground" : "border-muted-foreground/40 hover:border-kith",
+                      c.done
+                        ? "border-kith bg-kith text-primary-foreground"
+                        : "border-muted-foreground/40 hover:border-kith",
                     )}
                     aria-label="Toggle"
                   >
                     {c.done ? <Check className="size-3" /> : null}
                   </button>
-                  <span className={cn("min-w-0 flex-1", c.done && "text-muted-foreground line-through")}>{c.text}</span>
-                  <button onClick={() => del("checklist_item", c.id)} className="text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-destructive" aria-label="Delete">
+                  <span
+                    className={cn("min-w-0 flex-1", c.done && "text-muted-foreground line-through")}
+                  >
+                    {c.text}
+                  </span>
+                  <button
+                    onClick={() => del("checklist_item", c.id)}
+                    className="text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-destructive"
+                    aria-label="Delete"
+                  >
                     <Trash2 className="size-3.5" />
                   </button>
                 </li>
               ))}
             </ul>
             <div className="mt-2 flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 p-1.5 pl-3 focus-within:border-ring/60">
-              <input value={item} onChange={(e) => setItem(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addItem()} placeholder="Add a step…" className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/55" />
-              <Button size="xs" variant="outline" onClick={addItem}><Plus className="size-3.5" />Add</Button>
+              <input
+                value={item}
+                onChange={(e) => setItem(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addItem()}
+                placeholder="Add a step…"
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/55"
+              />
+              <Button size="xs" variant="outline" onClick={addItem}>
+                <Plus className="size-3.5" />
+                Add
+              </Button>
             </div>
           </section>
 
@@ -230,7 +302,9 @@ export function TaskDetailPage({
             <H>
               Deliverables
               {task.deliverables.length ? (
-                <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground">{task.deliverables.length}</span>
+                <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground">
+                  {task.deliverables.length}
+                </span>
               ) : null}
             </H>
             {task.deliverables.length === 0 ? (
@@ -240,7 +314,12 @@ export function TaskDetailPage({
             ) : (
               <ul className="space-y-2">
                 {task.deliverables.map((d) => (
-                  <DeliverableRow key={d.id} d={d} onDelete={() => delDeliverable(d)} onDownload={() => downloadDeliverable(d)} />
+                  <DeliverableRow
+                    key={d.id}
+                    d={d}
+                    onDelete={() => delDeliverable(d)}
+                    onDownload={() => downloadDeliverable(d)}
+                  />
                 ))}
               </ul>
             )}
@@ -274,7 +353,9 @@ export function TaskDetailPage({
                     </div>
                   ) : (
                     <div key={c.id} className="flex items-start gap-2">
-                      <span className="mt-1.5"><PresenceOrb size={7} /></span>
+                      <span className="mt-1.5">
+                        <PresenceOrb size={7} />
+                      </span>
                       <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-border/70 bg-card px-3 py-2 text-sm">
                         <p className="break-words whitespace-pre-wrap">{c.body}</p>
                       </div>
@@ -298,7 +379,13 @@ export function TaskDetailPage({
                   placeholder="Comment on this task…"
                   className="max-h-24 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm outline-none"
                 />
-                <Button size="icon" className="size-8 shrink-0 rounded-full" onClick={sendReply} disabled={!reply.trim()} aria-label="Send">
+                <Button
+                  size="icon"
+                  className="size-8 shrink-0 rounded-full"
+                  onClick={sendReply}
+                  disabled={!reply.trim()}
+                  aria-label="Send"
+                >
                   <Send className="size-4" />
                 </Button>
               </div>
@@ -312,8 +399,14 @@ export function TaskDetailPage({
 
 /** One produced thing. Files and text open in the preview dialog; links just
  * go out to the web. */
-function DeliverableRow({ d, onDelete, onDownload }: {
-  d: Detail["deliverables"][number]; onDelete: () => void; onDownload: () => void;
+function DeliverableRow({
+  d,
+  onDelete,
+  onDownload,
+}: {
+  d: Detail["deliverables"][number];
+  onDelete: () => void;
+  onDownload: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState<string | null>(d.kind === "text" ? d.content : null);
@@ -322,7 +415,11 @@ function DeliverableRow({ d, onDelete, onDownload }: {
   const isFile = d.kind === "file";
   // A text deliverable is his prose — read it as Markdown, like a file would be.
   const name = isFile ? d.content : `${(d.title || "deliverable").replace(/\s+/g, "-")}.md`;
-  const sub = isLink ? d.content : isFile ? d.content : `${d.content.length.toLocaleString()} chars`;
+  const sub = isLink
+    ? d.content
+    : isFile
+      ? d.content
+      : `${d.content.length.toLocaleString()} chars`;
 
   const preview = () => {
     setOpen(true);
@@ -336,29 +433,56 @@ function DeliverableRow({ d, onDelete, onDownload }: {
   return (
     <li className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card/50 p-3 shadow-sm transition-all hover:border-border hover:shadow-md">
       <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/70 text-sky-500">
-        {isLink ? <Link2 className="size-4" /> : isFile ? <FileCode2 className="size-4" /> : <FileText className="size-4" />}
+        {isLink ? (
+          <Link2 className="size-4" />
+        ) : isFile ? (
+          <FileCode2 className="size-4" />
+        ) : (
+          <FileText className="size-4" />
+        )}
       </span>
       {isLink ? (
         <a href={d.content} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium transition-colors group-hover:text-kith">{d.title}</span>
+          <span className="block truncate text-sm font-medium transition-colors group-hover:text-kith">
+            {d.title}
+          </span>
           <span className="block truncate font-mono text-[11px] text-muted-foreground">{sub}</span>
         </a>
       ) : (
         <button onClick={preview} className="min-w-0 flex-1 text-left" title="Open preview">
-          <span className="block truncate text-sm font-medium transition-colors group-hover:text-kith">{d.title}</span>
+          <span className="block truncate text-sm font-medium transition-colors group-hover:text-kith">
+            {d.title}
+          </span>
           <span className="block truncate font-mono text-[11px] text-muted-foreground">{sub}</span>
         </button>
       )}
       <div className="flex shrink-0 items-center gap-0.5">
         {isLink ? (
-          <RowAction label="Open link" onClick={() => window.open(d.content, "_blank", "noreferrer")} icon={<ArrowUpRight className="size-4" />} />
+          <RowAction
+            label="Open link"
+            onClick={() => window.open(d.content, "_blank", "noreferrer")}
+            icon={<ArrowUpRight className="size-4" />}
+          />
         ) : (
           <>
-            <RowAction label="Open preview" onClick={preview} icon={<Expand className="size-4" />} />
-            <RowAction label="Download" onClick={onDownload} icon={<Download className="size-4" />} />
+            <RowAction
+              label="Open preview"
+              onClick={preview}
+              icon={<Expand className="size-4" />}
+            />
+            <RowAction
+              label="Download"
+              onClick={onDownload}
+              icon={<Download className="size-4" />}
+            />
           </>
         )}
-        <RowAction label="Delete" onClick={onDelete} icon={<Trash2 className="size-3.5" />} danger />
+        <RowAction
+          label="Delete"
+          onClick={onDelete}
+          icon={<Trash2 className="size-3.5" />}
+          danger
+        />
       </div>
       {open ? (
         <FilePreviewDialog
@@ -368,16 +492,29 @@ function DeliverableRow({ d, onDelete, onDownload }: {
           title={d.title || name}
           content={body}
           error={err || undefined}
-          badge={<span className="shrink-0 rounded bg-kith-soft px-1.5 py-0.5 font-medium text-kith">deliverable</span>}
+          badge={
+            <span className="shrink-0 rounded bg-kith-soft px-1.5 py-0.5 font-medium text-kith">
+              deliverable
+            </span>
+          }
           onDownload={onDownload}
+          onOpenOnHost={isFile ? (reveal) => handOffAndOpen(d.content, reveal) : undefined}
         />
       ) : null}
     </li>
   );
 }
 
-function RowAction({ label, onClick, icon, danger }: {
-  label: string; onClick: () => void; icon: ReactNode; danger?: boolean;
+function RowAction({
+  label,
+  onClick,
+  icon,
+  danger,
+}: {
+  label: string;
+  onClick: () => void;
+  icon: ReactNode;
+  danger?: boolean;
 }) {
   return (
     <button
@@ -386,7 +523,8 @@ function RowAction({ label, onClick, icon, danger }: {
       aria-label={label}
       className={cn(
         "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-        danger && "opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive",
+        danger &&
+          "opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive",
       )}
     >
       {icon}
@@ -395,13 +533,19 @@ function RowAction({ label, onClick, icon, danger }: {
 }
 
 function H({ children }: { children: ReactNode }) {
-  return <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{children}</div>;
+  return (
+    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+      {children}
+    </div>
+  );
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">{label}</span>
+      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+        {label}
+      </span>
       {children}
     </label>
   );

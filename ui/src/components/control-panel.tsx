@@ -42,6 +42,7 @@ import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { TaskDetailPage } from "@/components/task-detail";
 import { CodeBlock, FilePreviewDialog, Markdown } from "@/components/file-view";
+import { handOffAndOpen } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import {
   createBrainItem,
@@ -59,7 +60,21 @@ import {
   type WorkspaceEntry,
 } from "@/lib/backend/brain";
 
-type Tab = "overview" | "lifetime" | "memory" | "notes" | "journal" | "projects" | "curiosities" | "reminders" | "schedules" | "messages" | "people" | "sources" | "workspace" | "tools";
+type Tab =
+  | "overview"
+  | "lifetime"
+  | "memory"
+  | "notes"
+  | "journal"
+  | "projects"
+  | "curiosities"
+  | "reminders"
+  | "schedules"
+  | "messages"
+  | "people"
+  | "sources"
+  | "workspace"
+  | "tools";
 
 /** Work lives in one place: Projects → a project → its tasks. Tasks with no
  * project sit in the "No project" tray, addressed by this sentinel. */
@@ -103,23 +118,47 @@ const TASK_PRIORITIES = ["high", "normal", "low"];
 const PROJECT_STATUSES = ["active", "done", "paused", "archived"];
 const CURIOSITY_STATUSES = ["open", "exploring", "explored", "dropped"];
 const COLUMN_LABEL: Record<string, string> = {
-  backlog: "Backlog", todo: "To do", doing: "Doing", waiting: "Waiting on you", done: "Done",
+  backlog: "Backlog",
+  todo: "To do",
+  doing: "Doing",
+  waiting: "Waiting on you",
+  done: "Done",
 };
 /** How each kind reads in a "Delete this …?" question. */
 const KIND_LABEL: Record<string, string> = {
-  memory: "memory", note: "note", journal: "journal entry", task: "task", project: "project",
-  milestone: "milestone", curiosity: "curiosity", reminder: "reminder", schedule: "schedule",
-  message: "message", person: "person", source: "source", tool: "tool",
-  deliverable: "deliverable", checklist_item: "step", task_comment: "comment",
+  memory: "memory",
+  note: "note",
+  journal: "journal entry",
+  task: "task",
+  project: "project",
+  milestone: "milestone",
+  curiosity: "curiosity",
+  reminder: "reminder",
+  schedule: "schedule",
+  message: "message",
+  person: "person",
+  source: "source",
+  tool: "tool",
+  deliverable: "deliverable",
+  checklist_item: "step",
+  task_comment: "comment",
 };
 
 /** Maps each overview stat / nav entry to the tab it opens. Tasks land on
  * Projects, since that's where work lives now. */
 const TAB_FOR: Record<string, Tab> = {
-  Memories: "memory", Notes: "notes", Journal: "journal", Projects: "projects",
-  Tasks: "projects", Curiosities: "curiosities", Reminders: "reminders",
-  Schedules: "schedules", Messages: "messages", People: "people",
-  Sources: "sources", Tools: "tools",
+  Memories: "memory",
+  Notes: "notes",
+  Journal: "journal",
+  Projects: "projects",
+  Tasks: "projects",
+  Curiosities: "curiosities",
+  Reminders: "reminders",
+  Schedules: "schedules",
+  Messages: "messages",
+  People: "people",
+  Sources: "sources",
+  Tools: "tools",
 };
 
 /** A full-screen window into everything Kith is — browse, search, edit, prune.
@@ -219,7 +258,9 @@ export function ControlPanel({
         </span>
         <div className="min-w-0 leading-tight">
           <div className="text-sm font-semibold tracking-tight">Control panel</div>
-          <div className="hidden text-[11px] text-muted-foreground sm:block">everything he is — browse, search, prune</div>
+          <div className="hidden text-[11px] text-muted-foreground sm:block">
+            everything he is — browse, search, prune
+          </div>
         </div>
         <div className="relative ml-3 w-56 md:w-72">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -244,7 +285,13 @@ export function ControlPanel({
         <Button variant="ghost" size="icon" className="size-8" onClick={load} aria-label="Refresh">
           <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
         </Button>
-        <Button variant="ghost" size="icon" className="size-8 hover:text-destructive" onClick={onClose} aria-label="Close">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 hover:text-destructive"
+          onClick={onClose}
+          aria-label="Close"
+        >
           <X className="size-4" />
         </Button>
       </header>
@@ -252,59 +299,126 @@ export function ControlPanel({
       <div className="relative z-10 flex min-h-0 flex-1">
         <nav className="w-56 shrink-0 overflow-y-auto border-r border-border/60 bg-sidebar/40 px-3 py-4 backdrop-blur-sm">
           <div className="space-y-0.5">
-            <TabButton icon={<Sparkles className="size-4" />} active={tab === "overview"} onClick={() => openTab("overview")}>
+            <TabButton
+              icon={<Sparkles className="size-4" />}
+              active={tab === "overview"}
+              onClick={() => openTab("overview")}
+            >
               Overview
             </TabButton>
-            <TabButton icon={<Clock className="size-4" />} active={tab === "lifetime"} onClick={() => openTab("lifetime")}>
+            <TabButton
+              icon={<Clock className="size-4" />}
+              active={tab === "lifetime"}
+              onClick={() => openTab("lifetime")}
+            >
               Lifetime
             </TabButton>
           </div>
 
           <NavGroup label="Mind">
-            <TabButton icon={<Brain className="size-4" />} active={tab === "memory"} count={counts.memories} onClick={() => openTab("memory")}>
+            <TabButton
+              icon={<Brain className="size-4" />}
+              active={tab === "memory"}
+              count={counts.memories}
+              onClick={() => openTab("memory")}
+            >
               Memory
             </TabButton>
-            <TabButton icon={<StickyNote className="size-4" />} active={tab === "notes"} count={counts.notes} onClick={() => openTab("notes")}>
+            <TabButton
+              icon={<StickyNote className="size-4" />}
+              active={tab === "notes"}
+              count={counts.notes}
+              onClick={() => openTab("notes")}
+            >
               Notes
             </TabButton>
-            <TabButton icon={<NotebookPen className="size-4" />} active={tab === "journal"} count={counts.journal} onClick={() => openTab("journal")}>
+            <TabButton
+              icon={<NotebookPen className="size-4" />}
+              active={tab === "journal"}
+              count={counts.journal}
+              onClick={() => openTab("journal")}
+            >
               Journal
             </TabButton>
-            <TabButton icon={<Sparkles className="size-4" />} active={tab === "curiosities"} count={counts.curiosities} onClick={() => openTab("curiosities")}>
+            <TabButton
+              icon={<Sparkles className="size-4" />}
+              active={tab === "curiosities"}
+              count={counts.curiosities}
+              onClick={() => openTab("curiosities")}
+            >
               Curiosities
             </TabButton>
           </NavGroup>
 
           <NavGroup label="Doing">
             {/* Projects is the way in to all work — tasks live inside one. */}
-            <TabButton icon={<FolderKanban className="size-4" />} active={tab === "projects"} count={counts.projects} onClick={() => openTab("projects")}>
+            <TabButton
+              icon={<FolderKanban className="size-4" />}
+              active={tab === "projects"}
+              count={counts.projects}
+              onClick={() => openTab("projects")}
+            >
               Projects
             </TabButton>
-            <TabButton icon={<BellRing className="size-4" />} active={tab === "reminders"} count={counts.reminders} onClick={() => openTab("reminders")}>
+            <TabButton
+              icon={<BellRing className="size-4" />}
+              active={tab === "reminders"}
+              count={counts.reminders}
+              onClick={() => openTab("reminders")}
+            >
               Reminders
             </TabButton>
-            <TabButton icon={<Repeat className="size-4" />} active={tab === "schedules"} count={counts.schedules} onClick={() => openTab("schedules")}>
+            <TabButton
+              icon={<Repeat className="size-4" />}
+              active={tab === "schedules"}
+              count={counts.schedules}
+              onClick={() => openTab("schedules")}
+            >
               Schedules
             </TabButton>
           </NavGroup>
 
           <NavGroup label="Relationships">
-            <TabButton icon={<MessageCircle className="size-4" />} active={tab === "messages"} count={counts.messages} onClick={() => openTab("messages")}>
+            <TabButton
+              icon={<MessageCircle className="size-4" />}
+              active={tab === "messages"}
+              count={counts.messages}
+              onClick={() => openTab("messages")}
+            >
               Messages
             </TabButton>
-            <TabButton icon={<User className="size-4" />} active={tab === "people"} count={counts.people} onClick={() => openTab("people")}>
+            <TabButton
+              icon={<User className="size-4" />}
+              active={tab === "people"}
+              count={counts.people}
+              onClick={() => openTab("people")}
+            >
               People
             </TabButton>
           </NavGroup>
 
           <NavGroup label="Workspace">
-            <TabButton icon={<FileText className="size-4" />} active={tab === "sources"} count={counts.sources} onClick={() => openTab("sources")}>
+            <TabButton
+              icon={<FileText className="size-4" />}
+              active={tab === "sources"}
+              count={counts.sources}
+              onClick={() => openTab("sources")}
+            >
               Sources
             </TabButton>
-            <TabButton icon={<FolderTree className="size-4" />} active={tab === "workspace"} onClick={() => openTab("workspace")}>
+            <TabButton
+              icon={<FolderTree className="size-4" />}
+              active={tab === "workspace"}
+              onClick={() => openTab("workspace")}
+            >
               Files
             </TabButton>
-            <TabButton icon={<Wrench className="size-4" />} active={tab === "tools"} count={counts.tools} onClick={() => openTab("tools")}>
+            <TabButton
+              icon={<Wrench className="size-4" />}
+              active={tab === "tools"}
+              count={counts.tools}
+              onClick={() => openTab("tools")}
+            >
               Tools
             </TabButton>
           </NavGroup>
@@ -317,7 +431,10 @@ export function ControlPanel({
               Loading his mind…
             </div>
           ) : openTask != null ? (
-            <div key={`task-${openTask}`} className="mx-auto max-w-5xl animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8">
+            <div
+              key={`task-${openTask}`}
+              className="mx-auto max-w-5xl animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
+            >
               <TaskDetailPage
                 taskId={openTask}
                 projects={snap.projects ?? []}
@@ -328,7 +445,10 @@ export function ControlPanel({
               />
             </div>
           ) : openProject != null ? (
-            <div key={`project-${openProject}`} className="mx-auto max-w-[92rem] animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8">
+            <div
+              key={`project-${openProject}`}
+              className="mx-auto max-w-[92rem] animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
+            >
               <ProjectPage
                 {...props}
                 snap={snap}
@@ -338,7 +458,10 @@ export function ControlPanel({
               />
             </div>
           ) : (
-            <div key={tab} className="mx-auto max-w-5xl animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8">
+            <div
+              key={tab}
+              className="mx-auto max-w-5xl animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
+            >
               {tab === "overview" ? (
                 <Overview snap={snap} timeline={timeline} query={query} onNavigate={openTab} />
               ) : tab === "lifetime" ? (
@@ -396,8 +519,18 @@ function NavGroup({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function TabButton({ icon, count, active, onClick, children }: {
-  icon: ReactNode; count?: number; active: boolean; onClick: () => void; children: ReactNode;
+function TabButton({
+  icon,
+  count,
+  active,
+  onClick,
+  children,
+}: {
+  icon: ReactNode;
+  count?: number;
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -415,7 +548,14 @@ function TabButton({ icon, count, active, onClick, children }: {
           active ? "opacity-100" : "opacity-0",
         )}
       />
-      <span className={cn("shrink-0 transition-colors", active ? "text-kith" : "text-muted-foreground group-hover:text-foreground")}>{icon}</span>
+      <span
+        className={cn(
+          "shrink-0 transition-colors",
+          active ? "text-kith" : "text-muted-foreground group-hover:text-foreground",
+        )}
+      >
+        {icon}
+      </span>
       <span className="flex-1 truncate">{children}</span>
       {count !== undefined ? (
         <span
@@ -433,20 +573,40 @@ function TabButton({ icon, count, active, onClick, children }: {
 
 /* ── Shared page furniture ──────────────────────────────────────────────── */
 
-function PageHeader({ icon, color, title, subtitle, count, children }: {
-  icon: ReactNode; color: keyof typeof CHIP; title: string; subtitle?: string; count?: number; children?: ReactNode;
+function PageHeader({
+  icon,
+  color,
+  title,
+  subtitle,
+  count,
+  children,
+}: {
+  icon: ReactNode;
+  color: keyof typeof CHIP;
+  title: string;
+  subtitle?: string;
+  count?: number;
+  children?: ReactNode;
 }) {
   return (
     <div className="mb-6 flex flex-wrap items-center gap-x-3.5 gap-y-3 border-b border-border/60 pb-5">
-      <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", CHIP[color])}>{icon}</span>
+      <span
+        className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", CHIP[color])}
+      >
+        {icon}
+      </span>
       <div className="min-w-0 flex-1">
         <h2 className="flex items-baseline gap-2 text-[15px] font-semibold tracking-tight">
           {title}
-          {count !== undefined ? <span className="text-xs font-normal tabular-nums text-muted-foreground">{count}</span> : null}
+          {count !== undefined ? (
+            <span className="text-xs font-normal tabular-nums text-muted-foreground">{count}</span>
+          ) : null}
         </h2>
         {subtitle ? <p className="mt-0.5 text-[13px] text-muted-foreground">{subtitle}</p> : null}
       </div>
-      {children ? <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div> : null}
+      {children ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">{children}</div>
+      ) : null}
     </div>
   );
 }
@@ -468,7 +628,9 @@ function Composer({ children, onSubmit }: { children: ReactNode; onSubmit?: () =
 function SectionLabel({ children, hint }: { children: ReactNode; hint?: string }) {
   return (
     <div className="mb-3 flex items-baseline gap-2">
-      <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{children}</h3>
+      <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        {children}
+      </h3>
       {hint ? <span className="text-xs text-muted-foreground/60">{hint}</span> : null}
     </div>
   );
@@ -478,34 +640,54 @@ function SectionLabel({ children, hint }: { children: ReactNode; hint?: string }
 
 type Stat = [string, number, ReactNode, keyof typeof CHIP];
 
-function Overview({ snap, timeline, query, onNavigate }: {
-  snap: BrainSnapshot; timeline: TimelineEvent[]; query: string; onNavigate: (tab: Tab) => void;
+function Overview({
+  snap,
+  timeline,
+  query,
+  onNavigate,
+}: {
+  snap: BrainSnapshot;
+  timeline: TimelineEvent[];
+  query: string;
+  onNavigate: (tab: Tab) => void;
 }) {
   const c = snap.counts;
   // oxlint-disable react/jsx-key -- these icons are a tuple FIELD (Stat[2]: ReactNode),
   // destructured below as `icon` and rendered into one slot. They are never an array of
   // siblings, so React needs no key here; the two real list renders below do have keys.
   const groups: [string, Stat[]][] = [
-    ["Mind", [
-      ["Memories", c.memories, <Brain className="size-4" />, "violet"],
-      ["Notes", c.notes, <StickyNote className="size-4" />, "amber"],
-      ["Journal", c.journal, <NotebookPen className="size-4" />, "sky"],
-      ["Curiosities", c.curiosities, <Sparkles className="size-4" />, "teal"],
-    ]],
-    ["Doing", [
-      ["Projects", c.projects, <FolderKanban className="size-4" />, "kith"],
-      ["Tasks", c.tasks, <ListChecks className="size-4" />, "emerald"],
-      ["Reminders", c.reminders, <BellRing className="size-4" />, "orange"],
-      ["Schedules", c.schedules, <Repeat className="size-4" />, "orange"],
-    ]],
-    ["Relationships", [
-      ["Messages", c.messages, <MessageCircle className="size-4" />, "pink"],
-      ["People", c.people, <User className="size-4" />, "teal"],
-    ]],
-    ["Workspace", [
-      ["Sources", c.sources, <FileText className="size-4" />, "sky"],
-      ["Tools", c.tools, <Wrench className="size-4" />, "rose"],
-    ]],
+    [
+      "Mind",
+      [
+        ["Memories", c.memories, <Brain className="size-4" />, "violet"],
+        ["Notes", c.notes, <StickyNote className="size-4" />, "amber"],
+        ["Journal", c.journal, <NotebookPen className="size-4" />, "sky"],
+        ["Curiosities", c.curiosities, <Sparkles className="size-4" />, "teal"],
+      ],
+    ],
+    [
+      "Doing",
+      [
+        ["Projects", c.projects, <FolderKanban className="size-4" />, "kith"],
+        ["Tasks", c.tasks, <ListChecks className="size-4" />, "emerald"],
+        ["Reminders", c.reminders, <BellRing className="size-4" />, "orange"],
+        ["Schedules", c.schedules, <Repeat className="size-4" />, "orange"],
+      ],
+    ],
+    [
+      "Relationships",
+      [
+        ["Messages", c.messages, <MessageCircle className="size-4" />, "pink"],
+        ["People", c.people, <User className="size-4" />, "teal"],
+      ],
+    ],
+    [
+      "Workspace",
+      [
+        ["Sources", c.sources, <FileText className="size-4" />, "sky"],
+        ["Tools", c.tools, <Wrench className="size-4" />, "rose"],
+      ],
+    ],
   ];
   const self = snap.self;
   const mood = snap.mood;
@@ -518,12 +700,18 @@ function Overview({ snap, timeline, query, onNavigate }: {
             <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
               <span className="kith-orb size-2" /> Who he's become
             </div>
-            {self?.identity ? <p className="text-xl font-semibold leading-snug tracking-tight">{self.identity}</p> : null}
+            {self?.identity ? (
+              <p className="text-xl font-semibold leading-snug tracking-tight">{self.identity}</p>
+            ) : null}
             {self?.profile ? (
-              <p className="mt-2.5 max-w-2xl whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{self.profile}</p>
+              <p className="mt-2.5 max-w-2xl whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                {self.profile}
+              </p>
             ) : null}
             {!self?.identity && !self?.profile ? (
-              <p className="text-sm text-muted-foreground">He hasn't shaped his own identity yet.</p>
+              <p className="text-sm text-muted-foreground">
+                He hasn't shaped his own identity yet.
+              </p>
             ) : null}
             {mood?.label ? (
               <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/50 pt-4 text-sm">
@@ -531,11 +719,16 @@ function Overview({ snap, timeline, query, onNavigate }: {
                 <span className="font-semibold text-kith">{mood.label}</span>
                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
-                    <span className="block h-full rounded-full bg-kith transition-all" style={{ width: `${clamp(mood.energy)}%` }} />
+                    <span
+                      className="block h-full rounded-full bg-kith transition-all"
+                      style={{ width: `${clamp(mood.energy)}%` }}
+                    />
                   </span>
                   energy {mood.energy}
                 </span>
-                {mood.note ? <span className="truncate text-xs text-muted-foreground/80">· {mood.note}</span> : null}
+                {mood.note ? (
+                  <span className="truncate text-xs text-muted-foreground/80">· {mood.note}</span>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -553,10 +746,21 @@ function Overview({ snap, timeline, query, onNavigate }: {
                   onClick={() => onNavigate(TAB_FOR[name])}
                   className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card/50 p-3.5 text-left transition-all hover:border-kith/40 hover:bg-card/80"
                 >
-                  <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", CHIP[color])}>{icon}</span>
+                  <span
+                    className={cn(
+                      "flex size-9 shrink-0 items-center justify-center rounded-lg",
+                      CHIP[color],
+                    )}
+                  >
+                    {icon}
+                  </span>
                   <span className="min-w-0">
-                    <span className="block text-lg font-semibold tabular-nums leading-none">{n ?? 0}</span>
-                    <span className="mt-1 block truncate text-xs text-muted-foreground">{name}</span>
+                    <span className="block text-lg font-semibold tabular-nums leading-none">
+                      {n ?? 0}
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-muted-foreground">
+                      {name}
+                    </span>
                   </span>
                   <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/60" />
                 </button>
@@ -586,7 +790,12 @@ function Lifetime({ events }: { events: TimelineEvent[] }) {
   if (events.length === 0) {
     return (
       <>
-        <PageHeader icon={<Clock className="size-5" />} color="kith" title="Lifetime" subtitle="Everything he's done, newest first." />
+        <PageHeader
+          icon={<Clock className="size-5" />}
+          color="kith"
+          title="Lifetime"
+          subtitle="Everything he's done, newest first."
+        />
         <EmptyState icon={<Clock className="size-5" />}>Nothing here yet.</EmptyState>
       </>
     );
@@ -594,7 +803,13 @@ function Lifetime({ events }: { events: TimelineEvent[] }) {
   const groups = groupByDay(events, (e) => e.at);
   return (
     <>
-      <PageHeader icon={<Clock className="size-5" />} color="kith" title="Lifetime" count={events.length} subtitle="Everything he's done, newest first." />
+      <PageHeader
+        icon={<Clock className="size-5" />}
+        color="kith"
+        title="Lifetime"
+        count={events.length}
+        subtitle="Everything he's done, newest first."
+      />
       <div className="space-y-8">
         {groups.map(([day, items]) => (
           <div key={day}>
@@ -620,7 +835,9 @@ function TimelineList({ events }: { events: TimelineEvent[] }) {
           </span>
           <div className="min-w-0 flex-1 pt-0.5">
             <span className="break-words text-sm leading-relaxed">{e.text}</span>
-            <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">{time(e.at)}</span>
+            <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">
+              {time(e.at)}
+            </span>
           </div>
         </li>
       ))}
@@ -630,7 +847,14 @@ function TimelineList({ events }: { events: TimelineEvent[] }) {
 
 /* ── Memory (front of mind vs. recall) ──────────────────────────────────── */
 
-function Memories({ snap, query, remove, relevel, create, update }: { snap: BrainSnapshot } & { query: string } & Handlers) {
+function Memories({
+  snap,
+  query,
+  remove,
+  relevel,
+  create,
+  update,
+}: { snap: BrainSnapshot } & { query: string } & Handlers) {
   const [content, setContent] = useState("");
   const [level, setLevel] = useState("recall");
   const items = snap.memories.filter((m) => matches(query, m.content, m.tags.join(" ")));
@@ -643,17 +867,34 @@ function Memories({ snap, query, remove, relevel, create, update }: { snap: Brai
   };
   return (
     <>
-      <PageHeader icon={<Brain className="size-5" />} color="violet" title="Memory" count={items.length} subtitle="What he holds onto — and how close to hand." />
+      <PageHeader
+        icon={<Brain className="size-5" />}
+        color="violet"
+        title="Memory"
+        count={items.length}
+        subtitle="What he holds onto — and how close to hand."
+      />
       <Composer onSubmit={add}>
-        <input value={content} onChange={(e) => setContent(e.target.value)} placeholder="Give him something to remember…" className={`${FIELD} flex-1`} />
+        <input
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder="Give him something to remember…"
+          className={`${FIELD} flex-1`}
+        />
         <Dropdown
           value={level}
           onChange={setLevel}
           className="w-40"
           ariaLabel="Memory level"
-          options={[{ value: "recall", label: "recall" }, { value: "core", label: "front of mind" }]}
+          options={[
+            { value: "recall", label: "recall" },
+            { value: "core", label: "front of mind" },
+          ]}
         />
-        <Button size="sm" onClick={add}><Plus className="size-4" />Remember</Button>
+        <Button size="sm" onClick={add}>
+          <Plus className="size-4" />
+          Remember
+        </Button>
       </Composer>
 
       {items.length === 0 ? (
@@ -662,9 +903,15 @@ function Memories({ snap, query, remove, relevel, create, update }: { snap: Brai
         <div className="space-y-8">
           {core.length > 0 ? (
             <div>
-              <SectionLabel hint={`${core.length}`}><span className="inline-flex items-center gap-1.5"><Pin className="size-3 text-violet-500" /> Front of mind</span></SectionLabel>
+              <SectionLabel hint={`${core.length}`}>
+                <span className="inline-flex items-center gap-1.5">
+                  <Pin className="size-3 text-violet-500" /> Front of mind
+                </span>
+              </SectionLabel>
               <div className="grid gap-3 sm:grid-cols-2">
-                {core.map((m) => <MemoryCard key={m.id} m={m} remove={remove} relevel={relevel} update={update} />)}
+                {core.map((m) => (
+                  <MemoryCard key={m.id} m={m} remove={remove} relevel={relevel} update={update} />
+                ))}
               </div>
             </div>
           ) : null}
@@ -672,7 +919,9 @@ function Memories({ snap, query, remove, relevel, create, update }: { snap: Brai
             <div>
               <SectionLabel hint={`${recall.length}`}>Recall</SectionLabel>
               <div className="grid gap-3 sm:grid-cols-2">
-                {recall.map((m) => <MemoryCard key={m.id} m={m} remove={remove} relevel={relevel} update={update} />)}
+                {recall.map((m) => (
+                  <MemoryCard key={m.id} m={m} remove={remove} relevel={relevel} update={update} />
+                ))}
               </div>
             </div>
           ) : null}
@@ -682,21 +931,34 @@ function Memories({ snap, query, remove, relevel, create, update }: { snap: Brai
   );
 }
 
-function MemoryCard({ m, remove, relevel, update }: {
+function MemoryCard({
+  m,
+  remove,
+  relevel,
+  update,
+}: {
   m: BrainSnapshot["memories"][number];
 } & Pick<Handlers, "remove" | "relevel" | "update">) {
   const core = m.level === "core";
   return (
-    <div className={cn(
-      "group relative flex flex-col rounded-xl border bg-card/50 p-4 shadow-sm transition-all hover:shadow-md",
-      core ? "border-violet-500/30 bg-violet-500/[0.04]" : "border-border/70 hover:border-border",
-    )}>
+    <div
+      className={cn(
+        "group relative flex flex-col rounded-xl border bg-card/50 p-4 shadow-sm transition-all hover:shadow-md",
+        core ? "border-violet-500/30 bg-violet-500/[0.04]" : "border-border/70 hover:border-border",
+      )}
+    >
       <div className="flex-1 text-sm leading-relaxed">
         <EditableText value={m.content} onSave={(v) => update("memory", m.id, { content: v })} />
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        {m.importance > 0 ? <Badge className="border-violet-500/25 bg-violet-500/10 text-violet-500">importance {m.importance}</Badge> : null}
-        {m.tags.map((t) => <Badge key={t}>#{t}</Badge>)}
+        {m.importance > 0 ? (
+          <Badge className="border-violet-500/25 bg-violet-500/10 text-violet-500">
+            importance {m.importance}
+          </Badge>
+        ) : null}
+        {m.tags.map((t) => (
+          <Badge key={t}>#{t}</Badge>
+        ))}
         <span className="ml-auto tabular-nums">{when(m.created_at)}</span>
       </div>
       <div className="mt-3 flex items-center gap-1 border-t border-border/60 pt-3">
@@ -718,7 +980,13 @@ function MemoryCard({ m, remove, relevel, update }: {
 
 /* ── Notes (masonry of paper cards) ─────────────────────────────────────── */
 
-function Notes({ snap, query, remove, create, update }: { snap: BrainSnapshot } & { query: string } & Handlers) {
+function Notes({
+  snap,
+  query,
+  remove,
+  create,
+  update,
+}: { snap: BrainSnapshot } & { query: string } & Handlers) {
   const [title, setTitle] = useState("");
   const items = snap.notes.filter((n) => matches(query, n.title, n.body));
   const add = () => {
@@ -728,17 +996,34 @@ function Notes({ snap, query, remove, create, update }: { snap: BrainSnapshot } 
   };
   return (
     <>
-      <PageHeader icon={<StickyNote className="size-5" />} color="amber" title="Notes" count={items.length} subtitle="Things he's jotted down to keep." />
+      <PageHeader
+        icon={<StickyNote className="size-5" />}
+        color="amber"
+        title="Notes"
+        count={items.length}
+        subtitle="Things he's jotted down to keep."
+      />
       <Composer onSubmit={add}>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="New note — give it a title…" className={`${FIELD} flex-1`} />
-        <Button size="sm" onClick={add}><Plus className="size-4" />Add note</Button>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="New note — give it a title…"
+          className={`${FIELD} flex-1`}
+        />
+        <Button size="sm" onClick={add}>
+          <Plus className="size-4" />
+          Add note
+        </Button>
       </Composer>
       {items.length === 0 ? (
         <EmptyState icon={<StickyNote className="size-5" />}>No notes yet.</EmptyState>
       ) : (
         <div className="gap-4 [column-fill:_balance] sm:columns-2 lg:columns-3">
           {items.map((n) => (
-            <div key={n.id} className="group mb-4 break-inside-avoid rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-amber-500/30 hover:shadow-md">
+            <div
+              key={n.id}
+              className="group mb-4 break-inside-avoid rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-amber-500/30 hover:shadow-md"
+            >
               <div className="mb-1 h-1 w-8 rounded-full bg-amber-500/40" />
               <div className="text-sm font-semibold leading-snug">
                 <EditableText value={n.title} onSave={(v) => update("note", n.id, { title: v })} />
@@ -768,11 +1053,25 @@ function Notes({ snap, query, remove, create, update }: { snap: BrainSnapshot } 
 
 /* ── Journal (day-grouped reading column) ───────────────────────────────── */
 
-function Journal({ snap, query, remove }: { snap: BrainSnapshot; query: string; remove: Handlers["remove"] }) {
+function Journal({
+  snap,
+  query,
+  remove,
+}: {
+  snap: BrainSnapshot;
+  query: string;
+  remove: Handlers["remove"];
+}) {
   const items = snap.journal.filter((j) => matches(query, j.entry));
   return (
     <>
-      <PageHeader icon={<NotebookPen className="size-5" />} color="sky" title="Journal" count={items.length} subtitle="His private diary — how the days felt." />
+      <PageHeader
+        icon={<NotebookPen className="size-5" />}
+        color="sky"
+        title="Journal"
+        count={items.length}
+        subtitle="His private diary — how the days felt."
+      />
       {items.length === 0 ? (
         <EmptyState icon={<NotebookPen className="size-5" />}>The journal is empty.</EmptyState>
       ) : (
@@ -782,7 +1081,10 @@ function Journal({ snap, query, remove }: { snap: BrainSnapshot; query: string; 
               <div className="mb-3 text-xs font-semibold text-muted-foreground">{day}</div>
               <div className="space-y-3">
                 {entries.map((j) => (
-                  <div key={j.id} className="group relative rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:shadow-md">
+                  <div
+                    key={j.id}
+                    className="group relative rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:shadow-md"
+                  >
                     <span className="absolute top-4 left-0 h-8 w-0.5 -translate-x-px rounded-full bg-sky-500/50" />
                     {/* His journal is Markdown too — headings, lists and links render. */}
                     <Markdown>{j.entry}</Markdown>
@@ -804,7 +1106,13 @@ function Journal({ snap, query, remove }: { snap: BrainSnapshot; query: string; 
 
 /* ── Curiosities (card grid) ────────────────────────────────────────────── */
 
-function Curiosities({ snap, query, remove, create, update }: { snap: BrainSnapshot } & { query: string } & Handlers) {
+function Curiosities({
+  snap,
+  query,
+  remove,
+  create,
+  update,
+}: { snap: BrainSnapshot } & { query: string } & Handlers) {
   const [topic, setTopic] = useState("");
   const items = snap.curiosities.filter((c) => matches(query, c.topic, c.note, c.status));
   const add = () => {
@@ -814,24 +1122,55 @@ function Curiosities({ snap, query, remove, create, update }: { snap: BrainSnaps
   };
   return (
     <>
-      <PageHeader icon={<Sparkles className="size-5" />} color="teal" title="Curiosities" count={items.length} subtitle="Rabbit holes he wants to go down." />
+      <PageHeader
+        icon={<Sparkles className="size-5" />}
+        color="teal"
+        title="Curiosities"
+        count={items.length}
+        subtitle="Rabbit holes he wants to go down."
+      />
       <Composer onSubmit={add}>
-        <input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Something to be curious about…" className={`${FIELD} flex-1`} />
-        <Button size="sm" onClick={add}><Plus className="size-4" />Add</Button>
+        <input
+          value={topic}
+          onChange={(e) => setTopic(e.target.value)}
+          placeholder="Something to be curious about…"
+          className={`${FIELD} flex-1`}
+        />
+        <Button size="sm" onClick={add}>
+          <Plus className="size-4" />
+          Add
+        </Button>
       </Composer>
       {items.length === 0 ? (
         <EmptyState icon={<Sparkles className="size-5" />}>Nothing sparks him yet.</EmptyState>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {items.map((c) => (
-            <div key={c.id} className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md">
+            <div
+              key={c.id}
+              className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md"
+            >
               <div className="flex items-start gap-2.5">
-                <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", CHIP.teal)}><Sparkles className="size-4" /></span>
-                <span className="min-w-0 flex-1 pt-1 text-sm font-semibold leading-snug">{c.topic}</span>
+                <span
+                  className={cn(
+                    "flex size-8 shrink-0 items-center justify-center rounded-lg",
+                    CHIP.teal,
+                  )}
+                >
+                  <Sparkles className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1 pt-1 text-sm font-semibold leading-snug">
+                  {c.topic}
+                </span>
                 <DeleteButton onClick={() => remove("curiosity", c.id, c.topic)} />
               </div>
               <div className="mt-2 pl-[42px] text-sm leading-relaxed text-muted-foreground">
-                <EditableText value={c.note} onSave={(v) => update("curiosity", c.id, { note: v })} multiline placeholder="(no notes yet)" />
+                <EditableText
+                  value={c.note}
+                  onSave={(v) => update("curiosity", c.id, { note: v })}
+                  multiline
+                  placeholder="(no notes yet)"
+                />
               </div>
               <div className="mt-3 flex items-center gap-2 pl-[42px]">
                 <Dropdown
@@ -841,7 +1180,9 @@ function Curiosities({ snap, query, remove, create, update }: { snap: BrainSnaps
                   className="w-32"
                   ariaLabel="Curiosity status"
                 />
-                <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{when(c.updated_at)}</span>
+                <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+                  {when(c.updated_at)}
+                </span>
               </div>
             </div>
           ))}
@@ -871,16 +1212,28 @@ function taskTally(tasks: BrainSnapshot["tasks"]) {
   };
 }
 
-function Projects({ snap, query, remove, create, update, onOpenProject }: {
-  snap: BrainSnapshot; query: string; onOpenProject: (ref: ProjectRef) => void;
+function Projects({
+  snap,
+  query,
+  remove,
+  create,
+  update,
+  onOpenProject,
+}: {
+  snap: BrainSnapshot;
+  query: string;
+  onOpenProject: (ref: ProjectRef) => void;
 } & Handlers) {
   const [name, setName] = useState("");
   const searching = query.trim().length > 0;
-  const hits = (t: BrainSnapshot["tasks"][number]) => matches(query, t.goal, t.status, t.description);
+  const hits = (t: BrainSnapshot["tasks"][number]) =>
+    matches(query, t.goal, t.status, t.description);
   // Searching finds work wherever it lives: a project surfaces when it matches
   // *or* when one of its tasks does.
   const projects = (snap.projects ?? []).filter(
-    (p) => matches(query, p.name, p.description, p.status) || snap.tasks.some((t) => t.project_id === p.id && hits(t)),
+    (p) =>
+      matches(query, p.name, p.description, p.status) ||
+      snap.tasks.some((t) => t.project_id === p.id && hits(t)),
   );
   const loose = snap.tasks.filter((t) => t.project_id == null && hits(t));
   const all = taskTally(snap.tasks);
@@ -891,22 +1244,40 @@ function Projects({ snap, query, remove, create, update, onOpenProject }: {
   };
   return (
     <>
-      <PageHeader icon={<FolderKanban className="size-5" />} color="kith" title="Projects" count={projects.length} subtitle="Everything he's working on. Open one to see its tasks." />
+      <PageHeader
+        icon={<FolderKanban className="size-5" />}
+        color="kith"
+        title="Projects"
+        count={projects.length}
+        subtitle="Everything he's working on. Open one to see its tasks."
+      />
       <Composer onSubmit={add}>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Start a project — a bigger goal…" className={`${FIELD} flex-1`} />
-        <Button size="sm" onClick={add}><Plus className="size-4" />Add project</Button>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Start a project — a bigger goal…"
+          className={`${FIELD} flex-1`}
+        />
+        <Button size="sm" onClick={add}>
+          <Plus className="size-4" />
+          Add project
+        </Button>
       </Composer>
 
       {/* Where his work stands overall, so nothing important hides inside a project. */}
       {all.total > 0 ? (
         <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-border/60 bg-card/40 px-4 py-2.5 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{all.total} task{all.total === 1 ? "" : "s"}</span>
+          <span className="font-medium text-foreground">
+            {all.total} task{all.total === 1 ? "" : "s"}
+          </span>
           <TaskTally tally={all} />
         </div>
       ) : null}
 
       {projects.length === 0 && loose.length === 0 ? (
-        <EmptyState icon={<FolderKanban className="size-5" />}>No projects yet — start one above.</EmptyState>
+        <EmptyState icon={<FolderKanban className="size-5" />}>
+          No projects yet — start one above.
+        </EmptyState>
       ) : (
         <div className="space-y-3">
           {projects.map((p) => {
@@ -923,7 +1294,9 @@ function Projects({ snap, query, remove, create, update, onOpenProject }: {
               />
             );
           })}
-          {loose.length > 0 ? <LooseCard tasks={loose} onOpen={() => onOpenProject(LOOSE)} /> : null}
+          {loose.length > 0 ? (
+            <LooseCard tasks={loose} onOpen={() => onOpenProject(LOOSE)} />
+          ) : null}
         </div>
       )}
     </>
@@ -935,21 +1308,32 @@ function TaskTally({ tally }: { tally: ReturnType<typeof taskTally> }) {
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
       {tally.doing ? <span className="text-emerald-500">{tally.doing} doing</span> : null}
-      {tally.waiting ? <span className="font-medium text-kith">{tally.waiting} waiting on you</span> : null}
+      {tally.waiting ? (
+        <span className="font-medium text-kith">{tally.waiting} waiting on you</span>
+      ) : null}
       {tally.open ? <span>{tally.open} to do</span> : null}
       {tally.done ? <span className="text-muted-foreground/70">{tally.done} done</span> : null}
     </span>
   );
 }
 
-function ProjectCard({ project, tasks, matching, remove, update, onOpen }: {
+function ProjectCard({
+  project,
+  tasks,
+  matching,
+  remove,
+  update,
+  onOpen,
+}: {
   project: BrainSnapshot["projects"][number];
   tasks: BrainSnapshot["tasks"];
   /** How many of its tasks match the current search (undefined = not searching). */
   matching?: number;
   onOpen: () => void;
 } & Pick<Handlers, "remove" | "update">) {
-  const pct = project.milestones_total ? Math.round((project.milestones_done / project.milestones_total) * 100) : 0;
+  const pct = project.milestones_total
+    ? Math.round((project.milestones_done / project.milestones_total) * 100)
+    : 0;
   const closed = project.status !== "active";
   const tally = taskTally(tasks);
   return (
@@ -964,13 +1348,25 @@ function ProjectCard({ project, tasks, matching, remove, update, onOpen }: {
       <ProgressRing pct={pct} size={44} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="min-w-0 truncate text-[15px] font-semibold leading-snug transition-colors group-hover:text-kith">{project.name}</span>
-          {tally.waiting ? <Badge className="border-kith/25 bg-kith-soft text-kith">waiting on you</Badge> : null}
-          {matching ? <Badge className="border-kith/25 bg-kith-soft text-kith">{matching} match{matching === 1 ? "" : "es"}</Badge> : null}
+          <span className="min-w-0 truncate text-[15px] font-semibold leading-snug transition-colors group-hover:text-kith">
+            {project.name}
+          </span>
+          {tally.waiting ? (
+            <Badge className="border-kith/25 bg-kith-soft text-kith">waiting on you</Badge>
+          ) : null}
+          {matching ? (
+            <Badge className="border-kith/25 bg-kith-soft text-kith">
+              {matching} match{matching === 1 ? "" : "es"}
+            </Badge>
+          ) : null}
         </div>
-        {project.description ? <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{project.description}</p> : null}
+        {project.description ? (
+          <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{project.description}</p>
+        ) : null}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          <span className="tabular-nums">{project.milestones_done}/{project.milestones_total} milestones</span>
+          <span className="tabular-nums">
+            {project.milestones_done}/{project.milestones_total} milestones
+          </span>
           <span className="text-muted-foreground/40">·</span>
           <TaskTally tally={tally} />
         </div>
@@ -1003,11 +1399,19 @@ function LooseCard({ tasks, onOpen }: { tasks: BrainSnapshot["tasks"]; onOpen: (
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-[15px] font-semibold leading-snug transition-colors group-hover:text-kith">No project</span>
-          {tally.waiting ? <Badge className="border-kith/25 bg-kith-soft text-kith">waiting on you</Badge> : null}
+          <span className="text-[15px] font-semibold leading-snug transition-colors group-hover:text-kith">
+            No project
+          </span>
+          {tally.waiting ? (
+            <Badge className="border-kith/25 bg-kith-soft text-kith">waiting on you</Badge>
+          ) : null}
         </div>
-        <p className="mt-0.5 text-sm text-muted-foreground">Loose work — tasks that aren't part of anything bigger.</p>
-        <div className="mt-2 text-[11px] text-muted-foreground"><TaskTally tally={tally} /></div>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Loose work — tasks that aren't part of anything bigger.
+        </p>
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          <TaskTally tally={tally} />
+        </div>
       </div>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-kith" />
     </div>
@@ -1016,11 +1420,24 @@ function LooseCard({ tasks, onOpen }: { tasks: BrainSnapshot["tasks"]; onOpen: (
 
 /* ── One project: what it is, its roadmap, and its tasks ────────────────── */
 
-function ProjectPage({ snap, query, projectRef, remove, update, create, onBack, onOpenTask }: {
-  snap: BrainSnapshot; query: string; projectRef: ProjectRef;
-  onBack: () => void; onOpenTask: (id: number) => void;
+function ProjectPage({
+  snap,
+  query,
+  projectRef,
+  remove,
+  update,
+  create,
+  onBack,
+  onOpenTask,
+}: {
+  snap: BrainSnapshot;
+  query: string;
+  projectRef: ProjectRef;
+  onBack: () => void;
+  onOpenTask: (id: number) => void;
 } & Handlers) {
-  const project = projectRef === LOOSE ? null : (snap.projects ?? []).find((p) => p.id === projectRef);
+  const project =
+    projectRef === LOOSE ? null : (snap.projects ?? []).find((p) => p.id === projectRef);
   const tasks = snap.tasks
     .filter((t) => (projectRef === LOOSE ? t.project_id == null : t.project_id === projectRef))
     .filter((t) => matches(query, t.goal, t.status, t.description));
@@ -1034,7 +1451,9 @@ function ProjectPage({ snap, query, projectRef, remove, update, create, onBack, 
     );
   }
 
-  const pct = project?.milestones_total ? Math.round((project.milestones_done / project.milestones_total) * 100) : 0;
+  const pct = project?.milestones_total
+    ? Math.round((project.milestones_done / project.milestones_total) * 100)
+    : 0;
 
   return (
     <>
@@ -1053,7 +1472,10 @@ function ProjectPage({ snap, query, projectRef, remove, update, create, onBack, 
             {project ? (
               <>
                 <div className="text-xl font-semibold tracking-tight">
-                  <EditableText value={project.name} onSave={(v) => update("project", project.id, { name: v })} />
+                  <EditableText
+                    value={project.name}
+                    onSave={(v) => update("project", project.id, { name: v })}
+                  />
                 </div>
                 <div className="mt-1 text-sm text-muted-foreground">
                   <EditableText
@@ -1067,7 +1489,10 @@ function ProjectPage({ snap, query, projectRef, remove, update, create, onBack, 
             ) : (
               <>
                 <div className="text-xl font-semibold tracking-tight">No project</div>
-                <p className="mt-1 text-sm text-muted-foreground">Loose work — tasks that aren't part of anything bigger. Give one a project from inside the task.</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Loose work — tasks that aren't part of anything bigger. Give one a project from
+                  inside the task.
+                </p>
               </>
             )}
           </div>
@@ -1080,13 +1505,20 @@ function ProjectPage({ snap, query, projectRef, remove, update, create, onBack, 
                 className="w-28"
                 ariaLabel="Project status"
               />
-              <DeleteButton onClick={() => { remove("project", project.id, project.name); onBack(); }} />
+              <DeleteButton
+                onClick={() => {
+                  remove("project", project.id, project.name);
+                  onBack();
+                }}
+              />
             </div>
           ) : null}
         </div>
       </div>
 
-      {project ? <Roadmap project={project} remove={remove} update={update} create={create} /> : null}
+      {project ? (
+        <Roadmap project={project} remove={remove} update={update} create={create} />
+      ) : null}
 
       <section className={project ? "mt-7" : ""}>
         <SectionLabel hint={`${tasks.length}`}>Tasks</SectionLabel>
@@ -1103,9 +1535,20 @@ function ProjectPage({ snap, query, projectRef, remove, update, create, onBack, 
   );
 }
 
-function Crumb({ onBack, label, current }: { onBack: () => void; label: string; current?: string }) {
+function Crumb({
+  onBack,
+  label,
+  current,
+}: {
+  onBack: () => void;
+  label: string;
+  current?: string;
+}) {
   return (
-    <button onClick={onBack} className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
+    <button
+      onClick={onBack}
+      className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+    >
       <ArrowLeft className="size-4" />
       {label}
       {current ? (
@@ -1118,7 +1561,12 @@ function Crumb({ onBack, label, current }: { onBack: () => void; label: string; 
   );
 }
 
-function Roadmap({ project, remove, update, create }: {
+function Roadmap({
+  project,
+  remove,
+  update,
+  create,
+}: {
   project: BrainSnapshot["projects"][number];
 } & Pick<Handlers, "remove" | "update" | "create">) {
   const [ms, setMs] = useState("");
@@ -1129,7 +1577,9 @@ function Roadmap({ project, remove, update, create }: {
   };
   return (
     <section>
-      <SectionLabel hint={`${project.milestones_done}/${project.milestones_total}`}>Roadmap</SectionLabel>
+      <SectionLabel hint={`${project.milestones_done}/${project.milestones_total}`}>
+        Roadmap
+      </SectionLabel>
       {project.milestones.length === 0 ? (
         <p className="text-sm text-muted-foreground">No milestones yet.</p>
       ) : (
@@ -1137,17 +1587,32 @@ function Roadmap({ project, remove, update, create }: {
           {project.milestones.map((m) => (
             <li key={m.id} className="group flex items-center gap-2.5 text-sm">
               <button
-                onClick={() => update("milestone", m.id, { status: m.status === "done" ? "todo" : "done" })}
+                onClick={() =>
+                  update("milestone", m.id, { status: m.status === "done" ? "todo" : "done" })
+                }
                 aria-label={m.status === "done" ? "Mark not done" : "Mark done"}
                 className={cn(
                   "flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
-                  m.status === "done" ? "border-kith bg-kith text-primary-foreground" : "border-muted-foreground/40 hover:border-kith",
+                  m.status === "done"
+                    ? "border-kith bg-kith text-primary-foreground"
+                    : "border-muted-foreground/40 hover:border-kith",
                 )}
               >
                 {m.status === "done" ? <Check className="size-3" /> : null}
               </button>
-              <span className={cn("min-w-0 flex-1 truncate", m.status === "done" && "text-muted-foreground line-through")}>{m.title}</span>
-              {m.target_at ? <span className="text-[11px] tabular-nums text-muted-foreground">{m.target_at.slice(0, 10)}</span> : null}
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate",
+                  m.status === "done" && "text-muted-foreground line-through",
+                )}
+              >
+                {m.title}
+              </span>
+              {m.target_at ? (
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {m.target_at.slice(0, 10)}
+                </span>
+              ) : null}
               <button
                 onClick={() => remove("milestone", m.id, m.title)}
                 className="text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-destructive"
@@ -1160,8 +1625,17 @@ function Roadmap({ project, remove, update, create }: {
         </ul>
       )}
       <div className="mt-3 flex items-center gap-2 rounded-xl border border-border/60 bg-card/40 p-1.5 pl-3 focus-within:border-ring/60">
-        <input value={ms} onChange={(e) => setMs(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addMilestone()} placeholder="Add a milestone…" className={`${FIELD} flex-1 text-xs`} />
-        <Button size="xs" variant="outline" onClick={addMilestone}><Plus className="size-3.5" />Add</Button>
+        <input
+          value={ms}
+          onChange={(e) => setMs(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && addMilestone()}
+          placeholder="Add a milestone…"
+          className={`${FIELD} flex-1 text-xs`}
+        />
+        <Button size="xs" variant="outline" onClick={addMilestone}>
+          <Plus className="size-3.5" />
+          Add
+        </Button>
       </div>
     </section>
   );
@@ -1174,21 +1648,41 @@ function ProgressRing({ pct, size = 52 }: { pct: number; size?: number }) {
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} className="fill-none stroke-muted" />
         <circle
-          cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} strokeLinecap="round"
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          strokeWidth={stroke}
+          className="fill-none stroke-muted"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          strokeWidth={stroke}
+          strokeLinecap="round"
           className="fill-none stroke-kith transition-all duration-500"
-          strokeDasharray={c} strokeDashoffset={c * (1 - clamp(pct) / 100)}
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - clamp(pct) / 100)}
         />
       </svg>
-      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold tabular-nums">{pct}%</span>
+      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold tabular-nums">
+        {pct}%
+      </span>
     </div>
   );
 }
 
 /* ── The task board — always scoped to one project (or the loose tray) ───── */
 
-function TaskBoard({ tasks, projectId, remove, create, update, onOpenTask }: {
+function TaskBoard({
+  tasks,
+  projectId,
+  remove,
+  create,
+  update,
+  onOpenTask,
+}: {
   tasks: BrainSnapshot["tasks"];
   /** The project new tasks join. `null` = the loose tray. */
   projectId: number | null;
@@ -1205,31 +1699,62 @@ function TaskBoard({ tasks, projectId, remove, create, update, onOpenTask }: {
     setGoal("");
   };
   const rank = (p: string) => (p === "high" ? 0 : p === "low" ? 2 : 1);
-  const byColumn = (col: string) => tasks.filter((t) => t.status === col).sort((a, b) => rank(a.priority) - rank(b.priority));
+  const byColumn = (col: string) =>
+    tasks.filter((t) => t.status === col).sort((a, b) => rank(a.priority) - rank(b.priority));
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card/40 p-2 pl-3.5 shadow-sm focus-within:border-ring/60" onKeyDown={(e) => e.key === "Enter" && add()}>
+      <div
+        className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card/40 p-2 pl-3.5 shadow-sm focus-within:border-ring/60"
+        onKeyDown={(e) => e.key === "Enter" && add()}
+      >
         <ListChecks className="size-4 shrink-0 text-emerald-500" />
-        <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Add a task to this project…" className={`${FIELD} min-w-48 flex-1`} />
-        <Dropdown value={priority} onChange={setPriority} options={TASK_PRIORITIES} className="w-28" ariaLabel="Priority" />
-        <Button size="sm" onClick={add}><Plus className="size-4" />Add</Button>
+        <input
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="Add a task to this project…"
+          className={`${FIELD} min-w-48 flex-1`}
+        />
+        <Dropdown
+          value={priority}
+          onChange={setPriority}
+          options={TASK_PRIORITIES}
+          className="w-28"
+          ariaLabel="Priority"
+        />
+        <Button size="sm" onClick={add}>
+          <Plus className="size-4" />
+          Add
+        </Button>
       </div>
       <div className="flex gap-3 overflow-x-auto pb-2">
         {TASK_COLUMNS.map((col) => {
           const cards = byColumn(col);
           return (
-            <div key={col} className="flex w-68 shrink-0 flex-col rounded-xl border border-border/50 bg-muted/25">
+            <div
+              key={col}
+              className="flex w-68 shrink-0 flex-col rounded-xl border border-border/50 bg-muted/25"
+            >
               <div className="flex items-center gap-2 border-b border-border/40 px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 <span>{COLUMN_LABEL[col]}</span>
-                <span className="rounded-full bg-background/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums">{cards.length}</span>
+                <span className="rounded-full bg-background/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums">
+                  {cards.length}
+                </span>
               </div>
               <div className="min-h-24 flex-1 space-y-2 p-2">
                 {cards.length === 0 ? (
                   <p className="px-2 py-6 text-center text-xs text-muted-foreground/50">Empty</p>
-                ) : cards.map((t) => (
-                  <TaskCard key={t.id} task={t} remove={remove} update={update} onOpen={() => onOpenTask(t.id)} />
-                ))}
+                ) : (
+                  cards.map((t) => (
+                    <TaskCard
+                      key={t.id}
+                      task={t}
+                      remove={remove}
+                      update={update}
+                      onOpen={() => onOpenTask(t.id)}
+                    />
+                  ))
+                )}
               </div>
             </div>
           );
@@ -1239,48 +1764,74 @@ function TaskBoard({ tasks, projectId, remove, create, update, onOpenTask }: {
   );
 }
 
-function TaskCard({ task, remove, update, onOpen }: {
-  task: BrainSnapshot["tasks"][number]; onOpen: () => void;
+function TaskCard({
+  task,
+  remove,
+  update,
+  onOpen,
+}: {
+  task: BrainSnapshot["tasks"][number];
+  onOpen: () => void;
 } & Pick<Handlers, "remove" | "update">) {
   const accent =
-    task.priority === "high" ? "border-l-red-400"
-    : task.priority === "low" ? "border-l-transparent"
-    : "border-l-amber-400";
+    task.priority === "high"
+      ? "border-l-red-400"
+      : task.priority === "low"
+        ? "border-l-transparent"
+        : "border-l-amber-400";
   return (
     // The whole card opens the task; the pencil, dropdowns and delete stop the
     // click so they still do their own thing.
     <div
       onClick={onOpen}
-      className={cn("group cursor-pointer rounded-xl border border-l-[3px] bg-card p-3 text-sm shadow-sm transition-all hover:border-kith/30 hover:shadow-md", accent)}
+      className={cn(
+        "group cursor-pointer rounded-xl border border-l-[3px] bg-card p-3 text-sm shadow-sm transition-all hover:border-kith/30 hover:shadow-md",
+        accent,
+      )}
     >
       <div className="flex items-start gap-2">
-        {task.priority === "high" ? <Flame className="mt-0.5 size-3.5 shrink-0 text-red-400" /> : null}
+        {task.priority === "high" ? (
+          <Flame className="mt-0.5 size-3.5 shrink-0 text-red-400" />
+        ) : null}
         <span className="min-w-0 flex-1 font-medium leading-snug">
           <EditableText value={task.goal} onSave={(v) => update("task", task.id, { goal: v })} />
         </span>
-        <span className="shrink-0 text-muted-foreground/50 transition-colors group-hover:text-kith" title="Open task">
+        <span
+          className="shrink-0 text-muted-foreground/50 transition-colors group-hover:text-kith"
+          title="Open task"
+        >
           <ArrowUpRight className="size-4" />
         </span>
         <DeleteButton onClick={() => remove("task", task.id, task.goal)} />
       </div>
-      {task.description ? <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{task.description}</p> : null}
-      {(task.due_at || task.created_by === "user") ? (
+      {task.description ? (
+        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{task.description}</p>
+      ) : null}
+      {task.due_at || task.created_by === "user" ? (
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
           {task.due_at ? <span>due {task.due_at.slice(0, 10)}</span> : null}
           {task.created_by === "user" ? <span>· yours</span> : null}
         </div>
       ) : null}
-      <div className="mt-2 flex items-center gap-1 border-t border-border/60 pt-2" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="mt-2 flex items-center gap-1 border-t border-border/60 pt-2"
+        onClick={(e) => e.stopPropagation()}
+      >
         <Dropdown
           value={task.status}
           onChange={(v) => update("task", task.id, { status: v })}
           options={TASK_STATUSES.map((s) => ({ value: s, label: COLUMN_LABEL[s] ?? s }))}
-          variant="bare" className="w-28" ariaLabel="Move column"
+          variant="bare"
+          className="w-28"
+          ariaLabel="Move column"
         />
         <Dropdown
           value={task.priority}
           onChange={(v) => update("task", task.id, { priority: v })}
-          options={TASK_PRIORITIES} variant="bare" className="w-20" ariaLabel="Priority"
+          options={TASK_PRIORITIES}
+          variant="bare"
+          className="w-20"
+          ariaLabel="Priority"
         />
       </div>
     </div>
@@ -1289,7 +1840,12 @@ function TaskCard({ task, remove, update, onOpen }: {
 
 /* ── Reminders (one-off, time-emphasised) ───────────────────────────────── */
 
-function Reminders({ snap, query, remove, create }: { snap: BrainSnapshot } & { query: string } & Handlers) {
+function Reminders({
+  snap,
+  query,
+  remove,
+  create,
+}: { snap: BrainSnapshot } & { query: string } & Handlers) {
   const [note, setNote] = useState("");
   const [mins, setMins] = useState("30");
   const items = snap.reminders.filter((r) => matches(query, r.note, r.status));
@@ -1303,15 +1859,35 @@ function Reminders({ snap, query, remove, create }: { snap: BrainSnapshot } & { 
   };
   return (
     <>
-      <PageHeader icon={<BellRing className="size-5" />} color="orange" title="Reminders" count={items.length} subtitle="Nudges that fire once, at a set time." />
+      <PageHeader
+        icon={<BellRing className="size-5" />}
+        color="orange"
+        title="Reminders"
+        count={items.length}
+        subtitle="Nudges that fire once, at a set time."
+      />
       <Composer onSubmit={add}>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Remind him to…" className={`${FIELD} flex-1`} />
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Remind him to…"
+          className={`${FIELD} flex-1`}
+        />
         <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
           in
-          <input type="number" min={1} value={mins} onChange={(e) => setMins(e.target.value)} className={`${INPUT} w-16`} />
+          <input
+            type="number"
+            min={1}
+            value={mins}
+            onChange={(e) => setMins(e.target.value)}
+            className={`${INPUT} w-16`}
+          />
           min
         </span>
-        <Button size="sm" onClick={add}><Plus className="size-4" />Set</Button>
+        <Button size="sm" onClick={add}>
+          <Plus className="size-4" />
+          Set
+        </Button>
       </Composer>
       {items.length === 0 ? (
         <EmptyState icon={<BellRing className="size-5" />}>No reminders.</EmptyState>
@@ -1322,11 +1898,23 @@ function Reminders({ snap, query, remove, create }: { snap: BrainSnapshot } & { 
               <SectionLabel hint={`${pending.length}`}>Upcoming</SectionLabel>
               <div className="space-y-2">
                 {pending.map((r) => (
-                  <div key={r.id} className="group flex items-center gap-3 rounded-xl border border-orange-500/25 bg-orange-500/[0.05] p-4 shadow-sm">
-                    <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", CHIP.orange)}><BellRing className="size-4" /></span>
+                  <div
+                    key={r.id}
+                    className="group flex items-center gap-3 rounded-xl border border-orange-500/25 bg-orange-500/[0.05] p-4 shadow-sm"
+                  >
+                    <span
+                      className={cn(
+                        "flex size-9 shrink-0 items-center justify-center rounded-xl",
+                        CHIP.orange,
+                      )}
+                    >
+                      <BellRing className="size-4" />
+                    </span>
                     <div className="min-w-0 flex-1">
                       <div className="break-words text-sm">{r.note}</div>
-                      <div className="text-[11px] text-muted-foreground">{r.fires || "scheduled"} · {when(r.fire_at)}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {r.fires || "scheduled"} · {when(r.fire_at)}
+                      </div>
                     </div>
                     <DeleteButton onClick={() => remove("reminder", r.id, r.note)} />
                   </div>
@@ -1339,11 +1927,18 @@ function Reminders({ snap, query, remove, create }: { snap: BrainSnapshot } & { 
               <SectionLabel hint={`${past.length}`}>Past</SectionLabel>
               <div className="space-y-2">
                 {past.map((r) => (
-                  <div key={r.id} className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card/40 p-4 opacity-75 transition-opacity hover:opacity-100">
-                    <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/60 text-muted-foreground"><BellRing className="size-4" /></span>
+                  <div
+                    key={r.id}
+                    className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card/40 p-4 opacity-75 transition-opacity hover:opacity-100"
+                  >
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/60 text-muted-foreground">
+                      <BellRing className="size-4" />
+                    </span>
                     <div className="min-w-0 flex-1">
                       <div className="break-words text-sm">{r.note}</div>
-                      <div className="text-[11px] text-muted-foreground">{r.status} · {when(r.fire_at)}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {r.status} · {when(r.fire_at)}
+                      </div>
                     </div>
                     <DeleteButton onClick={() => remove("reminder", r.id, r.note)} />
                   </div>
@@ -1359,7 +1954,13 @@ function Reminders({ snap, query, remove, create }: { snap: BrainSnapshot } & { 
 
 /* ── Schedules (standing jobs) ──────────────────────────────────────────── */
 
-function Schedules({ snap, query, remove, create, update }: { snap: BrainSnapshot } & { query: string } & Handlers) {
+function Schedules({
+  snap,
+  query,
+  remove,
+  create,
+  update,
+}: { snap: BrainSnapshot } & { query: string } & Handlers) {
   const [note, setNote] = useState("");
   const [mode, setMode] = useState<"daily" | "every">("daily");
   const [at, setAt] = useState("09:00");
@@ -1378,13 +1979,27 @@ function Schedules({ snap, query, remove, create, update }: { snap: BrainSnapsho
   };
   return (
     <>
-      <PageHeader icon={<Repeat className="size-5" />} color="orange" title="Schedules" count={items.length} subtitle="Standing jobs he runs on a cadence." />
+      <PageHeader
+        icon={<Repeat className="size-5" />}
+        color="orange"
+        title="Schedules"
+        count={items.length}
+        subtitle="Standing jobs he runs on a cadence."
+      />
       <Composer onSubmit={add}>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="A standing job — e.g. brief me on my sources…" className={`${FIELD} min-w-48 flex-1`} />
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="A standing job — e.g. brief me on my sources…"
+          className={`${FIELD} min-w-48 flex-1`}
+        />
         <Dropdown
           value={mode}
           onChange={(v) => setMode(v as "daily" | "every")}
-          options={[{ value: "daily", label: "daily at" }, { value: "every", label: "every" }]}
+          options={[
+            { value: "daily", label: "daily at" },
+            { value: "every", label: "every" },
+          ]}
           className="w-28"
           ariaLabel="Cadence"
         />
@@ -1392,34 +2007,62 @@ function Schedules({ snap, query, remove, create, update }: { snap: BrainSnapsho
           <input type="time" value={at} onChange={(e) => setAt(e.target.value)} className={INPUT} />
         ) : (
           <span className="flex items-center gap-1 text-sm text-muted-foreground">
-            <input type="number" min={1} value={mins} onChange={(e) => setMins(e.target.value)} className={`${INPUT} w-16`} />
+            <input
+              type="number"
+              min={1}
+              value={mins}
+              onChange={(e) => setMins(e.target.value)}
+              className={`${INPUT} w-16`}
+            />
             min
           </span>
         )}
-        <Button size="sm" onClick={add}><Plus className="size-4" />Add</Button>
+        <Button size="sm" onClick={add}>
+          <Plus className="size-4" />
+          Add
+        </Button>
       </Composer>
       {items.length === 0 ? (
-        <EmptyState icon={<Repeat className="size-5" />}>No standing jobs. Add one and he'll run it on schedule.</EmptyState>
+        <EmptyState icon={<Repeat className="size-5" />}>
+          No standing jobs. Add one and he'll run it on schedule.
+        </EmptyState>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {items.map((s) => {
             const active = s.status === "active";
             return (
-              <div key={s.id} className={cn("group flex items-start gap-3 rounded-xl border bg-card/50 p-4 shadow-sm transition-all hover:shadow-md", active ? "border-orange-500/25" : "border-border/70 opacity-75")}>
-                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", active ? CHIP.orange : "bg-muted/60 text-muted-foreground")}>
+              <div
+                key={s.id}
+                className={cn(
+                  "group flex items-start gap-3 rounded-xl border bg-card/50 p-4 shadow-sm transition-all hover:shadow-md",
+                  active ? "border-orange-500/25" : "border-border/70 opacity-75",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex size-9 shrink-0 items-center justify-center rounded-xl",
+                    active ? CHIP.orange : "bg-muted/60 text-muted-foreground",
+                  )}
+                >
                   <Repeat className="size-4" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="break-words text-sm font-medium">{s.note}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <Badge className={active ? "border-orange-500/25 bg-orange-500/10 text-orange-500" : ""}>
+                    <Badge
+                      className={
+                        active ? "border-orange-500/25 bg-orange-500/10 text-orange-500" : ""
+                      }
+                    >
                       {s.daily_at ? `daily · ${s.daily_at}` : `every ${s.every_minutes}m`}
                     </Badge>
                     <span>{active ? <>next {s.fires || "soon"}</> : "paused"}</span>
                   </div>
                 </div>
                 <Button
-                  variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-foreground"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-muted-foreground hover:text-foreground"
                   onClick={() => update("schedule", s.id, { status: active ? "paused" : "active" })}
                   aria-label={active ? "Pause" : "Resume"}
                 >
@@ -1437,28 +2080,56 @@ function Schedules({ snap, query, remove, create, update }: { snap: BrainSnapsho
 
 /* ── Messages (chat bubbles from Kith) ──────────────────────────────────── */
 
-function Messages({ snap, query, remove }: { snap: BrainSnapshot; query: string; remove: Handlers["remove"] }) {
+function Messages({
+  snap,
+  query,
+  remove,
+}: {
+  snap: BrainSnapshot;
+  query: string;
+  remove: Handlers["remove"];
+}) {
   const items = snap.messages.filter((m) => matches(query, m.body));
   return (
     <>
-      <PageHeader icon={<MessageCircle className="size-5" />} color="pink" title="Messages" count={items.length} subtitle="Times he reached out to you unprompted." />
+      <PageHeader
+        icon={<MessageCircle className="size-5" />}
+        color="pink"
+        title="Messages"
+        count={items.length}
+        subtitle="Times he reached out to you unprompted."
+      />
       {items.length === 0 ? (
-        <EmptyState icon={<MessageCircle className="size-5" />}>Kith hasn't reached out yet.</EmptyState>
+        <EmptyState icon={<MessageCircle className="size-5" />}>
+          Kith hasn't reached out yet.
+        </EmptyState>
       ) : (
         <div className="mx-auto max-w-2xl space-y-4">
           {items.map((m) => (
             <div key={m.id} className="group flex items-start gap-3">
-              <span className={cn("mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full", m.read ? "bg-muted/60 text-muted-foreground" : CHIP.pink)}>
+              <span
+                className={cn(
+                  "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
+                  m.read ? "bg-muted/60 text-muted-foreground" : CHIP.pink,
+                )}
+              >
                 <MessageCircle className="size-4" />
               </span>
-              <div className={cn(
-                "relative min-w-0 flex-1 rounded-xl rounded-tl-sm border p-4 shadow-sm",
-                m.read ? "border-border/70 bg-card/50" : "border-pink-500/25 bg-pink-500/[0.05]",
-              )}>
+              <div
+                className={cn(
+                  "relative min-w-0 flex-1 rounded-xl rounded-tl-sm border p-4 shadow-sm",
+                  m.read ? "border-border/70 bg-card/50" : "border-pink-500/25 bg-pink-500/[0.05]",
+                )}
+              >
                 <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">{m.body}</p>
                 <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
                   <span className="tabular-nums">{when(m.created_at)}</span>
-                  {m.read ? null : <span className="inline-flex items-center gap-1 font-medium text-pink-500"><span className="size-1.5 rounded-full bg-pink-500" />unread</span>}
+                  {m.read ? null : (
+                    <span className="inline-flex items-center gap-1 font-medium text-pink-500">
+                      <span className="size-1.5 rounded-full bg-pink-500" />
+                      unread
+                    </span>
+                  )}
                   <div className="flex-1" />
                   <DeleteButton onClick={() => remove("message", m.id, m.body)} />
                 </div>
@@ -1473,29 +2144,56 @@ function Messages({ snap, query, remove }: { snap: BrainSnapshot; query: string;
 
 /* ── People ─────────────────────────────────────────────────────────────── */
 
-function People({ snap, query, remove, update }: { snap: BrainSnapshot } & { query: string } & Handlers) {
+function People({
+  snap,
+  query,
+  remove,
+  update,
+}: { snap: BrainSnapshot } & { query: string } & Handlers) {
   const items = snap.people.filter((p) => matches(query, p.name, p.relationship, p.profile));
   return (
     <>
-      <PageHeader icon={<User className="size-5" />} color="teal" title="People" count={items.length} subtitle="Who he knows, and what he knows about them." />
+      <PageHeader
+        icon={<User className="size-5" />}
+        color="teal"
+        title="People"
+        count={items.length}
+        subtitle="Who he knows, and what he knows about them."
+      />
       {items.length === 0 ? (
-        <EmptyState icon={<User className="size-5" />}>Kith hasn't gotten to know anyone yet.</EmptyState>
+        <EmptyState icon={<User className="size-5" />}>
+          Kith hasn't gotten to know anyone yet.
+        </EmptyState>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {items.map((p) => (
-            <div key={p.id} className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md">
+            <div
+              key={p.id}
+              className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md"
+            >
               <div className="flex items-center gap-3">
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-teal-500/12 text-sm font-semibold text-teal-500">{initials(p.name)}</span>
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-teal-500/12 text-sm font-semibold text-teal-500">
+                  {initials(p.name)}
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-semibold">{p.name}</div>
-                  {p.relationship ? <div className="truncate text-xs text-muted-foreground">{p.relationship}</div> : null}
+                  {p.relationship ? (
+                    <div className="truncate text-xs text-muted-foreground">{p.relationship}</div>
+                  ) : null}
                 </div>
                 <DeleteButton onClick={() => remove("person", p.id, p.name)} />
               </div>
               <div className="mt-3 border-t border-border/60 pt-3 text-sm leading-relaxed text-muted-foreground">
-                <EditableText value={p.profile} onSave={(v) => update("person", p.id, { profile: v })} multiline placeholder="(nothing noted yet)" />
+                <EditableText
+                  value={p.profile}
+                  onSave={(v) => update("person", p.id, { profile: v })}
+                  multiline
+                  placeholder="(nothing noted yet)"
+                />
               </div>
-              <span className="mt-2 text-[11px] tabular-nums text-muted-foreground">{when(p.updated_at)}</span>
+              <span className="mt-2 text-[11px] tabular-nums text-muted-foreground">
+                {when(p.updated_at)}
+              </span>
             </div>
           ))}
         </div>
@@ -1506,8 +2204,15 @@ function People({ snap, query, remove, update }: { snap: BrainSnapshot } & { que
 
 /* ── Sources (things fed to him to read) ────────────────────────────────── */
 
-function Sources({ snap, query, remove, ingest }: {
-  snap: BrainSnapshot; query: string; remove: Handlers["remove"];
+function Sources({
+  snap,
+  query,
+  remove,
+  ingest,
+}: {
+  snap: BrainSnapshot;
+  query: string;
+  remove: Handlers["remove"];
   ingest: (input: { url?: string; text?: string }) => Promise<void>;
 }) {
   const [value, setValue] = useState("");
@@ -1530,9 +2235,20 @@ function Sources({ snap, query, remove, ingest }: {
   };
   return (
     <>
-      <PageHeader icon={<FileText className="size-5" />} color="sky" title="Sources" count={items.length} subtitle="He reads it, remembers it, and recalls it on demand." />
+      <PageHeader
+        icon={<FileText className="size-5" />}
+        color="sky"
+        title="Sources"
+        count={items.length}
+        subtitle="He reads it, remembers it, and recalls it on demand."
+      />
       <Composer onSubmit={add}>
-        <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="Paste a link, or text for him to read…" className={`${FIELD} flex-1`} />
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Paste a link, or text for him to read…"
+          className={`${FIELD} flex-1`}
+        />
         <Button size="sm" onClick={add} disabled={busy}>
           {busy ? <RefreshCw className="size-4 animate-spin" /> : <Plus className="size-4" />}
           {busy ? "Reading…" : "Feed"}
@@ -1540,21 +2256,38 @@ function Sources({ snap, query, remove, ingest }: {
       </Composer>
       {error ? <p className="-mt-3 mb-4 text-sm text-destructive">{error}</p> : null}
       {items.length === 0 ? (
-        <EmptyState icon={<FileText className="size-5" />}>You haven't given him anything to read yet.</EmptyState>
+        <EmptyState icon={<FileText className="size-5" />}>
+          You haven't given him anything to read yet.
+        </EmptyState>
       ) : (
         <div className="space-y-2">
           {items.map((s) => {
             const isLink = /^https?:\/\//i.test(s.origin);
             return (
-              <div key={s.id} className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:shadow-md">
-                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", CHIP.sky)}>
+              <div
+                key={s.id}
+                className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:shadow-md"
+              >
+                <span
+                  className={cn(
+                    "flex size-9 shrink-0 items-center justify-center rounded-xl",
+                    CHIP.sky,
+                  )}
+                >
                   {isLink ? <LinkIcon className="size-4" /> : <FileText className="size-4" />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{s.title}</div>
                   <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                     {isLink ? (
-                      <a href={s.origin} target="_blank" rel="noreferrer" className="truncate text-sky-500 hover:underline">{s.origin}</a>
+                      <a
+                        href={s.origin}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="truncate text-sky-500 hover:underline"
+                      >
+                        {s.origin}
+                      </a>
                     ) : (
                       <span className="truncate">{s.origin}</span>
                     )}
@@ -1580,18 +2313,25 @@ function Workspace() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   // The open file lives in a preview dialog, so the folder listing stays put.
-  const [file, setFile] = useState<{ path: string; content: string | null; error?: string } | null>(null);
+  const [file, setFile] = useState<{ path: string; content: string | null; error?: string } | null>(
+    null,
+  );
 
   const load = useCallback((p: string) => {
     setLoading(true);
     setError("");
     fetchWorkspace(p)
-      .then((d) => { setEntries(d.entries); setPath(p); })
+      .then((d) => {
+        setEntries(d.entries);
+        setPath(p);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "failed"))
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load("."); }, [load]);
+  useEffect(() => {
+    load(".");
+  }, [load]);
 
   const join = (name: string) => (path === "." ? name : `${path}/${name}`);
   const crumbs = path === "." ? [] : path.split("/");
@@ -1602,7 +2342,17 @@ function Workspace() {
     const stale = (cur: typeof file) => cur?.path !== p;
     fetchWorkspaceFile(p)
       .then((f) => setFile((cur) => (stale(cur) ? cur : { path: p, content: f.content })))
-      .catch((e) => setFile((cur) => (stale(cur) ? cur : { path: p, content: null, error: e instanceof Error ? e.message : "couldn't read that file" })));
+      .catch((e) =>
+        setFile((cur) =>
+          stale(cur)
+            ? cur
+            : {
+                path: p,
+                content: null,
+                error: e instanceof Error ? e.message : "couldn't read that file",
+              },
+        ),
+      );
   };
   const download = () => {
     if (!file?.content) return;
@@ -1615,11 +2365,18 @@ function Workspace() {
     URL.revokeObjectURL(url);
   };
 
-  const sorted = [...entries].sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
+  const sorted = [...entries].sort((a, b) =>
+    a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1,
+  );
 
   return (
     <>
-      <PageHeader icon={<FolderTree className="size-5" />} color="lime" title="Workspace" subtitle="His own computer — an isolated file sandbox.">
+      <PageHeader
+        icon={<FolderTree className="size-5" />}
+        color="lime"
+        title="Workspace"
+        subtitle="His own computer — an isolated file sandbox."
+      >
         <Button variant="ghost" size="icon-sm" onClick={() => load(path)} aria-label="Refresh">
           <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
         </Button>
@@ -1627,16 +2384,30 @@ function Workspace() {
 
       {/* breadcrumb */}
       <div className="mb-4 flex items-center gap-1 rounded-xl border border-border/70 bg-card/40 px-2.5 py-2 text-sm">
-        <Button variant="ghost" size="icon-xs" onClick={() => crumbs.length && goTo(crumbs.length - 2)} disabled={path === "."} aria-label="Up">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => crumbs.length && goTo(crumbs.length - 2)}
+          disabled={path === "."}
+          aria-label="Up"
+        >
           <ArrowUp className="size-3.5" />
         </Button>
-        <button onClick={() => load(".")} className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+        <button
+          onClick={() => load(".")}
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
           <Folder className="size-3.5 text-lime-500" />~
         </button>
         {crumbs.map((seg, i) => (
           <span key={i} className="flex items-center gap-1">
             <ChevronRight className="size-3.5 text-muted-foreground/50" />
-            <button onClick={() => goTo(i)} className="rounded px-1.5 py-0.5 font-mono transition-colors hover:bg-accent">{seg}</button>
+            <button
+              onClick={() => goTo(i)}
+              className="rounded px-1.5 py-0.5 font-mono transition-colors hover:bg-accent"
+            >
+              {seg}
+            </button>
           </span>
         ))}
       </div>
@@ -1644,22 +2415,36 @@ function Workspace() {
       {error ? <p className="mb-3 text-sm text-destructive">{error}</p> : null}
 
       {sorted.length === 0 ? (
-        <EmptyState icon={<Folder className="size-5" />}>{loading ? "Looking…" : "This folder is empty."}</EmptyState>
+        <EmptyState icon={<Folder className="size-5" />}>
+          {loading ? "Looking…" : "This folder is empty."}
+        </EmptyState>
       ) : (
         <div className="overflow-hidden rounded-xl border border-border/70 bg-card/40 shadow-sm">
           {sorted.map((e, i) => (
             <button
               key={e.name}
               onClick={() => (e.type === "dir" ? load(join(e.name)) : openFile(e.name))}
-              className={cn("group flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/60", i > 0 && "border-t border-border/50")}
+              className={cn(
+                "group flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/60",
+                i > 0 && "border-t border-border/50",
+              )}
             >
-              <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-lg", e.type === "dir" ? "bg-lime-500/12 text-lime-500" : "bg-muted/60 text-muted-foreground")}>
+              <span
+                className={cn(
+                  "flex size-7 shrink-0 items-center justify-center rounded-lg",
+                  e.type === "dir"
+                    ? "bg-lime-500/12 text-lime-500"
+                    : "bg-muted/60 text-muted-foreground",
+                )}
+              >
                 {e.type === "dir" ? <Folder className="size-4" /> : <FileText className="size-4" />}
               </span>
               <span className="min-w-0 flex-1 truncate">{e.name}</span>
               {e.type === "file" ? (
                 <>
-                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{fmtSize(e.size)}</span>
+                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                    {fmtSize(e.size)}
+                  </span>
                   <Expand className="size-3.5 shrink-0 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100" />
                 </>
               ) : (
@@ -1678,6 +2463,7 @@ function Workspace() {
           content={file.content}
           error={file.error}
           onDownload={file.content ? download : undefined}
+          onOpenOnHost={(reveal) => handOffAndOpen(file.path, reveal)}
         />
       ) : null}
     </>
@@ -1686,19 +2472,43 @@ function Workspace() {
 
 /* ── Tools (his self-made tools) ────────────────────────────────────────── */
 
-function Tools({ snap, query, remove }: { snap: BrainSnapshot; query: string; remove: Handlers["remove"] }) {
+function Tools({
+  snap,
+  query,
+  remove,
+}: {
+  snap: BrainSnapshot;
+  query: string;
+  remove: Handlers["remove"];
+}) {
   const items = snap.tools.filter((t) => matches(query, t.name, t.description));
   return (
     <>
-      <PageHeader icon={<Wrench className="size-5" />} color="rose" title="Tools" count={items.length} subtitle="Tools he wrote for himself, on his own." />
+      <PageHeader
+        icon={<Wrench className="size-5" />}
+        color="rose"
+        title="Tools"
+        count={items.length}
+        subtitle="Tools he wrote for himself, on his own."
+      />
       {items.length === 0 ? (
         <EmptyState icon={<Wrench className="size-5" />}>No self-made tools.</EmptyState>
       ) : (
         <div className="space-y-3">
           {items.map((t) => (
-            <details key={t.name} className="group rounded-xl border border-border/70 bg-card/50 shadow-sm transition-all hover:shadow-md">
+            <details
+              key={t.name}
+              className="group rounded-xl border border-border/70 bg-card/50 shadow-sm transition-all hover:shadow-md"
+            >
               <summary className="flex cursor-pointer list-none items-center gap-3 p-4">
-                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-xl", CHIP.rose)}><Code className="size-4" /></span>
+                <span
+                  className={cn(
+                    "flex size-9 shrink-0 items-center justify-center rounded-xl",
+                    CHIP.rose,
+                  )}
+                >
+                  <Code className="size-4" />
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm font-semibold">{t.name}</span>
@@ -1722,8 +2532,19 @@ function Tools({ snap, query, remove }: { snap: BrainSnapshot; query: string; re
 
 /* ── Primitives ─────────────────────────────────────────────────────────── */
 
-function EditableText({ value, onSave, multiline, placeholder, className = "", render }: {
-  value: string; onSave: (v: string) => void; multiline?: boolean; placeholder?: string; className?: string;
+function EditableText({
+  value,
+  onSave,
+  multiline,
+  placeholder,
+  className = "",
+  render,
+}: {
+  value: string;
+  onSave: (v: string) => void;
+  multiline?: boolean;
+  placeholder?: string;
+  className?: string;
   /** Display the saved value through this (e.g. rendered Markdown). Editing is
    * always the raw text. */
   render?: (value: string) => ReactNode;
@@ -1746,7 +2567,11 @@ function EditableText({ value, onSave, multiline, placeholder, className = "", r
     // gutter instead of trailing the text inline.
     return (
       <div className={`group/edit relative pe-5 ${className}`}>
-        {value ? render(value) : <em className="text-muted-foreground">{placeholder ?? "empty"}</em>}
+        {value ? (
+          render(value)
+        ) : (
+          <em className="text-muted-foreground">{placeholder ?? "empty"}</em>
+        )}
         <button
           className="absolute top-0 right-0 rounded p-0.5 text-muted-foreground opacity-0 transition group-hover/edit:opacity-100 hover:bg-accent hover:text-foreground"
           onClick={startEdit}
@@ -1774,7 +2599,10 @@ function EditableText({ value, onSave, multiline, placeholder, className = "", r
       </span>
     );
   }
-  const commit = () => { onSave(draft); setEditing(false); };
+  const commit = () => {
+    onSave(draft);
+    setEditing(false);
+  };
   const keys = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") setEditing(false);
     // ⌘/Ctrl+Enter saves from a textarea; plain Enter saves a single-line field.
@@ -1796,9 +2624,16 @@ function EditableText({ value, onSave, multiline, placeholder, className = "", r
           className={cn(INPUT, "min-h-44 w-full resize-y font-mono text-[13px] leading-relaxed")}
         />
         <div className="mt-1.5 flex items-center justify-end gap-1.5">
-          <span className="me-auto text-[10px] whitespace-nowrap text-muted-foreground/70">⌘↵ saves</span>
-          <Button variant="ghost" size="xs" onClick={() => setEditing(false)}>Cancel</Button>
-          <Button size="xs" onClick={commit}><Check className="size-3" />Save</Button>
+          <span className="me-auto text-[10px] whitespace-nowrap text-muted-foreground/70">
+            ⌘↵ saves
+          </span>
+          <Button variant="ghost" size="xs" onClick={() => setEditing(false)}>
+            Cancel
+          </Button>
+          <Button size="xs" onClick={commit}>
+            <Check className="size-3" />
+            Save
+          </Button>
         </div>
       </div>
     );
@@ -1807,23 +2642,60 @@ function EditableText({ value, onSave, multiline, placeholder, className = "", r
   return (
     <span className="flex w-full items-start gap-1" onClick={(e) => e.stopPropagation()}>
       {multiline ? (
-        <textarea ref={ref as RefObject<HTMLTextAreaElement>} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={keys} className={`${INPUT} min-h-16 flex-1 resize-y`} />
+        <textarea
+          ref={ref as RefObject<HTMLTextAreaElement>}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={keys}
+          className={`${INPUT} min-h-16 flex-1 resize-y`}
+        />
       ) : (
-        <input ref={ref as RefObject<HTMLInputElement>} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={keys} className={`${INPUT} flex-1`} />
+        <input
+          ref={ref as RefObject<HTMLInputElement>}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={keys}
+          className={`${INPUT} flex-1`}
+        />
       )}
-      <Button variant="ghost" size="icon" className="size-6" onClick={commit} aria-label="Save"><Check className="size-4" /></Button>
-      <Button variant="ghost" size="icon" className="size-6" onClick={() => setEditing(false)} aria-label="Cancel"><X className="size-4" /></Button>
+      <Button variant="ghost" size="icon" className="size-6" onClick={commit} aria-label="Save">
+        <Check className="size-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-6"
+        onClick={() => setEditing(false)}
+        aria-label="Cancel"
+      >
+        <X className="size-4" />
+      </Button>
     </span>
   );
 }
 
 function Badge({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <span className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[11px] ${className}`}>{children}</span>;
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-md border border-border/70 bg-muted/40 px-1.5 py-0.5 text-[11px] ${className}`}
+    >
+      {children}
+    </span>
+  );
 }
 
 function DeleteButton({ onClick }: { onClick: () => void }) {
   return (
-    <Button variant="ghost" size="icon" className="size-7 shrink-0 text-muted-foreground opacity-60 transition-opacity hover:text-destructive hover:opacity-100" onClick={(e) => { e.stopPropagation(); onClick(); }} aria-label="Delete">
+    <Button
+      variant="ghost"
+      size="icon"
+      className="size-7 shrink-0 text-muted-foreground opacity-60 transition-opacity hover:text-destructive hover:opacity-100"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      aria-label="Delete"
+    >
       <Trash2 className="size-4" />
     </Button>
   );
@@ -1847,7 +2719,15 @@ function clamp(n: number): number {
 }
 
 function initials(name: string): string {
-  return name.split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((w) => w[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "?"
+  );
 }
 
 function fmtSize(n: number): string {
@@ -1891,7 +2771,12 @@ function dayLabel(iso: string): string {
 
 function when(iso: string): string {
   try {
-    return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   } catch {
     return "";
   }
