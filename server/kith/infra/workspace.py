@@ -78,19 +78,128 @@ class ExecResult:
 # --------------------------------------------------------------------------- #
 
 
+#: Where a folder picked in the app is remembered. ``KITH_WORKSPACE`` still wins when it is
+#: set, because someone who started the process pointing at a folder meant it.
+ROOT_KEY = "workspace_dir"
+
+
+#: Folders that must never be the workspace. Inside the workspace he needs no permission —
+#: that is the whole design — so the choice of folder *is* the boundary. Picking your home
+#: folder would not give him a big workspace, it would silently switch the permission
+#: system off for every file you own. These are refused rather than warned about, because a
+#: warning you can click past is not a boundary.
+def _forbidden_roots() -> set[Path]:
+    home = Path.home()
+    return {
+        Path("/"),
+        home,
+        home.parent,
+        *(home / name for name in ("Desktop", "Documents", "Downloads", "Library")),
+    }
+
+
+def configured_root() -> Path:
+    """The folder he is set to work in, without creating anything.
+
+    Environment first, then whatever was picked in the app, then the default.
+    """
+    stored: object = None
+    try:
+        from kith.config import CONFIG_DB_PATH
+        from kith.infra.db import config_store
+
+        stored = config_store.load_settings(CONFIG_DB_PATH).get(ROOT_KEY)
+    except Exception:
+        # Before the config database exists — first run, a migration in flight — the
+        # default is the right answer, and failing here would take the whole app down.
+        stored = None
+    for candidate in (settings.WORKSPACE_DIR, stored):
+        text = str(candidate or "").strip()
+        if text:
+            return Path(text).expanduser()
+    return DEFAULT_ROOT
+
+
 def root() -> Path:
     """The workspace folder, created if it is not there yet.
 
     Read fresh rather than captured at import: it is a setting someone can change, and a
     module-level constant would mean a restart to take effect.
     """
-    configured = str(settings.WORKSPACE_DIR or "").strip()
-    chosen = Path(configured).expanduser() if configured else DEFAULT_ROOT
+    chosen = configured_root()
     try:
         chosen.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise WorkspaceError(f"Can't use {chosen} as his folder: {exc}") from None
     return chosen
+
+
+def set_root(raw: str) -> Path:
+    """Move him to a different folder, and say what that does and does not do.
+
+    Nothing is copied. His existing work stays where it is — which is the honest
+    behaviour: silently moving a folder that may hold gigabytes, or that the person has
+    open in an editor, is not something a settings row should do behind a click. The
+    interface says so; this only changes where he works next.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        raise WorkspaceError("Pick a folder for him to work in.")
+    chosen = Path(text).expanduser()
+    if not chosen.is_absolute():
+        raise WorkspaceError("That needs to be a full path.")
+    chosen = Path(os.path.normpath(chosen))
+    if chosen in _forbidden_roots():
+        raise WorkspaceError(
+            f"{chosen} is too broad to be his folder — he works without asking inside it, "
+            "so this would hand him everything under it. Give him a folder of his own."
+        )
+    if chosen.exists() and not chosen.is_dir():
+        raise WorkspaceError(f"{chosen} is a file, not a folder.")
+    try:
+        chosen.mkdir(parents=True, exist_ok=True)
+        probe = chosen / ".kith-write-test"
+        probe.write_text("")
+        probe.unlink()
+    except OSError as exc:
+        raise WorkspaceError(f"Can't write to {chosen}: {exc}") from None
+
+    previous = configured_root()
+    if chosen != previous:
+        _carry_records(previous, chosen)
+
+    from kith.config import CONFIG_DB_PATH
+    from kith.infra.db import config_store
+
+    config_store.update_settings(CONFIG_DB_PATH, {ROOT_KEY: str(chosen)})
+    return chosen
+
+
+def _carry_records(previous: Path, chosen: Path) -> None:
+    """Bring his own records to the new folder, before anything is switched.
+
+    His *work* stays behind deliberately. His records cannot, and the difference is not a
+    preference: conversation transcripts live in ``.kith/`` inside the workspace, but the
+    index that lists them lives in the databases, which do not move. Change the folder
+    without them and every past conversation is still listed and every one of them opens
+    empty — the index points at a file that is no longer under the current root. Nothing
+    was deleted, which is exactly what makes it so hard to understand.
+
+    Copied rather than moved, so the old folder remains a complete thing on disk. And done
+    before the setting changes, so a failure here leaves him where he was rather than
+    pointed at a folder his own history cannot be reached from.
+    """
+    source = previous / INTERNAL_DIR
+    if not source.is_dir():
+        return
+    destination = chosen / INTERNAL_DIR
+    try:
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(
+            f"Couldn't copy his conversations to {destination}: {exc}. Leaving him in "
+            f"{previous} — moving him without them would leave his history unreadable."
+        ) from None
 
 
 def internal() -> Path:

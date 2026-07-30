@@ -275,6 +275,10 @@ export interface ConfigPath {
   entries?: number;
   /** Worth a reveal-in-Finder button — a real folder rather than a build path. */
   open?: boolean;
+  /** Somewhere the person gets to choose, not just read. Only his workspace, so far. */
+  change?: boolean;
+  /** Fixed by an environment variable at launch, so the app cannot override it. */
+  pinned?: boolean;
   note?: string;
 }
 

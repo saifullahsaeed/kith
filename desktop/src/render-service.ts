@@ -26,7 +26,7 @@ import { BACKEND_ORIGIN } from "./config";
 
 import { getMainWindow, showMainWindow } from "./window";
 
-import { BrowserWindow, Notification, session, shell } from "electron";
+import { BrowserWindow, Notification, dialog, session, shell } from "electron";
 
 /** Matches the sandbox implementation this replaces (playwright's 30s goto). */
 const LOAD_TIMEOUT_MS = 30_000;
@@ -86,7 +86,7 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   };
 
   const route = (request.url ?? "").split("?")[0] ?? "";
-  const ROUTES = ["/render", "/notify", "/open-pane"];
+  const ROUTES = ["/render", "/notify", "/open-pane", "/pick-folder"];
   if (request.method !== "POST" || !ROUTES.includes(route)) {
     return reply(404, { error: "not found" });
   }
@@ -100,6 +100,7 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
 
   if (route === "/notify") return notify(request, reply);
   if (route === "/open-pane") return openPane(request, reply);
+  if (route === "/pick-folder") return pickFolder(request, reply);
 
   let target: string;
   try {
@@ -326,6 +327,46 @@ async function openPane(
   if (!target) return reply(400, { error: `unknown pane: ${name}` });
   await shell.openExternal(target);
   reply(200, { opened: name });
+}
+
+/**
+ * Ask for a folder, with the real system dialog.
+ *
+ * There is no way to do this from the page. A file input gives you a `File` and deliberately
+ * never a path, and typing one into a text box is how you end up with a typo pointed at a
+ * folder that does not exist. The only component that can put up the platform's own folder
+ * chooser is the main process, so the choice is made here and only the resulting path
+ * crosses back.
+ *
+ * `createDirectory` is on because "put him in a new folder called Kith" is the common case
+ * and macOS's chooser can do that itself.
+ */
+async function pickFolder(
+  request: http.IncomingMessage,
+  reply: (status: number, body: unknown) => void,
+): Promise<void> {
+  let title = "Choose a folder";
+  let start = "";
+  try {
+    const parsed = JSON.parse(await readBody(request)) as { title?: unknown; start?: unknown };
+    if (typeof parsed.title === "string" && parsed.title.trim()) title = parsed.title.trim();
+    if (typeof parsed.start === "string") start = parsed.start;
+  } catch {
+    // Both are cosmetic; a malformed body still deserves a dialog.
+  }
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const options: Electron.OpenDialogOptions = {
+    title,
+    buttonLabel: "Choose",
+    properties: ["openDirectory", "createDirectory"],
+    ...(start ? { defaultPath: start } : {}),
+  };
+  const result = parent
+    ? await dialog.showOpenDialog(parent, options)
+    : await dialog.showOpenDialog(options);
+  // Cancelling is a normal outcome, not a failure — say so plainly rather than with an error
+  // the caller has to pattern-match on.
+  reply(200, { path: result.canceled ? "" : (result.filePaths[0] ?? "") });
 }
 
 /**

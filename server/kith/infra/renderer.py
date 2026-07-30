@@ -30,6 +30,10 @@ from pathlib import Path
 # Rendering is a page load plus a settle delay; the shell caps itself at 45s, so
 # allow a little beyond that before deciding it is unreachable.
 _TIMEOUT_SECONDS = 55
+#: A folder chooser is open for as long as the person browsing it takes. Five minutes is
+#: not generosity, it is the difference between "they went to look in Documents" and a
+#: dialog that vanishes under them.
+_PICKER_TIMEOUT = 300
 
 # Docker Desktop's alias for the machine the container runs on.
 _HOST_FROM_CONTAINER = "host.docker.internal"
@@ -167,12 +171,34 @@ def open_settings_pane(pane: str) -> bool:
     return _ask("/open-pane", {"pane": pane}) is not None
 
 
-def _ask(route: str, payload: dict) -> dict | None:
+def pick_folder(title: str = "", start: str = "") -> str | None:
+    """Ask, with the system's own folder chooser, and return the chosen path.
+
+    ``""`` when the person cancelled, ``None`` when there is no shell to ask — two
+    different answers that must not be conflated: cancelling means leave the setting
+    alone, no shell means the interface should offer a text field instead.
+
+    The timeout is generous because what is being waited on is a human deciding where a
+    folder should go, and the usual five seconds would yank the dialog away mid-browse.
+    """
+    answer = _ask(
+        "/pick-folder",
+        {"title": title, "start": start},
+        timeout=_PICKER_TIMEOUT,
+    )
+    if answer is None:
+        return None
+    path = answer.get("path")
+    return path if isinstance(path, str) else ""
+
+
+def _ask(route: str, payload: dict, timeout: float = 5) -> dict | None:
     """One short request to the shell. None when it is not there or says no.
 
-    Short timeout on purpose: these are things a person is waiting on with a finger still
-    on the button, and a shell that has gone away should fail immediately rather than
-    holding the click for a minute.
+    Short by default on purpose: these are things a person is waiting on with a finger
+    still on the button, and a shell that has gone away should fail immediately rather
+    than holding the click for a minute. The exception is anything that puts a dialog in
+    front of them, which is bounded by how long they take, not by the network.
     """
     with _lock:
         endpoint = _endpoint
@@ -185,7 +211,7 @@ def _ask(route: str, payload: dict) -> dict | None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode())
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError):
         return None

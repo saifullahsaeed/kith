@@ -109,3 +109,58 @@ export async function openSettingsPane(
   const body = (await response.json()) as { opened?: boolean };
   return Boolean(body.opened);
 }
+
+/**
+ * Forget every standing grant.
+ *
+ * The counterpart to "Always allow" on a permission prompt, which until now was a
+ * one-way door: the grant was stored, honoured forever, and shown nowhere. A permission
+ * you cannot see or take back is not a permission you gave, it is one you lost track of.
+ */
+export async function revokeGrants(): Promise<PermissionState> {
+  const response = await fetch("/api/permissions/revoke", { method: "POST" });
+  if (!response.ok) throw new Error(await reason(response));
+  return (await response.json()) as PermissionState;
+}
+
+/**
+ * Ask for a folder with the system's own chooser.
+ *
+ * `""` means they cancelled. `null` means there is no desktop shell to ask — the page
+ * cannot put up a folder dialog itself, so the caller should fall back to a typed path
+ * rather than leaving a dead button.
+ */
+export async function pickFolder(title: string, start = ""): Promise<string | null> {
+  const response = await fetch("/api/system/pick-folder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, start }),
+  });
+  if (!response.ok) return null;
+  const body = (await response.json()) as {
+    available?: boolean;
+    path?: string;
+  };
+  if (!body.available) return null;
+  return typeof body.path === "string" ? body.path : "";
+}
+
+/** Point him at a different folder. Nothing is moved; his old work stays where it is. */
+export async function setWorkspaceRoot(path: string): Promise<string> {
+  const response = await fetch("/api/workspace/root", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!response.ok) throw new Error(await reason(response));
+  const body = (await response.json()) as { path?: string };
+  return String(body.path ?? path);
+}
+
+/** The server's own words when it refuses, since "400" tells nobody anything. */
+async function reason(response: Response): Promise<string> {
+  const detail = (await response.json().catch(() => ({}))) as {
+    error?: string;
+  };
+  return detail.error ?? `that didn't work (${response.status})`;
+}

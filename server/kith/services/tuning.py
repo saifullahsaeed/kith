@@ -182,6 +182,10 @@ def _paths() -> list[dict]:
             "bytes": _folder_size(here),
             "entries": sum(1 for item in here.iterdir() if item.name != workspace.INTERNAL_DIR),
             "open": True,
+            # The one folder that is a choice rather than a consequence — and the only one
+            # where the choice matters, since he works inside it without asking.
+            "change": True,
+            "pinned": bool(str(settings.WORKSPACE_DIR or "").strip()),
             "note": "Where he works. Everything he makes lands here.",
         },
         {

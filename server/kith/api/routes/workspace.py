@@ -104,6 +104,24 @@ def workspace_opens_with():
     return jsonify({"opensWith": default_app.for_filename(name)})
 
 
+@api.post("/workspace/root")
+@api.doc(
+    summary="Change the folder he works in",
+    description=(
+        "Points him at a different folder. Nothing is moved — his existing work stays "
+        "where it is. Refuses a folder broad enough to defeat the permission boundary, "
+        "since he works unprompted inside whichever folder this is. Body: {path}."
+    ),
+)
+def workspace_set_root():
+    body = request.get_json(silent=True) or {}
+    try:
+        chosen = sandbox.set_root(str(body.get("path") or ""))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"path": str(chosen)})
+
+
 @api.post("/workspace/folder")
 @api.doc(
     summary="Create a folder",

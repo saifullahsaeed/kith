@@ -2,11 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { FolderOpen, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
 import { openOnHost } from "@/lib/files";
+import { StandingGrants } from "./standing-grants";
 import {
   fetchTuning,
+  pickFolder,
   resetTuning,
   saveTuning,
+  setWorkspaceRoot,
   type Tunable,
   type TuningSnapshot,
 } from "@/lib/backend";
@@ -29,6 +33,7 @@ const inputClass =
  * discover is a trap.
  */
 export function AdvancedTab() {
+  const confirm = useConfirm();
   const [snapshot, setSnapshot] = useState<TuningSnapshot | null>(null);
   const [draft, setDraft] = useState<Record<string, number | string>>({});
   const [busy, setBusy] = useState(false);
@@ -53,6 +58,45 @@ export function AdvancedTab() {
     try {
       setSnapshot(await action());
       setDraft({});
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Move him to another folder.
+   *
+   * Two things are deliberate. The chooser is the system's own, because a text field for a
+   * path is how you get a typo pointed at nothing. And the split is stated up front: his
+   * conversations travel with him (they have to — the index that lists them does not move,
+   * so leaving them behind would make his whole history open empty), while the files he has
+   * made stay put, because relocating gigabytes is not something a settings click should do.
+   * Both halves are named in the confirm, since "everything he made is still in the old
+   * folder" is the honest outcome and reads exactly like data loss when discovered later.
+   */
+  async function move(current: string) {
+    setError("");
+    const picked = await pickFolder("Choose a folder for Kith to work in", current);
+    if (picked === null) {
+      setError("No desktop app running, so there's no folder chooser. Set KITH_WORKSPACE instead.");
+      return;
+    }
+    if (!picked || picked === current) return;
+    const ok = await confirm({
+      title: "Have Kith work in this folder?",
+      subject: picked,
+      description:
+        `His conversations come with him. The files he has already made do not — those stay ` +
+        `in ${current}, and you can copy them across yourself if you want them to follow.`,
+      confirmLabel: "Work here",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await setWorkspaceRoot(picked);
+      load();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -141,6 +185,22 @@ export function AdvancedTab() {
                   <p className="text-muted-foreground/70 mt-0.5 text-[11px]">{path.note}</p>
                 ) : null}
               </div>
+              {path.change ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={busy || path.pinned}
+                  onClick={() => void move(path.value)}
+                  title={
+                    path.pinned
+                      ? `Fixed by ${path.env} in the environment — unset it to choose here.`
+                      : "Pick a different folder for him to work in"
+                  }
+                >
+                  Change…
+                </Button>
+              ) : null}
               {path.open ? (
                 <Button
                   variant="outline"
@@ -157,6 +217,8 @@ export function AdvancedTab() {
           ))}
         </div>
       </section>
+
+      <StandingGrants />
 
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
 

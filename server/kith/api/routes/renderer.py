@@ -61,6 +61,26 @@ def system_notify():
     return jsonify({"shown": shown})
 
 
+@api.post("/system/pick-folder")
+@api.doc(
+    summary="Ask for a folder with the system dialog",
+    description=(
+        "Shows the platform's own folder chooser and returns what was picked. "
+        '{"path": ""} means they cancelled; {"available": false} means there is no '
+        "desktop shell to ask, and the interface should take a typed path instead."
+    ),
+)
+def system_pick_folder():
+    payload = request.get_json(silent=True) or {}
+    chosen = renderer.pick_folder(
+        title=str(payload.get("title") or ""),
+        start=str(payload.get("start") or ""),
+    )
+    if chosen is None:
+        return jsonify({"available": False, "path": ""})
+    return jsonify({"available": True, "path": chosen})
+
+
 @api.post("/system/settings-pane")
 @api.doc(
     summary="Open a macOS settings pane",
