@@ -26,8 +26,7 @@ LOOP_B = (
     "find the link structure"
 )
 PROGRESS = (
-    "Wrote the scraper module and ran it against the saved page — extracted 24 circulars "
-    "with dates and refs"
+    "Wrote the scraper module and ran it against the saved page — extracted 24 circulars with dates and refs"
 )
 
 # The tool shapes of those same ticks.
