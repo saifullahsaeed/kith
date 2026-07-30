@@ -11,7 +11,10 @@
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "package": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "brand": "bash scripts/brand-dev-bundle.sh",
+    "prestart": "bash scripts/brand-dev-bundle.sh",
+    "predev": "bash scripts/brand-dev-bundle.sh"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

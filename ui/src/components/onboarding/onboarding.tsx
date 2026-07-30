@@ -28,8 +28,8 @@ const COPY = {
     lead: "He looks things up on his own. This decides who pays for that, and who can see it.",
   },
   access: {
-    title: "Two things macOS decides",
-    lead: "Neither can be granted from in here, so this is the one place that asks.",
+    title: "One thing to allow",
+    lead: "Everything else about access is decided when it happens, which is where it belongs.",
   },
   ready: { title: "Ready.", lead: "Here's what he can do." },
 } as const;
