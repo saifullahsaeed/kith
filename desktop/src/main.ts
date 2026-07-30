@@ -22,7 +22,7 @@
 
 import { app, dialog } from "electron";
 
-import { waitForBackend } from "./backend";
+import { loadWhenReady, recoverFromBackendRestarts, waitForBackend } from "./backend";
 import { BACKEND_ORIGIN, BACKEND_WAIT_MS } from "./config";
 import {
   enableSandbox,
@@ -77,7 +77,13 @@ async function start(): Promise<void> {
     console.warn("[kith] render service unavailable, sandbox will render instead:", error);
   }
 
-  await window.loadURL(BACKEND_ORIGIN);
+  // Retrying, so a server that restarts underneath us costs a blink rather than the
+  // whole window: without this, one failed load left the app with nothing on screen.
+  recoverFromBackendRestarts(window);
+  if (!(await loadWhenReady(window))) {
+    reportBackendMissing();
+    return;
+  }
   window.show();
   window.focus();
 

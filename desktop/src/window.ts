@@ -10,6 +10,7 @@
 
 import { BrowserWindow, shell } from "electron";
 
+import { loadWhenReady, recoverFromBackendRestarts } from "./backend";
 import { BACKEND_ORIGIN, EXTERNAL_SCHEMES, WINDOW } from "./config";
 import { restoredBounds, trackWindowState } from "./window-state";
 
@@ -93,7 +94,8 @@ export function showMainWindow(): void {
     return;
   }
   const window = createMainWindow();
-  void window.loadURL(BACKEND_ORIGIN);
+  recoverFromBackendRestarts(window);
+  void loadWhenReady(window);
   window.once("ready-to-show", () => window.show());
 }
 
