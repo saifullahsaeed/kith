@@ -29,8 +29,15 @@ BUNDLE_ID="com.kith.desktop"
 current_exec=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST" 2>/dev/null || echo "")
 current_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST" 2>/dev/null || echo "")
 
-if [ "$current_exec" = "Kith" ] && [ "$current_id" = "$BUNDLE_ID" ] && codesign -v "$APP" 2>/dev/null; then
-  exit 0   # already branded and still verifying
+installed="$APP/Contents/Resources/electron.icns"
+icon_fresh=true
+if [ -f resources/icon.icns ] && [ resources/icon.icns -nt "$installed" ]; then
+  icon_fresh=false   # the mark was redrawn since it was installed
+fi
+
+if [ "$current_exec" = "Kith" ] && [ "$current_id" = "$BUNDLE_ID" ] && $icon_fresh \
+   && codesign -v "$APP" 2>/dev/null; then
+  exit 0   # already branded, icon current, signature still verifying
 fi
 
 echo "[brand] naming the dev bundle Kith"
@@ -41,6 +48,14 @@ echo "[brand] naming the dev bundle Kith"
   || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Kith" "$PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST" 2>/dev/null || true
 printf 'Electron.app/Contents/MacOS/Kith' > node_modules/electron/path.txt
+
+# The icon. macOS draws the app's icon beside every notification it attributes to it, so
+# without this Kith's notifications arrive wearing Electron's face — which is how this was
+# noticed. Same story for the Dock, Cmd-Tab, and Notification Center's settings list.
+if [ -f resources/icon.icns ]; then
+  echo "[brand] installing Kith's icon"
+  cp resources/icon.icns "$APP/Contents/Resources/electron.icns"
+fi
 
 # The part that is easy to forget and breaks notifications when forgotten.
 echo "[brand] re-signing (a broken signature means macOS drops every notification)"

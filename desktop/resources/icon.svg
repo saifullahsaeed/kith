@@ -1,0 +1,86 @@
+<!--
+  Kith's mark.
+
+  The app already has a signature: a warm amber presence orb that glows while he is here
+  and greens while he roams. It is on every screen, so the icon is that, rather than a new
+  idea nobody would connect to it.
+
+  Around it, an arc that does not close. Kith means your people — the circle is a
+  relationship, and a relationship that closed would be a finished thing. The gap sits at
+  the bottom right, which is also where the eye leaves a mark, so it reads as open rather
+  than broken.
+
+  Three constraints shaped every number here:
+
+  * It has to survive 16px. In Notification Center and the menu bar this is a handful of
+    pixels, so the whole design is two shapes with a wide gap between them — no glyph, no
+    thin detail, nothing that turns to mush. The arc is 7% of the canvas thick, which is
+    heavy at 1024 and still visible at 16.
+  * The plate is warm near-black, not black. Beside other macOS icons a pure-black tile
+    reads as a hole; #0E0905 is the app's own background, which is warm on purpose.
+  * The orb is off-centre, high and left, with the glow falling down and right. Centred it
+    looked like a loading spinner. Weighted, it looks like a thing that is lit.
+
+  Geometry is proportional to a 1024 canvas so the PNG generator can render the identical
+  shape at every size from one set of numbers. Change it here, run `npm run icons`.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Warm, slightly lit from the top left, like the app's own room. -->
+    <linearGradient id="plate" x1="0" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#241E19"/>
+      <stop offset="0.55" stop-color="#14100B"/>
+      <stop offset="1" stop-color="#0E0905"/>
+    </linearGradient>
+
+    <!-- The orb: bright at the top left where the light is, deepening away from it. -->
+    <radialGradient id="orb" cx="0.36" cy="0.32" r="0.82">
+      <stop offset="0" stop-color="#FFE0A8"/>
+      <stop offset="0.45" stop-color="#F1B65A"/>
+      <stop offset="1" stop-color="#D08C2E"/>
+    </radialGradient>
+
+    <!-- The glow. Not a blur filter: filters are expensive to rasterise, render
+         differently across tools, and are why so many app icons look muddy at small
+         sizes. A radial gradient with an alpha ramp is exact and cheap. -->
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F1B65A" stop-opacity="0.42"/>
+      <stop offset="0.45" stop-color="#F1B65A" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#F1B65A" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- macOS rounds app icons itself, but only for a real .icns in a bundle. The mark
+         carries its own squircle so it is correct anywhere else it appears too. -->
+    <clipPath id="plateClip">
+      <path d="M512 40
+               C 800 40 984 224 984 512
+               C 984 800 800 984 512 984
+               C 224 984 40 800 40 512
+               C 40 224 224 40 512 40 Z"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#plateClip)">
+    <path d="M512 40
+             C 800 40 984 224 984 512
+             C 984 800 800 984 512 984
+             C 224 984 40 800 40 512
+             C 40 224 224 40 512 40 Z" fill="url(#plate)"/>
+
+    <!-- A single soft highlight across the top, so the plate is not a flat field. -->
+    <ellipse cx="380" cy="150" rx="520" ry="300" fill="#F1B65A" opacity="0.05"/>
+  </g>
+
+  <!-- The open arc. A stroked path rather than a ring with a cut-out, so the round caps
+       come free — they are what stop the opening reading as damage rather than as space.
+       Concentric with the orb: offset, the two shapes read as a spiral, which is a
+       loading indicator and not a mind. The lit feeling comes from the gradients. -->
+  <path d="M 775.1 563.1
+           A 268 268 0 1 0 563.1 775.1"
+        fill="none" stroke="#F1B65A" stroke-opacity="0.94"
+        stroke-width="84" stroke-linecap="round"/>
+
+  <!-- Glow first, then the orb over it. -->
+  <circle cx="512" cy="512" r="250" fill="url(#glow)"/>
+  <circle cx="512" cy="512" r="150" fill="url(#orb)"/>
+</svg>

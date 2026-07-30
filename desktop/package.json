@@ -7,7 +7,7 @@
   "main": "out/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "icons": "python3 scripts/make-tray-icon.py",
+    "icons": "python3 scripts/make-app-icon.py && python3 scripts/make-tray-icon.py",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "package": "npm run build && electron-builder --dir",
@@ -49,7 +49,8 @@
         "NSDocumentsFolderUsageDescription": "Kith needs this to read files you point him at in Documents.",
         "NSDownloadsFolderUsageDescription": "Kith needs this to read files you point him at in Downloads.",
         "NSUserNotificationAlertStyle": "alert"
-      }
+      },
+      "icon": "resources/icon.icns"
     }
   }
 }

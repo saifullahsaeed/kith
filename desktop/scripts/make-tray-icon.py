@@ -13,8 +13,9 @@ Two rules the platform enforces, both easy to break silently:
 * ``@2x`` must share the same base name and be exactly double the pixel size, or
   Retina displays fall back to upscaling the 1x and it looks soft.
 
-The mark is a ring: Kith's identity in the UI is a warm amber presence dot, and a
-ring reads at 16px where a glyph would turn to mush.
+The mark matches the app icon: an arc with an opening at the lower right, which is Kith's
+mark everywhere else. A ring — or an arc — reads at 16px where a glyph would turn to mush,
+and the gap survives because it is a third of the circle rather than a nick in it.
 """
 
 from __future__ import annotations
@@ -36,13 +37,34 @@ def ring_alpha(size: int, x: int, y: int) -> int:
     thickness = max(1.6, size * 0.13)
     inner = outer - thickness
 
+    # The opening, centred on the lower-right diagonal — the same place the app icon's is.
+    import math
+
+    gap_centre, gap_half = 45.0, 34.0
+
     # Supersample 3x3 — at 16px an aliased circle looks visibly lumpy.
     hits = 0
     samples = 0
     for sub_y in (-0.33, 0.0, 0.33):
         for sub_x in (-0.33, 0.0, 0.33):
-            distance = ((x + sub_x - centre) ** 2 + (y + sub_y - centre) ** 2) ** 0.5
+            dx, dy = x + sub_x - centre, y + sub_y - centre
+            distance = (dx**2 + dy**2) ** 0.5
             samples += 1
+            angle = math.degrees(math.atan2(dy, dx)) % 360
+            if abs((angle - gap_centre + 180) % 360 - 180) <= gap_half:
+                # Inside the gap — unless it is within a round cap, which is what keeps the
+                # opening from looking chewed.
+                capped = False
+                for sign in (-1, 1):
+                    a = math.radians(gap_centre + sign * gap_half)
+                    cx_, cy_ = centre + (outer - thickness / 2) * math.cos(a), centre + (
+                        outer - thickness / 2
+                    ) * math.sin(a)
+                    if ((x + sub_x - cx_) ** 2 + (y + sub_y - cy_) ** 2) ** 0.5 <= thickness / 2:
+                        capped = True
+                        break
+                if not capped:
+                    continue
             if inner <= distance <= outer:
                 hits += 1
     return round(255 * hits / samples)
