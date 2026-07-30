@@ -24,6 +24,7 @@ from typing import Any
 import requests
 
 from kith.config import Config
+from kith.llm import caching
 
 # Optionally pin OpenRouter to one upstream host. Default routing spreads requests
 # across ~20 providers, so consecutive rounds land on different (cold) caches and
@@ -54,6 +55,18 @@ def _refuses_reasoning(response: requests.Response) -> bool:
         return False
 
 
+def _session_id() -> str:
+    """The persisted stickiness id, read through the config store."""
+    from kith.config import CONFIG_DB_PATH
+    from kith.infra.db import config_store
+
+    stored = config_store.load_settings(CONFIG_DB_PATH)
+    return caching.session_id(
+        stored,
+        lambda fresh: config_store.update_settings(CONFIG_DB_PATH, {caching.SESSION_KEY: fresh}),
+    )
+
+
 def _pinned_provider() -> str:
     """The upstream to pin OpenRouter to, read per request because it is editable.
 
@@ -75,7 +88,13 @@ def stream_once(
     url = f"{config.base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
         "model": config.model,
-        "messages": _to_openai(messages),
+        # Cache breakpoints go on after translation, because they mark boundaries in the
+        # wire-shape messages — and only for providers that need them (see llm.caching).
+        # The tool schemas are cached with the system prompt on Anthropic, so their
+        # size counts toward whether the prefix clears the provider's minimum.
+        "messages": caching.apply(
+            _to_openai(messages), config.model, prefix_extra_chars=len(json.dumps(tools or []))
+        ),
         "stream": True,
         "stream_options": {"include_usage": True},
     }
@@ -90,6 +109,10 @@ def stream_once(
         # Usage accounting: returns cache-hit tokens and real cost, which is how we
         # confirm prompt caching is actually working.
         payload["usage"] = {"include": True}
+        # Keeps a turn's rounds landing on the same upstream host, so the cache one
+        # round wrote is the cache the next one reads. A preference, not a pin —
+        # availability still falls back.
+        payload["session_id"] = _session_id()
         pinned = _pinned_provider()
         if pinned:
             # Fallbacks stay on so availability never breaks; the pin is a strong
@@ -283,11 +306,15 @@ def _stats(usage: dict | None, elapsed: float) -> dict[str, float]:
     # surfacing it lets us confirm the stable-prefix ordering is actually caching.
     details = usage.get("prompt_tokens_details") or {}
     cached = int(details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0)
+    # Writes bill at 1.25x-2x and reads at 0.1x-0.5x, so a run that is all writes and no
+    # reads is worse than no caching. Counting both is the only way to tell them apart.
+    written = int(details.get("cache_write_tokens") or 0)
     tps = completion / elapsed if elapsed > 0 and completion else 0.0
     return {
         "promptTokens": prompt,
         "responseTokens": completion,
         "cachedTokens": cached,
+        "cacheWriteTokens": written,
         "tokensPerSecond": round(tps, 1),
         "totalSeconds": round(elapsed, 2),
         "loadSeconds": 0.0,
