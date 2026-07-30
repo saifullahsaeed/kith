@@ -165,3 +165,72 @@ export const useFileViewer = create<{
   open: (path) => set({ path: toSandboxPath(path) }),
   close: () => set({ path: null }),
 }));
+
+// -- managing them ---------------------------------------------------------- //
+
+async function change(url: string, body: unknown, method = "POST"): Promise<void> {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error ?? `that didn't work (${response.status})`);
+  }
+}
+
+export const makeFolder = (path: string) => change("/api/workspace/folder", { path });
+export const rename = (path: string, to: string) => change("/api/workspace/rename", { path, to });
+export const remove = (path: string) => change("/api/workspace/file", { path }, "DELETE");
+
+/** Copy text to the clipboard, falling back for a non-secure origin.
+ *
+ * `navigator.clipboard` needs a secure context, and Kith is served over plain http on
+ * loopback — which browsers do treat as secure, but Electron's behaviour has varied, so
+ * the old path stays as a backstop rather than leaving "Copy path" silently dead. */
+export async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+}
+
+/** "2.4 KB", "1.1 MB" — sizes as a person reads them. */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** "14:23" today, "Mon 09:41" this week, "12 Jun" beyond — the shape a file browser
+ *  uses, because the useful part of a date is however recent it is. */
+export function formatModified(epochSeconds: number): string {
+  if (!epochSeconds) return "";
+  const when = new Date(epochSeconds * 1000);
+  const now = new Date();
+  const sameDay = when.toDateString() === now.toDateString();
+  if (sameDay) {
+    return when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+  const days = (now.getTime() - when.getTime()) / 86_400_000;
+  if (days < 7) {
+    return when.toLocaleDateString(undefined, { weekday: "short" });
+  }
+  return when.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}

@@ -158,7 +158,7 @@ export interface BrainSnapshot {
 }
 
 export type TimelineKind =
-  | "memory" | "note" | "journal" | "task" | "tool" | "reminder" | "message" | "curiosity";
+  "memory" | "note" | "journal" | "task" | "tool" | "reminder" | "message" | "curiosity";
 export interface TimelineEvent {
   kind: TimelineKind;
   at: string;
@@ -179,7 +179,9 @@ export async function fetchTimeline(): Promise<TimelineEvent[]> {
 }
 
 export async function deleteBrainItem(kind: string, key: string | number): Promise<void> {
-  const res = await fetch(`/api/brain/${kind}/${encodeURIComponent(String(key))}`, { method: "DELETE" });
+  const res = await fetch(`/api/brain/${kind}/${encodeURIComponent(String(key))}`, {
+    method: "DELETE",
+  });
   if (!res.ok) throw new Error(`delete ${kind}/${key} failed`);
 }
 
@@ -218,9 +220,13 @@ export interface WorkspaceEntry {
   name: string;
   type: "dir" | "file";
   size: number;
+  /** Seconds since the epoch. Zero when the container couldn't say. */
+  modified: number;
 }
 
-export async function fetchWorkspace(path: string): Promise<{ path: string; entries: WorkspaceEntry[] }> {
+export async function fetchWorkspace(
+  path: string,
+): Promise<{ path: string; entries: WorkspaceEntry[] }> {
   const res = await fetch(`/api/workspace?path=${encodeURIComponent(path)}`);
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
@@ -245,7 +251,11 @@ export async function fetchTaskDetail(id: number): Promise<TaskDetail> {
 }
 
 /** Feed Kith a link or pasted text to read and remember. */
-export async function ingestSource(input: { url?: string; text?: string; title?: string }): Promise<void> {
+export async function ingestSource(input: {
+  url?: string;
+  text?: string;
+  title?: string;
+}): Promise<void> {
   const res = await fetch("/api/sources", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

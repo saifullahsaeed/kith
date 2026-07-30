@@ -264,11 +264,17 @@ def list_files(path: str = ".") -> str:
 
 
 def list_dir(path: str = ".") -> list[dict]:
-    """Structured one-level listing of his workspace, for the file browser."""
+    """Structured one-level listing of his workspace, for the file browser.
+
+    Carries the modification time as well as the size, because sorting by "what did he
+    touch most recently" is how anyone actually finds work in progress — and a file
+    browser without a date column is a list, not a browser.
+    """
     ensure_ready()
     target = resolve(path)
     script = (
-        f"find {shlex.quote(target)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%P\\n' 2>/dev/null | sort"
+        f"find {shlex.quote(target)} -maxdepth 1 -mindepth 1 "
+        "-printf '%y\\t%s\\t%T@\\t%P\\n' 2>/dev/null | sort"
     )
     proc = _docker(["exec", CONTAINER, "bash", "-lc", script], timeout=30)
     if proc.returncode != 0:
@@ -276,17 +282,66 @@ def list_dir(path: str = ".") -> list[dict]:
     entries = []
     for line in proc.stdout.decode(errors="replace").splitlines():
         parts = line.split("\t")
-        if len(parts) != 3:
+        if len(parts) != 4:
             continue
-        kind, size, name = parts
+        kind, size, modified, name = parts
         entries.append(
             {
                 "name": name,
                 "type": "dir" if kind == "d" else "file",
                 "size": int(size) if size.isdigit() else 0,
+                # Seconds since the epoch, as a float from find. Sent as an int; the
+                # interface only ever renders it to the minute.
+                "modified": int(float(modified)) if _looks_numeric(modified) else 0,
             }
         )
     return entries
+
+
+def _looks_numeric(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def make_dir(path: str) -> None:
+    """Create a folder, and any parent it needs."""
+    _mutate(f"mkdir -p {shlex.quote(resolve(path))}", f"cannot create {path}")
+
+
+def move(source: str, destination: str) -> None:
+    """Rename or move something inside his home.
+
+    The collision is checked first so the refusal can be a sentence about the name
+    someone typed. ``mv -n`` stays as the backstop — it exits 0 having done nothing
+    when the target exists, which would otherwise report success — but relying on that
+    alone meant three round-trips into the container to work out what had happened.
+    """
+    if kind_of(destination):
+        raise SandboxError(f"{Path(destination).name} already exists here.")
+    src, dst = resolve(source), resolve(destination)
+    _mutate(f"mv -n {shlex.quote(src)} {shlex.quote(dst)}", f"cannot rename {source}")
+
+
+def remove(path: str) -> None:
+    """Delete a file or a whole folder.
+
+    Refuses his home itself. Everything else is his to lose — the interface asks first,
+    and a file browser that cannot delete is not one.
+    """
+    target = resolve(path)
+    if target.rstrip("/") == HOME:
+        raise SandboxError("that's his home folder — not that.")
+    _mutate(f"rm -rf {shlex.quote(target)}", f"cannot delete {path}")
+
+
+def _mutate(command: str, failure: str) -> None:
+    ensure_ready()
+    proc = _docker(["exec", CONTAINER, "bash", "-lc", command], timeout=60)
+    if proc.returncode != 0:
+        raise SandboxError(_tail(proc.stderr) or failure)
 
 
 def fetch_url(url: str) -> str:

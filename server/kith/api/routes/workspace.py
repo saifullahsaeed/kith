@@ -101,3 +101,70 @@ def workspace_opens_with():
     if not name:
         return jsonify({"error": "path required"}), 400
     return jsonify({"opensWith": default_app.for_filename(name)})
+
+
+@api.post("/workspace/folder")
+@api.doc(
+    summary="Create a folder",
+    description="Makes a folder in his workspace, with any parent it needs. Body: {path}.",
+)
+def workspace_make_folder():
+    return _mutate(lambda body: sandbox.make_dir(_relative(body.get("path"))))
+
+
+@api.post("/workspace/rename")
+@api.doc(
+    summary="Rename or move",
+    description=(
+        "Renames a file or folder, or moves it elsewhere in his workspace. Refuses when "
+        "something already has that name rather than replacing it. Body: {path, to}."
+    ),
+)
+def workspace_rename():
+    return _mutate(lambda body: sandbox.move(_relative(body.get("path")), _relative(body.get("to"))))
+
+
+@api.delete("/workspace/file")
+@api.doc(
+    summary="Delete a file or folder",
+    description=(
+        "Deletes it, and everything inside if it's a folder. His home itself is refused. Body: {path}."
+    ),
+)
+def workspace_delete():
+    return _mutate(lambda body: sandbox.remove(_relative(body.get("path"))))
+
+
+def _relative(raw: object) -> str:
+    """A workspace-relative path, or a ValueError.
+
+    Absolute paths and ``..`` are refused rather than repaired. An earlier version
+    stripped slashes first and *then* looked for a leading one, so ``/etc/passwd``
+    quietly became ``etc/passwd`` — harmless only because ``resolve()`` anchors
+    relative paths at his home, which makes the guarantee an accident of another
+    function rather than something this one enforces.
+    """
+    path = str(raw or "").strip()
+    if not path:
+        raise ValueError("path required")
+    if path.startswith("/") or path.startswith("~"):
+        raise ValueError("give a path inside his workspace, not an absolute one")
+    parts = [part for part in Path(path).parts if part not in ("", ".")]
+    if any(part == ".." for part in parts):
+        raise ValueError("that path is outside his workspace")
+    if not parts:
+        # "." or "./" — his home. Deleting or renaming that is never the intent.
+        raise ValueError("that's his workspace itself — pick something inside it")
+    return "/".join(parts)
+
+
+def _mutate(action):
+    """Run one workspace change, turning any refusal into a 400 with its reason."""
+    body = request.get_json(silent=True) or {}
+    try:
+        action(body)
+    except ValueError as bad:
+        return jsonify({"error": str(bad)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True})
