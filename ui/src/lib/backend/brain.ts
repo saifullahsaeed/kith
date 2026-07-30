@@ -70,6 +70,18 @@ export interface Milestone {
   target_at: string | null;
   status: string; // todo | done
   order_index: number;
+  /** Milestone ids this one waits for. */
+  waits_for: number[];
+  /** Titles of the unfinished ones — the reason, not just the state. */
+  blocked_by: string[];
+  /** Nothing in the way and not done: this is what he may work on. */
+  ready: boolean;
+  tasks_total: number;
+  tasks_done: number;
+  tasks_active: number;
+  /** In `doing` — where he is right now. */
+  tasks_doing: number;
+  tasks_waiting: number;
   created_at: string;
   updated_at: string;
 }

@@ -39,11 +39,7 @@ def list_projects(path: Path, args: dict):
     that showed only titles and statuses would leave him unable to see why something he
     can see is not something he can do.
     """
-    overview = repo.projects.project_overview(path)
-    for project in overview:
-        graph = repo.projects.roadmap(path, project["id"])
-        project["milestones"] = graph["milestones"]
-    return paging.page(overview, args, default=5)
+    return paging.page(repo.projects.project_overview(path), args, default=5)
 
 
 @tool(

@@ -146,12 +146,15 @@ def project_overview(path: Path) -> list[dict]:
     Three queries and a group-by in Python, rather than correlated subqueries per
     project: the number of projects is small, and this stays readable.
     """
-    all_milestones = list_milestones(path)
     all_tasks = list_tasks(path)
     out = []
     for project in list_projects(path):
         project_id = project["id"]
-        milestones = [m for m in all_milestones if m["project_id"] == project_id]
+        # The graph's nodes rather than the bare rows: every reader of this — the interface,
+        # his own tools, his awareness of where a project stands — needs `ready` and
+        # `blocked_by`, because the order is not advisory. A listing of titles and statuses
+        # leaves you unable to see why something visible is not something that can be done.
+        milestones = roadmap(path, project_id)["milestones"]
         tasks = [t for t in all_tasks if t.get("project_id") == project_id]
         out.append(
             {
