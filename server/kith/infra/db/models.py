@@ -120,8 +120,27 @@ class Milestone(Base):
     target_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="todo")
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Where the node sits once someone has arranged the graph. None means nobody has, and
+    #: the interface lays it out — a stored 0,0 could not be told apart from a deliberate
+    #: top-left corner.
+    x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    y: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class MilestoneDep(Base):
+    """One edge of a project's roadmap: `milestone_id` waits for `depends_on_id`.
+
+    This is what makes a milestone more than a label. A milestone with an unfinished
+    predecessor is not available, and neither are the tasks under it — so the graph decides
+    what he works on next instead of raw task priority deciding it.
+    """
+
+    __tablename__ = "milestone_deps"
+
+    milestone_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    depends_on_id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
 
 class Reminder(Base):

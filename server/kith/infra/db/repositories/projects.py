@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete as sql_delete
 
 from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES, TASK_ACTIVE
 from kith.infra.db.engine import as_dict, session
-from kith.infra.db.models import Milestone, Project, Task
+from kith.infra.db.models import Milestone, MilestoneDep, Project, Task
 from kith.infra.db.repositories.tasks import list_tasks
 from kith.infra.db.support import utc_now_iso
 
@@ -163,3 +164,145 @@ def project_overview(path: Path) -> list[dict]:
             }
         )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# The roadmap as a graph. This is the part that makes a milestone mean something:
+# it decides what is available to work on, rather than describing it afterwards.
+# --------------------------------------------------------------------------- #
+
+
+def dependencies(path: Path, project_id: int | None = None) -> list[dict]:
+    """Every edge, optionally for one project."""
+    with session(path) as db:
+        query = select(MilestoneDep)
+        if project_id is not None:
+            ours = select(Milestone.id).where(Milestone.project_id == project_id)
+            query = query.where(MilestoneDep.milestone_id.in_(ours))
+        return [
+            {"milestone_id": row.milestone_id, "depends_on_id": row.depends_on_id}
+            for row in db.scalars(query).all()
+        ]
+
+
+def add_dependency(path: Path, milestone_id: int, depends_on_id: int) -> None:
+    """Make one milestone wait for another.
+
+    Refuses a cycle, because a cycle is not a slow roadmap — it is a roadmap where nothing
+    is ever available, and he would sit doing nothing with no way to see why. Cheaper to
+    refuse the edge than to explain the deadlock later.
+    """
+    if milestone_id == depends_on_id:
+        raise ValueError("a milestone cannot wait for itself")
+    if _reaches(path, depends_on_id, milestone_id):
+        raise ValueError("that would make a loop — the other one already waits for this")
+    with session(path) as db:
+        exists = db.scalar(
+            select(MilestoneDep).where(
+                MilestoneDep.milestone_id == milestone_id,
+                MilestoneDep.depends_on_id == depends_on_id,
+            )
+        )
+        if exists is None:
+            db.add(MilestoneDep(milestone_id=milestone_id, depends_on_id=depends_on_id))
+
+
+def remove_dependency(path: Path, milestone_id: int, depends_on_id: int) -> None:
+    with session(path) as db:
+        db.execute(
+            sql_delete(MilestoneDep).where(
+                MilestoneDep.milestone_id == milestone_id,
+                MilestoneDep.depends_on_id == depends_on_id,
+            )
+        )
+
+
+def _reaches(path: Path, start: int, target: int) -> bool:
+    """Can `target` be reached from `start` by following dependencies?
+
+    Breadth-first with a seen set, so an already-corrupt graph cannot hang the check that
+    exists to prevent corruption.
+    """
+    edges = dependencies(path)
+    outgoing: dict[int, list[int]] = {}
+    for edge in edges:
+        outgoing.setdefault(edge["milestone_id"], []).append(edge["depends_on_id"])
+    seen, queue = set(), [start]
+    while queue:
+        node = queue.pop()
+        if node == target:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        queue.extend(outgoing.get(node, []))
+    return False
+
+
+def set_milestone_position(path: Path, milestone_id: int, x: float, y: float) -> None:
+    """Remember where someone dragged a node to."""
+    with session(path) as db:
+        row = db.scalar(select(Milestone).where(Milestone.id == milestone_id))
+        if row is not None:
+            row.x, row.y = float(x), float(y)
+
+
+def roadmap(path: Path, project_id: int) -> dict:
+    """One project's milestones as a graph, with what is available to work on.
+
+    `ready` is the answer to "what now": not done, and every predecessor done. `blocked`
+    carries the reason, so the interface and he himself can say *why* something is waiting
+    rather than just showing it greyed out.
+    """
+    milestones = [m for m in list_milestones(path) if m["project_id"] == project_id]
+    edges = dependencies(path, project_id)
+    by_id = {m["id"]: m for m in milestones}
+    waits_for: dict[int, list[int]] = {m["id"]: [] for m in milestones}
+    for edge in edges:
+        if edge["milestone_id"] in waits_for:
+            waits_for[edge["milestone_id"]].append(edge["depends_on_id"])
+
+    tasks = [t for t in list_tasks(path) if t.get("project_id") == project_id]
+    nodes = []
+    for milestone in milestones:
+        blockers = [
+            by_id[dep]["title"]
+            for dep in waits_for[milestone["id"]]
+            if dep in by_id and by_id[dep]["status"] != "done"
+        ]
+        mine = [t for t in tasks if t.get("milestone_id") == milestone["id"]]
+        nodes.append(
+            {
+                **milestone,
+                "waits_for": waits_for[milestone["id"]],
+                "blocked_by": blockers,
+                "ready": milestone["status"] != "done" and not blockers,
+                "tasks_total": len(mine),
+                "tasks_done": sum(1 for t in mine if t["status"] == "done"),
+                "tasks_active": sum(1 for t in mine if t["status"] in TASK_ACTIVE),
+                # Separately from "active", because this is where he is *right now* — the
+                # graph pulses this node, which is what turns a roadmap into something you
+                # can watch him walk.
+                "tasks_doing": sum(1 for t in mine if t["status"] == "doing"),
+                "tasks_waiting": sum(1 for t in mine if t["status"] == "waiting"),
+            }
+        )
+    return {"milestones": nodes, "dependencies": edges}
+
+
+def blocked_milestone_ids(path: Path) -> set[int]:
+    """Every milestone that is waiting on an unfinished predecessor, across all projects.
+
+    Used to decide what he may work on, which is why it is one query for everything rather
+    than per project: a tick asks this once and then filters its whole task list.
+    """
+    milestones = list_milestones(path)
+    status = {m["id"]: m["status"] for m in milestones}
+    waits: dict[int, list[int]] = {}
+    for edge in dependencies(path):
+        waits.setdefault(edge["milestone_id"], []).append(edge["depends_on_id"])
+    return {
+        milestone_id
+        for milestone_id, deps in waits.items()
+        if any(status.get(dep) != "done" for dep in deps)
+    }

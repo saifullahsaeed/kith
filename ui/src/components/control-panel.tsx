@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
+  Check,
   ArrowUp,
   ArrowUpRight,
   BellRing,
   Brain,
-  Check,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -65,6 +65,7 @@ import {
   remove as removeFile,
   rename as renameEntry,
 } from "@/lib/files";
+import { RoadmapGraph } from "@/components/roadmap-graph";
 import { cn } from "@/lib/utils";
 import {
   createBrainItem,
@@ -312,7 +313,7 @@ export function ControlPanel({
   }, [query, onClose]);
 
   const counts = snap?.counts ?? {};
-  const props = { snap, query, remove, relevel, create, update };
+  const props = { snap, query, refresh: load, remove, relevel, create, update };
 
   return (
     <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
@@ -574,6 +575,9 @@ export function ControlPanel({
 }
 
 type Handlers = {
+  /** Re-read the snapshot. The roadmap graph needs it: a new dependency changes which
+   *  tasks are available, and the board beside it would otherwise be stale. */
+  refresh: () => void;
   remove: (kind: string, key: string | number, label: string) => void;
   relevel: (id: number, level: string) => void;
   create: (kind: string, data: Record<string, unknown>) => void;
@@ -1544,6 +1548,7 @@ function ProjectPage({
   snap,
   query,
   projectRef,
+  refresh,
   remove,
   update,
   create,
@@ -1638,7 +1643,15 @@ function ProjectPage({
       </div>
 
       {project ? (
-        <Roadmap project={project} remove={remove} update={update} create={create} />
+        <Roadmap
+          project={project}
+          tasks={tasks}
+          create={create}
+          update={update}
+          remove={remove}
+          refresh={refresh}
+          onOpenTask={onOpenTask}
+        />
       ) : null}
 
       <section className={project ? "mt-7" : ""}>
@@ -1682,75 +1695,71 @@ function Crumb({
   );
 }
 
+/**
+ * A project, as its workflow.
+ *
+ * The old page was a checklist of milestones with a kanban of every task underneath, and the
+ * kanban was the problem: five columns of thirty tasks says nothing about what happens next.
+ * Most of those tasks are not available — they belong to milestones that are waiting — so a
+ * board that shows them all with equal weight is actively misleading about the work.
+ *
+ * So the canvas is the page. It decides what is available, it shows where he is right now,
+ * and the list underneath is whatever you have selected on it: one milestone's work, or —
+ * with nothing selected — exactly the tasks he may pick up next. That is the same question
+ * the graph answers, asked in words.
+ */
 function Roadmap({
   project,
-  remove,
-  update,
+  tasks,
   create,
+  update,
+  remove,
+  refresh,
+  onOpenTask,
 }: {
   project: BrainSnapshot["projects"][number];
-} & Pick<Handlers, "remove" | "update" | "create">) {
+  tasks: BrainSnapshot["tasks"];
+  refresh: () => void;
+  onOpenTask: (id: number) => void;
+} & Pick<Handlers, "create" | "update" | "remove">) {
   const [ms, setMs] = useState("");
+  const [selected, setSelected] = useState<number | null>(null);
+
   const addMilestone = () => {
     if (!ms.trim()) return;
     create("milestone", { project_id: project.id, title: ms });
     setMs("");
   };
+
+  const chosen = project.milestones.find((m) => m.id === selected) ?? null;
+  // With a milestone selected: its work. Without: the work that is actually available, which
+  // is the only list worth showing by default.
+  const blockedMilestones = new Set(
+    project.milestones.filter((m) => m.status !== "done").map((m) => m.id),
+  );
+  const shown = selected
+    ? tasks.filter((task) => task.milestone_id === selected)
+    : tasks.filter((task) => task.status !== "done");
+
   return (
-    <section>
+    <section className="space-y-4">
       <SectionLabel hint={`${project.milestones_done}/${project.milestones_total}`}>
-        Roadmap
+        Workflow
       </SectionLabel>
-      {project.milestones.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No milestones yet.</p>
-      ) : (
-        <ul className="space-y-1.5">
-          {project.milestones.map((m) => (
-            <li key={m.id} className="group flex items-center gap-2.5 text-sm">
-              <button
-                onClick={() =>
-                  update("milestone", m.id, { status: m.status === "done" ? "todo" : "done" })
-                }
-                aria-label={m.status === "done" ? "Mark not done" : "Mark done"}
-                className={cn(
-                  "flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
-                  m.status === "done"
-                    ? "border-kith bg-kith text-primary-foreground"
-                    : "border-muted-foreground/40 hover:border-kith",
-                )}
-              >
-                {m.status === "done" ? <Check className="size-3" /> : null}
-              </button>
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate",
-                  m.status === "done" && "text-muted-foreground line-through",
-                )}
-              >
-                {m.title}
-              </span>
-              {m.target_at ? (
-                <span className="text-[11px] tabular-nums text-muted-foreground">
-                  {m.target_at.slice(0, 10)}
-                </span>
-              ) : null}
-              <button
-                onClick={() => remove("milestone", m.id, m.title)}
-                className="text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-destructive"
-                aria-label="Delete milestone"
-              >
-                <X className="size-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="mt-3 flex items-center gap-2 rounded-xl border border-border/60 bg-card/40 p-1.5 pl-3 focus-within:border-ring/60">
+
+      <RoadmapGraph
+        projectId={project.id}
+        selected={selected}
+        onSelect={setSelected}
+        onChanged={refresh}
+      />
+
+      <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-card/40 p-1.5 pl-3 focus-within:border-ring/60">
         <input
           value={ms}
           onChange={(e) => setMs(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addMilestone()}
-          placeholder="Add a milestone…"
+          placeholder="Add a milestone, then drag between them to set the order…"
           className={`${FIELD} flex-1 text-xs`}
         />
         <Button size="xs" variant="outline" onClick={addMilestone}>
@@ -1758,7 +1767,131 @@ function Roadmap({
           Add
         </Button>
       </div>
+
+      <div>
+        <div className="mb-2 flex items-baseline gap-3">
+          <h3 className="text-sm font-semibold">{chosen ? chosen.title : "What he can work on"}</h3>
+          <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+            {chosen
+              ? "The work under this milestone."
+              : "Every open task on this project. Ones under a waiting milestone are marked."}
+          </p>
+          {chosen ? (
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="text-muted-foreground hover:text-foreground text-xs"
+            >
+              Show everything
+            </button>
+          ) : null}
+        </div>
+        <TaskLane
+          tasks={shown}
+          milestones={project.milestones}
+          blocked={blockedMilestones}
+          update={update}
+          remove={remove}
+          onOpenTask={onOpenTask}
+        />
+      </div>
     </section>
+  );
+}
+
+/**
+ * The work, in the order it can actually happen.
+ *
+ * Not a kanban. A board's columns are statuses, and status is the least interesting thing
+ * about a task here — whether it is *available* is what matters, and that comes from the
+ * graph above. So: ready first, then in progress, then the ones held back with the reason
+ * attached, then anything waiting on you. One column, honestly ordered.
+ */
+function TaskLane({
+  tasks,
+  milestones,
+  blocked,
+  update,
+  remove,
+  onOpenTask,
+}: {
+  tasks: BrainSnapshot["tasks"];
+  milestones: BrainSnapshot["projects"][number]["milestones"];
+  blocked: Set<number>;
+  onOpenTask: (id: number) => void;
+} & Pick<Handlers, "update" | "remove">) {
+  const titleOf = (id: number | null | undefined) =>
+    milestones.find((m) => m.id === id)?.title ?? null;
+
+  const rank = (task: BrainSnapshot["tasks"][number]) => {
+    if (task.status === "doing") return 0;
+    if (task.status === "waiting") return 1;
+    if (task.milestone_id && blocked.has(task.milestone_id)) return 3;
+    return 2;
+  };
+  const ordered = [...tasks].sort((a, b) => rank(a) - rank(b));
+
+  if (ordered.length === 0) {
+    return (
+      <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-center text-sm">
+        Nothing open here.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="divide-y rounded-xl border">
+      {ordered.map((task) => {
+        const held = Boolean(task.milestone_id && blocked.has(task.milestone_id));
+        return (
+          <li key={task.id} className="group flex items-center gap-3 px-3 py-2.5">
+            <button
+              onClick={() =>
+                update("task", task.id, { status: task.status === "done" ? "todo" : "done" })
+              }
+              aria-label={task.status === "done" ? "Reopen" : "Mark done"}
+              className={cn(
+                "flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+                task.status === "done"
+                  ? "border-kith bg-kith text-primary-foreground"
+                  : "border-muted-foreground/40 hover:border-kith",
+              )}
+            >
+              {task.status === "done" ? <Check className="size-3" /> : null}
+            </button>
+
+            <button
+              onClick={() => onOpenTask(task.id)}
+              className="min-w-0 flex-1 text-left"
+              title="Open this task"
+            >
+              <span className="block truncate text-sm">{task.goal}</span>
+              <span className="text-muted-foreground/70 flex items-center gap-1.5 text-[10px]">
+                {task.status === "doing" ? <span className="text-kith">working on it</span> : null}
+                {task.status === "waiting" ? (
+                  <span className="text-orange-400/90">waiting on you</span>
+                ) : null}
+                {held ? <span>held until “{titleOf(task.milestone_id)}” is ready</span> : null}
+                {!held && task.milestone_id ? <span>{titleOf(task.milestone_id)}</span> : null}
+              </span>
+            </button>
+
+            {task.priority && task.priority !== "normal" ? (
+              <span className="text-muted-foreground/60 shrink-0 font-mono text-[10px]">
+                {task.priority}
+              </span>
+            ) : null}
+            <button
+              onClick={() => remove("task", task.id, task.goal)}
+              className="text-muted-foreground shrink-0 opacity-0 transition group-hover:opacity-100 hover:text-destructive"
+              aria-label="Delete task"
+            >
+              <X className="size-3.5" />
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

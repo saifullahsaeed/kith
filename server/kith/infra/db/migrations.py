@@ -354,6 +354,33 @@ def _migrations():
         )
         conn.execute("CREATE INDEX idx_conversations_updated ON conversations (updated_at DESC)")
 
+    def v22_milestone_graph(conn):
+        # Milestones were decoration. Nothing consulted them when choosing what to work on
+        # next — the runner sorted tasks by priority and the roadmap was a progress bar — so
+        # a "roadmap" imposed no order on anything and there was no reason to keep one.
+        #
+        # Dependencies are what make them matter: a milestone whose predecessors are not
+        # done is not available, and neither are its tasks. That turns the roadmap into the
+        # thing that decides what happens next, which is what a roadmap is for.
+        #
+        # An edge table rather than a column, because this is a graph and the useful
+        # questions ("what is ready", "what does this block") are joins.
+        conn.execute(
+            """
+            CREATE TABLE milestone_deps (
+                milestone_id  INTEGER NOT NULL,   -- waits for
+                depends_on_id INTEGER NOT NULL,   -- this one
+                PRIMARY KEY (milestone_id, depends_on_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX idx_milestone_deps_on ON milestone_deps (depends_on_id)")
+        # Where the node sits when someone has arranged the graph by hand. NULL means
+        # "nobody has", which the interface lays out automatically — a stored 0,0 would be
+        # indistinguishable from a deliberate top-left corner.
+        conn.execute("ALTER TABLE milestones ADD COLUMN x REAL")
+        conn.execute("ALTER TABLE milestones ADD COLUMN y REAL")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -376,6 +403,7 @@ def _migrations():
         v19_tick_log,
         v20_tick_tokens_uncached,
         v21_conversations,
+        v22_milestone_graph,
     ]
 
 

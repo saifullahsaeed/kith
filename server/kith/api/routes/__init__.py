@@ -20,6 +20,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     permissions,
     persona,
     renderer,
+    roadmap,
     setup,
     sources,
     tasks,

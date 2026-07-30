@@ -110,15 +110,53 @@ def list_tasks(path: Path, status: str | None = None) -> list[dict]:
 
 
 def active_tasks(path: Path) -> list[dict]:
-    """Actionable tasks (todo/doing) whose project (if any) is still active, highest
-    priority first — what he should actually work next. Tasks under a done/paused
-    project are left alone, so a finished project lets him rest."""
+    """What he should actually work next, highest priority first.
+
+    Three things are excluded, and the third is the one that gives a roadmap teeth:
+
+    * anything not todo/doing — nothing to do on it;
+    * anything under a done or paused project, so a finished project lets him rest;
+    * anything under a milestone whose predecessors are not finished. That last one is why
+      milestones exist at all. Before it, the roadmap described progress after the fact
+      while raw task priority decided the order — so a "roadmap" imposed nothing and there
+      was no reason to keep one. Now a milestone that is waiting keeps its tasks waiting
+      with it, and the order someone laid out is the order the work happens in.
+
+    Tasks with no milestone are unaffected: a one-off errand should not need a roadmap.
+    """
+    from kith.infra.db.repositories.projects import blocked_milestone_ids
+
     with session(path) as db:
         parked = set(db.scalars(select(Project.id).where(Project.status != "active")).all())
+    blocked = blocked_milestone_ids(path)
     return [
         task
         for task in list_tasks(path)
-        if task["status"] in TASK_ACTIVE and task.get("project_id") not in parked
+        if task["status"] in TASK_ACTIVE
+        and task.get("project_id") not in parked
+        and task.get("milestone_id") not in blocked
+    ]
+
+
+def waiting_on_the_roadmap(path: Path) -> list[dict]:
+    """Actionable tasks held back only because their milestone is waiting.
+
+    Kept separate from ``active_tasks`` so "there is nothing to do" and "there is plenty to
+    do but it is not this milestone's turn" are different sentences. He needs to be able to
+    say which, and so does the interface — a blocked board that looks identical to an empty
+    one is how someone concludes the thing is broken.
+    """
+    from kith.infra.db.repositories.projects import blocked_milestone_ids
+
+    with session(path) as db:
+        parked = set(db.scalars(select(Project.id).where(Project.status != "active")).all())
+    blocked = blocked_milestone_ids(path)
+    return [
+        task
+        for task in list_tasks(path)
+        if task["status"] in TASK_ACTIVE
+        and task.get("project_id") not in parked
+        and task.get("milestone_id") in blocked
     ]
 
 

@@ -29,6 +29,9 @@ export interface Task {
   description: string;
   created_by: string; // kith | user
   project_id: number | null;
+  /** Which milestone delivers this. Null for a one-off errand, which is never gated by the
+   *  roadmap — see active_tasks on the server. */
+  milestone_id: number | null;
   created_at: string;
   updated_at: string;
 }
