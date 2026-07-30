@@ -444,10 +444,19 @@ class AutonomyRunner:
             mode, self._current = "curious", "following a curiosity"
             directive, prompt = directives.CURIOSITY, _curiosity_prompt()
         else:
-            # Genuinely caught up and not a scheduled inner-life tick — rest for real.
+            # Genuinely nothing to do, and not a scheduled inner-life tick — rest for real.
             # Don't call the model at all; an idle board shouldn't cost tokens.
-            self._current = "caught up — resting"
-            self._emit("status", "caught up — resting")
+            #
+            # But "nothing to do" has two very different causes, and conflating them is the
+            # one way this arrangement fails quietly. He may be finished, or he may be
+            # blocked on *you* — a question he asked, or a milestone whose predecessor needs
+            # your sign-off — and in the second case resting silently is the worst thing he
+            # can do. You would see "caught up" and assume there was nothing to look at,
+            # while the whole board sat waiting on an answer nobody knew was owed.
+            self._current, note = self._why_idle()
+            self._emit("status", self._current)
+            if note:
+                self._say_youre_the_blocker(note)
             return
         self._emit(mode, self._current)
 
@@ -571,6 +580,54 @@ class AutonomyRunner:
                 outcome,
                 tokens_uncached=tick_uncached,
             )
+        except Exception:
+            pass
+
+    def _why_idle(self) -> tuple[str, str]:
+        """Why there is nothing to do, and whether you need telling.
+
+        Returns the status line and, when you are the reason, what to say. Deliberately reads
+        two different things: tasks whose status is `waiting` (he asked you something) and
+        tasks held by the roadmap (their milestone waits on one that is not finished). Both
+        mean "he cannot proceed without you"; neither shows up as work he can do.
+        """
+        asked = [
+            task
+            for task in repo.tasks.list_tasks(AGENT_DB_PATH)
+            if task["status"] == "waiting"
+        ]
+        held = repo.tasks.waiting_on_the_roadmap(AGENT_DB_PATH)
+        if asked:
+            return (
+                f"waiting on you — {len(asked)} question{'' if len(asked) == 1 else 's'}",
+                f"I'm out of things I can do on my own. {len(asked)} task"
+                f"{' is' if len(asked) == 1 else 's are'} waiting on an answer from you: "
+                + "; ".join(f"“{task['goal']}” (#{task['id']})" for task in asked[:3])
+                + ("…" if len(asked) > 3 else ""),
+            )
+        if held:
+            return (
+                f"blocked — {len(held)} task{'' if len(held) == 1 else 's'} behind a milestone",
+                f"I've run out of available work. {len(held)} task"
+                f"{'' if len(held) == 1 else 's'} sit behind milestones that aren't finished — "
+                "if the order is wrong, the roadmap is the place to change it.",
+            )
+        return "caught up — resting", ""
+
+    #: How long to leave between saying "you are the blocker". Said once per stretch, not once
+    #: per tick: a tick can fire every thirty seconds, and the same true sentence repeated
+    #: twenty times is indistinguishable from a fault.
+    _BLOCKER_QUIET_SECONDS = 6 * 60 * 60
+
+    def _say_youre_the_blocker(self, note: str) -> None:
+        """Tell you once that he is stuck behind you, then stay quiet about it."""
+        now = time.monotonic()
+        last = getattr(self, "_said_blocked_at", None)
+        if last is not None and now - last < self._BLOCKER_QUIET_SECONDS:
+            return
+        self._said_blocked_at = now
+        try:
+            repo.messages.add_message(AGENT_DB_PATH, note, kind="stuck")
         except Exception:
             pass
 
