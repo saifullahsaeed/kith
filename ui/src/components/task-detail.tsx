@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/presence";
@@ -44,8 +45,6 @@ const STATUS_LABEL: Record<string, string> = {
   dropped: "Dropped",
 };
 const PRIORITIES = ["high", "normal", "low"];
-const FIELD_INPUT =
-  "rounded-lg border bg-card/40 px-3 py-1.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/25";
 
 /** The full-page view of one task: description, checklist, deliverables, and the
  * comment thread (you + him). Rendered in place of the tab content, not a panel. */
@@ -228,13 +227,11 @@ export function TaskDetailPage({
             />
           </Prop>
           <Prop label="Due">
-            <input
-              type="date"
+            <DatePicker
               value={task.due_at ? task.due_at.slice(0, 10) : ""}
-              onChange={(e) =>
-                patch({ due_at: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })
-              }
-              className={`${FIELD_INPUT} w-full`}
+              onChange={(day) => patch({ due_at: day ? `${day}T00:00:00+00:00` : null })}
+              placeholder="No due date"
+              ariaLabel="Due date"
             />
           </Prop>
           <Prop label="Project">
