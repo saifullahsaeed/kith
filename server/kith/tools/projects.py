@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 
 from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES
@@ -31,7 +32,18 @@ def create_project(path: Path, args: dict):
     required=(),
 )
 def list_projects(path: Path, args: dict):
-    return paging.page(repo.projects.project_overview(path), args, default=5)
+    """Projects with their roadmap, and which milestones are actually available.
+
+    ``ready`` and ``blocked_by`` are included per milestone because the order is not
+    advisory: work under a waiting milestone is not offered to him at all, so a listing
+    that showed only titles and statuses would leave him unable to see why something he
+    can see is not something he can do.
+    """
+    overview = repo.projects.project_overview(path)
+    for project in overview:
+        graph = repo.projects.roadmap(path, project["id"])
+        project["milestones"] = graph["milestones"]
+    return paging.page(overview, args, default=5)
 
 
 @tool(
@@ -61,11 +73,82 @@ def update_project(path: Path, args: dict):
         "project_id": INT,
         "title": STR,
         "target_at": {**STR, "description": "Optional target date, ISO 8601 (local zone)."},
+        "after": {
+            "type": "array",
+            "items": INT,
+            "description": "Milestone ids this one waits for. Its tasks stay out of your way "
+            "until they are all done.",
+        },
     },
     required=("project_id", "title"),
 )
 def add_milestone(path: Path, args: dict):
-    return repo.projects.add_milestone(path, args["project_id"], args["title"], args.get("target_at"))
+    created = repo.projects.add_milestone(
+        path, args["project_id"], args["title"], args.get("target_at")
+    )
+    problems = []
+    for earlier in args.get("after") or []:
+        try:
+            repo.projects.add_dependency(path, created["id"], int(earlier))
+        except (TypeError, ValueError) as exc:
+            problems.append(str(exc))
+    return {**created, **({"warnings": problems} if problems else {})}
+
+
+@tool(
+    "order_milestones",
+    "Put a project's milestones in order, so each waits for the one before it. Pass the ids "
+    "in the order they should happen. This is what makes a roadmap real: you will only be "
+    "offered work from milestones whose predecessors are finished, so you build in the order "
+    "you laid out instead of picking whatever looks urgent.",
+    {
+        "ids": {
+            "type": "array",
+            "items": INT,
+            "description": "Milestone ids, earliest first.",
+        }
+    },
+    required=("ids",),
+)
+def order_milestones(path: Path, args: dict):
+    """One call for the common case, which is a straight line.
+
+    Chaining a five-step roadmap by hand is four separate calls and four chances to get a
+    direction backwards — and a backwards edge is not a visible mistake, it is work that
+    quietly never becomes available.
+    """
+    ids = [int(one) for one in (args.get("ids") or [])]
+    if len(ids) < 2:
+        return {"ordered": ids, "note": "nothing to order — pass two or more ids"}
+    problems = []
+    for earlier, later in itertools.pairwise(ids):
+        try:
+            repo.projects.add_dependency(path, later, earlier)
+        except (TypeError, ValueError) as exc:
+            problems.append(f"{earlier} -> {later}: {exc}")
+    return {
+        "ordered": ids,
+        "roadmap": repo.projects.roadmap(path, _project_of(path, ids[0])),
+        **({"warnings": problems} if problems else {}),
+    }
+
+
+@tool(
+    "unlink_milestones",
+    "Stop one milestone waiting for another, when the order you set turns out to be wrong.",
+    {"milestone_id": INT, "no_longer_waits_for": INT},
+    required=("milestone_id", "no_longer_waits_for"),
+)
+def unlink_milestones(path: Path, args: dict):
+    repo.projects.remove_dependency(path, args["milestone_id"], args["no_longer_waits_for"])
+    return {"ok": True}
+
+
+def _project_of(path: Path, milestone_id: int) -> int:
+    for milestone in repo.projects.list_milestones(path):
+        if milestone["id"] == milestone_id:
+            return int(milestone["project_id"])
+    return 0
 
 
 @tool(

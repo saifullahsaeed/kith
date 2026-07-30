@@ -800,6 +800,7 @@ def _give_up(active: list[dict]) -> str:
             f"I'm stuck on “{task['goal']}” (task #{task['id']}) and can't move it on my own — "
             "I've set it aside for you. Open it to see what's blocking me.",
             link=f"/tasks/{task['id']}",
+            kind="stuck",
         )
         repo.journal.add_journal(
             AGENT_DB_PATH,

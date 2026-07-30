@@ -22,21 +22,41 @@ _TOP_TOOLS = 10
 # --------------------------------------------------------------------------- #
 
 
-def add_message(path: Path, body: str, sender: str = "kith", link: str | None = None) -> dict:
-    # His own messages start unread (they light the badge); the person's replies
-    # are already "read" (they wrote them). `link` (e.g. "/tasks/12") lets a
-    # notification be clickable straight to what it's about.
+def add_message(
+    path: Path,
+    body: str,
+    sender: str = "kith",
+    link: str | None = None,
+    kind: str = "note",
+) -> dict:
+    """Record a message, and light the badge only if this kind is allowed to interrupt.
+
+    Everything is recorded regardless — the channel is the history and nothing is dropped.
+    What the threshold changes is whether it counts as unread and whether it posts a desktop
+    notification, so "quieter" never means "you did not find out". `link` (e.g. "/tasks/12")
+    makes the notification clickable straight to what it is about.
+    """
+    from kith.services import notify
+
+    loud = sender != "user" and notify.interrupts(kind)
     with session(path) as db:
         row = Message(
             body=body,
-            read=1 if sender == "user" else 0,
+            # Unread is what lights the badge, so it follows the threshold rather than the
+            # sender: a note he made while working is still in the channel, just not a
+            # tap on the shoulder.
+            read=0 if loud else 1,
             sender=sender,
+            kind=kind if sender != "user" else "user",
             link=link,
             created_at=utc_now_iso(),
         )
         db.add(row)
         db.flush()
-        return as_dict(row)
+        saved = as_dict(row)
+    if loud:
+        notify.announce(kind, body, link)
+    return saved
 
 
 def list_messages(path: Path, limit: int = 100, unread_only: bool = False) -> list[dict]:

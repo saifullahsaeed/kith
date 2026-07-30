@@ -46,3 +46,30 @@ def messages_read_all():
 @api.doc(summary="Mark one read")
 def message_read(message_id):
     return jsonify(repo.messages.mark_message_read(AGENT_DB_PATH, message_id) or {})
+
+
+@api.get("/notify")
+@api.doc(
+    summary="How much he may interrupt you",
+    description=(
+        "The threshold and the options. Every message is recorded whatever this says — the "
+        "level decides what counts as unread and what posts a desktop notification."
+    ),
+)
+def get_notify():
+    from kith.services import notify
+
+    return jsonify(notify.snapshot())
+
+
+@api.post("/notify")
+@api.doc(summary="Set the threshold", description="One of all, needs_you, reachout.")
+def set_notify():
+    from kith.services import notify
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        notify.set_level(str(payload.get("level") or ""))
+    except ValueError:
+        return jsonify({"error": "level must be all, needs_you or reachout"}), 400
+    return jsonify(notify.snapshot())

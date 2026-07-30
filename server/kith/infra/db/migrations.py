@@ -381,6 +381,16 @@ def _migrations():
         conn.execute("ALTER TABLE milestones ADD COLUMN x REAL")
         conn.execute("ALTER TABLE milestones ADD COLUMN y REAL")
 
+    def v23_message_kind(conn):
+        # Everything he wrote reached you the same way: a note on a task, a question he was
+        # blocked on, and "I'm stuck" all arrived as one undifferentiated stream, all of it
+        # unread, all of it worth a notification. So the interesting ones were buried in the
+        # routine ones, and the only way to stop being interrupted was to stop looking.
+        #
+        # The kind is what makes a threshold possible: keep every message as a record, and
+        # let it decide which of them are allowed to interrupt you.
+        conn.execute("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'note'")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -404,6 +414,7 @@ def _migrations():
         v20_tick_tokens_uncached,
         v21_conversations,
         v22_milestone_graph,
+        v23_message_kind,
     ]
 
 

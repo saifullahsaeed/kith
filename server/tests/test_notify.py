@@ -1,0 +1,124 @@
+"""What is allowed to interrupt.
+
+Every message used to arrive identically — a note he made while working, a question he was
+blocked on, and "I'm stuck" all unread and all worth a notification — so the ones that wanted
+an answer were buried in the ones that did not. These tests pin the two properties that make
+a threshold safe: the numerous kind is the one that gets quiet first, and nothing is ever
+dropped.
+"""
+
+from __future__ import annotations
+
+from typing import ClassVar
+
+import pytest
+
+from kith.infra.db import repositories as repo
+from kith.services import notify
+
+
+class _Store:
+    values: ClassVar[dict] = {}
+
+    def load_settings(self, _path):
+        return dict(self.values)
+
+    def update_settings(self, _path, updates):
+        _Store.values = {**_Store.values, **updates}
+        return dict(_Store.values)
+
+
+@pytest.fixture(autouse=True)
+def isolated(tmp_path, monkeypatch):
+    _Store.values = {}
+    monkeypatch.setattr(notify, "_store", lambda: (tmp_path / "config.db", _Store()))
+    # Never actually post a notification from a test.
+    monkeypatch.setattr("kith.infra.renderer.notify", lambda title, body: True)
+    yield
+    _Store.values = {}
+
+
+class TestTheThreshold:
+    def test_the_default_lets_through_what_needs_an_answer(self):
+        assert notify.level() is notify.Level.NEEDS_YOU
+        assert notify.interrupts("asked")
+        assert notify.interrupts("stuck")
+        assert notify.interrupts("delivered")
+        assert notify.interrupts("reachout")
+
+    def test_the_default_silences_running_commentary(self):
+        """The one that was burying everything else."""
+        assert not notify.interrupts("note")
+
+    def test_everything_means_everything(self):
+        notify.set_level("all")
+        assert notify.interrupts("note")
+
+    def test_the_quietest_setting_is_still_a_channel(self):
+        notify.set_level("reachout")
+        assert notify.interrupts("reachout")
+        for quiet in ("note", "asked", "stuck", "delivered"):
+            assert not notify.interrupts(quiet)
+
+    def test_an_unknown_stored_level_falls_back_to_the_default(self):
+        _Store.values["notify_level"] = "loud"
+        assert notify.level() is notify.Level.NEEDS_YOU
+
+    def test_a_bad_level_is_refused_rather_than_stored(self):
+        with pytest.raises(ValueError):
+            notify.set_level("whatever")
+
+
+class TestNothingIsDropped:
+    def test_a_quiet_message_is_still_recorded(self, db):
+        """"Quieter" must never mean "you did not find out" — the channel is the history."""
+        notify.set_level("reachout")
+        repo.messages.add_message(db, "a note while working", kind="note")
+        assert len(repo.messages.list_messages(db)) == 1
+
+    def test_a_quiet_message_does_not_light_the_badge(self, db):
+        notify.set_level("reachout")
+        repo.messages.add_message(db, "a note while working", kind="note")
+        assert repo.messages.list_messages(db, unread_only=True) == []
+
+    def test_a_loud_message_does(self, db):
+        repo.messages.add_message(db, "I need your input", kind="asked")
+        assert len(repo.messages.list_messages(db, unread_only=True)) == 1
+
+    def test_your_own_messages_never_interrupt_you(self, db):
+        """You were there when you wrote it."""
+        notify.set_level("all")
+        repo.messages.add_message(db, "hello", sender="user")
+        assert repo.messages.list_messages(db, unread_only=True) == []
+
+    def test_the_kind_is_kept_on_the_row(self, db):
+        repo.messages.add_message(db, "finished a thing", kind="delivered")
+        assert repo.messages.list_messages(db)[0]["kind"] == "delivered"
+
+
+class TestAnnouncing:
+    def test_it_reports_whether_one_went_out(self):
+        assert notify.announce("asked", "come look") is True
+        notify.set_level("reachout")
+        assert notify.announce("note", "just working") is False
+
+    def test_a_failing_notification_never_breaks_the_caller(self, monkeypatch):
+        """He said the thing and it is recorded; a doorbell that will not ring is not a
+        reason to fail the tool call that rang it."""
+
+        def explode(title, body):
+            raise RuntimeError("no desktop app")
+
+        monkeypatch.setattr("kith.infra.renderer.notify", explode)
+        assert notify.announce("asked", "come look") is False
+
+    def test_a_long_body_is_trimmed_rather_than_truncated_mid_word(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(
+            "kith.infra.renderer.notify",
+            lambda title, body: seen.update(title=title, body=body) or True,
+        )
+        notify.announce("stuck", "x " * 400)
+        assert len(seen["body"]) <= 160
+        assert seen["body"].endswith("…")
+        assert seen["title"] == "Kith is stuck"

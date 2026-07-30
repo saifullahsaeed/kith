@@ -13,7 +13,9 @@ def _reach_out(path: Path, a: dict) -> dict:
     message = (a.get("message") or "").strip()
     if not message:
         raise ValueError("message is required")
-    saved = repo.messages.add_message(path, message)
+    # He chose to say this. The most deliberate kind, and the only one that survives the
+    # quietest setting.
+    saved = repo.messages.add_message(path, message, kind="reachout")
     return {"sent": True, "id": saved["id"], "note": "They'll see this when they next look."}
 
 

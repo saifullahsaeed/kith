@@ -26,6 +26,7 @@ def _ask_on_task(path: Path, a: dict) -> dict:
         path,
         f"I need your input on “{goal}” (task #{task_id}): {question}",
         link=f"/tasks/{task_id}",
+        kind="asked",
     )
     return {
         "asked": True,
@@ -50,6 +51,8 @@ def _comment_on_task(path: Path, a: dict) -> dict:
         path,
         f"New note on “{goal}” (task #{task_id}): {snippet}",
         link=f"/tasks/{task_id}",
+        # Running commentary. The numerous kind, and the one that was burying the rest.
+        kind="note",
     )
     return {
         "commented": True,
@@ -112,6 +115,7 @@ def _verify_done(path: Path, a: dict) -> dict | None:
             f"I couldn't finish “{detail.get('goal') or ('task #' + str(a['id']))}” (task #{a['id']}): "
             + "; ".join(str(c.get("requirement")) for c in unmet),
             link=f"/tasks/{a['id']}",
+            kind="stuck",
         )
         return None
 
@@ -306,6 +310,18 @@ def check_item(path: Path, args: dict):
     required=("id", "title", "content"),
 )
 def add_deliverable(path: Path, args: dict):
-    return repo.tasks.add_deliverable(
+    saved = repo.tasks.add_deliverable(
         path, args["id"], args.get("kind") or "text", args["title"], args["content"]
     )
+    # Something finished and collectable is worth knowing about — it is the whole point of
+    # having handed him the work. Notified separately from the task's own comments, which is
+    # why this is here rather than left to whatever note he happens to write alongside it.
+    detail = repo.tasks.task_detail(path, args["id"])
+    goal = (detail or {}).get("goal") or f"task #{args['id']}"
+    repo.messages.add_message(
+        path,
+        f"Finished something on “{goal}”: {args['title']}",
+        link=f"/tasks/{args['id']}",
+        kind="delivered",
+    )
+    return saved
