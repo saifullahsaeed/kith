@@ -20,6 +20,7 @@ from typing import Any
 
 from kith import settings, tools
 from kith.config import Config
+from kith.domain.tool_markup import ToolMarkupFilter
 from kith.llm import ollama, openai_compat
 
 # Tools that may run concurrently with each other. The bar is deliberately high:
@@ -100,11 +101,12 @@ _LANDING_DIRECTIVE = (
 )
 
 
-def _stream_once(messages, config: Config, host, tools=None):
+def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = "auto"):
     """Route to the cloud model when a key+endpoint are set, else local Ollama."""
     if config.api_key and config.base_url:
-        return openai_compat.stream_once(messages, config, host, tools=tools)
-    return ollama.stream_once(messages, config, host, tools=tools)
+        return openai_compat.stream_once(messages, config, host, tools=tools, tool_choice=tool_choice)
+    # Ollama has no tool_choice; withholding the schemas is the only lever there.
+    return ollama.stream_once(messages, config, host, tools=None if tool_choice == "none" else tools)
 
 
 # How many tool rounds a single turn may take before we make it wrap up. A long
@@ -307,8 +309,8 @@ def stream_agent(
                 yield {"type": "tool_result", "id": step["id"], "name": step["name"], "result": result}
                 convo.append({"role": "tool", "tool_name": step["name"], "content": json.dumps(result)})
 
-    # Out of tool budget — force a final answer (no tools) so there's always a reply.
-    yield from _final_answer(convo, config, host)
+    # Out of tool budget — force a final answer so there's always a reply.
+    yield from _final_answer(convo, config, host, tools.tool_schemas(agent_db_path))
 
 
 def _run(step: dict, agent_db_path: Path) -> Any:
@@ -344,7 +346,18 @@ def _batches(planned: list[dict]) -> Iterator[list[dict]]:
         yield batch
 
 
-def _final_answer(convo: list[dict[str, Any]], config: Config, host: str) -> Iterator[dict]:
+def _final_answer(
+    convo: list[dict[str, Any]], config: Config, host: str, schemas: list[dict] | None = None
+) -> Iterator[dict]:
+    """The last round: he must answer, and may not call anything.
+
+    The schemas are still sent, with ``tool_choice="none"`` to forbid using them. That
+    combination looks redundant and is not: asked to stop by prose alone, with the tool
+    definitions removed from the request, a model part-way through a tool-using turn
+    keeps producing calls as *prose* — ``<FUNCTION>web_search(query="…")</FUNCTION>`` —
+    which is indistinguishable from an answer and lands in the transcript and in
+    whatever he files. Telling the API rather than the model is what actually stops it.
+    """
     convo.append(
         {
             "role": "user",
@@ -355,15 +368,27 @@ def _final_answer(convo: list[dict[str, Any]], config: Config, host: str) -> Ite
         }
     )
     stats: dict | None = None
-    for event in _stream_once(convo, config, host, tools=None):
+    # Belt and braces for a model that narrates a call anyway: nothing can run at this
+    # point, so the markup is pure noise — and it would otherwise be stored as if it
+    # were his answer. Stateful because a tag can straddle two deltas.
+    scrub = ToolMarkupFilter()
+    for event in _stream_once(convo, config, host, tools=schemas, tool_choice="none"):
         kind = event["type"]
         if kind == "delta":
+            if event.get("role") == "text":
+                text = scrub.feed(event["text"])
+                if not text:
+                    continue
+                event = {**event, "text": text}
             yield event
         elif kind == "error":
             yield event
             return
         elif kind == "turn":
             stats = event["stats"]
+    tail = scrub.flush()
+    if tail:
+        yield {"type": "delta", "role": "text", "text": tail}
     _record(stats)
     if stats:
         yield {"type": "stats", "stats": stats}

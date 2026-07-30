@@ -49,6 +49,7 @@ def stream_once(
     config: Config,
     host: str | None = None,  # unused; kept for a common signature with ollama_client
     tools: list[dict] | None = None,
+    tool_choice: str = "auto",
 ) -> Iterator[dict]:
     url = f"{config.base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
@@ -74,7 +75,14 @@ def stream_once(
             payload["provider"] = {"order": [_PINNED_PROVIDER], "allow_fallbacks": True}
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        # "none" is how the API says "you may not call anything this turn". It matters
+        # that the schemas are still sent: a model mid-way through a tool-using turn,
+        # asked to stop by prose alone, keeps emitting calls — as *text*, in whatever
+        # pseudo-markup it was trained on (``<FUNCTION>web_search(...)</FUNCTION>``).
+        # That text is indistinguishable from an answer, so it reaches the transcript,
+        # the journal, and anything he files. Withholding the schemas caused it;
+        # sending them with tool_choice="none" is the fix.
+        payload["tool_choice"] = tool_choice
     if config.num_predict and config.num_predict > 0:
         payload["max_tokens"] = config.num_predict
 
