@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/presence";
-import { FilePreviewDialog } from "@/components/file-view";
+import { FilePreviewDialog, Markdown } from "@/components/file-view";
 import { handOffAndOpen } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import {
@@ -357,7 +357,9 @@ export function TaskDetailPage({
                         <PresenceOrb size={7} />
                       </span>
                       <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-border/70 bg-card px-3 py-2 text-sm">
-                        <p className="break-words whitespace-pre-wrap">{c.body}</p>
+                        {/* His progress notes are where he writes lists and links,
+                            and this was the one place his Markdown showed raw. */}
+                        <Markdown>{c.body}</Markdown>
                       </div>
                     </div>
                   ),

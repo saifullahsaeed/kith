@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Bell, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Markdown } from "@/components/file-view";
 import { PresenceOrb } from "@/components/presence";
 import { X } from "lucide-react";
 import type { useMessages } from "@/hooks/use-messages";
@@ -37,7 +38,9 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
       <div className="flex items-center gap-2 border-b px-4 py-2.5">
         <Bell className="size-4 text-muted-foreground" />
         <span className="font-semibold">Notifications</span>
-        {messages.length ? <span className="text-xs text-muted-foreground">· {messages.length}</span> : null}
+        {messages.length ? (
+          <span className="text-xs text-muted-foreground">· {messages.length}</span>
+        ) : null}
         <div className="flex-1" />
         <Button variant="ghost" size="icon" className="size-7" onClick={onClose} aria-label="Close">
           <X className="size-4" />
@@ -59,12 +62,20 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
                 onClick={m.link ? () => openLink(m.link!) : undefined}
                 className={`flex items-start gap-2 rounded-lg border p-3 text-sm ${m.read ? "" : "border-kith/30 bg-kith-soft/50"} ${m.link ? "cursor-pointer transition-colors hover:border-kith/50 hover:bg-kith-soft/40" : ""}`}
               >
-                <span className="mt-1"><PresenceOrb size={7} /></span>
+                <span className="mt-1">
+                  <PresenceOrb size={7} />
+                </span>
                 <div className="min-w-0 flex-1">
-                  <p className="break-words whitespace-pre-wrap">{m.body}</p>
+                  {/* He reaches out in his own words, and formats them. */}
+                  <Markdown>{m.body}</Markdown>
                   <span className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
                     {when(m.created_at)}
-                    {m.link ? <span className="flex items-center text-kith">· open task<ChevronRight className="size-3" /></span> : null}
+                    {m.link ? (
+                      <span className="flex items-center text-kith">
+                        · open task
+                        <ChevronRight className="size-3" />
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               </li>

@@ -777,9 +777,10 @@ function Overview({
               <p className="text-xl font-semibold leading-snug tracking-tight">{self.identity}</p>
             ) : null}
             {self?.profile ? (
-              <p className="mt-2.5 max-w-2xl whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                {self.profile}
-              </p>
+              <div className="mt-2.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+                {/* His own account of himself — his to format, so it renders. */}
+                <Markdown>{self.profile}</Markdown>
+              </div>
             ) : null}
             {!self?.identity && !self?.profile ? (
               <p className="text-sm text-muted-foreground">
@@ -1035,7 +1036,12 @@ function MemoryCard({
         )}
       >
         <div className="flex-1 text-sm leading-relaxed">
-          <EditableText value={m.content} onSave={(v) => update("memory", m.id, { content: v })} />
+          <EditableText
+            value={m.content}
+            multiline
+            render={(v) => <Markdown>{v}</Markdown>}
+            onSave={(v) => update("memory", m.id, { content: v })}
+          />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           {m.importance > 0 ? (
@@ -1272,6 +1278,7 @@ function Curiosities({
                 <div className="mt-2 pl-[42px] text-sm leading-relaxed text-muted-foreground">
                   <EditableText
                     value={c.note}
+                    render={(v) => <Markdown>{v}</Markdown>}
                     onSave={(v) => update("curiosity", c.id, { note: v })}
                     multiline
                     placeholder="(no notes yet)"
@@ -1586,6 +1593,7 @@ function ProjectPage({
                 <div className="mt-1 text-sm text-muted-foreground">
                   <EditableText
                     value={project.description}
+                    render={(v) => <Markdown>{v}</Markdown>}
                     onSave={(v) => update("project", project.id, { description: v })}
                     multiline
                     placeholder="(what this project is / what done means)"
@@ -2313,6 +2321,7 @@ function People({
                 <div className="mt-3 border-t border-border/60 pt-3 text-sm leading-relaxed text-muted-foreground">
                   <EditableText
                     value={p.profile}
+                    render={(v) => <Markdown>{v}</Markdown>}
                     onSave={(v) => update("person", p.id, { profile: v })}
                     multiline
                     placeholder="(nothing noted yet)"
