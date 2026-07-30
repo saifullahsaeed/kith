@@ -44,6 +44,28 @@ class Kind:
         return getattr(self, action, None) is not None
 
 
+def _task_edit(path, task_id, data: dict):
+    """Update a task, including where it sits on the roadmap.
+
+    Milestone is a separate call rather than another column on update_task because moving a
+    task between milestones also has to keep its project straight — a task cannot belong to a
+    milestone of a different project. Handled here so the interface can offer it as one field
+    like any other.
+    """
+    if "milestone_id" in data:
+        raw = data.get("milestone_id")
+        repo.tasks.set_task_milestone(path, task_id, int(raw) if raw not in (None, "", "none") else None)
+    return repo.tasks.update_task(
+        path,
+        task_id,
+        data.get("status"),
+        data.get("goal"),
+        data.get("priority"),
+        data.get("due_at"),
+        data.get("description"),
+    )
+
+
 def _milestone_add(path: Path, data: dict) -> dict:
     return repo.projects.add_milestone(
         path, int(data["project_id"]), data.get("title", ""), data.get("target_at")
@@ -91,9 +113,7 @@ KINDS: dict[str, Kind] = {
                 "user",
                 d.get("project_id"),
             ),
-            edit=lambda p, k, d: repo.tasks.update_task(
-                p, k, d.get("status"), d.get("goal"), d.get("priority"), d.get("due_at"), d.get("description")
-            ),
+            edit=_task_edit,
         ),
         Kind(
             "project",

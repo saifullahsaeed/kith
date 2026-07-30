@@ -366,8 +366,24 @@ def task_detail(path: Path, task_id: int) -> dict | None:
         if row is None:
             return None
         task = as_dict(row)
+    # Whether this can be worked on at all, and if not, why. A task page that shows a
+    # status of "todo" while the roadmap is quietly holding it back is telling you something
+    # untrue about the most important thing on the page.
+    held_by: list[str] = []
+    milestone_title = None
+    if task.get("milestone_id"):
+        from kith.infra.db.repositories.projects import roadmap
+
+        graph = roadmap(path, int(task["project_id"] or 0))
+        node = next((one for one in graph["milestones"] if one["id"] == task["milestone_id"]), None)
+        if node:
+            milestone_title = node["title"]
+            if node["status"] != "done" and not node["ready"]:
+                held_by = list(node["blocked_by"])
     return {
         **task,
+        "milestone_title": milestone_title,
+        "held_by": held_by,
         "comments": list_task_comments(path, task_id),
         "checklist": list_checklist(path, task_id),
         "deliverables": list_deliverables(path, task_id),

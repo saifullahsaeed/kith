@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
+  Lock,
   ArrowLeft,
   ArrowUpRight,
   Check,
@@ -56,8 +57,13 @@ export function TaskDetailPage({
   onChanged,
 }: {
   taskId: number;
-  /** For moving the task between projects. */
-  projects: { id: number; name: string }[];
+  /** For moving the task between projects, and for its milestones — the field that decides
+   *  when he actually gets to it. */
+  projects: {
+    id: number;
+    name: string;
+    milestones?: { id: number; title: string; status: string }[];
+  }[];
   /** Where "back" lands — the project you came in from, if any. */
   trail?: string;
   onBack: () => void;
@@ -145,6 +151,12 @@ export function TaskDetailPage({
   const done = task.checklist.filter((c) => c.done).length;
   const pct = task.checklist.length ? Math.round((done / task.checklist.length) * 100) : 0;
 
+  // What holds this task back, and which milestones it could belong to. Both come from the
+  // roadmap: a task's status says what someone intends, and only the graph says whether he
+  // is allowed to act on it.
+  const held = task.held_by ?? [];
+  const milestones = projects.find((one) => one.id === task.project_id)?.milestones ?? [];
+
   return (
     <div>
       {/* breadcrumb + back */}
@@ -158,10 +170,10 @@ export function TaskDetailPage({
         <span className="font-mono">#{task.id}</span>
       </button>
 
-      {/* header: title + meta + controls */}
-      <div className="mb-6 border-b border-border/60 pb-5">
+      {/* header: what it is, and whether it can be worked on */}
+      <div className="mb-5">
         <div className="flex items-start gap-3">
-          <span className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-emerald-500">
+          <span className="bg-muted/70 mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-emerald-500">
             <ListChecks className="size-4" />
           </span>
           <input
@@ -169,55 +181,94 @@ export function TaskDetailPage({
             onChange={(e) => setTask({ ...task, goal: e.target.value })}
             onBlur={(e) => e.target.value !== task.goal && patch({ goal: e.target.value })}
             title="Click to rename"
-            className="-mx-2 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-xl font-semibold tracking-tight outline-none transition-colors hover:bg-accent/40 focus:bg-card/70 focus:ring-[3px] focus:ring-ring/25"
+            className="focus:ring-ring/25 hover:bg-accent/40 focus:bg-card/70 -mx-2 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-xl font-semibold tracking-tight outline-none transition-colors focus:ring-[3px]"
           />
         </div>
-        <div className="mt-2 ml-12 text-[11px] text-muted-foreground">
-          <span>{task.created_by === "user" ? "from you" : "his own"}</span>
-        </div>
-        <div className="mt-4 ml-12 flex flex-wrap gap-3">
-          <Field label="Status">
-            <Dropdown
-              value={task.status}
-              onChange={(v) => patch({ status: v })}
-              className="w-36"
-              options={STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))}
-              ariaLabel="Status"
-            />
-          </Field>
-          <Field label="Priority">
-            <Dropdown
-              value={task.priority}
-              onChange={(v) => patch({ priority: v })}
-              options={PRIORITIES}
-              className="w-28"
-              ariaLabel="Priority"
-            />
-          </Field>
-          <Field label="Project">
-            {/* Tasks live under projects now, so this is how one moves house. */}
-            <Dropdown
-              value={task.project_id == null ? "none" : String(task.project_id)}
-              onChange={(v) => patch({ project_id: v === "none" ? null : Number(v) })}
-              options={[
-                { value: "none", label: "No project" },
-                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
-              ]}
-              className="w-44"
-              ariaLabel="Project"
-            />
-          </Field>
-          <Field label="Due">
-            <input
-              type="date"
-              value={task.due_at ? task.due_at.slice(0, 10) : ""}
-              onChange={(e) =>
-                patch({ due_at: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })
-              }
-              className={FIELD_INPUT}
-            />
-          </Field>
-        </div>
+
+        {/* Whether this is actually workable, stated first, because a status of "todo" on a
+            task the roadmap is holding back is the page telling you something untrue about
+            the most important thing on it. */}
+        {held.length > 0 ? (
+          <div className="border-orange-400/30 bg-orange-400/5 mt-3 ml-12 flex items-start gap-2.5 rounded-xl border px-3 py-2.5">
+            <Lock className="mt-0.5 size-3.5 shrink-0 text-orange-400/90" />
+            <p className="text-xs leading-relaxed">
+              <span className="text-orange-400/90">Not available yet.</span>{" "}
+              <span className="text-muted-foreground">
+                It waits for {held.join(", ")} — he will not pick it up until that is done, whatever
+                its status says.
+              </span>
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Properties as a panel, not a row of labelled form fields. Every task system worth
+          copying does it this way, and for a reason: these are attributes of the thing, read
+          far more often than they are changed, so they want to be scannable rather than
+          prominent. */}
+      <div className="border-border/60 bg-card/30 mb-6 grid gap-x-6 gap-y-3 rounded-xl border px-4 py-3 sm:grid-cols-2 lg:grid-cols-3">
+        <Prop label="Status">
+          <Dropdown
+            value={task.status}
+            onChange={(v) => patch({ status: v })}
+            className="w-full"
+            options={STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))}
+            ariaLabel="Status"
+          />
+        </Prop>
+        <Prop label="Priority">
+          <Dropdown
+            value={task.priority}
+            onChange={(v) => patch({ priority: v })}
+            options={PRIORITIES}
+            className="w-full"
+            ariaLabel="Priority"
+          />
+        </Prop>
+        <Prop label="Due">
+          <input
+            type="date"
+            value={task.due_at ? task.due_at.slice(0, 10) : ""}
+            onChange={(e) =>
+              patch({ due_at: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })
+            }
+            className={`${FIELD_INPUT} w-full`}
+          />
+        </Prop>
+        <Prop label="Project">
+          <Dropdown
+            value={task.project_id == null ? "none" : String(task.project_id)}
+            onChange={(v) => patch({ project_id: v === "none" ? null : Number(v) })}
+            options={[
+              { value: "none", label: "No project" },
+              ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+            ]}
+            className="w-full"
+            ariaLabel="Project"
+          />
+        </Prop>
+        {/* The field that decides when he gets to it. It was not on this page at all, which
+            meant the one attribute that gates the work was the one you could not see. */}
+        <Prop label="Milestone">
+          <Dropdown
+            value={task.milestone_id == null ? "none" : String(task.milestone_id)}
+            onChange={(v) => patch({ milestone_id: v === "none" ? null : Number(v) })}
+            options={[
+              { value: "none", label: "No milestone" },
+              ...milestones.map((m) => ({
+                value: String(m.id),
+                label: m.status === "done" ? `${m.title} ✓` : m.title,
+              })),
+            ]}
+            className="w-full"
+            ariaLabel="Milestone"
+          />
+        </Prop>
+        <Prop label="Raised by">
+          <span className="text-muted-foreground py-1.5 text-sm">
+            {task.created_by === "user" ? "you" : "himself"}
+          </span>
+        </Prop>
       </div>
 
       {/* two-column: work on the left, conversation on the right */}
@@ -549,10 +600,10 @@ function H({ children }: { children: ReactNode }) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Prop({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+    <label className="min-w-0">
+      <span className="text-muted-foreground/70 mb-1 block text-[10px] tracking-wide uppercase">
         {label}
       </span>
       {children}

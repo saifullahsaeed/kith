@@ -59,6 +59,12 @@ export interface Deliverable {
   created_at: string;
 }
 export interface TaskDetail extends Task {
+  /** The milestone's title, for showing it without another lookup. */
+  milestone_title: string | null;
+  /** Titles of the unfinished milestones holding this back. Empty when he can work on it —
+   *  status alone cannot tell you this, and the page would otherwise say "todo" about
+   *  something he will not touch. */
+  held_by: string[];
   comments: TaskComment[];
   checklist: ChecklistItem[];
   deliverables: Deliverable[];
