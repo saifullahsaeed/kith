@@ -22,7 +22,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/presence";
-import { FilePreviewDialog, Markdown, MarkdownInline } from "@/components/file-view";
+import { FileViewer, Markdown, MarkdownInline } from "@/components/file-view";
 import { EditableText } from "@/components/ui/editable-text";
 import { handOffAndOpen } from "@/lib/files";
 import { cn } from "@/lib/utils";
@@ -587,7 +587,7 @@ function DeliverableRow({
         />
       </div>
       {open ? (
-        <FilePreviewDialog
+        <FileViewer
           open={open}
           onOpenChange={setOpen}
           name={name}

@@ -52,7 +52,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { TaskDetailPage } from "@/components/task-detail";
-import { CodeBlock, FilePreviewDialog, Markdown, MarkdownInline } from "@/components/file-view";
+import { CodeBlock, FileViewer, Markdown, MarkdownInline } from "@/components/file-view";
 import {
   copyText,
   formatModified,
@@ -2755,7 +2755,7 @@ function Workspace() {
         icon={<FolderTree className="size-5" />}
         color="lime"
         title="Workspace"
-        subtitle="His own computer — an isolated file sandbox."
+        subtitle="His folder on this machine. Everything he makes lands here."
       >
         <Dropdown
           value={sortBy}
@@ -2961,7 +2961,7 @@ function Workspace() {
       )}
 
       {file ? (
-        <FilePreviewDialog
+        <FileViewer
           open
           onOpenChange={(o) => !o && setFile(null)}
           name={file.path}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { FilePreviewDialog } from "@/components/file-view";
+import { FileViewer } from "@/components/file-view";
 import { fetchWorkspaceFile } from "@/lib/backend/brain";
 import { handOffAndOpen, useFileViewer } from "@/lib/files";
 
@@ -40,7 +40,7 @@ export function WorkspaceFileViewer() {
   if (!path) return null;
 
   return (
-    <FilePreviewDialog
+    <FileViewer
       open
       onOpenChange={(next) => !next && close()}
       name={path}

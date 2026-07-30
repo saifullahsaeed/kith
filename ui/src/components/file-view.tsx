@@ -23,7 +23,6 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 /* ── Extension → language table ─────────────────────────────────────────── */
@@ -267,7 +266,7 @@ function HostActions({ onOpenOnHost }: { onOpenOnHost: (reveal: boolean) => Prom
  * Rendered/Source switch), code syntax-highlighted, everything else as plain
  * text — in a roomy modal. Shared by the workspace browser and task
  * deliverables; pass `content: null` while it's still being fetched. */
-export function FilePreviewDialog({
+export function FileViewer({
   open,
   onOpenChange,
   name,
@@ -304,93 +303,114 @@ export function FilePreviewDialog({
     ? `${content.split("\n").length.toLocaleString()} lines · ${content.length.toLocaleString()} chars`
     : "";
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        showCloseButton={false}
-        className="flex max-h-[88dvh] min-h-[16rem] w-[min(96vw,64rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
-      >
-        {/* header — identity on the left, controls on the right */}
-        <div className="flex items-start gap-3 border-b border-border/60 bg-muted/25 px-4 py-3">
-          <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-background/70 text-sky-500 ring-1 ring-border/60">
-            {kind.type === "code" ? (
-              <FileCode2 className="size-4" />
-            ) : (
-              <FileText className="size-4" />
-            )}
-          </span>
-          <div className="min-w-0 flex-1">
-            <DialogTitle className="truncate text-[15px] leading-tight font-semibold">
-              {heading}
-            </DialogTitle>
-            <DialogDescription className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px]">
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium tracking-wide text-muted-foreground">
-                {kind.label}
-              </span>
-              {badge}
-              {heading !== base || name.includes("/") ? (
-                <span className="min-w-0 truncate font-mono">{name}</span>
-              ) : null}
-              {stats ? <span className="shrink-0 tabular-nums">· {stats}</span> : null}
-            </DialogDescription>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {kind.type === "markdown" && content != null ? (
-              <div className="inline-flex rounded-lg border border-border/60 bg-background/70 p-0.5 text-xs">
-                {(["rendered", "source"] as const).map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setView(v)}
-                    className={cn(
-                      "rounded-md px-2.5 py-1 capitalize transition-colors",
-                      view === v
-                        ? "bg-accent font-medium text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {content != null ? (
-              <IconAction label="Copy" onClick={() => copyText(content)} copyIcon />
-            ) : null}
-            {onOpenOnHost ? <HostActions onOpenOnHost={onOpenOnHost} /> : null}
-            {onDownload ? (
-              <IconAction
-                label="Download"
-                onClick={onDownload}
-                icon={<Download className="size-4" />}
-              />
-            ) : null}
-            <IconAction
-              label="Close"
-              onClick={() => onOpenChange(false)}
-              icon={<X className="size-4" />}
-            />
-          </div>
-        </div>
+  // Escape closes it. A Dialog gave this for free; a page has to say so, and a full-window
+  // view you cannot dismiss from the keyboard is worse than the dialog it replaced.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // One Escape, one layer. The control panel also closes on Escape, from a listener on
+      // `window` — and `document` bubbles to `window`, so without this the same keypress
+      // shut the viewer *and* the panel behind it, which is how you lose your place in a
+      // file list. The panel's own guard for "a dialog is open" cannot save it: closing
+      // this flushes React synchronously, so the element it looks for is already gone by
+      // the time it looks.
+      event.stopPropagation();
+      onOpenChange(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onOpenChange]);
 
-        {/* body */}
-        <div className="min-h-0 flex-1 overflow-auto bg-background">
-          {error && looksBinary(error) ? (
-            // Not an error — an xlsx simply isn't text, and saying so in red while
-            // hiding the useful action in a 16px icon was the wrong way round.
-            <NeedsAnApp name={base} onOpenOnHost={onOpenOnHost} />
-          ) : error ? (
-            <p className="p-5 text-sm text-destructive">{error}</p>
-          ) : content == null ? (
-            <p className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Reading it…
-            </p>
+  if (!open) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={heading}
+      className="fixed inset-0 z-50 flex flex-col bg-background"
+    >
+      {/* header — identity on the left, controls on the right. It is the topmost bar in the
+          window while this is open, so it takes over the title bar's jobs: draggable, and
+          holding a gap where the traffic lights are drawn. */}
+      <div className="window-drag-region window-controls-gap flex shrink-0 items-start gap-3 border-b border-border/60 bg-muted/25 px-4 py-3">
+        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-background/70 text-sky-500 ring-1 ring-border/60">
+          {kind.type === "code" ? (
+            <FileCode2 className="size-4" />
           ) : (
-            <FileBody kind={kind} content={content} view={view} />
+            <FileText className="size-4" />
           )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-[15px] leading-tight font-semibold">{heading}</h2>
+          <div className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1.5 text-[11px]">
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-medium tracking-wide text-muted-foreground">
+              {kind.label}
+            </span>
+            {badge}
+            {heading !== base || name.includes("/") ? (
+              <span className="min-w-0 truncate font-mono">{name}</span>
+            ) : null}
+            {stats ? <span className="shrink-0 tabular-nums">· {stats}</span> : null}
+          </div>
         </div>
-      </DialogContent>
-    </Dialog>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {kind.type === "markdown" && content != null ? (
+            <div className="inline-flex rounded-lg border border-border/60 bg-background/70 p-0.5 text-xs">
+              {(["rendered", "source"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 capitalize transition-colors",
+                    view === v
+                      ? "bg-accent font-medium text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {content != null ? (
+            <IconAction label="Copy" onClick={() => copyText(content)} copyIcon />
+          ) : null}
+          {onOpenOnHost ? <HostActions onOpenOnHost={onOpenOnHost} /> : null}
+          {onDownload ? (
+            <IconAction
+              label="Download"
+              onClick={onDownload}
+              icon={<Download className="size-4" />}
+            />
+          ) : null}
+          <IconAction
+            label="Close"
+            onClick={() => onOpenChange(false)}
+            icon={<X className="size-4" />}
+          />
+        </div>
+      </div>
+
+      {/* body */}
+      <div className="min-h-0 flex-1 overflow-auto bg-background">
+        {error && looksBinary(error) ? (
+          // Not an error — an xlsx simply isn't text, and saying so in red while
+          // hiding the useful action in a 16px icon was the wrong way round.
+          <NeedsAnApp name={base} onOpenOnHost={onOpenOnHost} />
+        ) : error ? (
+          <p className="p-5 text-sm text-destructive">{error}</p>
+        ) : content == null ? (
+          <p className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Reading it…
+          </p>
+        ) : (
+          <FileBody kind={kind} content={content} view={view} />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -411,10 +431,10 @@ function FileBody({
       </div>
     );
   }
-  if (kind.type === "markdown") return <Code code={content} language="markdown" />;
-  if (kind.type === "code") return <Code code={content} language={kind.lang} />;
+  if (kind.type === "markdown") return <Code code={content} language="markdown" numbered />;
+  if (kind.type === "code") return <Code code={content} language={kind.lang} numbered />;
   return (
-    <pre className="overflow-x-auto whitespace-pre-wrap break-words p-5 font-mono text-[13px] leading-relaxed">
+    <pre className="mx-auto max-w-[80rem] overflow-x-auto whitespace-pre-wrap break-words p-5 font-mono text-[13px] leading-relaxed">
       {content}
     </pre>
   );
@@ -627,12 +647,48 @@ export function CodeBlock({
   );
 }
 
-function Code({ code, language }: { code: string; language?: string }) {
+function Code({
+  code,
+  language,
+  numbered = false,
+}: {
+  code: string;
+  language?: string;
+  /** A gutter of line numbers. For a whole file, not for a fenced snippet in chat. */
+  numbered?: boolean;
+}) {
   const html = useMemo(() => highlight(code, language), [code, language]);
+  const numbers = useMemo(
+    () => (numbered ? code.split("\n").map((_, index) => index + 1) : []),
+    [code, numbered],
+  );
+
+  if (!numbered) {
+    return (
+      <pre className="overflow-x-auto p-4 text-[13px] leading-relaxed">
+        <code className="hljs font-mono" dangerouslySetInnerHTML={{ __html: html }} />
+      </pre>
+    );
+  }
+
+  // Two columns rather than numbers woven into the markup. The highlighted HTML is one
+  // blob whose spans cross line boundaries, so splitting it per line to prefix a number
+  // means repairing tags — and getting that subtly wrong colours the rest of the file
+  // wrong. A parallel column with the same line-height needs no surgery at all, and it
+  // stays put while long lines scroll under it. It holds because the code pre does not
+  // wrap: one source line is always exactly one row.
   return (
-    <pre className="overflow-x-auto p-4 text-[13px] leading-relaxed">
-      <code className="hljs font-mono" dangerouslySetInnerHTML={{ __html: html }} />
-    </pre>
+    <div className="flex min-w-0 items-start font-mono text-[13px] leading-relaxed">
+      <pre
+        aria-hidden
+        className="text-muted-foreground/40 shrink-0 border-r border-border/40 py-4 pr-3 pl-5 text-right tabular-nums select-none"
+      >
+        {numbers.join("\n")}
+      </pre>
+      <pre className="min-w-0 flex-1 overflow-x-auto py-4 pr-5 pl-4">
+        <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+      </pre>
+    </div>
   );
 }
 
