@@ -335,6 +335,25 @@ def _migrations():
         # would be indistinguishable from a tick that was entirely cache hits.
         conn.execute("ALTER TABLE tick_log ADD COLUMN tokens_uncached INTEGER")
 
+    def v21_conversations(conn):
+        # Chat was ephemeral: the interface held the messages in React state and the
+        # server held none, so a reload ended a conversation permanently. This indexes
+        # them; the words live in append-only JSONL beside his work, because a plain-text
+        # transcript outlives this program and a table does not.
+        conn.execute(
+            """
+            CREATE TABLE conversations (
+                id         TEXT PRIMARY KEY,
+                title      TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                messages   INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute("CREATE INDEX idx_conversations_updated ON conversations (updated_at DESC)")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -356,6 +375,7 @@ def _migrations():
         v18_milestone_link_and_notify,
         v19_tick_log,
         v20_tick_tokens_uncached,
+        v21_conversations,
     ]
 
 

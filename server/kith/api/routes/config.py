@@ -14,6 +14,7 @@ _SETTING_KEYS = {
     "numCtx": "num_ctx",
     "numPredict": "num_predict",
     "think": "think",
+    "effort": "effort",
     "baseUrl": "base_url",
     "apiKey": "api_key",
 }

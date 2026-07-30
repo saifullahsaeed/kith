@@ -118,17 +118,28 @@ def stream_once(
         # Keeps a turn's rounds landing on the same upstream host, so the cache one
         # round wrote is the cache the next one reads. A preference, not a pin —
         # availability still falls back.
-        payload["session_id"] = _session_id()
+        # Per conversation when we know which one, so two unrelated chats do not fight
+        # over the same upstream; the install-wide id is the fallback for ticks.
+        payload["session_id"] = config.session_id or _session_id()
         pinned = _pinned_provider()
         if pinned:
             # Fallbacks stay on so availability never breaks; the pin is a strong
             # preference that keeps every round on the same warm cache.
             payload["provider"] = {"order": [pinned], "allow_fallbacks": True}
-        # Whether he reasons before answering. Sent only to OpenRouter, where it is a
-        # documented extension — a strict OpenAI-compatible host rejects the whole
-        # request rather than ignoring an unknown key. Until now this setting reached
-        # Ollama only, so on a cloud model the switch did nothing at all.
-        payload["reasoning"] = {"enabled": bool(config.think)}
+        # Whether he reasons before answering, and how hard. Sent only to OpenRouter,
+        # where it is a documented extension — a strict OpenAI-compatible host rejects
+        # the whole request rather than ignoring an unknown key. Until now this setting
+        # reached Ollama only, so on a cloud model the switch did nothing at all.
+        #
+        # `effort` beats `enabled` when it is set: they are alternative spellings of the
+        # same field and sending both makes the provider pick, which is not a decision to
+        # leave to it. Blank effort means "you decide", which is the right default — the
+        # sensible amount of thinking for a model is a thing its maker knows better.
+        effort = (config.effort or "").strip().lower()
+        if effort in ("low", "medium", "high"):
+            payload["reasoning"] = {"effort": effort}
+        else:
+            payload["reasoning"] = {"enabled": bool(config.think)}
     if tools:
         payload["tools"] = tools
         # "none" is how the API says "you may not call anything this turn". It matters

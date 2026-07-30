@@ -174,6 +174,10 @@ def _to_model_info(entry: Any) -> ModelInfo:
         # would be wrong in both directions.
         open_weights=bool(entry.hugging_face_id),
         retires_on=str(entry.expiration_date) if entry.expiration_date else None,
+        input_modalities=tuple(getattr(getattr(entry, "architecture", None), "input_modalities", None) or ()),
+        # `reasoning` and `reasoning_effort` both appear in the wild; either means an
+        # effort control does something rather than 400 the request.
+        supports_reasoning=bool({"reasoning", "reasoning_effort"} & set(entry.supported_parameters or [])),
     )
 
 

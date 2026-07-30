@@ -26,6 +26,11 @@ from kith.services.connections.providers import ProviderError
 #: simply off right now", and re-running onboarding on the second case would be wrong.
 ONBOARDED_KEY = "onboarded"
 
+#: Where a cloud key waits while a local connection is in use. Switching provider used to
+#: delete it outright, which meant "try the local model for a minute" cost you a trip to
+#: OpenRouter to issue a new one.
+KEPT_KEY = "api_key_kept"
+
 #: A model needs room to hold a multi-round turn. Below this he forgets his own
 #: earlier steps inside a single tick.
 USABLE_CONTEXT = 32_000
@@ -417,9 +422,17 @@ class ConnectionManager:
         Raises ValueError with something readable if it does not, so the caller can
         hand that straight to the user.
 
-        Clearing the endpoint and key for a local connection is deliberate: leaving a
-        previous cloud setup in place would let it keep quietly taking precedence,
-        because that is how ``Connection.infer`` reads the stored values back.
+        Switching to a local connection clears the active endpoint and key — it has to,
+        because ``Connection.infer`` reads the stored values back and a leftover cloud
+        setup would keep quietly taking precedence. But it no longer *destroys* the key:
+        it is set aside under ``api_key_kept`` and restored when a cloud connection is
+        adopted without a new one.
+
+        That distinction is not hypothetical. A single call with a local candidate
+        overwrote a working OpenRouter key with an empty string, and an API key is not
+        recoverable — it has to be reissued. Nothing in the app said it had happened;
+        chat simply started answering from a local model. Setting a thing aside and
+        deleting it look identical until the moment you need it back.
         """
         for problem in candidate.problems():
             raise ValueError(problem)
@@ -435,15 +448,26 @@ class ConnectionManager:
         if result.models and not any(m.id == candidate.model for m in result.models):
             raise ValueError(f"{candidate.model} isn't offered by that provider.")
 
-        config_store.update_settings(
-            self.config_db,
-            {
+        stored = config_store.load_settings(self.config_db)
+        previous_key = str(stored.get("api_key") or "")
+        kept_key = str(stored.get(KEPT_KEY) or "")
+
+        if candidate.is_local:
+            # Stand the cloud key down, don't shred it.
+            updates = {
                 "model": candidate.model,
-                "base_url": "" if candidate.is_local else candidate.endpoint,
-                "api_key": "" if candidate.is_local else candidate.api_key,
-                ONBOARDED_KEY: True,
-            },
-        )
+                "base_url": "",
+                "api_key": "",
+                KEPT_KEY: previous_key or kept_key,
+            }
+        else:
+            updates = {
+                "model": candidate.model,
+                "base_url": candidate.endpoint,
+                "api_key": candidate.api_key or previous_key or kept_key,
+                KEPT_KEY: "",
+            }
+        config_store.update_settings(self.config_db, {**updates, ONBOARDED_KEY: True})
         return self.current(), self.concerns(candidate, result.models)
 
 

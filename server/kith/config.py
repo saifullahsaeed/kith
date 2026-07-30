@@ -41,6 +41,14 @@ class Config:
     num_predict: int
     system: str
     think: bool
+    #: How hard to think before answering: "", "low", "medium" or "high". Blank leaves it
+    #: to the provider. Only sent to models whose OpenRouter entry lists `reasoning` in
+    #: supported_parameters — sending it elsewhere is a 400 on the whole request, not a
+    #: field quietly ignored.
+    effort: str = ""
+    #: OpenRouter stickiness for this conversation, so its rounds land on one warm cache.
+    #: Blank falls back to the install-wide id.
+    session_id: str = ""
     base_url: str = ""  # OpenAI-compatible cloud endpoint; blank = local Ollama
     api_key: str = ""  # cloud API key; when set (with base_url), chat runs in the cloud
 
@@ -59,6 +67,7 @@ def default_config() -> Config:
         num_predict=_int_setting("KITH_NUM_PREDICT", stored, "num_predict", 8192, allow_unlimited=True),
         system=settings.SYSTEM_PROMPT_OVERRIDE or load_persona(),
         think=_bool_setting("KITH_THINK", stored, "think", True),
+        effort=_str_setting("KITH_EFFORT", stored, "effort", ""),
         base_url=_str_setting("KITH_BASE_URL", stored, "base_url", "").rstrip("/"),
         api_key=_str_setting("KITH_API_KEY", stored, "api_key", ""),
     )
@@ -72,6 +81,7 @@ def to_wire(config: Config) -> dict:
         "numPredict": config.num_predict,
         "system": config.system,
         "think": config.think,
+        "effort": config.effort,
         "baseUrl": config.base_url,
         "apiKeySet": bool(config.api_key),
     }
@@ -89,6 +99,7 @@ def merge_overrides(base: Config, overrides: dict) -> Config:
     num_predict = overrides.get("numPredict")
     system = overrides.get("system")
     think = overrides.get("think")
+    effort = overrides.get("effort")
 
     return Config(
         model=model.strip() if isinstance(model, str) and model.strip() else base.model,
@@ -100,6 +111,7 @@ def merge_overrides(base: Config, overrides: dict) -> Config:
         ),
         system=system if isinstance(system, str) else base.system,
         think=think if isinstance(think, bool) else base.think,
+        effort=effort if isinstance(effort, str) else base.effort,
         # The cloud endpoint/key are server settings, never per-request overrides.
         base_url=base.base_url,
         api_key=base.api_key,

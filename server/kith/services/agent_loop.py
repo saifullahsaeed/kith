@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -266,6 +267,7 @@ def stream_agent(
     max_rounds: int | None = None,
     allow: set[str] | None = None,
     expect_durable: bool = False,
+    conversation_id: str = "",
 ) -> Iterator[dict]:
     """Run the tool loop.
 
@@ -273,8 +275,18 @@ def stream_agent(
     autonomy tick it is — the whole point of a tick is to leave something behind, and one
     that finishes empty means the next tick redoes the work. For a chat turn it is the
     normal outcome: answering a question is the deliverable, and there is nothing to file.
+
+    ``conversation_id`` picks the OpenRouter stickiness id. A conversation is the right
+    unit for it: every round in it shares a prompt prefix, and shares it with nothing else,
+    so keeping one conversation on one upstream is what keeps its cache warm.
     """
     convo = list(messages)
+    if conversation_id:
+        from kith.services import conversations
+
+        session = conversations.session_id(agent_db_path, conversation_id)
+        if session:
+            config = replace(config, session_id=session)
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
     budget = max_rounds or tuning.value("max_rounds")

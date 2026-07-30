@@ -13,7 +13,7 @@ from kith.domain import clock
 from kith.schemas import (
     ChatRequestSchema,
 )
-from kith.services import memory_context
+from kith.services import conversations, memory_context
 from kith.services.agent_loop import stream_agent
 
 CHAT_DIRECTIVE = (
@@ -87,6 +87,18 @@ def _present_state() -> str:
     return "\n\n".join(block for block in blocks if block).strip()
 
 
+def _save_reply(conversation_id: str, parts: list[str]) -> None:
+    """Store what he said, once, at the end.
+
+    Per-delta would mean a line in the transcript per token. The parts are accumulated and
+    joined instead — and written on the error and disconnect paths too, because a turn that
+    was interrupted is exactly the one whose half-answer you want to keep.
+    """
+    text = "".join(parts).strip()
+    if text:
+        conversations.record(AGENT_DB_PATH, conversation_id, "assistant", text)
+
+
 @api.post("/chat")
 @api.input(ChatRequestSchema, arg_name="payload")
 @api.doc(
@@ -107,17 +119,41 @@ def _present_state() -> str:
 def chat(payload):
     autonomy.note_user_activity()  # defer self-directed ticks while you're here
     config = merge_overrides(default_config(), payload.get("config") or {})
-    messages = _build_messages(payload.get("messages") or [], config)
+    history = payload.get("messages") or []
+    messages = _build_messages(history, config)
+
+    # Which conversation this belongs to. Opened on the first message rather than when the
+    # window opens, so idly launching the app does not litter the history with empties.
+    conversation_id = str(payload.get("conversationId") or "").strip()
+    latest = next((m.get("content", "") for m in reversed(history) if m.get("role") == "user"), "")
+    if not conversation_id:
+        conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
+    conversations.record(AGENT_DB_PATH, conversation_id, "user", latest)
 
     def generate():
+        # Tell the client which conversation it is in before anything else, so a chat
+        # started without an id can attach itself and reload into the same place.
+        yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
+        reply: list[str] = []
         try:
-            for event in stream_agent(messages, config, ollama_host(), AGENT_DB_PATH):
+            for event in stream_agent(
+                messages, config, ollama_host(), AGENT_DB_PATH, conversation_id=conversation_id
+            ):
+                if event.get("type") == "delta" and event.get("role") == "text":
+                    reply.append(event.get("text") or "")
+                elif event.get("type") in ("tool_call", "tool_result", "stats"):
+                    conversations.record_event(conversation_id, event["type"], event)
                 yield json.dumps(event) + "\n"
                 if event.get("type") == "error":
+                    conversations.record_event(conversation_id, "error", {"message": event.get("message")})
+                    _save_reply(conversation_id, reply)
                     return
+            _save_reply(conversation_id, reply)
             yield json.dumps({"type": "done"}) + "\n"
         except GeneratorExit:
-            # Client disconnected (e.g. Stop was clicked) — end quietly.
+            # Client disconnected (e.g. Stop was clicked) — end quietly, but keep what he
+            # had already said. A stopped answer is still an answer that was given.
+            _save_reply(conversation_id, reply)
             raise
         except Exception as exc:
             yield json.dumps({"type": "error", "message": str(exc)}) + "\n"

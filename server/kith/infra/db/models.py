@@ -242,6 +242,23 @@ class CustomTool(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class Conversation(Base):
+    """One chat, indexed. The words are a JSONL file in the workspace, not a column."""
+
+    __tablename__ = "conversations"
+
+    #: A sortable timestamp plus a short suffix, so the folder reads chronologically in
+    #: Finder as well as in the app. Also the transcript's filename.
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    #: OpenRouter stickiness, per conversation: its prefix is shared across its own turns
+    #: and with nothing else, which is exactly the unit that wants one warm cache.
+    session_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+    messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class TickLog(Base):
     """One row per autonomy tick — the durable flight recorder."""
 

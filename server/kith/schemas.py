@@ -21,6 +21,9 @@ class ConfigSchema(Schema):
     numPredict = Integer(metadata={"description": "Max output tokens (-1 = unlimited)", "example": 8192})
     system = String(metadata={"description": "System prompt / persona"})
     think = Boolean(metadata={"description": "Whether the model reasons before answering"})
+    effort = String(
+        metadata={"description": "Reasoning effort: '', 'low', 'medium' or 'high'", "example": "medium"}
+    )
     baseUrl = String(
         metadata={
             "description": "OpenAI-compatible cloud endpoint; blank = local Ollama",
@@ -52,6 +55,13 @@ class ChatRequestSchema(Schema):
         ConfigSchema,
         required=False,
         metadata={"description": "Optional per-request overrides of the defaults"},
+    )
+    conversationId = String(
+        required=False,
+        metadata={
+            "description": "Which conversation this turn belongs to. Omit to start one; "
+            "the stream's first frame reports the id that was created.",
+        },
     )
 
 

@@ -72,6 +72,13 @@ class ModelInfo:
     open_weights: bool = False
     #: ISO date the provider intends to withdraw it. Never recommend one of these.
     retires_on: str | None = None
+    #: What it can be *given*: text, image, file, audio, video. Straight from the
+    #: provider rather than guessed from the name, because the interface uses it to decide
+    #: whether to offer an attach button — and offering one that produces a 400 is worse
+    #: than not offering it. Empty means the provider did not say, treated as text-only.
+    input_modalities: tuple[str, ...] = ()
+    #: Accepts a `reasoning` parameter, so an effort control is meaningful for it.
+    supports_reasoning: bool = False
 
     @property
     def label(self) -> str:
@@ -115,6 +122,10 @@ class ModelInfo:
             "codingIndex": self.coding_index,
             "openWeights": self.open_weights,
             "retiresOn": self.retires_on,
+            "inputModalities": list(self.input_modalities),
+            "supportsImages": "image" in self.input_modalities,
+            "supportsFiles": "file" in self.input_modalities,
+            "supportsReasoning": self.supports_reasoning,
         }
 
 
