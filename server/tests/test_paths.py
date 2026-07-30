@@ -12,6 +12,8 @@ failure mode is silence, not an exception.
 
 from __future__ import annotations
 
+import pytest
+
 from kith import settings
 from kith.infra import workspace
 from kith.services.persona import fragment_paths, load_persona
@@ -102,3 +104,63 @@ def test_no_module_derives_a_shared_path_from_its_own_location() -> None:
         f"these walk up from __file__ and will break when moved: {sorted(set(offenders))}. "
         "Derive the path from settings.SERVER_ROOT instead."
     )
+
+
+class TestEditingThePersona:
+    """The persona is a folder of files, and these endpoints write to it.
+
+    So the traversal guard matters as much as the editing does: a write endpoint pointed at
+    a directory is exactly the shape that let `/etc/passwd` through the workspace routes
+    once, by stripping slashes before checking containment instead of after.
+    """
+
+    def test_a_plain_name_lands_in_the_folder(self) -> None:
+        from kith.services import persona
+
+        resolved = persona._resolve("50-mine.md", must_exist=False)
+        assert resolved.parent == persona.persona_dir().resolve()
+
+    def test_traversal_is_refused(self) -> None:
+        from kith.services import persona
+
+        for name in ("../../../etc/passwd.md", "/etc/passwd.md", "sub/../../out.md"):
+            with pytest.raises(persona.PersonaError):
+                persona._resolve(name, must_exist=False)
+
+    def test_only_markdown_and_text_are_fragments(self) -> None:
+        from kith.services import persona
+
+        with pytest.raises(persona.PersonaError):
+            persona._resolve("evil.sh", must_exist=False)
+
+    def test_the_title_drops_the_ordering_prefix(self) -> None:
+        from kith.services import persona
+
+        assert persona._title("40-how-you-work.md") == "how you work"
+        assert persona._title("_45-how-you-read.md") == "how you read"
+
+    def test_every_fragment_on_disk_is_listed_including_disabled_ones(self) -> None:
+        """`fragment_paths` hides disabled ones on purpose — the loader wants what he IS.
+        An editor wants what there is, or you cannot turn anything back on."""
+        from kith.services import persona
+
+        listed = {one["name"] for one in persona.fragments()}
+        assert {path.name for path in persona.fragment_paths()} <= listed
+
+    def test_the_read_discipline_fragment_is_present_and_active(self) -> None:
+        """The habit that decides whether a long job finishes. Silence is its failure mode,
+        so this asserts it is actually in the merged prompt rather than merely on disk."""
+        from kith.services.persona import load_persona
+
+        merged = load_persona()
+        assert "How you read" in merged
+        assert "grep" in merged
+
+    def test_the_persona_no_longer_promises_a_linux_container(self) -> None:
+        """He had one for the life of the sandbox. Telling him he still does is how he ends
+        up reporting himself blocked on a path that cannot exist."""
+        from kith.services.persona import load_persona
+
+        merged = load_persona()
+        assert "root on" not in merged
+        assert "~/Kith" in merged

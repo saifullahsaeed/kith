@@ -18,6 +18,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     health,
     messages,
     permissions,
+    persona,
     renderer,
     setup,
     sources,
