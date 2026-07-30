@@ -25,6 +25,7 @@ for a click that may never come, on a tick that may be running at 4am.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -66,6 +67,96 @@ _DANGEROUS = (
     (re.compile(r":\(\)\s*\{.*\}\s*;", re.I), "a fork bomb"),
     (re.compile(r"\b(security|keychain)\b.*\b(find|dump)", re.I), "reading your keychain"),
 )
+
+# --------------------------------------------------------------------------- #
+# What a shell command is about to touch
+# --------------------------------------------------------------------------- #
+#
+# This exists because of a real one. Asked to delete a file from the Desktop, he wrote
+# ``rm -- "$HOME/Desktop/thing.zip"`` and it ran: in Ask mode, on a file outside his
+# folder, with no prompt, unrecoverably. Three separate things had to be wrong for that,
+# and the third was the one that mattered — the dangerous list above is the *only* gate on
+# a shell command, so anything it does not match runs with no reference to where it points.
+# ``rm`` slipped it because the pattern insists on ``-r`` or ``-f``, and a plain ``rm`` of
+# one named file is exactly as unrecoverable as a forced one.
+#
+# So commands that destroy things are now read for the paths they name, and any path
+# outside the workspace goes through the same check a tool call would get — same prompt,
+# same grants, same auto-mode rules. Deliberately limited to destructive commands: a
+# gate that fires on every ``/usr/bin/env`` in a script is a gate people turn off, and
+# then nothing is protected. Reads through the shell stay ungated, which is a real
+# remaining gap and named as one rather than papered over.
+#
+# It reads literals, so ``$dir`` computed at runtime, ``$(...)``, and a path assembled in
+# a variable are all invisible to it. That is a floor, not a ceiling: the shapes it does
+# catch — an absolute path, ``~/…``, ``$HOME/…`` — are the shapes he actually writes.
+
+#: Commands whose whole point is to destroy or overwrite something.
+_DELETING = re.compile(r"\b(rm|rmdir|unlink|shred|srm)\b", re.I)
+_WRITING = re.compile(
+    # `>` and `>>` as redirection, but not `2>&1`: requiring a non-`&` after the arrow keeps
+    # the most common shell idiom in the world from reading as a write to a file.
+    r"\b(mv|cp|tee|touch|mkdir|install|ln|chmod|chown|chgrp|truncate|dd)\b"
+    r"|\bsed\s+-i\b|>>?\s*(?![&\s])",
+    re.I,
+)
+
+#: Path-shaped literals: absolute, or anchored at home. The left edge has to be the start
+#: of the string or a separator, or every relative ``a/b`` would contribute a phantom
+#: ``/b``.
+_PATH_LITERAL = re.compile(
+    r"(?:^|(?<=[\s'\"=:(]))((?:~|\$HOME|\$\{HOME\})?/[^\s'\"`;|&<>()]*)",
+)
+
+#: Paths a destructive command may name without asking. Scratch space and the null device
+#: are not "your files" in any sense worth a prompt, and prompting for them is how the
+#: whole mechanism gets resented.
+_UNREMARKABLE_PREFIXES = ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders", "/dev")
+
+#: Where the programs live. Ignored for *writes* only, and for one specific reason: the
+#: check reads every path in a command, so ``python3 /usr/bin/thing.py > out.txt`` would
+#: otherwise prompt about ``/usr/bin/thing.py`` — a path being read, in a command whose
+#: write goes to a relative file. Interpreter and binary paths appear in almost every real
+#: command, so that false prompt would be the common case, and a gate that cries wolf on
+#: ordinary work is one people switch off. Deletes still count these: ``rm /usr/local/bin/x``
+#: is worth a question no matter how it is spelled.
+_PROGRAM_PREFIXES = (
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/opt",
+    "/System",
+    "/Library/Frameworks",
+    "/Applications",
+)
+
+
+def paths_named(command: str, home: Path | None = None) -> list[Path]:
+    """Every path literal in a command, resolved as far as text allows."""
+    base = home or Path.home()
+    found: list[Path] = []
+    for raw in _PATH_LITERAL.findall(command):
+        text = raw.rstrip("/") or "/"
+        for prefix in ("${HOME}", "$HOME", "~"):
+            if text.startswith(prefix):
+                text = str(base) + text[len(prefix) :]
+                break
+        if not text.startswith("/"):
+            continue
+        candidate = Path(os.path.normpath(text))
+        if candidate not in found:
+            found.append(candidate)
+    return found
+
+
+def command_intent(command: str) -> Kind | None:
+    """``"delete"``, ``"write"``, or None when nothing in it destroys anything."""
+    if _DELETING.search(command):
+        return "delete"
+    if _WRITING.search(command):
+        return "write"
+    return None
+
 
 #: Directories worth naming in a prompt even in auto mode: a write here is not "outside the
 #: workspace" in the boring sense, it is somewhere that changes how your machine behaves.
@@ -222,9 +313,22 @@ def check_command(command: str, root: Path) -> Decision:
                 "command", command.strip()[:200], f"that command involves {description}", signature
             )
 
-    # Everything else runs, with the workspace as its working directory. Reaching outside
-    # from inside a shell is not something a regex can see, which is exactly why the
-    # dangerous list above is broad and why bypass mode is named the way it is.
+    # A command that destroys something gets read for what it points at, and anything
+    # outside his folder goes through the ordinary path check. See the note above
+    # _DELETING for why this is limited to destructive commands and what it cannot see.
+    intent = command_intent(command)
+    if intent is not None:
+        skip = _UNREMARKABLE_PREFIXES
+        if intent == "write":
+            skip = skip + _PROGRAM_PREFIXES
+        for target in paths_named(command):
+            if str(target).startswith(skip):
+                continue
+            decision = check_path(intent, target, root)
+            if not decision.allowed:
+                return decision
+
+    # Everything else runs, with the workspace as its working directory.
     return Decision(True)
 
 

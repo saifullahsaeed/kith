@@ -52,6 +52,23 @@ def write_file(path: Path, args: dict):
 
 
 @tool(
+    "delete_file",
+    "Put a file or folder in the Trash. Use this rather than `rm` in the shell — it goes "
+    "to the Trash, so your person can get it back if you were wrong about which one they "
+    "meant, and `rm` cannot be undone by anyone.",
+    {"path": STR},
+    required=("path",),
+)
+def delete_file(path: Path, args: dict):
+    # This tool exists because it did not, and its absence had a cost: asked to delete a
+    # file from the Desktop, the only route available was `shell` with `rm`, which is both
+    # the least supervised path in the system and the one that destroys rather than
+    # recovers. A first-class action means the permission check applies and the Trash does
+    # the rest.
+    return {"trashed": args["path"], "where": sandbox.remove(args["path"])}
+
+
+@tool(
     "list_files",
     "List a directory on your computer (defaults to your home).",
     {"path": STR},

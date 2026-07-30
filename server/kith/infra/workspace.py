@@ -441,19 +441,56 @@ def move(source: str, destination: str) -> None:
         raise WorkspaceError(f"cannot rename {source}: {exc}") from None
 
 
-def remove(path: str) -> None:
-    """Delete a file or a folder. Refuses the workspace root itself."""
+def remove(path: str) -> str:
+    """Put a file or folder in the Trash. Refuses the workspace root itself.
+
+    The Trash rather than ``unlink``, and this was ``unlink`` until it mattered. Asked to
+    delete a file from the Desktop, he did it with ``rm`` and the file was simply gone —
+    no prompt, and nothing to undo. The prompt is fixed separately, in
+    :mod:`kith.services.permissions`; this fixes the other half, which is that a delete
+    anyone can get wrong should not be the one operation on the machine with no way back.
+    macOS has a recoverable delete and every other app on the machine uses it.
+
+    Returns where it went, so the answer can say "in the Trash" and mean it.
+    """
     target = Path(resolve(path))
     if target.resolve() == root().resolve():
         raise WorkspaceError("that's his whole folder — not that.")
     permissions.require_path("delete", target, root())
+    if not target.exists() and not target.is_symlink():
+        raise WorkspaceError(f"there is nothing at {path}.")
+
+    bin_ = Path.home() / ".Trash"
+    if not bin_.is_dir():
+        # Not macOS, or a home directory without one. Say what happened rather than
+        # reporting "moved to the Trash" about a file that is gone for good.
+        try:
+            shutil.rmtree(target) if target.is_dir() else target.unlink()
+        except OSError as exc:
+            raise WorkspaceError(f"cannot delete {path}: {exc}") from None
+        return "deleted permanently (this machine has no Trash)"
+
+    destination = _free_name(bin_, target.name)
     try:
-        if target.is_dir():
-            shutil.rmtree(target)
-        else:
-            target.unlink(missing_ok=True)
+        # move, not rename: the Trash can be on a different volume from the file.
+        shutil.move(str(target), str(destination))
     except OSError as exc:
-        raise WorkspaceError(f"cannot delete {path}: {exc}") from None
+        raise WorkspaceError(f"cannot move {path} to the Trash: {exc}") from None
+    return f"in the Trash as {destination.name}"
+
+
+def _free_name(folder: Path, name: str) -> Path:
+    """``report.md``, then ``report 2.md`` — Finder's own convention, so a Trash full of
+    same-named files reads the way people expect it to."""
+    candidate = folder / name
+    if not candidate.exists():
+        return candidate
+    stem, dot, suffix = name.partition(".")
+    for index in range(2, 1000):
+        candidate = folder / f"{stem} {index}{dot}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise WorkspaceError(f"the Trash already has a thousand things called {name}.")
 
 
 def kind_of(path: str) -> str:
