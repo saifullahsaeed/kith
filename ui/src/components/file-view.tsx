@@ -2,9 +2,11 @@ import {
   memo,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
+  type RefObject,
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -294,6 +296,7 @@ export function FileViewer({
   onOpenOnHost?: (reveal: boolean) => Promise<unknown>;
 }) {
   const kind = classify(name);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<"rendered" | "source">("rendered");
   useEffect(() => setView("rendered"), [name]);
 
@@ -394,7 +397,7 @@ export function FileViewer({
       </div>
 
       {/* body */}
-      <div className="min-h-0 flex-1 overflow-auto bg-background">
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto bg-background">
         {error && looksBinary(error) ? (
           // Not an error — an xlsx simply isn't text, and saying so in red while
           // hiding the useful action in a 16px icon was the wrong way round.
@@ -407,7 +410,7 @@ export function FileViewer({
             Reading it…
           </p>
         ) : (
-          <FileBody kind={kind} content={content} view={view} />
+          <FileBody kind={kind} content={content} view={view} scroller={bodyRef} />
         )}
       </div>
     </div>
@@ -418,16 +421,28 @@ function FileBody({
   kind,
   content,
   view,
+  scroller,
 }: {
   kind: Kind;
   content: string;
   view: "rendered" | "source";
+  scroller: RefObject<HTMLDivElement | null>;
 }) {
   if (!content.trim()) return <p className="p-5 text-sm text-muted-foreground">(empty file)</p>;
   if (kind.type === "markdown" && view === "rendered") {
+    const headings = outlineOf(content);
     return (
-      <div className="mx-auto max-w-[48rem] px-6 py-6">
-        <Markdown>{content}</Markdown>
+      <div className="mx-auto flex max-w-[68rem] items-start gap-8 px-6 py-6">
+        {/* The prose keeps its measure and the width goes to navigation instead. A wide
+            window was leaving a stark empty margin beside a 48rem column — the answer to
+            "use the space" on a document is not longer lines, which are harder to read,
+            it is a way to move around the document. Hidden below xl, where there is no
+            spare width to spend, and below three headings, where a list of two is not an
+            outline. */}
+        {headings.length >= 3 ? <Outline headings={headings} scroller={scroller} /> : null}
+        <div className="min-w-0 max-w-[48rem] flex-1">
+          <Markdown>{content}</Markdown>
+        </div>
       </div>
     );
   }
@@ -437,6 +452,129 @@ function FileBody({
     <pre className="mx-auto max-w-[80rem] overflow-x-auto whitespace-pre-wrap break-words p-5 font-mono text-[13px] leading-relaxed">
       {content}
     </pre>
+  );
+}
+
+/** One heading in a markdown file: its depth and its text, in document order. */
+type Heading = { depth: number; text: string };
+
+/**
+ * The headings of a markdown file, read from the source.
+ *
+ * Fenced code is skipped, which is the whole reason this is a loop and not one regex: a
+ * shell block with a `# comment` in it would otherwise become a chapter of the document.
+ * Inline markdown is stripped so "The **big** idea" reads as "The big idea".
+ */
+function outlineOf(markdown: string): Heading[] {
+  const found: Heading[] = [];
+  let fenced = false;
+  for (const line of markdown.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    const match = /^(#{1,4})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!match) continue;
+    const text = match[2]
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/[*_]([^*_]+)[*_]/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .trim();
+    if (text) found.push({ depth: match[1].length, text });
+  }
+  return found;
+}
+
+/**
+ * Where you are in the document, and how to get somewhere else in it.
+ *
+ * Scrolling is done by *position*, not by anchor ids. Ids would have to be generated on
+ * both sides — slugged from the source here and from the rendered children there — and the
+ * two disagree the moment a heading contains inline markdown or two headings share a name.
+ * Counting heading elements in the rendered body cannot drift: each heading line renders
+ * exactly one heading element, in the same order the source lists them.
+ *
+ * The active item is tracked on scroll, because an outline that does not know where you are
+ * is a table of contents, and the point of one of these is telling you where you got to.
+ */
+function Outline({
+  headings,
+  scroller,
+}: {
+  headings: Heading[];
+  scroller: RefObject<HTMLDivElement | null>;
+}) {
+  const [active, setActive] = useState(0);
+
+  useEffect(() => {
+    const box = scroller.current;
+    if (!box) return;
+    const onScroll = () => {
+      const marks = box.querySelectorAll("h1, h2, h3, h4");
+      const top = box.getBoundingClientRect().top;
+      let current = 0;
+      marks.forEach((mark, index) => {
+        // A heading counts as reached once its top passes a little below the viewport's
+        // top edge — not at exactly 0, or the heading you just scrolled to flickers
+        // between itself and the one above it.
+        if (mark.getBoundingClientRect().top - top < 80) current = index;
+      });
+      setActive(current);
+    };
+    onScroll();
+    box.addEventListener("scroll", onScroll, { passive: true });
+    return () => box.removeEventListener("scroll", onScroll);
+  }, [scroller, headings]);
+
+  const go = (index: number) => {
+    const box = scroller.current;
+    const mark = box?.querySelectorAll<HTMLElement>("h1, h2, h3, h4")[index];
+    if (!box || !mark) return;
+    // A plain scrollTop assignment, and deliberately no smooth scrolling of either kind.
+    //
+    // `scrollIntoView({behavior: "smooth"})` did nothing at all when I tried it — not
+    // instant, nothing. So I moved the animation to CSS instead, and that was worse: with
+    // `scroll-behavior: smooth` on the container, this assignment *also* routes through the
+    // same animation path and is swallowed too. Both were verified failing in a real
+    // browser, and either can be turned off under the reader's own motion settings. A
+    // jump-to-heading that silently does not jump is a broken feature; one that does not
+    // animate is a working feature that is slightly less pretty.
+    //
+    // offsetTop is measured from the positioned dialog root, so the body's own offset — the
+    // header's height — comes back off. The extra few pixels stop the heading sitting flush
+    // against the top edge.
+    box.scrollTop = mark.offsetTop - box.offsetTop - 12;
+  };
+
+  return (
+    <nav aria-label="Outline" className="sticky top-0 hidden w-52 shrink-0 self-start xl:block">
+      <p className="text-muted-foreground/50 mb-2 text-[10px] font-medium tracking-wide uppercase">
+        In this file
+      </p>
+      <ul className="border-border/50 space-y-0.5 border-s">
+        {headings.map((heading, index) => (
+          <li key={`${index}-${heading.text}`}>
+            <button
+              type="button"
+              onClick={() => go(index)}
+              className={cn(
+                "-ms-px block w-full border-s-2 py-0.5 pe-1 text-left text-[11.5px] leading-snug transition-colors",
+                index === active
+                  ? "border-kith text-foreground"
+                  : "text-muted-foreground/70 hover:text-foreground border-transparent",
+              )}
+              // Depth as indentation, so the shape of the document is visible at a glance
+              // rather than being a flat list of every heading in it.
+              style={{ paddingInlineStart: `${(heading.depth - 1) * 0.6 + 0.6}rem` }}
+            >
+              {heading.text}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 
