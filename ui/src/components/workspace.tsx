@@ -6,13 +6,14 @@ import { Thread } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/app-header";
 import { ControlPanel } from "@/components/control-panel";
+import { SettingsPage } from "@/components/settings/settings-page";
 import { InboxPanel } from "@/components/inbox-panel";
 import { MindPanel } from "@/components/mind-panel";
 import { useAutonomy } from "@/hooks/use-autonomy";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
 import { moodHue } from "@/lib/backend/mood";
-import { parseLocation, pathForHome, pathForTab, pathForTask } from "@/lib/router";
+import { parseLocation, pathForHome, pathForSettings, pathForTab, pathForTask } from "@/lib/router";
 import { createBackendAdapter, type ServerConfig } from "@/lib/backend";
 
 const MIND_MIN = 320;
@@ -97,9 +98,6 @@ export function Workspace({
           <div className="kith-ambient" style={{ ["--wash" as string]: wash }} />
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             <AppHeader
-              config={config}
-              serverDefaults={serverDefaults}
-              onSaveConfig={onSaveConfig}
               roaming={roaming}
               status={autonomy.status?.current ?? null}
               mood={mood}
@@ -111,6 +109,7 @@ export function Workspace({
               }}
               onOpenMind={() => setMindOpen((o) => !o)}
               onOpenPanel={() => navigate(pathForTab("overview"))}
+              onOpenSettings={() => navigate(pathForSettings())}
             />
             <div className="flex min-h-0 flex-1">
               {/* Chat window */}
@@ -130,11 +129,27 @@ export function Workspace({
                 </div>
               ) : null}
               {/* Mind window */}
-              {mindOpen ? <MindPanel autonomy={autonomy} width={mindWidth} onClose={() => setMindOpen(false)} /> : null}
+              {mindOpen ? (
+                <MindPanel
+                  autonomy={autonomy}
+                  width={mindWidth}
+                  onClose={() => setMindOpen(false)}
+                />
+              ) : null}
             </div>
           </div>
         </div>
         {inboxOpen ? <InboxPanel inbox={inbox} onClose={() => setInboxOpen(false)} /> : null}
+        {route.settingsTab ? (
+          <SettingsPage
+            tab={route.settingsTab}
+            config={config}
+            serverDefaults={serverDefaults}
+            onSelectTab={(t) => navigate(pathForSettings(t))}
+            onSaveConfig={onSaveConfig}
+            onClose={() => navigate(pathForHome())}
+          />
+        ) : null}
         {panelOpen ? (
           <ControlPanel
             tab={route.tab}

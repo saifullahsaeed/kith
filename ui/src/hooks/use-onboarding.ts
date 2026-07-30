@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 
+import { useConnectionProbe } from "@/hooks/use-connection-probe";
 import {
   completeSetup,
   fetchSetup,
-  probeConnection,
   saveSearch,
   type ModelOption,
-  type ProbeOutcome,
   type ProviderCard,
   type ProviderKind,
   type ReadinessCheck,
@@ -21,29 +20,13 @@ export type OnboardingStep = "choose" | "connect" | "model" | "search" | "ready"
 
 const ORDER: OnboardingStep[] = ["choose", "connect", "model", "search", "ready"];
 
-/** Long enough that probing doesn't fire on every keystroke of a pasted key,
- *  short enough that it feels like a reaction rather than a wait. */
-const PROBE_DEBOUNCE_MS = 450;
-
-const IDLE: ProbeOutcome = {
-  reachable: false,
-  usable: false,
-  detail: "",
-  models: [],
-  suggested: [],
-  keyState: "missing",
-  keyDetail: "",
-};
-
 /**
- * The whole flow's state, kept out of the components so they stay about layout.
+ * The flow's state machine, kept out of the components so they stay about layout.
  *
- * Two things here are less obvious than they look. Probing is debounced *and*
- * cancellable: a key gets pasted, edited, re-pasted, and each in-flight request must
- * be abandoned or a stale reply can overwrite a fresh one. And the credential is
- * tracked apart from reachability, because a provider with a public catalogue answers
- * before there is any key to check — the model list can be shown while "Continue"
- * stays disabled.
+ * The credential half of this lives in `useConnectionProbe`, shared with Settings —
+ * editing a key and being told whether it works is the same job in both places. What
+ * is here is only what makes this a *wizard*: which step, what has been chosen so far,
+ * and the two writes (connection, then search) that have to happen in that order.
  */
 export function useOnboarding(
   providers: ProviderCard[],
@@ -52,12 +35,7 @@ export function useOnboarding(
 ) {
   const [step, setStep] = useState<OnboardingStep>("choose");
   const [kind, setKind] = useState<ProviderKind | null>(null);
-  const [baseUrl, setBaseUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
-
-  const [probing, setProbing] = useState(false);
-  const [probe, setProbe] = useState<ProbeOutcome>(IDLE);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -69,58 +47,21 @@ export function useOnboarding(
   const [searchOffer, setSearchOffer] = useState<SearchOption[]>(searchOptions);
 
   const provider = providers.find((entry) => entry.kind === kind) ?? null;
-  const inFlight = useRef<AbortController | null>(null);
+  // Held back until the connect step: probing while someone is still looking at the
+  // provider cards would fire a request for a provider they haven't chosen.
+  const connection = useConnectionProbe({ provider, enabled: step === "connect" });
+  const { baseUrl, apiKey, probe, probing } = connection;
 
-  // Probe whenever the credentials change and we're on the step that needs them.
-  // The effect owns cancellation, so an abandoned attempt can never land late.
-  useEffect(() => {
-    if (step !== "connect" || !kind || !provider) return;
-
-    const ready = provider.needsBaseUrl ? baseUrl.trim().length > 0 : true;
-    const hasKey = apiKey.trim().length > 0;
-    // Nothing to ask about yet: an endpoint we don't have, or a key-only provider
-    // with neither a key nor a public catalogue.
-    if (!ready || (!hasKey && !provider.listsWithoutKey)) {
-      setProbe(IDLE);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      inFlight.current?.abort();
-      const controller = new AbortController();
-      inFlight.current = controller;
-      setProbing(true);
+  const choose = useCallback(
+    (next: ProviderKind) => {
+      setKind(next);
+      setModel("");
       setError("");
-
-      probeConnection(
-        { kind, baseUrl: baseUrl.trim() || undefined, apiKey: apiKey.trim() || undefined },
-        controller.signal,
-      )
-        .then(setProbe)
-        .catch((err: unknown) => {
-          if (controller.signal.aborted) return;
-          setError(err instanceof Error ? err.message : String(err));
-          setProbe(IDLE);
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setProbing(false);
-        });
-    }, PROBE_DEBOUNCE_MS);
-
-    return () => clearTimeout(timer);
-  }, [step, kind, provider, baseUrl, apiKey]);
-
-  useEffect(() => () => inFlight.current?.abort(), []);
-
-  const choose = useCallback((next: ProviderKind) => {
-    setKind(next);
-    setBaseUrl("");
-    setApiKey("");
-    setModel("");
-    setProbe(IDLE);
-    setError("");
-    setStep("connect");
-  }, []);
+      connection.reset();
+      setStep("connect");
+    },
+    [connection],
+  );
 
   const back = useCallback(() => {
     setError("");
@@ -209,7 +150,7 @@ export function useOnboarding(
     probe,
     probing,
     saving,
-    error,
+    error: error || connection.error,
     warnings,
     checks,
     search,
@@ -220,8 +161,8 @@ export function useOnboarding(
     setSearxUrl,
     setSearchProbe,
     saveConnection,
-    setBaseUrl,
-    setApiKey,
+    setBaseUrl: connection.setBaseUrl,
+    setApiKey: connection.setApiKey,
     choose,
     chooseModel,
     toModels,

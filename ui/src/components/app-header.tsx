@@ -1,18 +1,13 @@
 import { useState } from "react";
-import { Bell, Brain, LayoutDashboard, Moon, Sun } from "lucide-react";
+import { Bell, Brain, LayoutDashboard, Moon, Settings2, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PresenceOrb } from "@/components/presence";
-import { SettingsDialog } from "@/components/settings-dialog";
 import { moodHue, type Mood } from "@/lib/backend/mood";
-import type { ServerConfig } from "@/lib/backend";
 
 /** The presence bar: Kith as a living thing (orb + mood + what he's doing right
  * now), then his inbox, mind, panel, and settings. */
 export function AppHeader({
-  config,
-  serverDefaults,
-  onSaveConfig,
   roaming,
   status,
   mood,
@@ -21,10 +16,8 @@ export function AppHeader({
   onOpenInbox,
   onOpenMind,
   onOpenPanel,
+  onOpenSettings,
 }: {
-  config: ServerConfig;
-  serverDefaults: ServerConfig;
-  onSaveConfig: (config: ServerConfig) => void;
   roaming: boolean;
   status: string | null;
   mood: Mood | null;
@@ -33,6 +26,7 @@ export function AppHeader({
   onOpenInbox: () => void;
   onOpenMind: () => void;
   onOpenPanel: () => void;
+  onOpenSettings: () => void;
 }) {
   const doing = cleanStatus(status);
   const hue = moodHue(mood?.label);
@@ -59,7 +53,10 @@ export function AppHeader({
         <span className="font-medium tracking-tight">Kith</span>
         <span className="truncate font-mono text-[11px] tracking-wide">
           {mood?.label ? (
-            <span style={{ color: roaming ? undefined : hue }} className={roaming ? "text-muted-foreground/80" : ""}>
+            <span
+              style={{ color: roaming ? undefined : hue }}
+              className={roaming ? "text-muted-foreground/80" : ""}
+            >
               {mood.label}
             </span>
           ) : null}
@@ -120,7 +117,15 @@ export function AppHeader({
       >
         {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
       </Button>
-      <SettingsDialog config={config} serverDefaults={serverDefaults} onSave={onSaveConfig} />
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="text-muted-foreground hover:text-foreground"
+        onClick={onOpenSettings}
+        aria-label="Settings"
+      >
+        <Settings2 className="size-4" />
+      </Button>
     </header>
   );
 }

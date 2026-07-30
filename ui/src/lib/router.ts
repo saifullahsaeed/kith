@@ -6,14 +6,26 @@
  *   /                          → home (chat + mind)
  *   /control-panel/<tab>       → the panel open on a tab (e.g. /control-panel/memories)
  *   /tasks/<id>                → the panel open on that task's detail
+ *   /settings/<tab>            → settings open on a tab (model | tools | chat)
  */
 
 // The panel's internal tab values. The URL uses these verbatim except for the
 // one whose nav label ("Memories") differs from its value ("memory").
 const TABS = [
-  "overview", "lifetime", "memory", "notes", "journal", "projects",
-  "curiosities", "reminders", "schedules", "messages", "people",
-  "sources", "workspace", "tools",
+  "overview",
+  "lifetime",
+  "memory",
+  "notes",
+  "journal",
+  "projects",
+  "curiosities",
+  "reminders",
+  "schedules",
+  "messages",
+  "people",
+  "sources",
+  "workspace",
+  "tools",
 ] as const;
 
 export type PanelTab = (typeof TABS)[number];
@@ -30,21 +42,42 @@ function slugTab(slug: string): PanelTab | null {
   return (TABS as readonly string[]).includes(slug) ? (slug as PanelTab) : null;
 }
 
-export type Route = { panelOpen: boolean; tab: PanelTab; taskId: number | null };
+/** Settings' tabs. Model and Tools are separate because they are separate decisions
+ *  with separate costs — per token against per search — and each saves on its own. */
+const SETTINGS_TABS = ["model", "tools", "chat"] as const;
+
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+
+export type Route = {
+  panelOpen: boolean;
+  tab: PanelTab;
+  taskId: number | null;
+  settingsTab: SettingsTab | null;
+};
 
 /** Read the current URL into the app's view state. */
+const HOME: Route = { panelOpen: false, tab: "overview", taskId: null, settingsTab: null };
+
 export function parseLocation(pathname: string = window.location.pathname): Route {
+  if (pathname.startsWith("/settings")) {
+    const slug = pathname.split("/")[2] ?? "";
+    const tab = (SETTINGS_TABS as readonly string[]).includes(slug)
+      ? (slug as SettingsTab)
+      : "model";
+    return { ...HOME, settingsTab: tab };
+  }
   if (pathname.startsWith("/tasks/")) {
     const id = Number.parseInt(pathname.split("/")[2] ?? "", 10);
-    if (Number.isFinite(id)) return { panelOpen: true, tab: "projects", taskId: id };
+    if (Number.isFinite(id)) return { ...HOME, panelOpen: true, tab: "projects", taskId: id };
   }
   if (pathname.startsWith("/control-panel")) {
     const tab = slugTab(pathname.split("/")[2] ?? "") ?? "overview";
-    return { panelOpen: true, tab, taskId: null };
+    return { ...HOME, panelOpen: true, tab };
   }
-  return { panelOpen: false, tab: "overview", taskId: null };
+  return HOME;
 }
 
 export const pathForHome = () => "/";
 export const pathForTab = (tab: PanelTab) => `/control-panel/${tabSlug(tab)}`;
 export const pathForTask = (id: number) => `/tasks/${id}`;
+export const pathForSettings = (tab: SettingsTab = "model") => `/settings/${tab}`;
