@@ -44,6 +44,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
+import { ItemMenu } from "@/components/ui/item-menu";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -205,6 +206,7 @@ export function ControlPanel({
   const [live, setLive] = useState(true);
   // Work drills down: projects list → one project → one task.
   const [openProject, setOpenProject] = useState<ProjectRef | null>(null);
+  const searchBox = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -262,6 +264,52 @@ export function ControlPanel({
     onSelectTab(t); // drives the URL; clears any open task
   };
 
+  /* Keyboard, at the panel level.
+   *
+   * A window this dense with lists needs a way in from the keyboard, and it had none:
+   * search could only be reached by pointing at it, and Escape did nothing. Bound on
+   * the panel rather than globally so it cannot fire while the chat composer has focus
+   * — the panel is an overlay, so while it's up these are the only keys that matter.
+   *
+   * ⌘K rather than ⌘F: ⌘F is the browser's own find, and taking it from someone who
+   * wanted to search the page they're looking at would be worse than not binding it. */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const typing =
+        event.target instanceof HTMLElement &&
+        (event.target.isContentEditable || ["INPUT", "TEXTAREA"].includes(event.target.tagName));
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchBox.current?.focus();
+        searchBox.current?.select();
+        return;
+      }
+      if (event.key === "Escape") {
+        // An open context menu owns Escape. Radix closes it without stopping the event
+        // reaching here, so without this check right-clicking a card and pressing
+        // Escape closed the entire panel — which is what happened the first time I
+        // tried it.
+        if (document.querySelector('[role="menu"], [role="dialog"]')) return;
+        // Then a search: closing the panel because someone wanted to undo a filter
+        // would lose their place.
+        if (query) {
+          setQuery("");
+          return;
+        }
+        if (!typing) onClose();
+        return;
+      }
+      // A bare "/" is the other search convention, but only when not already typing.
+      if (event.key === "/" && !typing) {
+        event.preventDefault();
+        searchBox.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [query, onClose]);
+
   const counts = snap?.counts ?? {};
   const props = { snap, query, remove, relevel, create, update };
 
@@ -285,11 +333,16 @@ export function ControlPanel({
         <div className="relative ml-3 w-56 md:w-72">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
+            ref={searchBox}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search his mind…"
-            className={`${INPUT} w-full pl-9`}
+            className={`${INPUT} w-full pr-9 pl-9`}
+            aria-label="Search his mind"
           />
+          <kbd className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 rounded border border-border/60 px-1 font-mono text-[10px] text-muted-foreground/50">
+            ⌘K
+          </kbd>
         </div>
         <div className="flex-1" />
         <Button
@@ -961,40 +1014,55 @@ function MemoryCard({
 } & Pick<Handlers, "remove" | "relevel" | "update">) {
   const core = m.level === "core";
   return (
-    <div
-      className={cn(
-        "group relative flex flex-col rounded-xl border bg-card/50 p-4 shadow-sm transition-all hover:shadow-md",
-        core ? "border-violet-500/30 bg-violet-500/[0.04]" : "border-border/70 hover:border-border",
-      )}
+    <ItemMenu
+      title={core ? "Front of mind" : "Memory"}
+      copy={m.content}
+      actions={[
+        {
+          label: core ? "Move back to recall" : "Move to front of mind",
+          icon: <Pin className="size-3.5" />,
+          onSelect: () => relevel(m.id, core ? "recall" : "core"),
+        },
+      ]}
+      onDelete={() => remove("memory", m.id, m.content)}
     >
-      <div className="flex-1 text-sm leading-relaxed">
-        <EditableText value={m.content} onSave={(v) => update("memory", m.id, { content: v })} />
+      <div
+        className={cn(
+          "group relative flex flex-col rounded-xl border bg-card/50 p-4 shadow-sm transition-all hover:shadow-md",
+          core
+            ? "border-violet-500/30 bg-violet-500/[0.04]"
+            : "border-border/70 hover:border-border",
+        )}
+      >
+        <div className="flex-1 text-sm leading-relaxed">
+          <EditableText value={m.content} onSave={(v) => update("memory", m.id, { content: v })} />
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          {m.importance > 0 ? (
+            <Badge className="border-violet-500/25 bg-violet-500/10 text-violet-500">
+              importance {m.importance}
+            </Badge>
+          ) : null}
+          {m.tags.map((t) => (
+            <Badge key={t}>#{t}</Badge>
+          ))}
+          <span className="ml-auto tabular-nums">{when(m.created_at)}</span>
+        </div>
+        <div className="mt-3 flex items-center gap-1 border-t border-border/60 pt-3">
+          <Button
+            variant="ghost"
+            size="xs"
+            className={core ? "text-violet-500" : "text-muted-foreground"}
+            onClick={() => relevel(m.id, core ? "recall" : "core")}
+          >
+            <Pin className="size-3" />
+            {core ? "Front of mind" : "Move to front"}
+          </Button>
+          <div className="flex-1" />
+          <DeleteButton onClick={() => remove("memory", m.id, m.content)} />
+        </div>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        {m.importance > 0 ? (
-          <Badge className="border-violet-500/25 bg-violet-500/10 text-violet-500">
-            importance {m.importance}
-          </Badge>
-        ) : null}
-        {m.tags.map((t) => (
-          <Badge key={t}>#{t}</Badge>
-        ))}
-        <span className="ml-auto tabular-nums">{when(m.created_at)}</span>
-      </div>
-      <div className="mt-3 flex items-center gap-1 border-t border-border/60 pt-3">
-        <Button
-          variant="ghost"
-          size="xs"
-          className={core ? "text-violet-500" : "text-muted-foreground"}
-          onClick={() => relevel(m.id, core ? "recall" : "core")}
-        >
-          <Pin className="size-3" />
-          {core ? "Front of mind" : "Move to front"}
-        </Button>
-        <div className="flex-1" />
-        <DeleteButton onClick={() => remove("memory", m.id, m.content)} />
-      </div>
-    </div>
+    </ItemMenu>
   );
 }
 
@@ -1040,30 +1108,37 @@ function Notes({
       ) : (
         <div className="gap-4 [column-fill:_balance] sm:columns-2 lg:columns-3">
           {items.map((n) => (
-            <div
+            <ItemMenu
               key={n.id}
-              className="group mb-4 break-inside-avoid rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-amber-500/30 hover:shadow-md"
+              title={n.title}
+              copy={`${n.title}\n\n${n.body}`}
+              onDelete={() => remove("note", n.id, n.title)}
             >
-              <div className="mb-1 h-1 w-8 rounded-full bg-amber-500/40" />
-              <div className="text-sm font-semibold leading-snug">
-                <EditableText value={n.title} onSave={(v) => update("note", n.id, { title: v })} />
+              <div className="group mb-4 break-inside-avoid rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-amber-500/30 hover:shadow-md">
+                <div className="mb-1 h-1 w-8 rounded-full bg-amber-500/40" />
+                <div className="text-sm font-semibold leading-snug">
+                  <EditableText
+                    value={n.title}
+                    onSave={(v) => update("note", n.id, { title: v })}
+                  />
+                </div>
+                <div className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  {/* He writes his notes in Markdown — show them that way, edit the raw text. */}
+                  <EditableText
+                    value={n.body}
+                    onSave={(v) => update("note", n.id, { body: v })}
+                    multiline
+                    placeholder="(empty — click to write)"
+                    render={(v) => <Markdown>{v}</Markdown>}
+                  />
+                </div>
+                <div className="mt-3 flex items-center gap-2 border-t border-border/50 pt-2.5 text-[11px] text-muted-foreground">
+                  <span className="tabular-nums">{when(n.updated_at)}</span>
+                  <div className="flex-1" />
+                  <DeleteButton onClick={() => remove("note", n.id, n.title)} />
+                </div>
               </div>
-              <div className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                {/* He writes his notes in Markdown — show them that way, edit the raw text. */}
-                <EditableText
-                  value={n.body}
-                  onSave={(v) => update("note", n.id, { body: v })}
-                  multiline
-                  placeholder="(empty — click to write)"
-                  render={(v) => <Markdown>{v}</Markdown>}
-                />
-              </div>
-              <div className="mt-3 flex items-center gap-2 border-t border-border/50 pt-2.5 text-[11px] text-muted-foreground">
-                <span className="tabular-nums">{when(n.updated_at)}</span>
-                <div className="flex-1" />
-                <DeleteButton onClick={() => remove("note", n.id, n.title)} />
-              </div>
-            </div>
+            </ItemMenu>
           ))}
         </div>
       )}
@@ -1101,19 +1176,26 @@ function Journal({
               <div className="mb-3 text-xs font-semibold text-muted-foreground">{day}</div>
               <div className="space-y-3">
                 {entries.map((j) => (
-                  <div
+                  <ItemMenu
                     key={j.id}
-                    className="group relative rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:shadow-md"
+                    title={"Journal entry"}
+                    copy={j.entry}
+                    onDelete={() => remove("journal", j.id, j.entry)}
                   >
-                    <span className="absolute top-4 left-0 h-8 w-0.5 -translate-x-px rounded-full bg-sky-500/50" />
-                    {/* His journal is Markdown too — headings, lists and links render. */}
-                    <Markdown>{j.entry}</Markdown>
-                    <div className="mt-2.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span className="tabular-nums">{time(j.created_at)}</span>
-                      <div className="flex-1" />
-                      <DeleteButton onClick={() => remove("journal", j.id, j.entry)} />
+                    <div
+                      key={j.id}
+                      className="group relative rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:shadow-md"
+                    >
+                      <span className="absolute top-4 left-0 h-8 w-0.5 -translate-x-px rounded-full bg-sky-500/50" />
+                      {/* His journal is Markdown too — headings, lists and links render. */}
+                      <Markdown>{j.entry}</Markdown>
+                      <div className="mt-2.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span className="tabular-nums">{time(j.created_at)}</span>
+                        <div className="flex-1" />
+                        <DeleteButton onClick={() => remove("journal", j.id, j.entry)} />
+                      </div>
                     </div>
-                  </div>
+                  </ItemMenu>
                 ))}
               </div>
             </div>
@@ -1166,45 +1248,49 @@ function Curiosities({
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {items.map((c) => (
-            <div
+            <ItemMenu
               key={c.id}
-              className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md"
+              title={c.topic}
+              copy={`${c.topic}\n\n${c.note}`}
+              onDelete={() => remove("curiosity", c.id, c.topic)}
             >
-              <div className="flex items-start gap-2.5">
-                <span
-                  className={cn(
-                    "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                    CHIP.teal,
-                  )}
-                >
-                  <Sparkles className="size-4" />
-                </span>
-                <span className="min-w-0 flex-1 pt-1 text-sm font-semibold leading-snug">
-                  {c.topic}
-                </span>
-                <DeleteButton onClick={() => remove("curiosity", c.id, c.topic)} />
+              <div className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md">
+                <div className="flex items-start gap-2.5">
+                  <span
+                    className={cn(
+                      "flex size-8 shrink-0 items-center justify-center rounded-lg",
+                      CHIP.teal,
+                    )}
+                  >
+                    <Sparkles className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1 pt-1 text-sm font-semibold leading-snug">
+                    {c.topic}
+                  </span>
+                  <DeleteButton onClick={() => remove("curiosity", c.id, c.topic)} />
+                </div>
+                <div className="mt-2 pl-[42px] text-sm leading-relaxed text-muted-foreground">
+                  <EditableText
+                    value={c.note}
+                    onSave={(v) => update("curiosity", c.id, { note: v })}
+                    multiline
+                    placeholder="(no notes yet)"
+                  />
+                </div>
+                <div className="mt-3 flex items-center gap-2 pl-[42px]">
+                  <Dropdown
+                    value={c.status}
+                    onChange={(v) => update("curiosity", c.id, { status: v })}
+                    options={CURIOSITY_STATUSES}
+                    className="w-32"
+                    ariaLabel="Curiosity status"
+                  />
+                  <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+                    {when(c.updated_at)}
+                  </span>
+                </div>
               </div>
-              <div className="mt-2 pl-[42px] text-sm leading-relaxed text-muted-foreground">
-                <EditableText
-                  value={c.note}
-                  onSave={(v) => update("curiosity", c.id, { note: v })}
-                  multiline
-                  placeholder="(no notes yet)"
-                />
-              </div>
-              <div className="mt-3 flex items-center gap-2 pl-[42px]">
-                <Dropdown
-                  value={c.status}
-                  onChange={(v) => update("curiosity", c.id, { status: v })}
-                  options={CURIOSITY_STATUSES}
-                  className="w-32"
-                  ariaLabel="Curiosity status"
-                />
-                <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
-                  {when(c.updated_at)}
-                </span>
-              </div>
-            </div>
+            </ItemMenu>
           ))}
         </div>
       )}
@@ -1918,26 +2004,33 @@ function Reminders({
               <SectionLabel hint={`${pending.length}`}>Upcoming</SectionLabel>
               <div className="space-y-2">
                 {pending.map((r) => (
-                  <div
+                  <ItemMenu
                     key={r.id}
-                    className="group flex items-center gap-3 rounded-xl border border-orange-500/25 bg-orange-500/[0.05] p-4 shadow-sm"
+                    title={"Reminder"}
+                    copy={r.note}
+                    onDelete={() => remove("reminder", r.id, r.note)}
                   >
-                    <span
-                      className={cn(
-                        "flex size-9 shrink-0 items-center justify-center rounded-xl",
-                        CHIP.orange,
-                      )}
+                    <div
+                      key={r.id}
+                      className="group flex items-center gap-3 rounded-xl border border-orange-500/25 bg-orange-500/[0.05] p-4 shadow-sm"
                     >
-                      <BellRing className="size-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="break-words text-sm">{r.note}</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {r.fires || "scheduled"} · {when(r.fire_at)}
+                      <span
+                        className={cn(
+                          "flex size-9 shrink-0 items-center justify-center rounded-xl",
+                          CHIP.orange,
+                        )}
+                      >
+                        <BellRing className="size-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="break-words text-sm">{r.note}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {r.fires || "scheduled"} · {when(r.fire_at)}
+                        </div>
                       </div>
+                      <DeleteButton onClick={() => remove("reminder", r.id, r.note)} />
                     </div>
-                    <DeleteButton onClick={() => remove("reminder", r.id, r.note)} />
-                  </div>
+                  </ItemMenu>
                 ))}
               </div>
             </div>
@@ -2126,35 +2219,46 @@ function Messages({
       ) : (
         <div className="mx-auto max-w-2xl space-y-4">
           {items.map((m) => (
-            <div key={m.id} className="group flex items-start gap-3">
-              <span
-                className={cn(
-                  "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
-                  m.read ? "bg-muted/60 text-muted-foreground" : CHIP.pink,
-                )}
-              >
-                <MessageCircle className="size-4" />
-              </span>
-              <div
-                className={cn(
-                  "relative min-w-0 flex-1 rounded-xl rounded-tl-sm border p-4 shadow-sm",
-                  m.read ? "border-border/70 bg-card/50" : "border-pink-500/25 bg-pink-500/[0.05]",
-                )}
-              >
-                <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">{m.body}</p>
-                <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span className="tabular-nums">{when(m.created_at)}</span>
-                  {m.read ? null : (
-                    <span className="inline-flex items-center gap-1 font-medium text-pink-500">
-                      <span className="size-1.5 rounded-full bg-pink-500" />
-                      unread
-                    </span>
+            <ItemMenu
+              key={m.id}
+              title={"Message"}
+              copy={m.body}
+              onDelete={() => remove("message", m.id, m.body)}
+            >
+              <div className="group flex items-start gap-3">
+                <span
+                  className={cn(
+                    "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
+                    m.read ? "bg-muted/60 text-muted-foreground" : CHIP.pink,
                   )}
-                  <div className="flex-1" />
-                  <DeleteButton onClick={() => remove("message", m.id, m.body)} />
+                >
+                  <MessageCircle className="size-4" />
+                </span>
+                <div
+                  className={cn(
+                    "relative min-w-0 flex-1 rounded-xl rounded-tl-sm border p-4 shadow-sm",
+                    m.read
+                      ? "border-border/70 bg-card/50"
+                      : "border-pink-500/25 bg-pink-500/[0.05]",
+                  )}
+                >
+                  <p className="break-words whitespace-pre-wrap text-sm leading-relaxed">
+                    {m.body}
+                  </p>
+                  <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span className="tabular-nums">{when(m.created_at)}</span>
+                    {m.read ? null : (
+                      <span className="inline-flex items-center gap-1 font-medium text-pink-500">
+                        <span className="size-1.5 rounded-full bg-pink-500" />
+                        unread
+                      </span>
+                    )}
+                    <div className="flex-1" />
+                    <DeleteButton onClick={() => remove("message", m.id, m.body)} />
+                  </div>
                 </div>
               </div>
-            </div>
+            </ItemMenu>
           ))}
         </div>
       )}
@@ -2187,34 +2291,38 @@ function People({
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">
           {items.map((p) => (
-            <div
+            <ItemMenu
               key={p.id}
-              className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md"
+              title={p.name}
+              copy={`${p.name} — ${p.relationship}\n\n${p.profile}`}
+              onDelete={() => remove("person", p.id, p.name)}
             >
-              <div className="flex items-center gap-3">
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-teal-500/12 text-sm font-semibold text-teal-500">
-                  {initials(p.name)}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold">{p.name}</div>
-                  {p.relationship ? (
-                    <div className="truncate text-xs text-muted-foreground">{p.relationship}</div>
-                  ) : null}
+              <div className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md">
+                <div className="flex items-center gap-3">
+                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-teal-500/12 text-sm font-semibold text-teal-500">
+                    {initials(p.name)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold">{p.name}</div>
+                    {p.relationship ? (
+                      <div className="truncate text-xs text-muted-foreground">{p.relationship}</div>
+                    ) : null}
+                  </div>
+                  <DeleteButton onClick={() => remove("person", p.id, p.name)} />
                 </div>
-                <DeleteButton onClick={() => remove("person", p.id, p.name)} />
+                <div className="mt-3 border-t border-border/60 pt-3 text-sm leading-relaxed text-muted-foreground">
+                  <EditableText
+                    value={p.profile}
+                    onSave={(v) => update("person", p.id, { profile: v })}
+                    multiline
+                    placeholder="(nothing noted yet)"
+                  />
+                </div>
+                <span className="mt-2 text-[11px] tabular-nums text-muted-foreground">
+                  {when(p.updated_at)}
+                </span>
               </div>
-              <div className="mt-3 border-t border-border/60 pt-3 text-sm leading-relaxed text-muted-foreground">
-                <EditableText
-                  value={p.profile}
-                  onSave={(v) => update("person", p.id, { profile: v })}
-                  multiline
-                  placeholder="(nothing noted yet)"
-                />
-              </div>
-              <span className="mt-2 text-[11px] tabular-nums text-muted-foreground">
-                {when(p.updated_at)}
-              </span>
-            </div>
+            </ItemMenu>
           ))}
         </div>
       )}
