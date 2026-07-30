@@ -83,6 +83,9 @@ class Handoff:
     #: False for anything that would execute. Revealing it is still offered.
     openable: bool
     note: str = ""
+    #: What the machine would open it with, for the button's label. None when we
+    #: can't tell, in which case the generic wording is used.
+    opens_with: str | None = None
 
     def public(self) -> dict:
         return {
@@ -92,6 +95,7 @@ class Handoff:
             "size": self.size,
             "openable": self.openable,
             "note": self.note,
+            "opensWith": self.opens_with,
         }
 
 

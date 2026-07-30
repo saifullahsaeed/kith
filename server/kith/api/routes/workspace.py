@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import jsonify, request
 
 from kith.api.blueprint import api
-from kith.infra import sandbox
+from kith.infra import default_app, sandbox
 from kith.services import handoff
 
 
@@ -84,3 +84,20 @@ def workspace_open():
     except handoff.HandoffError as refused:
         return jsonify({"error": str(refused)}), 400
     return jsonify({"ok": True})
+
+
+@api.get("/workspace/opens-with")
+@api.doc(
+    summary="Which application would open this file",
+    description=(
+        "The name of the machine's handler for a file's type — 'Microsoft Excel', "
+        "'Preview' — so a button can say what it will do. Resolved from the extension, "
+        "so nothing is copied out of the sandbox to answer it. Null when unknown, or "
+        "on a platform where this can't be determined."
+    ),
+)
+def workspace_opens_with():
+    name = request.args.get("path") or ""
+    if not name:
+        return jsonify({"error": "path required"}), 400
+    return jsonify({"opensWith": default_app.for_filename(name)})

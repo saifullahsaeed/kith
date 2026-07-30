@@ -14,6 +14,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FileBox,
   FileCode2,
   FileText,
   FolderOpen,
@@ -21,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
@@ -105,6 +107,97 @@ function classify(name: string): Kind {
   const byExt = BY_EXT[ext];
   if (byExt) return { type: "code", lang: byExt.id, label: byExt.label };
   return { type: "plain", label: ext ? ext.toUpperCase() : "Text" };
+}
+
+/** The server says a file isn't text when it can't be decoded — which for a workbook
+ *  or an image is the normal case, not a failure. */
+function looksBinary(error: string): boolean {
+  return /binary file/i.test(error);
+}
+
+/**
+ * What to show instead of a text body for a file this window can't render.
+ *
+ * The whole point of the viewer is to see the work, and for a spreadsheet the honest
+ * answer is "not here — in the app you already use for spreadsheets". So this is a
+ * real invitation with the application named, rather than a red line of prose next to
+ * an icon nobody would think to press.
+ */
+function NeedsAnApp({
+  name,
+  onOpenOnHost,
+}: {
+  name: string;
+  onOpenOnHost?: (reveal: boolean) => Promise<unknown>;
+}) {
+  const [app, setApp] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"open" | "reveal" | null>(null);
+  const [failed, setFailed] = useState("");
+
+  // Asked by extension, so nothing is copied out of the sandbox just to label a button.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/workspace/opens-with?path=${encodeURIComponent(name)}`)
+      .then((response) => response.json())
+      .then((body: { opensWith?: string | null }) => {
+        if (!cancelled) setApp(body.opensWith ?? null);
+      })
+      .catch(() => {
+        /* the generic label is a fine fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  const run = (reveal: boolean) => {
+    if (!onOpenOnHost) return;
+    setBusy(reveal ? "reveal" : "open");
+    setFailed("");
+    onOpenOnHost(reveal)
+      .catch((err: unknown) => setFailed(err instanceof Error ? err.message : String(err)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center">
+      <span className="mb-2 flex size-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+        <FileBox className="size-5" />
+      </span>
+      <p className="text-sm font-medium">This one needs its own application</p>
+      <p className="text-muted-foreground max-w-sm text-xs leading-relaxed">
+        {app
+          ? `It's not text, so there's nothing to show here. ${app} is what this machine opens it with.`
+          : "It's not text, so there's nothing to show here. It'll open in whatever you normally use for this kind of file."}
+      </p>
+
+      {onOpenOnHost ? (
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <Button onClick={() => run(false)} disabled={busy !== null}>
+            {busy === "open" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <ExternalLink className="size-4" />
+            )}
+            {app ? `Open in ${app}` : "Open in another app"}
+          </Button>
+          <Button variant="outline" onClick={() => run(true)} disabled={busy !== null}>
+            {busy === "reveal" ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <FolderOpen className="size-4" />
+            )}
+            Show in folder
+          </Button>
+        </div>
+      ) : null}
+
+      {failed ? <p className="text-destructive mt-3 max-w-sm text-xs">{failed}</p> : null}
+      <p className="text-muted-foreground/60 mt-3 text-[11px]">
+        A copy is placed in your Kith files folder first.
+      </p>
+    </div>
+  );
 }
 
 /** Getting the file out of the sandbox and into an app you already have.
@@ -272,7 +365,11 @@ export function FilePreviewDialog({
 
         {/* body */}
         <div className="min-h-0 flex-1 overflow-auto bg-background">
-          {error ? (
+          {error && looksBinary(error) ? (
+            // Not an error — an xlsx simply isn't text, and saying so in red while
+            // hiding the useful action in a 16px icon was the wrong way round.
+            <NeedsAnApp name={base} onOpenOnHost={onOpenOnHost} />
+          ) : error ? (
             <p className="p-5 text-sm text-destructive">{error}</p>
           ) : content == null ? (
             <p className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
