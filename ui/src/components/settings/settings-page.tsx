@@ -144,7 +144,12 @@ export function SettingsPage({
                 onSaved={load}
               />
             ) : (
-              <ChatTab config={config} serverDefaults={serverDefaults} onSave={onSaveConfig} />
+              <ChatTab
+                config={config}
+                connection={snapshot.connection}
+                serverDefaults={serverDefaults}
+                onSave={onSaveConfig}
+              />
             )}
           </div>
         </div>
