@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   AssistantRuntimeProvider,
+  SimpleImageAttachmentAdapter,
   useLocalRuntime,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
@@ -67,7 +68,18 @@ export function Workspace({
       }),
     [],
   );
-  const runtime = useLocalRuntime(adapter, { initialMessages: resumed });
+  // The attach button exists only when the provider says the model takes images. Offering
+  // one that silently drops the image, or 400s the turn, is worse than not offering it —
+  // and when it is absent he still has the whole computer, which is the better answer for
+  // a spreadsheet anyway.
+  const attachments = useMemo(
+    () => (config.capabilities?.images ? new SimpleImageAttachmentAdapter() : undefined),
+    [config.capabilities?.images],
+  );
+  const runtime = useLocalRuntime(adapter, {
+    initialMessages: resumed,
+    ...(attachments ? { adapters: { attachments } } : {}),
+  });
 
   const openConversation = useCallback(async (id: string) => {
     const detail = await fetchConversation(id).catch(() => null);

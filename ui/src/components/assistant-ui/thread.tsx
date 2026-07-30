@@ -1,6 +1,6 @@
 "use client";
 
-import { UserMessageAttachments } from "@/components/assistant-ui/attachment";
+import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
@@ -36,6 +36,7 @@ import {
   ThreadPrimitive,
   type ToolCallMessagePartComponent,
   useAuiState,
+  useComposerRuntime,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
@@ -46,6 +47,7 @@ import {
   CopyIcon,
   DownloadIcon,
   MicIcon,
+  Paperclip,
   MoreHorizontalIcon,
   PencilIcon,
   RefreshCwIcon,
@@ -54,6 +56,7 @@ import {
 import {
   createContext,
   useContext,
+  useRef,
   type ComponentType,
   type FC,
   type PropsWithChildren,
@@ -72,12 +75,8 @@ export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
-  ToolGroup?:
-    | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
-    | undefined;
-  ReasoningGroup?:
-    | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
-    | undefined;
+  ToolGroup?: ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined;
+  ReasoningGroup?: ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined;
 };
 
 export type ThreadProps = {
@@ -86,14 +85,12 @@ export type ThreadProps = {
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 
-const ThreadComponentsContext =
-  createContext<ThreadComponents>(EMPTY_COMPONENTS);
+const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
 const isNewChatView = (s: AssistantState) =>
-  s.thread.messages.length === 0 &&
-  (!s.thread.isLoading || s.threads.isLoading);
+  s.thread.messages.length === 0 && (!s.thread.isLoading || s.threads.isLoading);
 
 export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS }) => {
   const isEmpty = useAuiState(isNewChatView);
@@ -134,13 +131,8 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
             <Welcome />
           </AuiIf>
 
-          <div
-            data-slot="aui_message-group"
-            className="mb-14 flex flex-col gap-y-6 empty:hidden"
-          >
-            <ThreadPrimitive.Messages>
-              {() => <ThreadMessage />}
-            </ThreadPrimitive.Messages>
+          <div data-slot="aui_message-group" className="mb-14 flex flex-col gap-y-6 empty:hidden">
+            <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
           </div>
 
           <ThreadPrimitive.ViewportFooter
@@ -190,7 +182,15 @@ const ThreadScrollToBottom: FC = () => {
 const ThreadWelcome: FC = () => {
   const hour = new Date().getHours();
   const partOfDay =
-    hour < 5 ? "night" : hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
+    hour < 5
+      ? "night"
+      : hour < 12
+        ? "morning"
+        : hour < 17
+          ? "afternoon"
+          : hour < 21
+            ? "evening"
+            : "night";
 
   return (
     <div className="aui-thread-welcome-root mb-8 flex flex-col items-center px-4 text-center [animation:kith-rise_0.5s_ease-out_both]">
@@ -210,9 +210,7 @@ const ThreadWelcome: FC = () => {
 const ThreadSuggestions: FC = () => {
   return (
     <div className="aui-thread-welcome-suggestions flex w-full flex-wrap items-center justify-center gap-2 px-4">
-      <ThreadPrimitive.Suggestions>
-        {() => <ThreadSuggestionItem />}
-      </ThreadPrimitive.Suggestions>
+      <ThreadPrimitive.Suggestions>{() => <ThreadSuggestionItem />}</ThreadPrimitive.Suggestions>
     </div>
   );
 };
@@ -241,6 +239,7 @@ const Composer: FC = () => {
           data-slot="aui_composer-shell"
           className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:shadow-none"
         >
+          <ComposerAttachmentStrip />
           <ComposerPrimitive.Input
             placeholder="say something to Kith…"
             className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
@@ -256,10 +255,63 @@ const Composer: FC = () => {
   );
 };
 
+/**
+ * What is attached to the message you are writing.
+ *
+ * Rendered above the input rather than below it, so adding an image does not push the
+ * caret you are typing in. Nothing shows when nothing is attached, and the whole strip is
+ * absent for a model that cannot take images — the adapter is what creates the capability,
+ * and the workspace only installs it when the provider says the model accepts one.
+ */
+const ComposerAttachmentStrip: FC = () => (
+  <AuiIf condition={(s) => s.composer.attachments.length > 0}>
+    <div className="flex flex-wrap gap-1.5 px-1 pt-1">
+      <ComposerPrimitive.Attachments>{() => <AttachmentUI />}</ComposerPrimitive.Attachments>
+    </div>
+  </AuiIf>
+);
+
+const AttachButton: FC = () => {
+  const composer = useComposerRuntime();
+  const input = useRef<HTMLInputElement>(null);
+  // The adapter is what creates the capability, and the workspace installs it only for
+  // models whose provider says they accept an image. No adapter, no button.
+  const capable = useAuiState((s) => s.thread.capabilities.attachments);
+  if (!capable) return null;
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(event) => {
+          for (const file of Array.from(event.target.files ?? []))
+            void composer.addAttachment(file);
+          event.target.value = "";
+        }}
+      />
+      <TooltipIconButton
+        tooltip="Attach an image"
+        side="bottom"
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-7 rounded-full"
+        onClick={() => input.current?.click()}
+      >
+        <Paperclip className="size-4" />
+      </TooltipIconButton>
+    </>
+  );
+};
+
 const ComposerAction: FC = () => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-end">
       <div className="flex items-center gap-1.5">
+        <AttachButton />
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>
             <ComposerPrimitive.Dictate asChild>
@@ -352,10 +404,7 @@ const AssistantMessage: FC = () => {
       data-role="assistant"
       className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
     >
-      <div
-        data-slot="aui_assistant-message-name"
-        className="mb-1.5 flex items-center gap-2 px-2"
-      >
+      <div data-slot="aui_assistant-message-name" className="mb-1.5 flex items-center gap-2 px-2">
         <PresenceOrb size={7} />
         <span className="font-mono text-[11px] tracking-wide text-kith/90">Kith</span>
       </div>
@@ -389,9 +438,7 @@ const AssistantMessage: FC = () => {
                 );
               case "group-reasoning": {
                 if (ReasoningGroup) {
-                  return (
-                    <ReasoningGroup group={part}>{children}</ReasoningGroup>
-                  );
+                  return <ReasoningGroup group={part}>{children}</ReasoningGroup>;
                 }
                 const running = part.status.type === "running";
                 return (
@@ -469,10 +516,7 @@ const AssistantActionBar: FC = () => {
       </ActionBarPrimitive.Reload>
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild>
-          <TooltipIconButton
-            tooltip="More"
-            className="data-[state=open]:bg-accent"
-          >
+          <TooltipIconButton tooltip="More" className="data-[state=open]:bg-accent">
             <MoreHorizontalIcon />
           </TooltipIconButton>
         </ActionBarMorePrimitive.Trigger>
@@ -549,11 +593,7 @@ const EditComposer: FC = () => {
         />
         <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
           <ComposerPrimitive.Cancel asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 rounded-full px-3.5"
-            >
+            <Button variant="ghost" size="sm" className="h-8 rounded-full px-3.5">
               Cancel
             </Button>
           </ComposerPrimitive.Cancel>
@@ -568,10 +608,7 @@ const EditComposer: FC = () => {
   );
 };
 
-const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
-  className,
-  ...rest
-}) => {
+const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({ className, ...rest }) => {
   return (
     <BranchPickerPrimitive.Root
       hideWhenSingleBranch

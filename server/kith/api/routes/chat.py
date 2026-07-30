@@ -63,12 +63,41 @@ def _build_messages(messages, config):
         # Byte-identical on every request Kith ever makes. Nothing else may join it.
         out.append({"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()})
     for message in messages:
-        if message.get("role") in ("user", "assistant"):
-            out.append({"role": message["role"], "content": message.get("content", "")})
+        if message.get("role") not in ("user", "assistant"):
+            continue
+        out.append(_with_attachments(message))
     now = _present_state()
     if now:
         out.append({"role": "system", "content": now})
     return out
+
+
+def _with_attachments(message: dict) -> dict:
+    """Turn a message with attachments into multimodal content.
+
+    Only images become content parts. A model that lists `image` in its modalities takes
+    them inline; anything else — a PDF, a spreadsheet, a zip — is named and pointed at
+    instead, because he has a whole computer now and reading a file with his own tools is
+    both more capable and more honest than pretending the model can see it. He can open a
+    spreadsheet with python, and no vision model can.
+    """
+    text = message.get("content", "") or ""
+    attachments = [a for a in (message.get("attachments") or []) if isinstance(a, dict)]
+    if not attachments:
+        return {"role": message["role"], "content": text}
+
+    images = [a for a in attachments if str(a.get("kind")) == "image" and a.get("data")]
+    others = [a for a in attachments if a not in images]
+    if others:
+        named = ", ".join(str(a.get("name") or "a file") for a in others)
+        # A path, not a payload: it is already on the machine he works on.
+        text = f"{text}\n\n[They attached: {named}. Read it with your own tools.]".strip()
+    if not images:
+        return {"role": message["role"], "content": text}
+
+    parts: list[dict] = [{"type": "text", "text": text}] if text else []
+    parts += [{"type": "image_url", "image_url": {"url": str(image["data"])}} for image in images]
+    return {"role": message["role"], "content": parts}
 
 
 def _present_state() -> str:

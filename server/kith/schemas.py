@@ -44,6 +44,15 @@ class ChatMessageSchema(Schema):
 
     role = String(required=True, metadata={"description": "'user' or 'assistant'"})
     content = String(required=True)
+    attachments = List(
+        Dict(),
+        required=False,
+        metadata={
+            "description": "Images or files sent with this message: "
+            "[{kind: 'image'|'file', name, mediaType, data}] where data is a data: URL. "
+            "Only accepted for models whose provider lists the modality."
+        },
+    )
 
 
 class ChatRequestSchema(Schema):

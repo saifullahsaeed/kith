@@ -310,6 +310,9 @@ def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             call_id = pending_ids.pop(0) if pending_ids else f"call_{len(out)}"
             out.append({"role": "tool", "tool_call_id": call_id, "content": message.get("content", "")})
         else:
+            # Content may be a string or already a list of parts (an image the person
+            # attached). Passed through as-is either way: rebuilding it here would mean
+            # this function knowing about modalities, which is the route's business.
             out.append({"role": role, "content": message.get("content", "")})
     return out
 
