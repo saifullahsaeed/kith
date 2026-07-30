@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
+from kith.tools import paging
+from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -22,15 +24,18 @@ def take_note(path: Path, args: dict):
 @tool(
     "read_notes",
     "Read your notes. With a query, search; otherwise list the most recent.",
-    {"query": STR, "limit": INT},
+    {"query": STR, **PAGE_PARAMS},
     required=(),
 )
 def read_notes(path: Path, args: dict):
-    return (
-        repo.notes.search_notes(path, args["query"], args.get("limit") or 20)
+    # Fetch generously and page here, so 'total' counts what matched rather than what
+    # a hardcoded ceiling happened to let through.
+    rows = (
+        repo.notes.search_notes(path, args["query"], 200)
         if args.get("query")
-        else repo.notes.list_notes(path, args.get("limit") or 50)
+        else repo.notes.list_notes(path, 200)
     )
+    return paging.page(rows, args)
 
 
 @tool(

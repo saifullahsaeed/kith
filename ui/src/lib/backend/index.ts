@@ -1,11 +1,5 @@
 export type { ServerConfig, BackendEvent } from "./types";
-export {
-  FALLBACK_CONFIG,
-  fetchServerConfig,
-  loadLocalConfig,
-  saveLocalConfig,
-  patchServerConfig,
-} from "./config";
+export { FALLBACK_CONFIG, fetchServerConfig, forgetLocalConfig, patchServerConfig } from "./config";
 export { createBackendAdapter } from "./adapter";
 export type {
   ConnectionState,

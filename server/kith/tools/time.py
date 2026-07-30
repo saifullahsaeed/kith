@@ -6,6 +6,8 @@ from pathlib import Path
 
 from kith.domain import clock
 from kith.infra.db import repositories as repo
+from kith.tools import paging
+from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -56,11 +58,11 @@ def set_reminder(path: Path, args: dict):
 @tool(
     "list_reminders",
     "See the reminders you've set that haven't fired yet.",
-    {},
+    {**PAGE_PARAMS},
     required=(),
 )
 def list_reminders(path: Path, args: dict):
-    return _list_reminders(path)
+    return paging.page(_list_reminders(path), args)
 
 
 @tool(
@@ -93,11 +95,12 @@ def schedule(path: Path, args: dict):
 @tool(
     "list_schedules",
     "See your standing jobs and when each fires next.",
-    {},
+    {**PAGE_PARAMS},
     required=(),
 )
 def list_schedules(path: Path, args: dict):
-    return [{**s, "fires": clock.humanize_until(s["next_fire"])} for s in repo.schedules.list_schedules(path)]
+    rows = [{**s, "fires": clock.humanize_until(s["next_fire"])} for s in repo.schedules.list_schedules(path)]
+    return paging.page(rows, args)
 
 
 @tool(

@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
-from kith.tools.params import INT, STR
+from kith.tools import paging
+from kith.tools.paging import PAGE_PARAMS
+from kith.tools.params import STR
 from kith.tools.registry import tool
 
 
@@ -22,8 +24,10 @@ def journal(path: Path, args: dict):
 @tool(
     "read_journal",
     "Read your most recent journal entries.",
-    {"limit": INT},
+    {**PAGE_PARAMS},
     required=(),
 )
 def read_journal(path: Path, args: dict):
-    return repo.journal.list_journal(path, args.get("limit") or 50)
+    # The worst offender before paging: fifty entries measured 31,890 characters, near
+    # 8,000 tokens, re-sent on every later round of the turn.
+    return paging.page(repo.journal.list_journal(path, 200), args, default=10)

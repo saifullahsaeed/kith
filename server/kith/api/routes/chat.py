@@ -39,36 +39,52 @@ CHAT_DIRECTIVE = (
 
 
 def _build_messages(messages, config):
-    """Prepend the persona plus the memory that's present right now, then turns."""
+    """The persona, then the turns, then the state he is in right now.
+
+    The order is a caching decision, and it is worth more than it looks. Everything a
+    provider can reuse has to sit in an unchanging prefix: the persona and the turn
+    directive never change, so they go first and alone.
+
+    What follows them changes constantly — the clock to the minute, his mood, how long
+    since he last acted, whatever memory is present — and it used to be concatenated into
+    the same system message. That is what made a repeated "hey" cost full price twice:
+    the moment he replies, `last_activity_at` moves, "1 hour ago" becomes "just now", and
+    the message is no longer byte-identical. Providers that cache automatically match at
+    message granularity, so one changed word at the end discarded ~8,000 cacheable tokens
+    at the start. Measured: identical consecutive messages, 0% cached; with the volatile
+    part moved out, 99.7%.
+
+    Putting it last is also the better prompt. It is the freshest thing he knows, and the
+    directive already sat at the end for exactly that reason.
+    """
     out = []
-    system = (config.system or "").strip()
-    who = memory_context.self_block(AGENT_DB_PATH)
-    if who:
-        system = f"{system}\n\n{who}".strip()
-    system = f"{system}\n\n{clock.presence_block(AGENT_DB_PATH)}".strip()
-    people = memory_context.people_block(AGENT_DB_PATH)
-    if people:
-        system = f"{system}\n\n{people}".strip()
-    channel = memory_context.messages_block(AGENT_DB_PATH)
-    if channel:
-        system = f"{system}\n\n{channel}".strip()
-    projects = memory_context.projects_block(AGENT_DB_PATH)
-    if projects:
-        system = f"{system}\n\n{projects}".strip()
-    work = memory_context.work_block(AGENT_DB_PATH)
-    if work:
-        system = f"{system}\n\n{work}".strip()
-    present = memory_context.context_block(AGENT_DB_PATH)
-    if present:
-        system = f"{system}\n\n[Your memory right now]\n{present}".strip()
-    # The chat turn-directive goes last so it's freshest in mind.
-    system = f"{system}\n\n{CHAT_DIRECTIVE}".strip()
-    if system:
-        out.append({"role": "system", "content": system})
+    persona = (config.system or "").strip()
+    if persona:
+        # Byte-identical on every request Kith ever makes. Nothing else may join it.
+        out.append({"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()})
     for message in messages:
         if message.get("role") in ("user", "assistant"):
             out.append({"role": message["role"], "content": message.get("content", "")})
+    now = _present_state()
+    if now:
+        out.append({"role": "system", "content": now})
     return out
+
+
+def _present_state() -> str:
+    """Everything about him that is true only at this moment."""
+    blocks = [
+        memory_context.self_block(AGENT_DB_PATH),
+        clock.presence_block(AGENT_DB_PATH),
+        memory_context.people_block(AGENT_DB_PATH),
+        memory_context.messages_block(AGENT_DB_PATH),
+        memory_context.projects_block(AGENT_DB_PATH),
+        memory_context.work_block(AGENT_DB_PATH),
+    ]
+    present = memory_context.context_block(AGENT_DB_PATH)
+    if present:
+        blocks.append(f"[Your memory right now]\n{present}")
+    return "\n\n".join(block for block in blocks if block).strip()
 
 
 @api.post("/chat")

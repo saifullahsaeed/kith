@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from kith.infra.db import repositories as repo
+from kith.tools import paging
+from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import STR
 from kith.tools.registry import tool
 
@@ -96,11 +98,12 @@ def create_tool(path: Path, args: dict):
 @tool(
     "list_tools",
     "List the tools you have built for yourself.",
-    {},
+    {**PAGE_PARAMS},
     required=(),
 )
 def list_tools(path: Path, args: dict):
-    return repo.custom_tools.list_custom_tools(path)
+    # Each row carries the tool's source, so a dozen is a lot of characters.
+    return paging.page(repo.custom_tools.list_custom_tools(path), args, default=10)
 
 
 @tool(

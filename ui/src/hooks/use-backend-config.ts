@@ -3,17 +3,22 @@ import { useCallback, useEffect, useState } from "react";
 import {
   FALLBACK_CONFIG,
   fetchServerConfig,
-  loadLocalConfig,
-  saveLocalConfig,
+  forgetLocalConfig,
   type ServerConfig,
 } from "@/lib/backend";
 
 export type ConnectionStatus = "loading" | "ready" | "error";
 
 /**
- * Loads the server's config on mount and tracks connection status. A user's
- * saved overrides (from a previous session) win over the server defaults;
- * `updateConfig` persists changes back to localStorage.
+ * The server's config, and the connection status while fetching it.
+ *
+ * The server is the only source of truth. It used to be "the browser's saved copy if
+ * there is one, else the server", which meant a model picked in an old session outranked
+ * the one in Settings forever — and got sent back as a per-request override that the
+ * server obeyed. Settings displayed one model, every turn used another.
+ *
+ * `reload` exists so saving in Settings refreshes what is on screen straight away; the
+ * header shows the model, and a header that lags is how this hid in the first place.
  */
 export function useBackendConfig() {
   const [status, setStatus] = useState<ConnectionStatus>("loading");
@@ -21,26 +26,32 @@ export function useBackendConfig() {
   const [config, setConfig] = useState<ServerConfig>(FALLBACK_CONFIG);
   const [serverDefaults, setServerDefaults] = useState<ServerConfig>(FALLBACK_CONFIG);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchServerConfig(controller.signal)
+  const load = useCallback((signal?: AbortSignal) => {
+    fetchServerConfig(signal)
       .then((server) => {
         setServerDefaults(server);
-        setConfig(loadLocalConfig() ?? server);
+        setConfig(server);
         setStatus("ready");
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+        if (signal?.aborted) return;
         setError(err instanceof Error ? err.message : String(err));
         setStatus("error");
       });
+  }, []);
+
+  useEffect(() => {
+    forgetLocalConfig();
+    const controller = new AbortController();
+    load(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [load]);
 
-  const updateConfig = useCallback((next: ServerConfig) => {
-    setConfig(next);
-    saveLocalConfig(next);
-  }, []);
+  const reload = useCallback(() => load(), [load]);
 
-  return { status, error, config, serverDefaults, updateConfig };
+  // Settings already persisted this to the server before calling us; hold it locally so
+  // the interface updates without a round trip.
+  const updateConfig = useCallback((next: ServerConfig) => setConfig(next), []);
+
+  return { status, error, config, serverDefaults, updateConfig, reload };
 }

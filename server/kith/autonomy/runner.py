@@ -451,25 +451,27 @@ class AutonomyRunner:
             return
         self._emit(mode, self._current)
 
-        system = config.system
-        who = memory_context.self_block(AGENT_DB_PATH)
-        if who:
-            system = f"{system}\n\n{who}"
-        system = f"{system}\n\n{clock.presence_block(AGENT_DB_PATH)}"
-        for block in (
+        # Persona and mode directive alone in the system message, so it is byte-identical
+        # across every tick that runs in this mode and a provider can cache it once and
+        # read it forever. Everything below changes minute to minute — the clock, his
+        # mood, how long since he last acted, whatever memory is present — and folding it
+        # in here is what used to make every tick pay full price for the whole prefix.
+        # It goes last instead, where it is also the freshest thing he knows.
+        blocks = [
+            memory_context.self_block(AGENT_DB_PATH),
+            clock.presence_block(AGENT_DB_PATH),
             memory_context.projects_block(AGENT_DB_PATH),
             memory_context.people_block(AGENT_DB_PATH),
             memory_context.messages_block(AGENT_DB_PATH),
-        ):
-            if block:
-                system = f"{system}\n\n{block}"
+        ]
         present = memory_context.context_block(AGENT_DB_PATH)
         if present:
-            system = f"{system}\n\n[Your memory right now]\n{present}"
-        messages = [
-            {"role": "system", "content": f"{system}\n\n{directive}"},
-            {"role": "user", "content": prompt},
-        ]
+            blocks.append(f"[Your memory right now]\n{present}")
+        state = "\n\n".join(block for block in blocks if block).strip()
+        messages = [{"role": "system", "content": f"{config.system}\n\n{directive}"}]
+        if state:
+            messages.append({"role": "system", "content": state})
+        messages.append({"role": "user", "content": prompt})
 
         # Reminders fire once, then retire; schedules fire, then roll to next time.
         for reminder in reminders_due:

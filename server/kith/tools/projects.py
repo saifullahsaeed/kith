@@ -6,6 +6,8 @@ from pathlib import Path
 
 from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES
 from kith.infra.db import repositories as repo
+from kith.tools import paging
+from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -24,11 +26,12 @@ def create_project(path: Path, args: dict):
 @tool(
     "list_projects",
     "See your projects with their roadmap (milestones) and how much is done.",
-    {},
+    # A project carries its milestones, so a handful of them is already a large payload.
+    {**PAGE_PARAMS},
     required=(),
 )
 def list_projects(path: Path, args: dict):
-    return repo.projects.project_overview(path)
+    return paging.page(repo.projects.project_overview(path), args, default=5)
 
 
 @tool(

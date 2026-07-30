@@ -6,6 +6,8 @@ from pathlib import Path
 
 from kith.domain.enums import TASK_PRIORITIES, TASK_STATUSES
 from kith.infra.db import repositories as repo
+from kith.tools import paging
+from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -177,12 +179,13 @@ def add_task(path: Path, args: dict):
 
 @tool(
     "list_tasks",
-    "List your tasks (highest priority first), optionally filtered by column.",
-    {"status": {**STR, "enum": list(TASK_STATUSES)}},
+    "List your tasks (highest priority first), optionally filtered by column. "
+    "Returns one page — check 'more' before assuming you've seen them all.",
+    {"status": {**STR, "enum": list(TASK_STATUSES)}, **PAGE_PARAMS},
     required=(),
 )
 def list_tasks(path: Path, args: dict):
-    return repo.tasks.list_tasks(path, args.get("status"))
+    return paging.page(repo.tasks.list_tasks(path, args.get("status")), args)
 
 
 @tool(

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from kith.domain.enums import CURIOSITY_STATUSES
 from kith.infra.db import repositories as repo
+from kith.tools import paging
+from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -28,11 +30,11 @@ def wonder(path: Path, args: dict):
 @tool(
     "list_curiosities",
     "See the things you're curious about and where each stands.",
-    {"status": {**STR, "enum": list(CURIOSITY_STATUSES)}},
+    {"status": {**STR, "enum": list(CURIOSITY_STATUSES)}, **PAGE_PARAMS},
     required=(),
 )
 def list_curiosities(path: Path, args: dict):
-    return repo.curiosities.list_curiosities(path, args.get("status"))
+    return paging.page(repo.curiosities.list_curiosities(path, args.get("status")), args)
 
 
 @tool(

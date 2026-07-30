@@ -4,7 +4,7 @@ import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
 import { readEvents, toWireMessages } from "./stream";
-import type { JsonObject, JsonValue, ServerConfig } from "./types";
+import type { JsonObject, JsonValue } from "./types";
 
 interface ToolPart {
   id: string;
@@ -19,6 +19,9 @@ type Piece =
   | { kind: "text"; text: string }
   | { kind: "tool"; tool: ToolPart };
 
+/** Name on the data part carrying a turn's token count, shared with the renderer. */
+export const USAGE_PART = "round-usage";
+
 /**
  * An assistant-ui adapter that streams from the Kith server.
  *
@@ -29,13 +32,13 @@ type Piece =
  * top, and which sentence went with which tool call was lost. Chronological order is
  * what he actually did.
  *
- * Config is read fresh on each run via `getConfig`, so settings changes take effect
- * without recreating the runtime.
+ * The request carries messages and nothing else. It used to send the whole config as
+ * per-request overrides, read from state fetched once at startup — so changing the model
+ * in Settings left the server obeying the old one on every turn. Model, persona and
+ * limits are server settings with a server-side store; reading them from anywhere else
+ * could only ever agree or be wrong.
  */
-/** Name on the data part carrying a round's token count, shared with the renderer. */
-export const USAGE_PART = "round-usage";
-
-export function createBackendAdapter(getConfig: () => ServerConfig): ChatModelAdapter {
+export function createBackendAdapter(): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
       let response: Response;
@@ -43,7 +46,7 @@ export function createBackendAdapter(getConfig: () => ServerConfig): ChatModelAd
         response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: toWireMessages(messages), config: getConfig() }),
+          body: JSON.stringify({ messages: toWireMessages(messages) }),
           signal: abortSignal,
         });
       } catch (error) {

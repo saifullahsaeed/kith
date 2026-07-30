@@ -11,6 +11,7 @@ export function AppHeader({
   roaming,
   status,
   mood,
+  model,
   unread,
   mindOpen,
   onOpenInbox,
@@ -21,6 +22,8 @@ export function AppHeader({
   roaming: boolean;
   status: string | null;
   mood: Mood | null;
+  /** The model he is actually thinking with, straight from the server. */
+  model?: string;
   unread: number;
   mindOpen?: boolean;
   onOpenInbox: () => void;
@@ -69,6 +72,20 @@ export function AppHeader({
       </div>
 
       <div className="flex-1" />
+
+      {/* Which model is answering. Nothing showed this, and that is how turns ran for
+          days on a model nobody had selected — the settings page said one thing and a
+          stale client override sent another. A name on screen makes that unmissable. */}
+      {model ? (
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title={`${model} — click to change`}
+          className="text-muted-foreground/60 hover:text-foreground hidden max-w-[14rem] truncate font-mono text-[11px] transition-colors sm:block"
+        >
+          {shortModel(model)}
+        </button>
+      ) : null}
 
       <Button
         variant="ghost"
@@ -136,4 +153,11 @@ function cleanStatus(status: string | null): string {
   if (!status) return "";
   const text = status.replace(/^working on:\s*/i, "").replace(/^reminder due:\s*/i, "↳ ");
   return text.length > 42 ? text.slice(0, 42) + "…" : text;
+}
+
+/** "openai/gpt-5.6-luna" → "gpt-5.6-luna". The vendor prefix is the least useful part
+ *  of a name that has to fit in a title bar; the full id is on hover. */
+function shortModel(id: string): string {
+  const slash = id.lastIndexOf("/");
+  return slash === -1 ? id : id.slice(slash + 1);
 }

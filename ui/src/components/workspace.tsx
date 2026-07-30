@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react";
 
@@ -27,16 +27,17 @@ export function Workspace({
   config,
   serverDefaults,
   onSaveConfig,
+  onConnectionSaved,
 }: {
   config: ServerConfig;
   serverDefaults: ServerConfig;
   onSaveConfig: (config: ServerConfig) => void;
+  /** Called after the provider/model is saved, so the header stops showing the old one. */
+  onConnectionSaved: () => void;
 }) {
-  // The adapter reads the freshest config through a ref, so the runtime is never
-  // recreated (which would drop an in-flight stream).
-  const configRef = useRef(config);
-  configRef.current = config;
-  const adapter = useMemo(() => createBackendAdapter(() => configRef.current), []);
+  // No config passed: the server reads its own settings, so there is nothing here that
+  // can go stale. Memoised so the runtime is never recreated mid-stream.
+  const adapter = useMemo(() => createBackendAdapter(), []);
   const runtime = useLocalRuntime(adapter);
 
   const autonomy = useAutonomy();
@@ -102,6 +103,7 @@ export function Workspace({
               roaming={roaming}
               status={autonomy.status?.current ?? null}
               mood={mood}
+              model={config.model}
               unread={inbox.unread}
               mindOpen={mindOpen}
               onOpenInbox={() => {
@@ -151,6 +153,7 @@ export function Workspace({
             serverDefaults={serverDefaults}
             onSelectTab={(t) => navigate(pathForSettings(t))}
             onSaveConfig={onSaveConfig}
+            onConnectionSaved={onConnectionSaved}
             onClose={() => navigate(pathForHome())}
           />
         ) : null}

@@ -43,6 +43,7 @@ export function SettingsPage({
   serverDefaults,
   onSelectTab,
   onSaveConfig,
+  onConnectionSaved,
   onClose,
 }: {
   tab: SettingsTab;
@@ -50,6 +51,7 @@ export function SettingsPage({
   serverDefaults: ServerConfig;
   onSelectTab: (tab: SettingsTab) => void;
   onSaveConfig: (config: ServerConfig) => void;
+  onConnectionSaved: () => void;
   onClose: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<SetupSnapshot | null>(null);
@@ -141,14 +143,20 @@ export function SettingsPage({
               <ModelTab
                 connection={snapshot.connection}
                 providers={snapshot.providers}
-                onSaved={load}
+                onSaved={() => {
+                  load();
+                  onConnectionSaved();
+                }}
               />
             ) : tab === "tools" ? (
               <ToolsTab
                 search={snapshot.search.current}
                 options={snapshot.search.options}
                 checks={snapshot.checks}
-                onSaved={load}
+                onSaved={() => {
+                  load();
+                  onConnectionSaved();
+                }}
               />
             ) : tab === "chat" ? (
               <ChatTab
