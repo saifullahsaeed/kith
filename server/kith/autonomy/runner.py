@@ -185,7 +185,10 @@ class AutonomyRunner:
         self._stop = threading.Event()
 
         self._running = False
-        self._interval = 5.0  # seconds between roams — fast cadence (watch cloud cost)
+        # None means "whatever the setting says". Only set when a caller asks for a
+        # specific cadence, so a change in settings reaches a loop already running —
+        # this used to be a hardcoded 5.0, which no setting could reach.
+        self._interval: float | None = None
         self._quiet = 25.0
         self._last_user_activity = 0.0
         self._last_tick_mono: float | None = None
@@ -218,6 +221,10 @@ class AutonomyRunner:
                 self._thread = threading.Thread(target=self._loop, daemon=True, name="kith-autonomy")
                 self._thread.start()
 
+    def _roam_interval(self) -> float:
+        """Seconds between steps while he has work: what was asked for, else the setting."""
+        return self._interval if self._interval is not None else float(tuning.value("roam_interval"))
+
     def start(self, interval_seconds: float | None = None) -> dict:
         with self._state_lock:
             if interval_seconds:
@@ -241,7 +248,7 @@ class AutonomyRunner:
     def status(self) -> dict:
         return {
             "running": self._running,
-            "intervalSeconds": self._interval,
+            "intervalSeconds": self._roam_interval(),
             "quietSeconds": self._quiet,
             "ticking": self._tick_lock.locked(),
             "lastTick": self._last_tick_at,
@@ -329,10 +336,10 @@ class AutonomyRunner:
             return False
         # Caught up? Roam far slower so an empty board doesn't burn tokens; snap
         # back to the fast interval the moment there's real work again.
-        interval = self._interval
+        interval = self._roam_interval()
         try:
             if not repo.tasks.active_tasks(AGENT_DB_PATH):
-                interval = max(self._interval, tuning.value("idle_interval"))
+                interval = max(interval, tuning.value("idle_interval"))
         except Exception:
             pass
         # Not yet time if a tick ran within the interval.
