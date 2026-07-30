@@ -22,12 +22,25 @@ from kith.services.connections.providers import ProviderError
 
 
 class FakeProviders:
-    """Stands in for the provider registry, one canned answer at a time."""
+    """Stands in for both the provider registry and the provider it returns.
 
-    def __init__(self, models=(), error: str = "", lists_without_key: bool = False):
+    One object for both because the manager only ever uses them together, and a
+    second layer of doubles would test the doubles rather than the manager.
+    """
+
+    def __init__(
+        self,
+        models=(),
+        error: str = "",
+        lists_without_key: bool = False,
+        key_note: str = "",
+        key_error: str = "",
+    ):
         self.models = list(models)
         self.error = error
         self.lists_without_key = lists_without_key
+        self.key_note = key_note
+        self.key_error = key_error
         self.calls = 0
 
     # -- the registry surface the manager uses -- #
@@ -50,6 +63,11 @@ class FakeProviders:
         if self.error:
             raise ProviderError(self.error)
         return list(self.models)
+
+    def verify_key(self, connection):
+        if self.key_error:
+            raise ProviderError(self.key_error)
+        return self.key_note
 
 
 def manager_with(config_db: Path, providers) -> ConnectionManager:
@@ -317,3 +335,53 @@ class TestStoredKeyReuse:
         m = manager_with(config_db, FakeProviders(models=[model("a/b")]))
         m.adopt(Connection.openrouter(api_key="sk-or-secret", model="a/b"))
         assert m.candidate("ollama", model="qwen3:14b").api_key == ""
+
+
+class TestKeyVerification:
+    """A public catalogue answers without a key, so listing cannot vouch for one."""
+
+    def public(self, **kwargs):
+        """A provider whose model list is public — the shape that needs the check."""
+        return FakeProviders(models=[model("a/b")], lists_without_key=True, **kwargs)
+
+    def test_a_rejected_key_is_caught_even_though_listing_worked(self, config_db):
+        m = manager_with(config_db, self.public(key_error="That key was rejected."))
+        result = m.probe(m.candidate("openrouter", api_key="nonsense"))
+
+        assert result.reachable  # we did reach it, and it did list models
+        assert not result.usable  # but the credential is no good
+        assert result.key_state == "rejected"
+        assert result.key_detail == "That key was rejected."
+
+    def test_a_good_key_carries_something_reassuring(self, config_db):
+        m = manager_with(config_db, self.public(key_note="$4.20 of credit left"))
+        result = m.probe(m.candidate("openrouter", api_key="sk-or-good"))
+
+        assert result.usable
+        assert result.key_state == "valid"
+        assert result.key_detail == "$4.20 of credit left"
+
+    def test_models_are_offered_before_a_key_exists(self, config_db):
+        m = manager_with(config_db, self.public())
+        result = m.probe(m.candidate("openrouter"))
+
+        # The picker can be filled while someone is still deciding...
+        assert result.reachable
+        assert result.models
+        # ...but nothing may be saved yet.
+        assert not result.usable
+        assert result.key_state == "missing"
+
+    def test_a_local_connection_has_no_key_to_check(self, config_db):
+        m = manager_with(config_db, FakeProviders(models=[model("qwen3:14b")], lists_without_key=True))
+        result = m.probe(m.candidate("ollama"))
+        assert result.usable
+        assert result.key_state == "not_required"
+
+    def test_adopt_refuses_a_key_the_provider_rejected(self, config_db):
+        m = manager_with(config_db, self.public(key_error="That key was rejected."))
+        # The hole this closes: reachable-but-unauthenticated used to be saved, then
+        # failed on his first message, looking like an unrelated bug.
+        with pytest.raises(ValueError, match="rejected"):
+            m.adopt(Connection.openrouter(api_key="nonsense", model="a/b"))
+        assert not m.is_onboarded()

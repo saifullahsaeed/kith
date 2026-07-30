@@ -20,6 +20,7 @@ import requests
 
 from kith import settings
 from kith.domain.connection import Connection
+from kith.domain.search import SearchKind, SearchSetup
 from kith.infra import sandbox
 from kith.services.connections.providers import ProviderError
 from kith.services.connections.providers.ollama import OllamaProvider
@@ -55,9 +56,9 @@ class Check:
         }
 
 
-def report(connection: Connection) -> list[Check]:
+def report(connection: Connection, search: SearchSetup) -> list[Check]:
     """Every check, most consequential first."""
-    return [_computer(), _memory(), _search(connection)]
+    return [_computer(), _memory(), _search(connection, search)]
 
 
 def _computer() -> Check:
@@ -106,36 +107,59 @@ def _memory() -> Check:
     )
 
 
-def _search(connection: Connection) -> Check:
-    """Two ways to search, checked in the order search itself tries them."""
-    if _searx_up():
+def _search(connection: Connection, search: SearchSetup) -> Check:
+    """Report the choice that was made, not whatever happens to be reachable.
+
+    Checking the chosen provider rather than probing both matters: someone who picked
+    SearXNG to avoid being billed should be told their instance is down, not quietly
+    reassured that search "works" because a metered fallback exists.
+    """
+    if search.kind is SearchKind.NONE:
         return Check(
             "search",
             "Web search",
-            Health.OK,
-            f"Search goes through your SearXNG at {settings.SEARCH_URL} — free.",
+            Health.DEGRADED,
+            "Search is off, so he can only read pages you point him at.",
+            "Turn it on in settings whenever you like — either option works.",
         )
-    if connection.supports_web_plugin:
+
+    if search.kind is SearchKind.OPENROUTER:
+        if connection.supports_web_plugin:
+            return Check(
+                "search",
+                "Web search",
+                Health.OK,
+                "Search runs through the same key — about half a cent a search.",
+            )
+        return Check(
+            "search",
+            "Web search",
+            Health.DEGRADED,
+            "Search is set to OpenRouter, but he no longer thinks through OpenRouter.",
+            "Pick a different search provider, or point him back at OpenRouter.",
+        )
+
+    if _searx_up(search.endpoint):
         return Check(
             "search",
             "Web search",
             Health.OK,
-            "Search runs through the same key — about half a cent a search.",
+            f"Search goes through your SearXNG at {search.endpoint} — free.",
         )
     return Check(
         "search",
         "Web search",
         Health.DEGRADED,
-        "No search provider, so he can only read pages you point him at.",
-        "OpenRouter includes search on the same key. Otherwise run a SearXNG instance "
-        f"and set KITH_SEARCH_URL (currently {settings.SEARCH_URL}).",
+        f"Nothing is answering at {search.endpoint}, so he can't search.",
+        "Start the instance, point him at a different one, or switch to OpenRouter's "
+        "search — it's about half a cent a search on the key he already has.",
     )
 
 
-def _searx_up() -> bool:
+def _searx_up(endpoint: str) -> bool:
     try:
         response = requests.get(
-            f"{settings.SEARCH_URL}/search",
+            f"{endpoint}/search",
             params={"q": "kith", "format": "json"},
             timeout=CHECK_TIMEOUT,
         )

@@ -19,8 +19,11 @@ So search tries providers cheapest-first:
    which turns it into a plain search API returning a title, a URL, and a real
    page excerpt (not a paraphrase) for about half a cent a call.
 
-Override the order with ``KITH_SEARCH_PROVIDER`` (``auto`` | ``searx`` |
-``openrouter``).
+Which one he uses is a saved choice (see ``services.search_setup``), not a fixed
+order: someone who picked SearXNG to avoid being billed should not be quietly
+charged the moment their instance is rate-limited. So the chosen provider is tried
+first, and the other is only a fallback when the choice was never made — the
+``auto`` case, which is also what ``KITH_SEARCH_PROVIDER`` still selects.
 """
 
 from __future__ import annotations
@@ -33,7 +36,9 @@ import requests
 
 from kith import settings
 from kith.config import Config, default_config
+from kith.domain.search import SearchKind
 from kith.infra import sandbox
+from kith.infra.db import config_store
 from kith.llm import openai_compat
 
 # Exa charges one flat fee for up to ten results and only then bills per extra
@@ -105,11 +110,31 @@ def search(query: str, limit: int = 5) -> list[dict]:
 
 
 def _order(config: Config) -> list[str]:
-    """Which providers to try, in order."""
-    if _PROVIDER in _PROVIDERS:
-        return [_PROVIDER]
-    # auto: free first, paid as the safety net — and only when it can work at all.
+    """Which providers to try, in order.
+
+    Read per search rather than at import, so choosing a different one in the app
+    takes effect on the next search instead of the next restart.
+    """
+    chosen = _chosen(config)
+    if chosen is SearchKind.NONE:
+        return []
+    if chosen is SearchKind.SEARXNG:
+        return ["searx"]
+    if chosen is SearchKind.OPENROUTER:
+        return ["openrouter"]
+    # Nobody has chosen: free first, paid as the safety net, and only when it can
+    # work at all.
     return ["searx"] + (["openrouter"] if _openrouter_ready(config) else [])
+
+
+def _chosen(config: Config) -> SearchKind | None:
+    """The saved preference, or None when it was left on auto."""
+    from kith.config import CONFIG_DB_PATH
+    from kith.services.search_setup import KIND_KEY, _as_kind
+
+    if _PROVIDER and _PROVIDER != "auto":
+        return _as_kind(_PROVIDER)
+    return _as_kind(config_store.load_settings(CONFIG_DB_PATH).get(KIND_KEY))
 
 
 def _openrouter_ready(config: Config) -> bool:
@@ -124,7 +149,50 @@ def _openrouter_ready(config: Config) -> bool:
 
 
 def _searx(query: str, limit: int, config: Config) -> list[dict]:
-    return sandbox.searx_search(query, limit)
+    """Ask the instance from here, falling back to the sandbox if that fails.
+
+    Direct first because routing every search through ``docker exec`` made free
+    search depend on Docker for no reason a user could have guessed — and cost about
+    two seconds a call. The sandbox path stays as a fallback for the setup where the
+    instance is only on Docker's network and not published to the host.
+    """
+    url = _searx_url()
+    try:
+        response = requests.get(
+            f"{url}/search",
+            params={"q": query, "format": "json"},
+            timeout=(4, 10),
+        )
+        response.raise_for_status()
+        data = response.json()
+    except (requests.exceptions.RequestException, ValueError) as direct_failure:
+        if not sandbox.docker_available():
+            raise RuntimeError(f"SearXNG at {url} is unreachable: {direct_failure}") from None
+        return sandbox.searx_search(query, limit)
+
+    hits = [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": (item.get("content") or "")[:300],
+        }
+        for item in (data.get("results") or [])[:limit]
+    ]
+    if hits:
+        return hits
+    # It answered, but every engine behind it was blocked — a broken instance
+    # masquerading as an empty web, and worth saying out loud so the caller can
+    # fall through to the next provider instead of trusting the emptiness.
+    raise RuntimeError(f"SearXNG at {url} returned no results for any engine")
+
+
+def _searx_url() -> str:
+    """The chosen instance, or the configured default."""
+    from kith.config import CONFIG_DB_PATH
+    from kith.services.search_setup import URL_KEY
+
+    stored = str(config_store.load_settings(CONFIG_DB_PATH).get(URL_KEY) or "")
+    return (stored or settings.SEARCH_URL).rstrip("/")
 
 
 def _openrouter(query: str, limit: int, config: Config) -> list[dict]:

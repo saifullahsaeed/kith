@@ -12,6 +12,7 @@ cannot save a connection that has since stopped working.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 
 from kith import settings
@@ -53,6 +54,22 @@ _ASYNC_SUFFIX = ":batch"
 BUDGET_CEILING = PRICE_TIERS[1]
 
 
+class KeyState(StrEnum):
+    """Whether the credential is good — a different question from reachability.
+
+    They have to be separate because OpenRouter's catalogue is public: it answers
+    happily with no key at all, which is useful (the model picker can be filled
+    while someone is still deciding) and dangerous (a listing proves nothing about
+    the key). Conflating the two is how a rejected key gets saved.
+    """
+
+    NOT_REQUIRED = "not_required"
+    #: Reached the provider, but no key has been offered yet.
+    MISSING = "missing"
+    VALID = "valid"
+    REJECTED = "rejected"
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     """What happened when we tried a connection."""
@@ -61,13 +78,25 @@ class ProbeResult:
     detail: str = ""
     models: tuple[ModelInfo, ...] = ()
     suggested: tuple[str, ...] = ()
+    key_state: KeyState = KeyState.NOT_REQUIRED
+    #: Something worth showing about the credential: remaining credit, or the
+    #: provider's own words for why it said no.
+    key_detail: str = ""
+
+    @property
+    def usable(self) -> bool:
+        """Reached, and holding a credential it will accept."""
+        return self.reachable and self.key_state in (KeyState.VALID, KeyState.NOT_REQUIRED)
 
     def public(self) -> dict:
         return {
             "reachable": self.reachable,
+            "usable": self.usable,
             "detail": self.detail,
             "models": [model.public() for model in self.models],
             "suggested": list(self.suggested),
+            "keyState": str(self.key_state),
+            "keyDetail": self.key_detail,
         }
 
 
@@ -151,20 +180,48 @@ class ConnectionManager:
         display rather than an exception to handle.
         """
         provider = self._providers.for_kind(candidate.kind)
-        if candidate.requires_key and not candidate.api_key and not provider.lists_without_key:
-            return ProbeResult(reachable=False, detail="Paste an API key to continue.")
+        missing_key = candidate.requires_key and not candidate.api_key
+        if missing_key and not provider.lists_without_key:
+            return ProbeResult(
+                reachable=False,
+                detail="Paste an API key to continue.",
+                key_state=KeyState.MISSING,
+            )
         try:
             found = provider.list_models(candidate)
         except ProviderError as failure:
-            return ProbeResult(reachable=False, detail=str(failure))
+            return ProbeResult(reachable=False, detail=str(failure), key_state=self._key_state(candidate))
         except Exception as exc:
             return ProbeResult(reachable=False, detail=f"{type(exc).__name__}: {exc}")
+
+        # Listing worked, which for a public catalogue says nothing about the key.
+        key_state, key_detail = KeyState.NOT_REQUIRED, ""
+        if candidate.requires_key:
+            if missing_key:
+                key_state = KeyState.MISSING
+            else:
+                try:
+                    key_detail = provider.verify_key(candidate)
+                    key_state = KeyState.VALID
+                except ProviderError as rejected:
+                    key_state, key_detail = KeyState.REJECTED, str(rejected)
+                except Exception as exc:
+                    key_state, key_detail = KeyState.REJECTED, f"{type(exc).__name__}: {exc}"
 
         return ProbeResult(
             reachable=True,
             models=tuple(found),
             suggested=tuple(self.suggest(candidate.kind, found)),
+            key_state=key_state,
+            key_detail=key_detail,
         )
+
+    @staticmethod
+    def _key_state(candidate: Connection) -> KeyState:
+        """The credential's status when listing itself failed, and told us nothing."""
+        if not candidate.requires_key:
+            return KeyState.NOT_REQUIRED
+        return KeyState.MISSING if not candidate.api_key else KeyState.REJECTED
 
     def suggest(self, kind: ProviderKind, models: list[ModelInfo]) -> list[str]:
         """A few sensible starting points, cheapest first.
@@ -271,6 +328,11 @@ class ConnectionManager:
         result = self.probe(candidate)
         if not result.reachable:
             raise ValueError(result.detail)
+        # Reachable is not enough. A public catalogue answers without a key, so this
+        # is the check that stops an invalid one being stored to fail later, during
+        # his first message, where it looks like something else entirely.
+        if not result.usable:
+            raise ValueError(result.key_detail or "That key was rejected.")
         if result.models and not any(m.id == candidate.model for m in result.models):
             raise ValueError(f"{candidate.model} isn't offered by that provider.")
 

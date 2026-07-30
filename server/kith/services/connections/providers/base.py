@@ -54,6 +54,19 @@ class Provider(ABC):
     def list_models(self, connection: Connection) -> list[ModelInfo]:
         """Everything this provider offers. Raises ProviderError if it cannot say."""
 
+    def verify_key(self, connection: Connection) -> str:
+        """Check the credential, returning something reassuring to show.
+
+        Separate from ``list_models`` because on some providers the two are not the
+        same question. OpenRouter's catalogue is public: it answers 200 to a key made
+        of nonsense, so a listing that succeeds proves nothing about the credential —
+        and onboarding would cheerfully save a key that fails on his first message.
+
+        The default is right wherever listing is authenticated, which is most places:
+        if the list arrived, the key worked. Raise ``ProviderError`` to reject one.
+        """
+        return ""
+
     def card(self) -> dict:
         """The choice card, generated rather than hand-written in the UI."""
         return {

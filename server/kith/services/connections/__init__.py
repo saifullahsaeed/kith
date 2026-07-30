@@ -15,20 +15,39 @@ from __future__ import annotations
 from kith.config import CONFIG_DB_PATH
 from kith.services.connections import providers, readiness
 from kith.services.connections.manager import ConnectionManager, ProbeResult
+from kith.services.search_setup import SearchManager
 
 #: The app has one configuration database, so one manager over it. Constructed here
 #: rather than per-request: it holds no mutable state, only the path it writes to.
 manager = ConnectionManager(config_db=CONFIG_DB_PATH)
 
-__all__ = ["ConnectionManager", "ProbeResult", "manager", "providers", "readiness", "snapshot"]
+#: Search is a second, smaller decision over the same database. Separate object
+#: because it answers a different question, constructed here for the same reason.
+search = SearchManager(config_db=CONFIG_DB_PATH)
+
+__all__ = [
+    "ConnectionManager",
+    "ProbeResult",
+    "SearchManager",
+    "manager",
+    "providers",
+    "readiness",
+    "search",
+    "snapshot",
+]
 
 
 def snapshot() -> dict:
     """Everything the onboarding UI needs, in one request."""
     connection = manager.current()
+    chosen = search.current(connection)
     return {
         "onboarded": manager.is_onboarded(),
         "connection": connection.public(),
         "providers": providers.cards(),
-        "checks": [check.public() for check in readiness.report(connection)],
+        "search": {
+            "current": chosen.public(),
+            "options": search.options(connection),
+        },
+        "checks": [check.public() for check in readiness.report(connection, chosen)],
     }

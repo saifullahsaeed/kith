@@ -16,6 +16,7 @@ from flask import jsonify, request
 
 from kith.api.blueprint import api
 from kith.domain.connection import ProviderKind
+from kith.domain.search import SearchKind, SearchSetup
 from kith.services import connections
 
 #: Named once so the error message and the check cannot drift apart.
@@ -87,3 +88,51 @@ def setup_complete():
         return jsonify({"error": str(refused)}), 400
 
     return jsonify({"connection": saved.public(), "warnings": warnings})
+
+
+@api.post("/setup/search/probe")
+@api.doc(
+    summary="Try a search provider without saving it",
+    description=(
+        "Runs one real search and throws the results away, so the answer is whether "
+        "it actually works rather than whether the address parses. Nothing is "
+        "persisted. Body: {kind, searxUrl?}."
+    ),
+)
+def setup_search_probe():
+    body = request.get_json(silent=True) or {}
+    try:
+        candidate = _search_setup(body)
+    except ValueError as bad:
+        return jsonify({"error": str(bad)}), 400
+    return jsonify(connections.search.probe(candidate).public())
+
+
+@api.post("/setup/search")
+@api.doc(
+    summary="Save how he searches",
+    description=(
+        "Persists the search provider. A SearXNG instance that is merely blocked is "
+        "still accepted — it recovers, and refusing would force a choice nobody wants "
+        "over a temporary condition. Body: {kind, searxUrl?}."
+    ),
+)
+def setup_search_save():
+    body = request.get_json(silent=True) or {}
+    try:
+        candidate = _search_setup(body)
+        saved = connections.search.adopt(candidate, connections.manager.current())
+    except ValueError as refused:
+        return jsonify({"error": str(refused)}), 400
+    return jsonify(saved.public())
+
+
+def _search_setup(body: dict) -> SearchSetup:
+    """A request body as a SearchSetup, or a ValueError naming the valid kinds."""
+    raw = str(body.get("kind") or "")
+    try:
+        kind = SearchKind(raw)
+    except ValueError:
+        valid = ", ".join(str(k) for k in SearchKind)
+        raise ValueError(f"kind must be one of: {valid}") from None
+    return SearchSetup(kind=kind, searx_url=str(body.get("searxUrl") or "").strip())

@@ -9,6 +9,10 @@ from kith.services.connections.providers.base import Provider
 
 _CATALOGUE = "https://openrouter.ai/api/v1/models"
 
+#: The only endpoint that actually authenticates. ``/models`` is public and answers
+#: 200 to any nonsense in the header, so it cannot be used to check a key.
+_KEY_INFO = "https://openrouter.ai/api/v1/key"
+
 
 class OpenRouterProvider(Provider):
     kind: ClassVar[ProviderKind] = ProviderKind.OPENROUTER
@@ -49,6 +53,31 @@ class OpenRouterProvider(Provider):
                 )
             )
         return models
+
+    def verify_key(self, connection: Connection) -> str:
+        """Ask about the key itself, and report what it can spend.
+
+        ``_get_json`` turns the 401 into "That key was rejected", which is the whole
+        point of the call. The credit line is the reassurance: an onboarding step that
+        says "connected" without evidence is indistinguishable from one that is lying.
+        """
+        data = self._get_json(_KEY_INFO, connection.api_key).get("data") or {}
+        spent = data.get("usage")
+        allowance = data.get("limit")
+        remaining = data.get("limit_remaining")
+
+        if allowance is None:
+            note = f"${float(spent):.2f} used so far" if isinstance(spent, int | float) else "pay as you go"
+        elif isinstance(remaining, int | float):
+            note = f"${float(remaining):.2f} of credit left"
+        else:
+            note = f"${float(allowance):.2f} limit"
+
+        if data.get("is_free_tier"):
+            # Worth saying: the free tier is rate-limited hard enough that he will
+            # stall mid-task, which looks like a bug in him rather than a quota.
+            return f"Free tier — {note}. Expect rate limits on long tasks."
+        return note
 
 
 def _per_million(raw: object) -> float | None:
