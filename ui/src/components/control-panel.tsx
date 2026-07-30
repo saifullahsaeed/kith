@@ -15,6 +15,7 @@ import {
   Flame,
   Folder,
   FolderKanban,
+  FolderOpen,
   FolderTree,
   Link as LinkIcon,
   ListChecks,
@@ -2421,36 +2422,59 @@ function Workspace() {
       ) : (
         <div className="overflow-hidden rounded-xl border border-border/70 bg-card/40 shadow-sm">
           {sorted.map((e, i) => (
-            <button
+            <div
               key={e.name}
-              onClick={() => (e.type === "dir" ? load(join(e.name)) : openFile(e.name))}
               className={cn(
-                "group flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/60",
+                "group flex w-full items-center gap-3 pr-2 text-left text-sm transition-colors hover:bg-accent/60",
                 i > 0 && "border-t border-border/50",
               )}
             >
-              <span
-                className={cn(
-                  "flex size-7 shrink-0 items-center justify-center rounded-lg",
-                  e.type === "dir"
-                    ? "bg-lime-500/12 text-lime-500"
-                    : "bg-muted/60 text-muted-foreground",
-                )}
+              <button
+                onClick={() => (e.type === "dir" ? load(join(e.name)) : openFile(e.name))}
+                className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left"
               >
-                {e.type === "dir" ? <Folder className="size-4" /> : <FileText className="size-4" />}
-              </span>
-              <span className="min-w-0 flex-1 truncate">{e.name}</span>
-              {e.type === "file" ? (
-                <>
+                <span
+                  className={cn(
+                    "flex size-7 shrink-0 items-center justify-center rounded-lg",
+                    e.type === "dir"
+                      ? "bg-lime-500/12 text-lime-500"
+                      : "bg-muted/60 text-muted-foreground",
+                  )}
+                >
+                  {e.type === "dir" ? (
+                    <Folder className="size-4" />
+                  ) : (
+                    <FileText className="size-4" />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{e.name}</span>
+                {e.type === "file" ? (
                   <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                     {fmtSize(e.size)}
                   </span>
-                  <Expand className="size-3.5 shrink-0 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100" />
-                </>
-              ) : (
+                ) : null}
+              </button>
+              {/* A folder is often the thing you actually want — a website is its
+                  directory, not the html inside it. */}
+              <button
+                type="button"
+                title={
+                  e.type === "dir"
+                    ? "Copy this folder to your machine and show it"
+                    : "Copy to your machine and show it"
+                }
+                aria-label="Show on your machine"
+                onClick={() => void handOffAndOpen(join(e.name), true)}
+                className="shrink-0 rounded-md p-1.5 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-background/70 hover:text-foreground focus-visible:opacity-100"
+              >
+                <FolderOpen className="size-3.5" />
+              </button>
+              {e.type === "dir" ? (
                 <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" />
+              ) : (
+                <Expand className="size-3.5 shrink-0 text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100" />
               )}
-            </button>
+            </div>
           ))}
         </div>
       )}

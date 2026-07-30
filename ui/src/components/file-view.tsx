@@ -133,6 +133,9 @@ function NeedsAnApp({
   const [app, setApp] = useState<string | null>(null);
   const [busy, setBusy] = useState<"open" | "reveal" | null>(null);
   const [failed, setFailed] = useState("");
+  // Set after a handoff that widened to the folder, so the note can say so — a page
+  // arriving with its stylesheet is the difference between working and looking broken.
+  const [handedFolder, setHandedFolder] = useState(false);
 
   // Asked by extension, so nothing is copied out of the sandbox just to label a button.
   useEffect(() => {
@@ -155,6 +158,10 @@ function NeedsAnApp({
     setBusy(reveal ? "reveal" : "open");
     setFailed("");
     onOpenOnHost(reveal)
+      .then((result) => {
+        const handoff = result as { folderHandedOver?: boolean } | undefined;
+        if (handoff?.folderHandedOver) setHandedFolder(true);
+      })
       .catch((err: unknown) => setFailed(err instanceof Error ? err.message : String(err)))
       .finally(() => setBusy(null));
   };
@@ -194,7 +201,9 @@ function NeedsAnApp({
 
       {failed ? <p className="text-destructive mt-3 max-w-sm text-xs">{failed}</p> : null}
       <p className="text-muted-foreground/60 mt-3 text-[11px]">
-        A copy is placed in your Kith files folder first.
+        {handedFolder
+          ? "Its whole folder was copied to your Kith files, so anything it loads alongside it came too."
+          : "A copy is placed in your Kith files folder first."}
       </p>
     </div>
   );

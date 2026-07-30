@@ -457,14 +457,29 @@ def _unwrap(href: str) -> str:
     return urllib.parse.unquote(match.group(1)) if match else href
 
 
-def copy_out(container_path: str, destination: Path) -> None:
-    """Copy one file from his home out to the host.
+def kind_of(path: str) -> str:
+    """``"file"``, ``"dir"``, or ``""`` when there's nothing there.
 
-    ``docker cp`` rather than ``cat``: it preserves the bytes exactly, which matters
-    for the files this exists for — a spreadsheet or an image that the text viewer
-    cannot show is precisely the reason someone wants it on their own machine.
+    Asked before copying, because a folder and a file are copied to different
+    destinations — and because a website is a folder even when someone clicked the
+    html inside it.
     """
     ensure_ready()
-    proc = _docker(["cp", f"{CONTAINER}:{container_path}", str(destination)], timeout=120)
+    target = resolve(path)
+    script = f"if [ -d {shlex.quote(target)} ]; then echo dir; elif [ -e {shlex.quote(target)} ]; then echo file; fi"
+    proc = _docker(["exec", CONTAINER, "bash", "-lc", script], timeout=20)
+    return proc.stdout.decode(errors="replace").strip()
+
+
+def copy_out(container_path: str, destination: Path) -> None:
+    """Copy a file or a whole directory from his home out to the host.
+
+    ``docker cp`` rather than ``cat``: it preserves the bytes exactly, which matters
+    for what this exists for — a spreadsheet or an image the text viewer cannot show
+    is precisely the reason someone wants it on their own machine — and it recurses,
+    which is what makes handing over a project folder possible at all.
+    """
+    ensure_ready()
+    proc = _docker(["cp", f"{CONTAINER}:{container_path}", str(destination)], timeout=300)
     if proc.returncode != 0:
         raise SandboxError(_tail(proc.stderr) or f"cannot copy {container_path}")

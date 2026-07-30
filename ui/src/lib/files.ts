@@ -106,6 +106,10 @@ export interface HandoffResult {
   /** False for anything that would execute; revealing it is still offered. */
   openable: boolean;
   note: string;
+  /** True when a whole folder came out — a page needs its stylesheet alongside it. */
+  folderHandedOver: boolean;
+  /** What this machine opens it with, when that could be determined. */
+  opensWith: string | null;
 }
 
 /** Copy a file out of the sandbox onto this machine. */
