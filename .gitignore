@@ -1,0 +1,32 @@
+# Kith — what must never be committed.
+#
+# Written before `git init` on purpose: the first commit is the dangerous one, and a
+# credential that reaches git history is far harder to remove than to prevent.
+
+# ── Secrets and personal data ──────────────────────────────────────────────────
+# config.db holds the cloud API key in plaintext; agent.db is his entire memory —
+# journal, notes, people, tasks. Neither belongs in a repository.
+server/data/
+!server/data/.gitkeep
+
+# ── Dependencies (~620 MB of it) ───────────────────────────────────────────────
+.venv/
+node_modules/
+
+# ── Build output ───────────────────────────────────────────────────────────────
+ui/dist/
+desktop/out/
+desktop/dist/
+desktop/resources/*.png
+
+# ── Caches and tool state ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+
+# ── Logs ───────────────────────────────────────────────────────────────────────
+*.log
+server/server.log

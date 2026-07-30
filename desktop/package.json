@@ -1,0 +1,19 @@
+{
+  "name": "kith-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Desktop shell for Kith — owns the window, the tray, and the app lifecycle.",
+  "//": "Deliberately NOT \"type\": \"module\". Electron's main process and any sandboxed preload must be CommonJS; declaring ESM here silently breaks a sandboxed preload if one is ever added.",
+  "main": "out/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "icons": "python3 scripts/make-tray-icon.py",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron . --dev"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "electron": "^43.2.0",
+    "typescript": "~6.0.2"
+  }
+}

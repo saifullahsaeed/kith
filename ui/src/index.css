@@ -1,0 +1,383 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "tw-shimmer";
+
+@custom-variant dark (&:is(.dark *));
+
+/* "Presence" — a warm room where Kith lives. Amber is his colour; green means
+   he's roaming. Light is warm paper (for bright rooms); .dark is the warm night.
+   A head script sets the .dark class before paint, so there's no flash. */
+:root {
+  --radius: 0.9rem;
+
+  /* Space reserved at the top-left of the window for the OS window controls.
+     Zero in a browser tab — the desktop build overrides it below. */
+  --window-controls-inset: 0px;
+
+  --background: oklch(0.983 0.006 84);
+  --foreground: oklch(0.26 0.014 60);
+
+  --card: oklch(0.997 0.004 84);
+  --card-foreground: oklch(0.26 0.014 60);
+  --popover: oklch(0.997 0.004 84);
+  --popover-foreground: oklch(0.26 0.014 60);
+
+  --primary: oklch(0.64 0.14 62);
+  --primary-foreground: oklch(0.99 0.01 85);
+  --secondary: oklch(0.95 0.007 84);
+  --secondary-foreground: oklch(0.26 0.014 60);
+  --muted: oklch(0.95 0.007 84);
+  --muted-foreground: oklch(0.5 0.014 60);
+  --accent: oklch(0.93 0.01 84);
+  --accent-foreground: oklch(0.26 0.014 60);
+  --destructive: oklch(0.58 0.2 27);
+
+  --border: oklch(0.3 0.02 60 / 12%);
+  --input: oklch(0.3 0.02 60 / 15%);
+  --ring: oklch(0.64 0.14 62 / 45%);
+
+  /* Kith's signature accents */
+  --kith: oklch(0.64 0.14 62);
+  --kith-soft: oklch(0.64 0.14 62 / 14%);
+  --roam: oklch(0.56 0.15 150);
+  --roam-soft: oklch(0.56 0.15 150 / 14%);
+
+  --sidebar: oklch(0.965 0.006 84);
+  --sidebar-foreground: oklch(0.26 0.014 60);
+  --sidebar-primary: oklch(0.64 0.14 62);
+  --sidebar-primary-foreground: oklch(0.99 0.01 85);
+  --sidebar-accent: oklch(0.93 0.01 84);
+  --sidebar-accent-foreground: oklch(0.26 0.014 60);
+  --sidebar-border: oklch(0.3 0.02 60 / 12%);
+  --sidebar-ring: oklch(0.64 0.14 62 / 45%);
+}
+
+.dark {
+  --background: oklch(0.166 0.007 66);
+  --foreground: oklch(0.923 0.012 78);
+
+  --card: oklch(0.205 0.008 67);
+  --card-foreground: oklch(0.923 0.012 78);
+  --popover: oklch(0.202 0.009 67);
+  --popover-foreground: oklch(0.923 0.012 78);
+
+  --primary: oklch(0.812 0.128 76);
+  --primary-foreground: oklch(0.22 0.03 72);
+  --secondary: oklch(0.262 0.009 67);
+  --secondary-foreground: oklch(0.923 0.012 78);
+  --muted: oklch(0.255 0.008 67);
+  --muted-foreground: oklch(0.69 0.014 74);
+  --accent: oklch(0.288 0.011 69);
+  --accent-foreground: oklch(0.95 0.01 78);
+  --destructive: oklch(0.63 0.19 25);
+
+  --border: oklch(0.93 0.02 82 / 9%);
+  --input: oklch(0.93 0.02 82 / 13%);
+  --ring: oklch(0.812 0.128 76 / 55%);
+
+  --kith: oklch(0.812 0.128 76);
+  --kith-soft: oklch(0.812 0.128 76 / 16%);
+  --roam: oklch(0.79 0.16 152);
+  --roam-soft: oklch(0.79 0.16 152 / 16%);
+
+  --sidebar: oklch(0.19 0.008 67);
+  --sidebar-foreground: oklch(0.923 0.012 78);
+  --sidebar-primary: oklch(0.812 0.128 76);
+  --sidebar-primary-foreground: oklch(0.22 0.03 72);
+  --sidebar-accent: oklch(0.288 0.011 69);
+  --sidebar-accent-foreground: oklch(0.95 0.01 78);
+  --sidebar-border: oklch(0.93 0.02 82 / 9%);
+  --sidebar-ring: oklch(0.812 0.128 76 / 55%);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-kith: var(--kith);
+  --color-kith-soft: var(--kith-soft);
+  --color-roam: var(--roam);
+  --color-roam-soft: var(--roam-soft);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+
+  @keyframes collapsible-down {
+    from { height: 0; }
+    to { height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto)); }
+  }
+  @keyframes collapsible-up {
+    from { height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto)); }
+    to { height: 0; }
+  }
+  @keyframes kith-breathe {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.12); }
+  }
+  @keyframes kith-drift {
+    0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+    50% { transform: translate3d(0, -2%, 0) scale(1.05); }
+  }
+  @keyframes kith-rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--kith) 32%, transparent);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 18%, transparent) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--foreground) 16%, transparent);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--foreground) 26%, transparent);
+    background-clip: padding-box;
+  }
+}
+
+/* ── Presence primitives ─────────────────────────────────────────────── */
+
+/* The breathing orb that stands in for Kith. Colour is set inline via --orb
+   (amber when awake, green when roaming). */
+.kith-orb {
+  position: relative;
+  border-radius: 9999px;
+  background: var(--orb, var(--kith));
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--orb, var(--kith)) 15%, transparent),
+    0 0 14px 2px color-mix(in oklab, var(--orb, var(--kith)) 45%, transparent);
+}
+.kith-orb::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, color-mix(in oklab, var(--orb, var(--kith)) 40%, transparent) 0%, transparent 70%);
+  animation: kith-breathe 3.4s ease-in-out infinite;
+}
+.kith-orb[data-idle="true"]::after {
+  animation-duration: 6.5s;
+}
+
+/* Ambient wash behind the whole room — leans amber when awake, green while
+   he roams. */
+/* ─────────────────────────────────────────────────────────────────────────────
+   Desktop window chrome
+
+   The desktop shell uses a frameless window (titleBarStyle: hiddenInset), which
+   is what makes it feel like a Mac app rather than a web page in a frame — but it
+   means the traffic lights are drawn ON TOP of whatever the page puts at y=0.
+   Without reserving room they land straight through the header.
+
+   Two classes carry the whole contract, and they are inert in a browser tab:
+
+     .window-drag-region  a bar that behaves like a title bar — drag it to move
+                          the window, double-click to zoom. Interactive children
+                          stay clickable automatically (see the :is() rule below),
+                          so nothing has to be annotated one by one.
+
+     .window-controls-gap reserves space for the traffic lights. Needed on ANY
+                          surface that can sit at the top of the window — the app
+                          header, and any full-window overlay that covers it.
+
+   New full-window overlay? It needs .window-controls-gap on its top bar.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+[data-desktop-platform="mac"] {
+  /* Clears the traffic lights at their hiddenInset position (~13px from the
+     left edge, ~60px wide) with breathing room after them. */
+  --window-controls-inset: 78px;
+}
+
+.window-controls-gap {
+  padding-left: calc(var(--window-controls-inset) + 1rem);
+}
+
+[data-desktop] .window-drag-region {
+  -webkit-app-region: drag;
+  /* The strip is a window handle, so text selection inside it reads as broken. */
+  user-select: none;
+}
+
+/* A drag region swallows mouse events, which would make every control inside it
+   dead. Opting children back in by role — rather than by hand at each call site —
+   means a button added later works without anyone remembering this file exists. */
+[data-desktop] .window-drag-region :is(button, a, input, select, textarea, label, [role="button"], [role="tab"], [role="switch"], [contenteditable]) {
+  -webkit-app-region: no-drag;
+}
+
+.kith-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 50% at 50% 0%, color-mix(in oklab, var(--wash, var(--kith)) 12%, transparent) 0%, transparent 70%),
+    radial-gradient(70% 60% at 100% 100%, color-mix(in oklab, var(--wash, var(--kith)) 8%, transparent) 0%, transparent 75%);
+  transition: background 1.2s ease;
+  animation: kith-drift 16s ease-in-out infinite;
+}
+
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
+
+/* ── Syntax highlighting (highlight.js tokens) ───────────────────────────
+   A warm, theme-aware palette so highlighted code reads well in both the
+   light "paper" and dark "night" rooms. Colours lift in the dark. */
+.hljs {
+  color: var(--foreground);
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: color-mix(in oklab, var(--muted-foreground) 92%, transparent);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link,
+.hljs-meta .hljs-keyword {
+  color: oklch(0.55 0.19 300);
+}
+.hljs-string,
+.hljs-addition,
+.hljs-regexp,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: oklch(0.52 0.13 152);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-meta {
+  color: oklch(0.56 0.14 55);
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-name {
+  color: oklch(0.52 0.16 250);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params {
+  color: oklch(0.55 0.15 40);
+}
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-type,
+.hljs-tag,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: oklch(0.5 0.11 205);
+}
+.hljs-deletion {
+  color: var(--destructive);
+}
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
+.dark .hljs-comment,
+.dark .hljs-quote {
+  color: color-mix(in oklab, var(--muted-foreground) 95%, transparent);
+}
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-literal,
+.dark .hljs-section,
+.dark .hljs-link,
+.dark .hljs-meta .hljs-keyword {
+  color: oklch(0.76 0.13 300);
+}
+.dark .hljs-string,
+.dark .hljs-addition,
+.dark .hljs-regexp,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-pseudo {
+  color: oklch(0.79 0.13 152);
+}
+.dark .hljs-number,
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-meta {
+  color: oklch(0.81 0.12 65);
+}
+.dark .hljs-title,
+.dark .hljs-title.function_,
+.dark .hljs-name {
+  color: oklch(0.76 0.13 245);
+}
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-variable,
+.dark .hljs-template-variable,
+.dark .hljs-params {
+  color: oklch(0.79 0.13 55);
+}
+.dark .hljs-built_in,
+.dark .hljs-class .hljs-title,
+.dark .hljs-type,
+.dark .hljs-tag,
+.dark .hljs-selector-class,
+.dark .hljs-selector-id {
+  color: oklch(0.77 0.1 205);
+}

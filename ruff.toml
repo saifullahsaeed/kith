@@ -1,0 +1,37 @@
+# Lint config for the Kith server.
+#
+# Chosen for signal, not for maximal strictness: a rule that fires constantly on
+# deliberate choices trains people to ignore the whole tool. Two real bugs were
+# found by hand during the layering refactor — a dropped constant and a dead import
+# causing a circular import — and F/I catch both classes for free.
+
+target-version = "py312"
+line-length = 110
+src = ["server"]
+exclude = [".venv", "__pycache__", "server/data", "web", "desktop"]
+
+[lint]
+select = [
+  "F",    # pyflakes: undefined names, unused imports — the two bugs from the refactor
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "I",    # import sorting
+  "UP",   # pyupgrade: modern syntax for the Python we actually target
+  "B",    # bugbear: mutable defaults, silent except, loop-variable capture
+  "SIM",  # simplify
+  "RUF",  # ruff's own
+]
+ignore = [
+  "E501",    # line length is enforced by the formatter, not as an error
+  "B008",    # Flask/APIFlask decorators legitimately call in argument defaults
+  "SIM108",  # ternaries are not always clearer than an if/else
+  "RUF001",  # en dashes are deliberate in his persona and tool prose, not typos
+  "SIM105",  # try/except/pass reads fine and contextlib.suppress hides the intent
+  "SIM102",  # nested ifs are often clearer when each tests a separate thing
+]
+
+[lint.per-file-ignores]
+# The compatibility façade exists to re-export; that IS its job.
+"server/kith/db/agent_store.py" = ["F401", "F403", "I001"]
+# Migrations are historical records — never reformat or "modernise" an old one.
+"server/kith/infra/db/migrations.py" = ["E", "W", "UP", "SIM"]

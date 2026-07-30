@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kith</title>
+    <script>
+      // Apply the saved theme before paint (default dark) so there's no flash.
+      (function () {
+        try {
+          if ((localStorage.getItem("kith-theme") || "dark") === "dark")
+            document.documentElement.classList.add("dark");
+        } catch (e) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+
+      // Mark the desktop build before paint too, so the window-control inset is
+      // part of the first layout instead of a visible jump on hydration.
+      // The desktop shell has no preload by design, so the user agent is how the
+      // page learns it is in a window rather than a browser tab.
+      (function () {
+        try {
+          // Our shell appends "KithDesktop/<version>". Deliberately NOT a test for
+          // "Electron": other Electron-based browsers would then get a gap
+          // reserved for window controls that do not exist in them.
+          if (!/ KithDesktop\//.test(navigator.userAgent)) return;
+          var root = document.documentElement;
+          root.dataset.desktop = "1";
+          // macOS is the only platform whose window controls overlap the content.
+          if (/Mac OS X/.test(navigator.userAgent)) root.dataset.desktopPlatform = "mac";
+        } catch (e) {
+          /* a browser tab is the safe default */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

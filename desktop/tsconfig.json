@@ -1,0 +1,30 @@
+{
+  "//": [
+    "Separate from the ui/ tsconfigs on purpose: both of those set noEmit AND",
+    "allowImportingTsExtensions, which forbid emit outright — they cannot be reused.",
+    "CommonJS output is a hard requirement, not a preference: Electron's main process",
+    "and sandboxed preloads cannot load ESM. module: Node16 emits CommonJS (because",
+    "package.json has no \"type\": \"module\") while avoiding the node10 resolution mode",
+    "that TypeScript 6 deprecates."
+  ],
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "outDir": "out",
+    "rootDir": "src",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "declaration": false
+  },
+  "include": ["src/**/*.ts"]
+}
