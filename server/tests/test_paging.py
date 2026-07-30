@@ -108,7 +108,7 @@ class TestFiltering:
 
     def test_total_counts_what_matched_not_what_exists(self):
         """Otherwise "1-3 of 200" would promise 197 more rows that no page can reach."""
-        pool = rows(200) + [{"id": 999, "text": "needle"}]
+        pool = [*rows(200), {"id": 999, "text": "needle"}]
         out = paging.page(pool, {"contains": "needle"})
         assert out["total"] == 1
         assert "more" not in out

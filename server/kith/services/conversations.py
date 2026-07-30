@@ -81,11 +81,16 @@ class Conversation:
 def start(agent_db: Path, first_message: str = "") -> dict:
     """Open a conversation and return it.
 
-    The id is a timestamp plus a short random suffix — sortable by name in a file
-    listing, which is what you want the moment you are looking at the folder in Finder
-    rather than through the app.
+    The id is a timestamp plus a short random suffix — sortable by name in a file listing,
+    which is what you want the moment you are looking at the folder in Finder rather than
+    through the app.
+
+    Milliseconds are in it because seconds are not enough: two conversations opened in the
+    same second sorted by their random suffix instead, which quietly made the sentence
+    above false exactly when someone was clicking quickly.
     """
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    now = time.time()
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + f"{int(now % 1 * 1000):03d}"
     conversation_id = f"{stamp}-{uuid.uuid4().hex[:6]}"
     session_id = f"kith-{uuid.uuid4().hex[:16]}"
     title = title_from(first_message) if first_message else "New conversation"
