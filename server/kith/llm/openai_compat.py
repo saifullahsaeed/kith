@@ -91,9 +91,15 @@ def stream_once(
         # Cache breakpoints go on after translation, because they mark boundaries in the
         # wire-shape messages — and only for providers that need them (see llm.caching).
         # The tool schemas are cached with the system prompt on Anthropic, so their
-        # size counts toward whether the prefix clears the provider's minimum.
+        # size counts toward whether the prefix clears the provider's minimum. The
+        # persona marks where the prompt stops being identical between requests —
+        # everything after it carries the clock, so it is the only region that can be
+        # cached across turns rather than only within one.
         "messages": caching.apply(
-            _to_openai(messages), config.model, prefix_extra_chars=len(json.dumps(tools or []))
+            _to_openai(messages),
+            config.model,
+            prefix_extra_chars=len(json.dumps(tools or [])),
+            persona=config.system or "",
         ),
         "stream": True,
         "stream_options": {"include_usage": True},

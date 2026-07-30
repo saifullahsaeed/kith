@@ -412,9 +412,10 @@ TUNABLES: tuple[Tunable, ...] = (
         key="openrouter_provider",
         env="KITH_OR_PROVIDER",
         label="Pin OpenRouter to one upstream",
-        help="OpenRouter spreads requests across many hosts, so consecutive rounds miss "
-        "each other's prompt cache. Pinning keeps a turn warm and cheaper. Blank uses "
-        "their routing, which is more available.",
+        help="OpenRouter spreads requests across many hosts, so rounds can miss each "
+        "other's prompt cache. Blank is now the right answer for almost everyone: he "
+        "sends a session id, which asks for the same host without giving up the "
+        "fallbacks that keep him answering. Name a provider only to force one.",
         default="",
         group="infrastructure",
         kind="text",

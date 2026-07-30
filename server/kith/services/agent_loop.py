@@ -148,16 +148,32 @@ def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = 
 # Process-wide token meter. Every model call — chat and autonomy alike — flows
 # through stream_agent, so this is the one true tally of what Kith costs. Read it
 # with usage_snapshot(); it counts every round, not just final answers.
-_usage = {"promptTokens": 0, "responseTokens": 0, "cachedTokens": 0, "calls": 0}
+_usage = {
+    "promptTokens": 0,
+    "responseTokens": 0,
+    "cachedTokens": 0,
+    "cacheWriteTokens": 0,
+    "calls": 0,
+}
 
 
 def usage_snapshot() -> dict:
-    """Total tokens spent since the server started (chat + autonomy). `cachedTokens`
-    is the slice of prompt tokens the provider served from its prefix cache — the
-    real, on-your-traffic measure of how much caching is actually helping."""
+    """Total tokens spent since the server started (chat + autonomy).
+
+    `cachedTokens` is the slice of prompt tokens the provider served from its prefix
+    cache, and `cacheWriteTokens` is what it charged 1.25x to *put* there — the real,
+    on-your-traffic measure of whether caching is helping or just costing.
+
+    Both are needed, because a hit rate on its own cannot tell the two apart. A
+    breakpoint in the wrong place produced a full write on every single request and
+    never a read, and the hit rate reported that as an unremarkable 0% — identical to
+    having no caching at all, while actually costing 25% more. `cacheEfficiency` is the
+    ratio that makes it visible: above 1 means reads are outrunning writes.
+    """
     snap = dict(_usage)
     prompt = snap["promptTokens"] or 1
     snap["cacheHitRate"] = round(snap["cachedTokens"] / prompt, 3)
+    snap["cacheEfficiency"] = round(snap["cachedTokens"] / (snap["cacheWriteTokens"] or 1), 2)
     return snap
 
 
@@ -167,6 +183,7 @@ def _record(stats: dict | None) -> None:
     _usage["promptTokens"] += int(stats.get("promptTokens") or 0)
     _usage["responseTokens"] += int(stats.get("responseTokens") or 0)
     _usage["cachedTokens"] += int(stats.get("cachedTokens") or 0)
+    _usage["cacheWriteTokens"] += int(stats.get("cacheWriteTokens") or 0)
     _usage["calls"] += 1
 
 

@@ -26,6 +26,14 @@ the prefix from the second round on.
 Sending one where it is not needed is harmless — verified 200 on Moonshot — but it is
 still only sent to the families that need it, so a request carries nothing it cannot use.
 
+**Where the breakpoint goes matters as much as sending one.** Kith's system prompt is
+the persona followed by the current time, his mood, and the memory present right now —
+so the volatile part starts at character 9,084 of 17,646. Caching is strictly
+prefix-based, so a single breakpoint over that whole block is written afresh on every
+request and read almost never: it caches the rounds within one turn and nothing across
+turns or ticks. Marking the seam instead means the persona and tool schemas — the ~8,700
+tokens sent identically every single time — are cached once and read forever.
+
 Reference: https://openrouter.ai/docs/guides/best-practices/prompt-caching
 """
 
@@ -55,6 +63,27 @@ _CHARS_PER_TOKEN = 3.7
 MIN_CONVERSATION_CHARS = MIN_CACHEABLE_TOKENS * _CHARS_PER_TOKEN
 
 
+def stable_head(text: str, persona: str) -> int:
+    """How many leading characters of a system prompt never change.
+
+    Caching is strictly prefix-based, so one volatile byte costs everything after it.
+    Kith's system prompt is assembled as the persona followed by the current time, his
+    mood, how long since he last acted, and whatever memory is present — which means
+    the volatile part starts a third of the way in and the stable part in front of it
+    is the only region that can be cached across requests.
+
+    The persona is that region, and the transport already holds it as ``config.system``,
+    so nothing has to be threaded down from the caller. Both assemblers prepend it
+    verbatim; one strips it first, so both spellings are accepted. A prompt that does
+    not start with the persona at all — an override, a caller that builds its own —
+    returns 0 and is cached as a single undivided block, which is what it is.
+    """
+    for candidate in (persona, persona.strip()):
+        if candidate and text.startswith(candidate):
+            return len(candidate)
+    return 0
+
+
 def needs_breakpoint(model: str) -> bool:
     """Does this model's provider require an explicit breakpoint to cache at all?"""
     return model.strip().lower().startswith(NEEDS_BREAKPOINT)
@@ -72,23 +101,33 @@ def big_enough(chars: int) -> bool:
     return chars >= MIN_CACHEABLE_TOKENS * _CHARS_PER_TOKEN
 
 
-def apply(messages: list[dict[str, Any]], model: str, prefix_extra_chars: int = 0) -> list[dict[str, Any]]:
+def apply(
+    messages: list[dict[str, Any]],
+    model: str,
+    prefix_extra_chars: int = 0,
+    persona: str = "",
+) -> list[dict[str, Any]]:
     """Mark the cacheable boundaries in a message list.
 
-    Two breakpoints, which is the shape a tool loop wants and well inside Anthropic's
-    limit of four:
+    Three breakpoints, well inside Anthropic's limit of four, each covering a region
+    that goes stale at a different rate:
 
-    1. **The end of the system prompt.** The persona and tool schemas are byte-identical
-       on every round of every turn, so this is the prefix that pays off most. For
-       Anthropic the cache covers tools *and* system, since tools sit ahead of system in
-       their ordering.
-    2. **The last message.** The conversation only ever grows, so round N reads what
-       round N-1 wrote. Without this, the tool results — which are most of a long turn —
-       are re-billed in full every round.
+    1. **The end of the persona.** The one region that is byte-identical on every
+       request Kith ever makes — so this is the only breakpoint that pays off *across*
+       turns and ticks rather than only within one. For Anthropic the cache covers
+       tools *and* persona, since tools sit ahead of system in their ordering.
+    2. **The end of the system prompt**, i.e. after the time, the mood and the present
+       memory. Stale as soon as the clock ticks, so this one is reused by the later
+       rounds of the same turn. A write costs 0.25x of the region and a read saves
+       0.9x, so it pays for itself the first time it is read, whatever its size.
+    3. **The last message.** The conversation only ever grows, so round N reads what
+       round N-1 wrote. Without this, the tool results — most of a long turn — are
+       re-billed in full every round.
 
     ``prefix_extra_chars`` is anything cached alongside the system prompt but not part of
     the message list — the tool schemas, which are their own request field yet share the
-    cached region.
+    cached region. ``persona`` is the stable head described in :func:`stable_head`;
+    omitting it collapses 1 and 2 into a single breakpoint over the whole system prompt.
 
     Returns a new list; the caller's messages are not touched, because they are the
     agent loop's live history and mutating them would leak cache markers into the next
@@ -102,9 +141,9 @@ def apply(messages: list[dict[str, Any]], model: str, prefix_extra_chars: int = 
     for message in marked:
         if message.get("role") != "system":
             continue
-        text = str(message.get("content") or "")
-        if big_enough(len(text) + prefix_extra_chars):
-            message["content"] = _with_breakpoint(text)
+        blocks = _system_blocks(str(message.get("content") or ""), persona, prefix_extra_chars)
+        if blocks is not None:
+            message["content"] = blocks
         break
 
     # Only when there is enough conversation to be worth a second write. Below that the
@@ -118,6 +157,43 @@ def apply(messages: list[dict[str, Any]], model: str, prefix_extra_chars: int = 
             last["content"] = _with_breakpoint(last["content"])
 
     return marked
+
+
+def _system_blocks(text: str, persona: str, extra_chars: int) -> list[dict[str, Any]] | None:
+    """Split a system prompt at its stable/volatile seam, or don't split it at all.
+
+    Returns None to leave the message exactly as it came in — a prefix under the
+    provider's minimum will not be cached however it is marked, and a write that is
+    never honoured still bills at 1.25x.
+
+    The concatenation is byte-identical to the original string: the seam falls where the
+    persona ends, and the separator that followed it stays at the head of the volatile
+    block. What the model reads does not change.
+    """
+    if not text:
+        return None
+
+    head = stable_head(text, persona)
+    # The persona alone has to clear the minimum, since it is cached on its own — for
+    # Kith that is 9,082 characters of persona plus 23,123 of tool schemas.
+    if head and big_enough(head + extra_chars):
+        blocks = [_block(text[:head], cached=True)]
+        if text[head:]:
+            blocks.append(_block(text[head:], cached=True))
+        return blocks
+
+    # No usable seam — an overridden persona, or a caller assembling its own prompt.
+    # One breakpoint over the whole thing still caches within a turn.
+    if big_enough(len(text) + extra_chars):
+        return _with_breakpoint(text)
+    return None
+
+
+def _block(text: str, *, cached: bool) -> dict[str, Any]:
+    block: dict[str, Any] = {"type": "text", "text": text}
+    if cached:
+        block["cache_control"] = {"type": "ephemeral"}
+    return block
 
 
 def _with_breakpoint(text: str) -> list[dict[str, Any]]:

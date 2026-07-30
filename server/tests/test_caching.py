@@ -158,3 +158,102 @@ class TestStickiness:
 
     def test_it_fits_openrouter_s_limit(self):
         assert len(caching.session_id({}, lambda v: None)) <= 256
+
+
+class TestTheStableSeam:
+    """The persona is the only region identical between two different requests.
+
+    Everything after it carries the clock, so a breakpoint placed over the whole system
+    prompt is rewritten every request and read almost never. These pin the seam, because
+    the symptom of losing it is not an error — it is a cache that quietly only ever
+    works inside a single turn.
+    """
+
+    PERSONA = "p" * 9_082
+    VOLATILE = "\n\n[Right now]\nIt's Thursday, 30 Jul 2026, 3:23 PM.\n" + "m" * 8_500
+    SCHEMAS = 23_123
+
+    def prompt(self, volatile: str | None = None) -> dict:
+        return system(self.PERSONA + (self.VOLATILE if volatile is None else volatile))
+
+    def split(self, message: dict) -> list[str]:
+        content = message["content"]
+        assert isinstance(content, list), "expected blocks, got one undivided string"
+        return [block["text"] for block in content]
+
+    def apply(self, message: dict) -> dict:
+        return caching.apply(
+            [message, {"role": "user", "content": "x"}],
+            "anthropic/claude-sonnet-5",
+            prefix_extra_chars=self.SCHEMAS,
+            persona=self.PERSONA,
+        )[0]
+
+    def test_the_prompt_is_split_where_the_persona_ends(self):
+        blocks = self.split(self.apply(self.prompt()))
+        assert blocks[0] == self.PERSONA
+        assert blocks[1] == self.VOLATILE
+
+    def test_the_stable_block_is_what_carries_the_breakpoint(self):
+        content = self.apply(self.prompt())["content"]
+        assert content[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_the_model_reads_exactly_the_same_prompt(self):
+        """Blocks concatenate, so splitting must not add, drop or move a byte."""
+        original = self.prompt()
+        assert "".join(self.split(self.apply(original))) == original["content"]
+
+    def test_the_stable_block_survives_a_change_in_the_volatile_one(self):
+        """The whole point: two requests a minute apart share a cacheable prefix."""
+        first = self.split(self.apply(self.prompt()))
+        later = self.split(self.apply(self.prompt("\n\n[Right now]\nIt's 4:11 PM.\n" + "z" * 8_500)))
+        assert first[0] == later[0], "the persona must be byte-identical between requests"
+        assert first[1] != later[1], "and the volatile part is expected to differ"
+
+    def test_a_prompt_that_does_not_start_with_the_persona_is_left_whole(self):
+        """An overridden persona, or a caller assembling its own prompt."""
+        content = self.apply(system("something else entirely" + "x" * 20_000))["content"]
+        assert len(content) == 1, "no seam to split on"
+        assert content[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_a_persona_too_small_to_cache_alone_is_not_split_off(self):
+        # Splitting a sub-minimum head off would trade a cache that works within the
+        # turn for one the provider refuses outright.
+        out = caching.apply(
+            [system("tiny" + "v" * 20_000), {"role": "user", "content": "x"}],
+            "anthropic/claude-sonnet-5",
+            persona="tiny",
+        )
+        assert len(out[0]["content"]) == 1
+
+    def test_the_volatile_block_is_marked_too(self):
+        """It is stale next minute, but the later rounds of this turn re-read it."""
+        content = self.apply(self.prompt())["content"]
+        assert content[1]["cache_control"] == {"type": "ephemeral"}
+
+    def test_at_most_four_breakpoints(self):
+        """Anthropic's hard limit; a fifth is a 400 on the whole request."""
+        convo = [
+            self.prompt(),
+            {"role": "user", "content": BIG},
+            {"role": "assistant", "content": BIG},
+            {"role": "user", "content": BIG},
+        ]
+        out = caching.apply(
+            convo, "anthropic/claude-sonnet-5", prefix_extra_chars=self.SCHEMAS, persona=self.PERSONA
+        )
+        breakpoints = sum(
+            1
+            for message in out
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if "cache_control" in block
+        )
+        assert breakpoints <= 4, f"{breakpoints} breakpoints"
+
+    def test_the_persona_is_found_even_when_the_caller_stripped_it(self):
+        """chat.py strips before assembling; runner.py does not."""
+        assert caching.stable_head("abc\n\nrest", "  abc  ") == 3
+        assert caching.stable_head("abc\n\nrest", "abc") == 3
+        assert caching.stable_head("abc\n\nrest", "different") == 0
+        assert caching.stable_head("abc", "") == 0
