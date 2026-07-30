@@ -91,7 +91,6 @@ type Tab =
   | "curiosities"
   | "reminders"
   | "schedules"
-  | "messages"
   | "people"
   | "sources"
   | "workspace"
@@ -167,7 +166,6 @@ const TAB_FOR: Record<string, Tab> = {
   Curiosities: "curiosities",
   Reminders: "reminders",
   Schedules: "schedules",
-  Messages: "messages",
   People: "people",
   Sources: "sources",
   Tools: "tools",
@@ -458,6 +456,16 @@ export function ControlPanel({
             >
               Curiosities
             </TabButton>
+            {/* What he knows about the people in his life — which is memory, and reads as odd
+                anywhere else. It had a section of its own with one entry in it. */}
+            <TabButton
+              icon={<User className="size-4" />}
+              active={tab === "people"}
+              count={counts.people}
+              onClick={() => openTab("people")}
+            >
+              People
+            </TabButton>
           </NavGroup>
 
           <NavGroup label="Doing">
@@ -485,25 +493,6 @@ export function ControlPanel({
               onClick={() => openTab("schedules")}
             >
               Schedules
-            </TabButton>
-          </NavGroup>
-
-          <NavGroup label="Relationships">
-            <TabButton
-              icon={<MessageCircle className="size-4" />}
-              active={tab === "messages"}
-              count={counts.messages}
-              onClick={() => openTab("messages")}
-            >
-              Messages
-            </TabButton>
-            <TabButton
-              icon={<User className="size-4" />}
-              active={tab === "people"}
-              count={counts.people}
-              onClick={() => openTab("people")}
-            >
-              People
             </TabButton>
           </NavGroup>
 
@@ -594,8 +583,6 @@ export function ControlPanel({
                 <Reminders {...props} snap={snap} />
               ) : tab === "schedules" ? (
                 <Schedules {...props} snap={snap} />
-              ) : tab === "messages" ? (
-                <Messages snap={snap} query={query} remove={remove} />
               ) : tab === "people" ? (
                 <People {...props} snap={snap} />
               ) : tab === "sources" ? (
@@ -789,13 +776,6 @@ function Overview({
         ["Tasks", c.tasks, <ListChecks className="size-4" />, "emerald"],
         ["Reminders", c.reminders, <BellRing className="size-4" />, "orange"],
         ["Schedules", c.schedules, <Repeat className="size-4" />, "orange"],
-      ],
-    ],
-    [
-      "Relationships",
-      [
-        ["Messages", c.messages, <MessageCircle className="size-4" />, "pink"],
-        ["People", c.people, <User className="size-4" />, "teal"],
       ],
     ],
     [
@@ -2411,81 +2391,6 @@ function Schedules({
 }
 
 /* ── Messages (chat bubbles from Kith) ──────────────────────────────────── */
-
-function Messages({
-  snap,
-  query,
-  remove,
-}: {
-  snap: BrainSnapshot;
-  query: string;
-  remove: Handlers["remove"];
-}) {
-  const items = snap.messages.filter((m) => matches(query, m.body));
-  return (
-    <>
-      <PageHeader
-        icon={<MessageCircle className="size-5" />}
-        color="pink"
-        title="Messages"
-        count={items.length}
-        subtitle="Times he reached out to you unprompted."
-      />
-      {items.length === 0 ? (
-        <EmptyState icon={<MessageCircle className="size-5" />}>
-          Kith hasn't reached out yet.
-        </EmptyState>
-      ) : (
-        <div className="mx-auto max-w-2xl space-y-4">
-          {items.map((m) => (
-            <ItemMenu
-              key={m.id}
-              title={"Message"}
-              copy={m.body}
-              onDelete={() => remove("message", m.id, m.body)}
-            >
-              <div className="group flex items-start gap-3">
-                <span
-                  className={cn(
-                    "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full",
-                    m.read ? "bg-muted/60 text-muted-foreground" : CHIP.pink,
-                  )}
-                >
-                  <MessageCircle className="size-4" />
-                </span>
-                <div
-                  className={cn(
-                    "relative min-w-0 flex-1 rounded-xl rounded-tl-sm border p-4 shadow-sm",
-                    m.read
-                      ? "border-border/70 bg-card/50"
-                      : "border-pink-500/25 bg-pink-500/[0.05]",
-                  )}
-                >
-                  <div className="break-words text-sm leading-relaxed">
-                    <Markdown>{m.body}</Markdown>
-                  </div>
-                  <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-                    <span className="tabular-nums">{when(m.created_at)}</span>
-                    {m.read ? null : (
-                      <span className="inline-flex items-center gap-1 font-medium text-pink-500">
-                        <span className="size-1.5 rounded-full bg-pink-500" />
-                        unread
-                      </span>
-                    )}
-                    <div className="flex-1" />
-                    <DeleteButton onClick={() => remove("message", m.id, m.body)} />
-                  </div>
-                </div>
-              </div>
-            </ItemMenu>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-/* ── People ─────────────────────────────────────────────────────────────── */
 
 function People({
   snap,

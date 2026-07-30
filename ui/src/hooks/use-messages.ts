@@ -6,6 +6,7 @@ import {
   sendMessage,
   type KithMessage,
 } from "@/lib/backend/messages";
+import { deleteBrainItem } from "@/lib/backend/brain";
 
 const POLL_MS = 8000;
 
@@ -64,5 +65,15 @@ export function useMessages() {
     }
   }, []);
 
-  return { messages, unread, markAllRead, send, refresh, enableNotifications };
+  /** Prune one. The panel is the only place that can now, since the browse tab it used to
+   *  live in was a worse version of this list and has gone. */
+  const dismiss = useCallback(
+    async (id: number) => {
+      await deleteBrainItem("message", id).catch(() => {});
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return { messages, unread, markAllRead, send, refresh, dismiss, enableNotifications };
 }

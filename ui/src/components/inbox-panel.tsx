@@ -40,7 +40,7 @@ const KINDS: Record<string, { label: string; icon: typeof Bell; tone: string; wa
 };
 
 export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () => void }) {
-  const { messages, unread, markAllRead } = inbox;
+  const { messages, unread, markAllRead, dismiss } = inbox;
   const feedRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const [onlyWanting, setOnlyWanting] = useState(false);
@@ -125,7 +125,7 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
                     const kind = KINDS[message.kind] ?? KINDS.note;
                     const Icon = kind.icon;
                     return (
-                      <li key={message.id}>
+                      <li key={message.id} className="group relative">
                         <button
                           type="button"
                           disabled={!message.link}
@@ -162,6 +162,18 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
                               <ChevronRight className="size-3" />
                             </span>
                           ) : null}
+                        </button>
+
+                        {/* Pruning, which the removed Messages tab was the only place to do.
+                            On hover so it never competes with the thing being read. */}
+                        <button
+                          type="button"
+                          aria-label="Dismiss"
+                          title="Dismiss"
+                          onClick={() => void dismiss(message.id)}
+                          className="text-muted-foreground/40 hover:text-destructive absolute end-2 top-2 opacity-0 transition group-hover:opacity-100"
+                        >
+                          <X className="size-3.5" />
                         </button>
                       </li>
                     );

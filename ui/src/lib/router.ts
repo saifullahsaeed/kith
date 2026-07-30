@@ -21,7 +21,6 @@ const TABS = [
   "curiosities",
   "reminders",
   "schedules",
-  "messages",
   "people",
   "sources",
   "workspace",
