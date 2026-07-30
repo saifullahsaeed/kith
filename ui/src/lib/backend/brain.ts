@@ -122,7 +122,11 @@ export interface Reminder {
 export interface Message {
   id: number;
   body: string;
+  kind: string;
   read: number;
+  /** An in-app path like "/tasks/42" when this is about something you can open. */
+  link: string | null;
+  sender: string;
   created_at: string;
 }
 export interface Person {

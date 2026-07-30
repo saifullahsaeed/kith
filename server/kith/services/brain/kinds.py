@@ -53,8 +53,11 @@ def _task_edit(path, task_id, data: dict):
     like any other.
     """
     if "milestone_id" in data:
+        # A blank selection arrives as None, "", "none" or 0 depending on who is calling.
+        # All of them mean "no milestone"; the first version of this let 0 through as an id.
         raw = data.get("milestone_id")
-        repo.tasks.set_task_milestone(path, task_id, int(raw) if raw not in (None, "", "none") else None)
+        chosen = None if raw in (None, "", "none", 0, "0") else int(raw)
+        repo.tasks.set_task_milestone(path, task_id, chosen)
     return repo.tasks.update_task(
         path,
         task_id,

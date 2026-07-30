@@ -140,7 +140,7 @@ def render(url: str) -> str | None:
     return text
 
 
-def notify(title: str, body: str) -> bool:
+def notify(title: str, body: str, link: str | None = None) -> bool:
     """Post a native notification through the desktop shell.
 
     False when there is no shell registered — running as a bare server, there is no app
@@ -151,7 +151,10 @@ def notify(title: str, body: str) -> bool:
     permission "granted", throws nothing, and macOS drops the notification, because a
     notification from a page has no app to attribute. The shell's main process does.
     """
-    return _ask("/notify", {"title": title, "body": body}) is not None
+    # `link` is an in-app path like "/tasks/42". Without it a notification can only bring the
+    # window forward, which leaves you reading "I need your input on task #42" and then hunting
+    # for task #42 — the notification names the thing and then makes you go and find it.
+    return _ask("/notify", {"title": title, "body": body, "link": link or ""}) is not None
 
 
 def open_settings_pane(pane: str) -> bool:

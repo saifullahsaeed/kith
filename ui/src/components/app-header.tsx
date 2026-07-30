@@ -134,20 +134,27 @@ export function AppHeader({
         </button>
       ) : null}
 
-      <Button
+      <span className="bg-border/60 mx-1 hidden h-4 w-px sm:block" aria-hidden />
+
+      {/* An icon, because the word never told you anything the bell doesn't — and the count
+          is the only part that ever mattered. The label was costing space in a bar where the
+          things that need words (what he is doing, which model, which mode) were being
+          truncated to make room for it. */}
+      <TooltipIconButton
+        tooltip={unread > 0 ? `${unread} unread` : "Alerts"}
+        side="bottom"
         variant="ghost"
-        size="sm"
-        className="relative gap-1.5 text-muted-foreground hover:text-foreground"
+        size="icon"
+        className="relative size-7"
         onClick={onOpenInbox}
       >
         <Bell className="size-4" />
-        Alerts
         {unread > 0 ? (
-          <span className="absolute -top-1 -right-1 flex min-w-4 items-center justify-center rounded-full bg-kith px-1 text-[10px] font-semibold text-primary-foreground shadow-[0_0_10px_var(--kith)]">
+          <span className="bg-kith text-primary-foreground absolute -top-0.5 -right-0.5 flex min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold shadow-[0_0_10px_var(--kith)]">
             {unread > 9 ? "9+" : unread}
           </span>
         ) : null}
-      </Button>
+      </TooltipIconButton>
       <Button
         variant="ghost"
         size="sm"

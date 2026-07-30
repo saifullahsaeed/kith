@@ -22,7 +22,9 @@ import * as crypto from "node:crypto";
 import * as http from "node:http";
 import { URL } from "node:url";
 
-import { showMainWindow } from "./window";
+import { BACKEND_ORIGIN } from "./config";
+
+import { getMainWindow, showMainWindow } from "./window";
 
 import { BrowserWindow, Notification, session, shell } from "electron";
 
@@ -261,10 +263,24 @@ async function notify(
 ): Promise<void> {
   let title = "Kith";
   let body = "";
+  let link = "";
   try {
-    const parsed = JSON.parse(await readBody(request)) as { title?: unknown; body?: unknown };
+    const parsed = JSON.parse(await readBody(request)) as {
+      title?: unknown;
+      body?: unknown;
+      link?: unknown;
+    };
     if (typeof parsed.title === "string" && parsed.title.trim()) title = parsed.title.trim();
     if (typeof parsed.body === "string") body = parsed.body;
+    // In-app paths only. A notification is server-supplied and its body can contain anything
+    // he wrote, so this is the one field that decides where a click goes — "/tasks/42" yes,
+    // anything with a scheme or a host no.
+    // A single leading slash, and nothing that could be read as a host. "//evil" passes a
+    // naive "starts with /" check and `new URL("//evil", origin)` resolves it as
+    // protocol-relative — a different site entirely, reached from a notification body.
+    if (typeof parsed.link === "string" && /^\/(?!\/)[\w\-/]*$/.test(parsed.link)) {
+      link = parsed.link;
+    }
   } catch (error) {
     return reply(400, { error: `bad request: ${(error as Error).message}` });
   }
@@ -272,7 +288,10 @@ async function notify(
     return reply(503, { error: "this machine can't show notifications" });
   }
   const notification = new Notification({ title, body });
-  notification.on("click", () => showMainWindow());
+  notification.on("click", () => {
+    showMainWindow();
+    if (link) void openInApp(link);
+  });
   notification.show();
   reply(200, { shown: true });
 }
@@ -307,4 +326,34 @@ async function openPane(
   if (!target) return reply(400, { error: `unknown pane: ${name}` });
   await shell.openExternal(target);
   reply(200, { opened: name });
+}
+
+/**
+ * Go to a path inside the running app.
+ *
+ * Asks the page to route there first, and only reloads if it cannot. The difference matters:
+ * a reload throws away whatever was on screen, and a notification arriving mid-reply should
+ * not cost you the reply. The app sets `window.__kithRouter` once its router is mounted and
+ * listens for this event; if that flag is missing — the window is still loading, or showing
+ * onboarding — a real navigation is the honest fallback.
+ *
+ * Deliberately not a preload bridge. The shell has no preload by design, and one existing
+ * only so a notification can change the URL would be a large hole for a small feature.
+ */
+async function openInApp(path: string): Promise<void> {
+  const window = getMainWindow();
+  if (!window || window.isDestroyed()) return;
+  try {
+    const routed = (await window.webContents.executeJavaScript(
+      `(() => {
+         if (!window.__kithRouter) return false;
+         window.dispatchEvent(new CustomEvent("kith:navigate", { detail: ${JSON.stringify(path)} }));
+         return true;
+       })()`,
+    )) as boolean;
+    if (routed) return;
+  } catch {
+    /* fall through to a real navigation */
+  }
+  await window.loadURL(new URL(path, BACKEND_ORIGIN).toString());
 }

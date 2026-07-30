@@ -5,6 +5,9 @@ export interface KithMessage {
   body: string;
   read: number; // 0 unread, 1 read
   sender: "kith" | "user";
+  /** What sort of thing this is: note | asked | stuck | delivered | reachout | user. Decides
+   *  how it reads in the alerts panel and whether it was allowed to interrupt you at all. */
+  kind: string;
   created_at: string;
   link?: string | null; // e.g. "/tasks/12" — makes the alert click through to its task
 }

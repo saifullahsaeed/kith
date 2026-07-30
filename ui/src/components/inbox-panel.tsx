@@ -1,27 +1,55 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, ChevronRight } from "lucide-react";
+import {
+  Bell,
+  Check,
+  ChevronRight,
+  CircleHelp,
+  Gift,
+  Megaphone,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/file-view";
-import { PresenceOrb } from "@/components/presence";
-import { X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { useMessages } from "@/hooks/use-messages";
 
 type Messages = ReturnType<typeof useMessages>;
 
-/** Notifications from Kith — the things he surfaces to you on his own (updates,
- * and "I need you on task X" pings). Read-only: the actual back-and-forth now
- * happens in each task's comment thread. Opening it clears the unread badge. */
+/**
+ * What he has told you, and which of it wants something.
+ *
+ * Every row used to look the same — one orb, one paragraph, one timestamp — which was exactly
+ * the problem the message kinds were introduced to solve on the notification side and hadn't
+ * been carried through to here. A question he is blocked on and a note he made while working
+ * are not the same event, and a list that renders them identically makes you read all of it
+ * to find the one that matters.
+ *
+ * So: each kind says what it is, in an icon and a word and a colour. Grouped by day, because
+ * "3 days ago" in a flat list is a date you have to compute. And a filter, since the common
+ * question is not "what has he said" but "what is waiting on me".
+ */
+const KINDS: Record<string, { label: string; icon: typeof Bell; tone: string; wants: boolean }> = {
+  asked: { label: "Needs your answer", icon: CircleHelp, tone: "text-orange-400", wants: true },
+  stuck: { label: "Stuck", icon: TriangleAlert, tone: "text-orange-400", wants: true },
+  delivered: { label: "Finished", icon: Gift, tone: "text-roam", wants: false },
+  reachout: { label: "He reached out", icon: Megaphone, tone: "text-kith", wants: false },
+  note: { label: "Note", icon: Check, tone: "text-muted-foreground/60", wants: false },
+};
+
 export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () => void }) {
   const { messages, unread, markAllRead } = inbox;
   const feedRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const [onlyWanting, setOnlyWanting] = useState(false);
 
-  const openLink = (link: string) => {
-    onClose();
-    navigate(link);
-  };
+  // What was unread when you opened it, kept for this viewing. Marking everything read on
+  // open and *also* dropping the highlight meant the act of looking erased what was new.
+  const [wasUnread] = useState(
+    () => new Set(messages.filter((one) => !one.read).map((one) => one.id)),
+  );
 
   useEffect(() => {
     if (unread > 0) void markAllRead();
@@ -30,74 +58,153 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
 
   useEffect(() => {
     const el = feedRef.current;
-    if (el) el.scrollTop = 0; // newest-first, keep top in view
+    if (el) el.scrollTop = 0; // newest first, keep the top in view
   }, [messages.length]);
 
+  const shown = onlyWanting
+    ? messages.filter((one) => KINDS[one.kind]?.wants)
+    : messages.filter((one) => one.sender !== "user");
+  const wanting = messages.filter((one) => KINDS[one.kind]?.wants).length;
+
+  const days = useMemo(() => groupByDay(shown), [shown]);
+
   return (
-    <aside className="fixed right-0 top-0 z-20 flex h-dvh w-96 max-w-full flex-col border-l bg-background shadow-xl">
+    <aside className="bg-background fixed top-0 right-0 z-20 flex h-dvh w-[26rem] max-w-full flex-col border-s shadow-xl">
       <div className="flex items-center gap-2 border-b px-4 py-2.5">
-        <Bell className="size-4 text-muted-foreground" />
-        <span className="font-semibold">Notifications</span>
-        {messages.length ? (
-          <span className="text-xs text-muted-foreground">· {messages.length}</span>
-        ) : null}
+        <Bell className="text-muted-foreground size-4" />
+        <span className="font-semibold">Alerts</span>
         <div className="flex-1" />
         <Button variant="ghost" size="icon" className="size-7" onClick={onClose} aria-label="Close">
           <X className="size-4" />
         </Button>
       </div>
 
-      <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {messages.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Nothing yet. When Kith has something to tell you — a finding, or a task he needs your
-            input on — it shows up here. To talk something through, open that task and use its
-            comments.
+      {/* The filter is the whole point of having kinds. Hidden when there is nothing waiting,
+          since a toggle that can only ever empty the list is not a useful control. */}
+      {wanting > 0 ? (
+        <div className="flex items-center gap-1 border-b px-3 py-2">
+          {(
+            [
+              [false, `Everything · ${messages.filter((one) => one.sender !== "user").length}`],
+              [true, `Waiting on you · ${wanting}`],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={String(value)}
+              type="button"
+              onClick={() => setOnlyWanting(value)}
+              className={cn(
+                "rounded-md px-2 py-1 text-[11px] transition-colors",
+                onlyWanting === value
+                  ? "bg-kith-soft text-kith"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {shown.length === 0 ? (
+          <p className="text-muted-foreground p-4 text-center text-sm leading-relaxed">
+            {onlyWanting
+              ? "Nothing is waiting on you."
+              : "Nothing yet. When he finishes something, gets stuck, or needs an answer, it shows up here."}
           </p>
         ) : (
-          <ul className="space-y-2.5">
-            {messages.map((m) => (
-              <li
-                key={m.id}
-                onClick={m.link ? () => openLink(m.link!) : undefined}
-                className={`flex items-start gap-2 rounded-lg border p-3 text-sm ${m.read ? "" : "border-kith/30 bg-kith-soft/50"} ${m.link ? "cursor-pointer transition-colors hover:border-kith/50 hover:bg-kith-soft/40" : ""}`}
-              >
-                <span className="mt-1">
-                  <PresenceOrb size={7} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  {/* He reaches out in his own words, and formats them. */}
-                  <Markdown>{m.body}</Markdown>
-                  <span className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-                    {when(m.created_at)}
-                    {m.link ? (
-                      <span className="flex items-center text-kith">
-                        · open task
-                        <ChevronRight className="size-3" />
-                      </span>
-                    ) : null}
-                  </span>
-                </div>
-              </li>
+          <div className="space-y-4">
+            {days.map(([label, group]) => (
+              <div key={label}>
+                <p className="text-muted-foreground/50 mb-1.5 px-1 text-[10px] tracking-wide uppercase">
+                  {label}
+                </p>
+                <ul className="space-y-1.5">
+                  {group.map((message) => {
+                    const kind = KINDS[message.kind] ?? KINDS.note;
+                    const Icon = kind.icon;
+                    return (
+                      <li key={message.id}>
+                        <button
+                          type="button"
+                          disabled={!message.link}
+                          onClick={() => {
+                            if (!message.link) return;
+                            onClose();
+                            navigate(message.link);
+                          }}
+                          className={cn(
+                            "w-full rounded-xl border p-3 text-start transition-colors",
+                            wasUnread.has(message.id)
+                              ? "border-kith/30 bg-kith-soft/40"
+                              : "border-border/60 bg-card/30",
+                            message.link && "hover:border-kith/50 hover:bg-kith-soft/30",
+                            !message.link && "cursor-default",
+                          )}
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <Icon className={cn("size-3.5 shrink-0", kind.tone)} />
+                            <span className={cn("text-[11px] font-medium", kind.tone)}>
+                              {kind.label}
+                            </span>
+                            <span className="text-muted-foreground/50 ms-auto text-[10px] tabular-nums">
+                              {time(message.created_at)}
+                            </span>
+                          </span>
+                          <span className="mt-1 block text-sm">
+                            {/* He writes these, and he formats them. */}
+                            <Markdown>{message.body}</Markdown>
+                          </span>
+                          {message.link ? (
+                            <span className="text-kith mt-1 flex items-center text-[10px]">
+                              {message.link.startsWith("/tasks/") ? "Open the task" : "Open"}
+                              <ChevronRight className="size-3" />
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
-      </div>
-      <div className="border-t px-4 py-2 text-[11px] text-muted-foreground">
-        Replies happen in each task's comments — open the task he mentions.
       </div>
     </aside>
   );
 }
 
-function when(iso: string): string {
+/** Newest day first, each with its messages. "Today"/"Yesterday" rather than a date, because
+ *  a date is something you have to work out. */
+function groupByDay<T extends { created_at: string }>(messages: T[]): [string, T[]][] {
+  const out = new Map<string, T[]>();
+  for (const message of messages) {
+    const label = dayLabel(message.created_at);
+    out.set(label, [...(out.get(label) ?? []), message]);
+  }
+  return [...out.entries()];
+}
+
+function dayLabel(iso: string): string {
   try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const when = new Date(iso);
+    const day = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayMs = 86_400_000;
+    if (day === today) return "Today";
+    if (day === today - dayMs) return "Yesterday";
+    return when.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+  } catch {
+    return "Earlier";
+  }
+}
+
+function time(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   } catch {
     return "";
   }

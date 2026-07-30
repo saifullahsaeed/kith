@@ -33,7 +33,11 @@ def isolated(tmp_path, monkeypatch):
     _Store.values = {}
     monkeypatch.setattr(notify, "_store", lambda: (tmp_path / "config.db", _Store()))
     # Never actually post a notification from a test.
-    monkeypatch.setattr("kith.infra.renderer.notify", lambda title, body: True)
+    # Signature must match the real one — announce() swallows exceptions so a tool call is
+    # never taken down by a doorbell, which means a stale stub here fails as a silent False
+    # rather than as a TypeError. That is exactly how these two tests broke when `link` was
+    # added, so the stub takes it too.
+    monkeypatch.setattr("kith.infra.renderer.notify", lambda title, body, link=None: True)
     yield
     _Store.values = {}
 
@@ -106,7 +110,7 @@ class TestAnnouncing:
         """He said the thing and it is recorded; a doorbell that will not ring is not a
         reason to fail the tool call that rang it."""
 
-        def explode(title, body):
+        def explode(title, body, link=None):
             raise RuntimeError("no desktop app")
 
         monkeypatch.setattr("kith.infra.renderer.notify", explode)
@@ -116,9 +120,20 @@ class TestAnnouncing:
         seen = {}
         monkeypatch.setattr(
             "kith.infra.renderer.notify",
-            lambda title, body: seen.update(title=title, body=body) or True,
+            lambda title, body, link=None: seen.update(title=title, body=body, link=link) or True,
         )
         notify.announce("stuck", "x " * 400)
         assert len(seen["body"]) <= 160
         assert seen["body"].endswith("…")
         assert seen["title"] == "Kith is stuck"
+
+    def test_the_link_reaches_the_notification(self, monkeypatch):
+        """The whole point of a deeplink: a notification that names a task has to be able to
+        open it, or you read "I need your input on task #42" and go hunting for task #42."""
+        seen = {}
+        monkeypatch.setattr(
+            "kith.infra.renderer.notify",
+            lambda title, body, link=None: seen.update(link=link) or True,
+        )
+        notify.announce("asked", "come look", "/tasks/42")
+        assert seen["link"] == "/tasks/42"

@@ -189,3 +189,58 @@ class TestTheRoadmapView:
         assert repo.tasks.active_tasks(db) == []
         repo.projects.remove_dependency(db, b, a)
         assert len(repo.tasks.active_tasks(db)) == 1
+
+
+class TestTheMilestoneLink:
+    """A task pointing at a milestone that does not exist.
+
+    It happened to a real task: the column stored whatever it was given and only looked the
+    milestone up in order to copy its project across, so a stray 0 — what `Number("")` produces
+    in an interface — was written straight in. The roadmap then could not gate the task, the
+    task page showed an empty milestone, and nothing anywhere said the link was broken.
+    """
+
+    def test_a_real_milestone_links_and_carries_its_project(self, db, project):
+        one = milestone(db, project, "Design")
+        row = repo.tasks.add_task(db, "sketch it", "")
+        repo.tasks.set_task_milestone(db, row["id"], one)
+        detail = repo.tasks.task_detail(db, row["id"])
+        assert detail["milestone_id"] == one
+        assert detail["project_id"] == project
+
+    def test_an_id_that_is_not_a_milestone_is_refused(self, db, project):
+        one = milestone(db, project, "Design")
+        row = repo.tasks.add_task(db, "sketch it", "", project_id=project, milestone_id=one)
+        with pytest.raises(ValueError):
+            repo.tasks.set_task_milestone(db, row["id"], 9999)
+
+    def test_a_refusal_leaves_the_existing_link_alone(self, db, project):
+        """The failure mode that made this expensive: a bad write that also destroyed the
+        good value would turn one mistake into two."""
+        one = milestone(db, project, "Design")
+        row = repo.tasks.add_task(db, "sketch it", "", project_id=project, milestone_id=one)
+        with pytest.raises(ValueError):
+            repo.tasks.set_task_milestone(db, row["id"], 9999)
+        assert repo.tasks.task_detail(db, row["id"])["milestone_id"] == one
+
+    def test_zero_means_no_milestone_rather_than_milestone_zero(self, db, project):
+        one = milestone(db, project, "Design")
+        row = repo.tasks.add_task(db, "sketch it", "", project_id=project, milestone_id=one)
+        repo.tasks.set_task_milestone(db, row["id"], 0)
+        assert repo.tasks.task_detail(db, row["id"])["milestone_id"] is None
+
+    def test_none_clears_it(self, db, project):
+        one = milestone(db, project, "Design")
+        row = repo.tasks.add_task(db, "sketch it", "", project_id=project, milestone_id=one)
+        repo.tasks.set_task_milestone(db, row["id"], None)
+        assert repo.tasks.task_detail(db, row["id"])["milestone_id"] is None
+
+    def test_an_unlinked_task_is_never_gated(self, db, project):
+        """Which is why a broken link was invisible: it looked exactly like no link at all."""
+        first = milestone(db, project, "Design")
+        second = milestone(db, project, "Build")
+        repo.projects.add_dependency(db, second, first)
+        row = repo.tasks.add_task(db, "loose", "", project_id=project, milestone_id=second)
+        assert repo.tasks.active_tasks(db) == []
+        repo.tasks.set_task_milestone(db, row["id"], None)
+        assert len(repo.tasks.active_tasks(db)) == 1

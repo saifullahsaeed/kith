@@ -112,7 +112,7 @@ def announce(kind: str, body: str, link: str | None = None) -> bool:
         summary = body.strip().replace("\n", " ")
         if len(summary) > 160:
             summary = summary[:157].rstrip() + "…"
-        return renderer.notify(title, summary)
+        return renderer.notify(title, summary, link)
     except Exception:
         return False
 

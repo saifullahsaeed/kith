@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   AssistantRuntimeProvider,
@@ -142,6 +142,22 @@ export function Workspace({
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   }, []);
+
+  // Clicking a desktop notification lands here. The shell dispatches this rather than
+  // reloading the window, because a notification arriving mid-reply should not cost you the
+  // reply — and `__kithRouter` is how it knows an in-page route is possible at all.
+  useEffect(() => {
+    (window as unknown as { __kithRouter?: boolean }).__kithRouter = true;
+    const onNavigate = (event: Event) => {
+      const path = (event as CustomEvent<string>).detail;
+      if (typeof path === "string" && path.startsWith("/")) navigate(path);
+    };
+    window.addEventListener("kith:navigate", onNavigate);
+    return () => {
+      (window as unknown as { __kithRouter?: boolean }).__kithRouter = false;
+      window.removeEventListener("kith:navigate", onNavigate);
+    };
+  }, [navigate]);
 
   const roaming = autonomy.status?.running ?? false;
   // The room glows green while he roams, otherwise the colour of his mood.

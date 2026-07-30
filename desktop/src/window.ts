@@ -14,7 +14,7 @@ import { loadWhenReady, recoverFromBackendRestarts } from "./backend";
 import { BACKEND_ORIGIN, EXTERNAL_SCHEMES, WINDOW } from "./config";
 import { restoredBounds, trackWindowState } from "./window-state";
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow_: BrowserWindow | null = null;
 
 /** True once the app is genuinely quitting, so close stops meaning "hide". */
 let quitting = false;
@@ -24,7 +24,7 @@ export function markQuitting(): void {
 }
 
 export function getMainWindow(): BrowserWindow | null {
-  return mainWindow;
+  return mainWindow_;
 }
 
 export function createMainWindow(): BrowserWindow {
@@ -77,16 +77,16 @@ export function createMainWindow(): BrowserWindow {
   });
 
   window.on("closed", () => {
-    mainWindow = null;
+    mainWindow_ = null;
   });
 
-  mainWindow = window;
+  mainWindow_ = window;
   return window;
 }
 
 /** Bring the window back, creating it again if it has genuinely gone. */
 export function showMainWindow(): void {
-  const existing = mainWindow;
+  const existing = mainWindow_;
   if (existing && !existing.isDestroyed()) {
     if (existing.isMinimized()) existing.restore();
     existing.show();

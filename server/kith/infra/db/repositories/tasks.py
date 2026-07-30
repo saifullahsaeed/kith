@@ -68,16 +68,30 @@ def add_task(
 
 
 def set_task_milestone(path: Path, task_id: int, milestone_id: int | None) -> dict | None:
-    """Link a task to a milestone (and inherit the milestone's project)."""
+    """Link a task to a milestone, inheriting the milestone's project.
+
+    Refuses an id that is not a milestone. It used to store whatever it was given and only
+    look the milestone up to copy the project across, so a stray value — a 0 from a
+    `Number("")` in the interface, say — was written straight to the column. The task then
+    pointed at a milestone that does not exist: the roadmap could not gate it, the task page
+    showed an empty milestone field, and nothing anywhere said the link was broken. That
+    happened to a real task, which is why this now validates instead of trusting.
+
+    Zero is treated as "no milestone" rather than rejected, because it is what an empty form
+    field arrives as and the intent is unambiguous.
+    """
     with session(path) as db:
         row = db.get(Task, task_id)
         if row is None:
             return None
-        row.milestone_id = milestone_id
-        if milestone_id:
+        if not milestone_id:  # None or 0 — no milestone
+            row.milestone_id = None
+        else:
             milestone = db.get(Milestone, milestone_id)
-            if milestone:
-                row.project_id = milestone.project_id
+            if milestone is None:
+                raise ValueError(f"there is no milestone {milestone_id}")
+            row.milestone_id = milestone_id
+            row.project_id = milestone.project_id
         row.updated_at = utc_now_iso()
         db.flush()
         return as_dict(row)
