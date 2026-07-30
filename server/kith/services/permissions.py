@@ -395,6 +395,30 @@ def revoke_all() -> None:
     _session_grants.clear()
 
 
+def revoke(signature: str) -> bool:
+    """Take back one standing permission. False if it was not there.
+
+    All-or-nothing was the only option, and that is not how anyone actually feels about
+    these: you want to keep "he may read my Documents" and drop the one folder you
+    approved in a hurry last week. Forcing the choice between all of them and none of
+    them means people keep the ones they would rather not.
+    """
+    wanted = str(signature or "").strip()
+    if not wanted:
+        return False
+    remaining = always_grants()
+    found = wanted in remaining
+    if found:
+        remaining.discard(wanted)
+        path, store = _store()
+        store.update_settings(path, {GRANTS_KEY: "\n".join(sorted(remaining))})
+    # A grant can be standing, session-only, or both; dropping it should mean dropping it.
+    if wanted in _session_grants:
+        _session_grants.discard(wanted)
+        found = True
+    return found
+
+
 def _signature(request: Request) -> str:
     return (
         f"path:{request.what}" if request.kind != "command" else f"cmd:{request.why.split('involves ')[-1]}"

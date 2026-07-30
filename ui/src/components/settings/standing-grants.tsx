@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, ShieldCheck, TerminalSquare } from "lucide-react";
+import { FolderOpen, ShieldCheck, TerminalSquare, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -35,6 +35,18 @@ export function StandingGrants() {
   }, []);
 
   useEffect(load, [load]);
+
+  async function drop(signature: string) {
+    setBusy(true);
+    setError("");
+    try {
+      setState(await revokeGrants(signature));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function forget() {
     const count = state?.grants.length ?? 0;
@@ -96,7 +108,7 @@ export function StandingGrants() {
       ) : (
         <div className="divide-y rounded-xl border">
           {grants.map((grant) => (
-            <Grant key={grant} signature={grant} />
+            <Grant key={grant} signature={grant} onDrop={() => void drop(grant)} busy={busy} />
           ))}
         </div>
       )}
@@ -114,12 +126,20 @@ export function StandingGrants() {
 }
 
 /** One grant, read back as the thing it permits rather than as its stored signature. */
-function Grant({ signature }: { signature: string }) {
+function Grant({
+  signature,
+  onDrop,
+  busy,
+}: {
+  signature: string;
+  onDrop: () => void;
+  busy: boolean;
+}) {
   const isPath = signature.startsWith("path:");
   const body = signature.slice(signature.indexOf(":") + 1);
   const Icon = isPath ? FolderOpen : TerminalSquare;
   return (
-    <div className="flex items-start gap-2.5 px-3 py-2.5">
+    <div className="group flex items-start gap-2.5 px-3 py-2.5">
       <Icon className="text-muted-foreground/60 mt-0.5 size-3.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <code className="block font-mono text-[11px] break-all">{body}</code>
@@ -127,6 +147,18 @@ function Grant({ signature }: { signature: string }) {
           {isPath ? "This and anything inside it" : "This command, whenever he runs it"}
         </p>
       </div>
+      <button
+        type="button"
+        onClick={onDrop}
+        disabled={busy}
+        title="Forget this one — he'll ask again next time"
+        aria-label={`Forget permission for ${body}`}
+        // Shown on hover, but always reachable by keyboard: a control that only exists for
+        // a mouse is not a control everyone has.
+        className="text-muted-foreground/40 hover:text-destructive focus-visible:text-destructive mt-0.5 shrink-0 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100"
+      >
+        <X className="size-3.5" />
+      </button>
     </div>
   );
 }

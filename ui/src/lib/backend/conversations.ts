@@ -63,3 +63,24 @@ export async function deleteConversation(id: string, purge = false): Promise<voi
   const response = await fetch(`/api/conversations/${id}?purge=${purge}`, { method: "DELETE" });
   if (!response.ok) throw new Error(`could not remove (${response.status})`);
 }
+
+export interface TranscriptHit {
+  conversationId: string;
+  title: string;
+  role: string;
+  at: string;
+  snippet: string;
+}
+
+/**
+ * Find where something was said, across every transcript.
+ *
+ * Titles come from a conversation's first message, so without this a conversation is
+ * findable by how it opened and by nothing else that happened in it.
+ */
+export async function searchConversations(query: string): Promise<TranscriptHit[]> {
+  const response = await fetch(`/api/conversations/search?q=${encodeURIComponent(query)}`);
+  if (!response.ok) return [];
+  const body = (await response.json()) as { hits?: TranscriptHit[] };
+  return body.hits ?? [];
+}

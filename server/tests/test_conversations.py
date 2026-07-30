@@ -134,3 +134,117 @@ class TestListing:
         report = conversations.storage()
         assert report["files"] == 2
         assert report["bytes"] > 0
+
+
+class TestSearchingWhatWasSaid:
+    """Finding a conversation by what happened in it, not by how it opened.
+
+    Nothing could do this. The control panel's box filters whichever tab is on screen, and
+    the tab that held messages is gone — so the record kept most carefully was the one
+    thing with no way in. Titles are generated from a first message, which means without
+    this a conversation is findable by its opening line and by nothing else in it.
+    """
+
+    def test_a_word_from_the_middle_of_a_conversation_finds_it(self, db):
+        first = conversations.start(db, "planning the week")
+        conversations.record(db, first["id"], "user", "can you look at the invoice from Acme")
+        conversations.start(db, "something unrelated")
+
+        hits = conversations.search(db, "acme")
+
+        assert [hit["conversationId"] for hit in hits] == [first["id"]]
+        assert "Acme" in hits[0]["snippet"]
+
+    def test_it_says_who_said_it(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record(db, one["id"], "assistant", "I found the missing receipt")
+
+        hits = conversations.search(db, "receipt")
+
+        # "Did I ask for that or did he offer it" is most of why anyone is looking.
+        assert hits[0]["role"] == "assistant"
+
+    def test_case_does_not_matter(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record(db, one["id"], "user", "Check the QUARTERLY numbers")
+        assert len(conversations.search(db, "quarterly")) == 1
+
+    def test_one_hit_per_conversation(self, db):
+        one = conversations.start(db, "hello")
+        for _ in range(5):
+            conversations.record(db, one["id"], "user", "budget budget budget")
+
+        # Five matches from one conversation would bury every other conversation that also
+        # has one, and the list exists to get you to the right conversation.
+        assert len(conversations.search(db, "budget")) == 1
+
+    def test_newest_conversation_first(self, db):
+        older = conversations.start(db, "older")
+        conversations.record(db, older["id"], "user", "the mango report")
+        newer = conversations.start(db, "newer")
+        conversations.record(db, newer["id"], "user", "the mango report again")
+
+        hits = conversations.search(db, "mango")
+
+        assert [hit["conversationId"] for hit in hits] == [newer["id"], older["id"]]
+
+    def test_an_empty_query_finds_nothing_rather_than_everything(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record(db, one["id"], "user", "anything")
+        assert conversations.search(db, "   ") == []
+
+    def test_the_limit_is_respected(self, db):
+        for index in range(6):
+            one = conversations.start(db, f"chat {index}")
+            conversations.record(db, one["id"], "user", "shared word")
+        assert len(conversations.search(db, "shared", limit=3)) == 3
+
+    def test_reasoning_and_tool_calls_are_not_searched(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record_event(one["id"], "tool_call", {"name": "shell", "arguments": {"command": "rg zebra"}})
+
+        # Matching these would answer "where did we talk about X" with a stack trace, and
+        # the tool call is not something either of you said.
+        assert conversations.search(db, "zebra") == []
+
+    def test_a_missing_transcript_is_skipped_rather_than_raising(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record(db, one["id"], "user", "findable")
+        conversations.transcript_path(one["id"]).unlink()
+
+        # The index can outlive the file — that is the whole reason the files are the
+        # record. A search must not die because one row points at nothing.
+        assert conversations.search(db, "findable") == []
+
+    def test_a_mangled_line_does_not_stop_the_search(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record(db, one["id"], "user", "before the damage")
+        with conversations.transcript_path(one["id"]).open("a") as handle:
+            handle.write("{not json at all\n")
+        conversations.record(db, one["id"], "user", "after the damage")
+
+        assert len(conversations.search(db, "after the damage")) == 1
+
+
+class TestSnippets:
+    def test_a_long_line_is_cut_around_the_match(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record(db, one["id"], "user", "x" * 400 + " needle " + "y" * 400)
+
+        snippet = conversations.search(db, "needle")[0]["snippet"]
+
+        assert "needle" in snippet
+        assert len(snippet) < 250
+        assert snippet.startswith("…") and snippet.endswith("…")
+
+    def test_newlines_are_flattened(self, db):
+        one = conversations.start(db, "hello")
+        conversations.record(db, one["id"], "user", "first line\n\nthen the keyword here")
+
+        snippet = conversations.search(db, "keyword")[0]["snippet"]
+
+        # A result row is one line high. A snippet with newlines in it either breaks the
+        # row or gets silently clipped, and the offset of the match moves when whitespace
+        # collapses — which put the window in the wrong place until it was re-found.
+        assert "\n" not in snippet
+        assert "keyword" in snippet

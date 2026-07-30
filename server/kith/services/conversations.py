@@ -244,6 +244,100 @@ def read(conversation_id: str) -> list[dict]:
     return entries
 
 
+def search(agent_db: Path, query: str, limit: int = 40) -> list[dict]:
+    """Find where something was said, across every conversation.
+
+    Nothing could search these. The control panel's box filters whatever tab you are
+    looking at, and the tab that held messages was removed — so the one thing kept most
+    carefully, a complete transcript of everything either of you said, was the one thing
+    with no way in. Titles are generated from a first message, which means a conversation
+    is findable by how it opened and by nothing else that happened in it.
+
+    Read from the files rather than an index. They are the record — the database only
+    points at them — so a search over the files cannot disagree with what you would see on
+    opening one. At the scale this runs at (tens of conversations, tens of thousands of
+    lines) reading them is a few milliseconds, and an index would be a second copy of the
+    truth to keep in step for no gain anyone would feel.
+
+    Newest first, and it stops once it has enough: what you are looking for is nearly
+    always something recent, and scanning years of history to fill a list nobody scrolls
+    is work done for its own sake.
+    """
+    needle = str(query or "").strip().lower()
+    if not needle:
+        return []
+
+    hits: list[dict] = []
+    for row in repo.conversations.recent(agent_db, 500):
+        conversation_id = str(row.get("id") or "")
+        path = transcript_path(conversation_id)
+        if not path.is_file():
+            continue
+        for entry in _spoken(path):
+            text = entry["text"]
+            at = text.lower().find(needle)
+            if at < 0:
+                continue
+            hits.append(
+                {
+                    "conversationId": conversation_id,
+                    "title": str(row.get("title") or "Untitled"),
+                    "role": entry["role"],
+                    "at": entry["at"],
+                    "snippet": _around(text, at, len(needle)),
+                }
+            )
+            # One hit per conversation. Ten matches from one long conversation would bury
+            # the other nine conversations that also have one, and the point of the list is
+            # to get you to the right conversation.
+            break
+        if len(hits) >= limit:
+            break
+    return hits
+
+
+def _spoken(path: Path) -> list[dict]:
+    """Only the things that were actually said. Reasoning, tool calls and token counts are
+    in the file too, and matching them would answer "where did we talk about X" with a
+    stack trace."""
+    said: list[dict] = []
+    for line in path.read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        kind = entry.get("type")
+        if kind == "message":
+            text, role = entry.get("content"), entry.get("role") or "user"
+        elif kind == "said":
+            text, role = entry.get("text"), "assistant"
+        else:
+            continue
+        if isinstance(text, str) and text.strip():
+            said.append({"text": text, "role": role, "at": str(entry.get("at") or "")})
+    return said
+
+
+#: How much of the line to show around a match. Enough to recognise it, short enough that
+#: a result list stays a list.
+_SNIPPET_SIDE = 90
+
+
+def _around(text: str, at: int, length: int) -> str:
+    """The match with its surroundings, on one line."""
+    flat = " ".join(text.split())
+    # Re-find in the flattened text: collapsing whitespace moves the offset, and using the
+    # original index here put the window in the wrong place on anything with a newline.
+    at = flat.lower().find(text[at : at + length].lower())
+    if at < 0:
+        return flat[: _SNIPPET_SIDE * 2] + ("…" if len(flat) > _SNIPPET_SIDE * 2 else "")
+    start = max(0, at - _SNIPPET_SIDE)
+    end = min(len(flat), at + length + _SNIPPET_SIDE)
+    return ("…" if start > 0 else "") + flat[start:end] + ("…" if end < len(flat) else "")
+
+
 def rename(agent_db: Path, conversation_id: str, title: str) -> dict:
     repo.conversations.rename(agent_db, conversation_id, title.strip()[:TITLE_CHARS] or "Untitled")
     _append(conversation_id, {"type": "rename", "at": _now(), "title": title})

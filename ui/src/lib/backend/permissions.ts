@@ -117,8 +117,14 @@ export async function openSettingsPane(
  * one-way door: the grant was stored, honoured forever, and shown nowhere. A permission
  * you cannot see or take back is not a permission you gave, it is one you lost track of.
  */
-export async function revokeGrants(): Promise<PermissionState> {
-  const response = await fetch("/api/permissions/revoke", { method: "POST" });
+export async function revokeGrants(signature?: string): Promise<PermissionState> {
+  const response = await fetch("/api/permissions/revoke", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // No signature means all of them. One means just that one, so keeping the grants you
+    // still mean does not cost you the ones you want gone.
+    body: JSON.stringify(signature ? { signature } : {}),
+  });
   if (!response.ok) throw new Error(await reason(response));
   return (await response.json()) as PermissionState;
 }

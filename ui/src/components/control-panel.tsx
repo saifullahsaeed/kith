@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   ArrowLeft,
   Check,
+  CircleDot,
   ArrowUp,
   BellRing,
   Brain,
@@ -39,6 +40,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { EditableText } from "@/components/ui/editable-text";
@@ -1952,23 +1954,22 @@ function Roadmap({
         </Button>
       </div>
 
+      {chosen ? (
+        <MilestoneInspector
+          milestone={chosen}
+          onClear={() => setSelected(null)}
+          update={update}
+        />
+      ) : null}
+
       <div>
         <div className="mb-2 flex items-baseline gap-3">
-          <h3 className="text-sm font-semibold">{chosen ? chosen.title : "What he can work on"}</h3>
+          <h3 className="text-sm font-semibold">{chosen ? "Its work" : "What he can work on"}</h3>
           <p className="text-muted-foreground min-w-0 flex-1 text-xs">
             {chosen
-              ? "The work under this milestone."
+              ? "The tasks under this milestone."
               : "Every open task on this project. Ones under a waiting milestone are marked."}
           </p>
-          {chosen ? (
-            <button
-              type="button"
-              onClick={() => setSelected(null)}
-              className="text-muted-foreground hover:text-foreground text-xs"
-            >
-              Show everything
-            </button>
-          ) : null}
         </div>
         <TaskLane
           tasks={shown}
@@ -1993,6 +1994,86 @@ function Roadmap({
  * graph above. So: ready first, then in progress, then the ones held back with the reason
  * attached, then anything waiting on you. One column, honestly ordered.
  */
+/**
+ * The one milestone you have picked, and the things you can do to it.
+ *
+ * All three of these were unreachable from anywhere in the app. A milestone's target date
+ * could only be set by Kith, through `add_milestone`, at the moment he created it — so a
+ * date you wanted to change, or one you wanted to add later, could only be had by asking
+ * him to do it. Marking one done had no control at all, and neither did renaming.
+ *
+ * The server could already do all of it: the generic brain edit for "milestone" takes
+ * status, title and target_at. Nothing was missing but somewhere to click, which is the
+ * most annoying kind of gap because it looks like a missing feature and is really a
+ * missing button.
+ *
+ * It appears only when a milestone is selected, so the graph stays the way in and this
+ * does not add a permanent panel to a page that already has plenty on it.
+ */
+function MilestoneInspector({
+  milestone,
+  onClear,
+  update,
+}: {
+  milestone: BrainSnapshot["projects"][number]["milestones"][number];
+  onClear: () => void;
+  update: Handlers["update"];
+}) {
+  const [title, setTitle] = useState(milestone.title);
+  useEffect(() => setTitle(milestone.title), [milestone.id, milestone.title]);
+  const done = milestone.status === "done";
+
+  const rename = () => {
+    const next = title.trim();
+    if (!next || next === milestone.title) {
+      setTitle(milestone.title);
+      return;
+    }
+    update("milestone", milestone.id, { title: next });
+  };
+
+  return (
+    <div className="border-border/60 bg-card/40 flex flex-wrap items-center gap-2 rounded-xl border p-2 pl-3">
+      <button
+        type="button"
+        title={done ? "Mark it not done" : "Mark it done"}
+        onClick={() => update("milestone", milestone.id, { status: done ? "todo" : "done" })}
+        className={cn(
+          "shrink-0 rounded-md p-1 transition-colors",
+          done ? "text-roam" : "text-muted-foreground/60 hover:text-foreground",
+        )}
+      >
+        {done ? <Check className="size-4" /> : <CircleDot className="size-4" />}
+      </button>
+      <input
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        onBlur={rename}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") setTitle(milestone.title);
+        }}
+        aria-label="Milestone name"
+        className={cn(`${FIELD} min-w-40 flex-1 text-sm font-medium`, done && "line-through opacity-70")}
+      />
+      <DatePicker
+        value={(milestone.target_at ?? "").slice(0, 10)}
+        onChange={(next) => update("milestone", milestone.id, { target_at: next })}
+        placeholder="No target date"
+        ariaLabel="Target date"
+        className="w-44 shrink-0"
+      />
+      <button
+        type="button"
+        onClick={onClear}
+        className="text-muted-foreground hover:text-foreground shrink-0 px-2 text-xs"
+      >
+        Show everything
+      </button>
+    </div>
+  );
+}
+
 function TaskLane({
   tasks,
   milestones,

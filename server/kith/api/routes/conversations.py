@@ -31,6 +31,24 @@ def create_conversation():
     return jsonify(conversations.start(AGENT_DB_PATH, str(payload.get("firstMessage") or "")))
 
 
+@api.get("/conversations/search")
+@api.doc(
+    summary="Search everything either of you said",
+    description=(
+        "Across every transcript, newest first, one hit per conversation with a snippet. "
+        "Only actual speech — reasoning, tool calls and token counts are in the files too "
+        "and matching those would answer a question about a conversation with a stack trace."
+    ),
+)
+def search_conversations():
+    query = request.args.get("q") or ""
+    try:
+        limit = max(1, min(100, int(request.args.get("limit") or 40)))
+    except ValueError:
+        limit = 40
+    return jsonify({"query": query, "hits": conversations.search(AGENT_DB_PATH, query, limit)})
+
+
 @api.get("/conversations/<conversation_id>")
 @api.doc(
     summary="One conversation",

@@ -55,7 +55,19 @@ def deny_permission(request_id: str):
 
 
 @api.post("/permissions/revoke")
-@api.doc(summary="Forget every standing grant")
+@api.doc(
+    summary="Forget standing grants",
+    description=(
+        "With no body, forgets every standing grant. With {signature}, forgets just that "
+        "one — keeping the ones you still mean, which is the only way anyone actually "
+        "wants to manage these."
+    ),
+)
 def revoke_permissions():
-    permissions.revoke_all()
+    payload = request.get_json(silent=True) or {}
+    signature = str(payload.get("signature") or "").strip()
+    if signature:
+        permissions.revoke(signature)
+    else:
+        permissions.revoke_all()
     return jsonify(permissions.snapshot())

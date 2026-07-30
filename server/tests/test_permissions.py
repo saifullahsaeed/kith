@@ -184,3 +184,58 @@ class TestApproval:
         for i in range(permissions.MAX_PENDING + 8):
             permissions.check_path("read", Path(f"/etc/thing{i}"), tmp_path)
         assert len(permissions.pending()) <= permissions.MAX_PENDING
+
+
+class TestTakingBackOneGrant:
+    """All-or-nothing was the only option, and that is not how anyone feels about these.
+
+    You want to keep "he may read my Documents" and drop the one folder you approved in a
+    hurry last week. Forcing a choice between all of them and none of them means people
+    keep the ones they would rather not — which makes the safe action the inconvenient one.
+    """
+
+    def test_one_goes_and_the_rest_stay(self):
+        permissions._remember_always("path:/Users/me/Documents")
+        permissions._remember_always("path:/Users/me/Desktop")
+        permissions._remember_always("cmd:a recursive or forced delete")
+
+        assert permissions.revoke("path:/Users/me/Desktop") is True
+
+        assert permissions.always_grants() == {
+            "path:/Users/me/Documents",
+            "cmd:a recursive or forced delete",
+        }
+
+    def test_he_asks_again_afterwards(self, tmp_path):
+        root = tmp_path / "Kith"
+        root.mkdir()
+        target = tmp_path / "Desktop" / "thing.txt"
+        permissions._remember_always(f"path:{target}")
+        assert permissions.check_path("write", target, root).allowed
+
+        permissions.revoke(f"path:{target}")
+
+        # The point of revoking is the prompt coming back, not a tidier list.
+        assert not permissions.check_path("write", target, root).allowed
+
+    def test_a_grant_that_is_not_there_says_so(self):
+        assert permissions.revoke("path:/never/granted") is False
+
+    def test_an_empty_signature_is_not_a_wildcard(self):
+        permissions._remember_always("path:/Users/me/Documents")
+
+        assert permissions.revoke("  ") is False
+
+        # An empty string reaching this must never be read as "all of them" — that is a
+        # one-character bug away from silently clearing everything someone approved.
+        assert permissions.always_grants() == {"path:/Users/me/Documents"}
+
+    def test_a_session_grant_goes_too(self):
+        permissions._session_grants.add("cmd:killing other programs")
+        assert permissions.granted("cmd:killing other programs")
+
+        assert permissions.revoke("cmd:killing other programs") is True
+
+        # Standing and session-only are different lifetimes, but "forget this" means
+        # forget it — leaving the session copy behind would look like the click did nothing.
+        assert not permissions.granted("cmd:killing other programs")

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Bell, Check, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   fetchNotifyLevel,
   patchServerConfig,
+  sendTestNotification,
   setNotifyLevel,
   type ConnectionState,
   type NotifyState,
@@ -223,6 +224,53 @@ function NotifyLevel() {
           </span>
         </button>
       ))}
+      <TestNotification />
+    </div>
+  );
+}
+
+/**
+ * Prove they still arrive.
+ *
+ * This existed only in onboarding, which is exactly backwards: the interesting moment is
+ * six weeks later, when you have not heard from him in a while and cannot tell whether
+ * that means he had nothing to say. macOS notifications fail *silently* and for reasons
+ * that have nothing to do with this app — permission revoked in System Settings, Do Not
+ * Disturb, a broken code signature after a rebuild — and every one of them looks
+ * identical to a quiet week.
+ */
+function TestNotification() {
+  const [result, setResult] = useState<"" | "sent" | "failed">("");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="flex items-center gap-2.5 pt-1">
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          setResult("");
+          void sendTestNotification()
+            .then((shown) => setResult(shown ? "sent" : "failed"))
+            .catch(() => setResult("failed"))
+            .finally(() => setBusy(false));
+        }}
+      >
+        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Bell className="size-3.5" />}
+        Send a test notification
+      </Button>
+      {/* "Sent" is not "you saw it", so the confirmation asks rather than asserts — the
+          failure this is meant to catch is one where the app is told all is well. */}
+      {result === "sent" ? (
+        <span className="text-muted-foreground text-xs">Sent — did it show up?</span>
+      ) : null}
+      {result === "failed" ? (
+        <span className="text-destructive text-xs">
+          Nothing went out. Check Notifications in System Settings.
+        </span>
+      ) : null}
     </div>
   );
 }
