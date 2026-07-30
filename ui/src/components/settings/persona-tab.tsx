@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, FolderOpen, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -57,8 +57,27 @@ export function PersonaTab() {
 
   useEffect(() => load(), [load]);
 
+  // Cmd-S. It is a text editor; muscle memory arrives before the mouse does, and without
+  // this the browser's own Save dialog appears over the top of it.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        saveRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const current = state?.fragments.find((one) => one.name === selected) ?? null;
   const dirty = current !== null && draft !== current.body;
+  // A ref so the key handler is bound once and still sees the current fragment.
+  const saveRef = useRef<(() => void) | null>(null);
+  saveRef.current =
+    current && dirty && !busy
+      ? () => void act(() => savePersonaFragment(current.name, draft), current.name)
+      : null;
 
   const act = async (work: () => Promise<unknown>, keep?: string) => {
     setBusy(true);
@@ -89,26 +108,32 @@ export function PersonaTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 className="text-sm font-semibold">Who he is</h2>
-        <p className="text-muted-foreground min-w-0 flex-1 text-xs">
-          Six files, merged in filename order. The number prefix is the order — rename to move
-          something earlier or later.
+      {/* Title, size and Reveal on one line; the explanation on its own. They were all
+          competing for one row, and in a narrow window the sentence wrapped three times
+          around the number. */}
+      <div>
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold">Who he is</h2>
+          <span
+            className="text-muted-foreground/70 font-mono text-[11px] tabular-nums"
+            title="Every request carries all of this. It is also the part that caches, so it costs once per five minutes rather than once per message."
+          >
+            {state.chars.toLocaleString()} chars · ~{Math.round(state.chars / 4).toLocaleString()}{" "}
+            tokens
+          </span>
+          <div className="flex-1" />
+          <Button variant="outline" size="sm" onClick={() => void openOnHost(state.folder, true)}>
+            <FolderOpen className="size-3.5" />
+            Reveal
+          </Button>
+        </div>
+        <p className="text-muted-foreground mt-1 text-xs">
+          Files merged in filename order — the number prefix <em>is</em> the order, so renaming is
+          how you move something earlier or later.
         </p>
-        <span
-          className="text-muted-foreground/70 font-mono text-[11px] tabular-nums"
-          title="Every request carries all of this. It is also the part that caches, so it costs once and reads cheaply after."
-        >
-          {state.chars.toLocaleString()} chars · ~{Math.round(state.chars / 4).toLocaleString()}{" "}
-          tokens
-        </span>
-        <Button variant="outline" size="sm" onClick={() => void openOnHost(state.folder, true)}>
-          <FolderOpen className="size-3.5" />
-          Reveal
-        </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-[15rem_1fr]">
+      <div className="grid gap-5 lg:grid-cols-[14rem_1fr]">
         <div className="space-y-1">
           {state.fragments.map((fragment) => (
             <button
@@ -210,18 +235,32 @@ export function PersonaTab() {
               </Button>
             </div>
 
+            {/* Prose, not code: this is writing, and a 12px monospace box discourages
+                writing in it. Spellcheck on for the same reason — his persona is English. */}
             <textarea
               value={draft}
-              spellCheck={false}
+              spellCheck
               onChange={(event) => setDraft(event.target.value)}
-              className="focus-visible:border-ring focus-visible:ring-ring/40 h-[26rem] w-full resize-y rounded-xl border bg-transparent p-3 font-mono text-[12px] leading-relaxed outline-none focus-visible:ring-2"
+              placeholder="Write in the second person — you are telling him who he is."
+              className="focus-visible:border-ring focus-visible:ring-ring/40 h-[30rem] w-full resize-y rounded-xl border bg-transparent px-4 py-3.5 text-[13.5px] leading-[1.75] outline-none focus-visible:ring-2"
             />
 
             <div className="flex items-center gap-3">
               <span className="text-muted-foreground text-xs">
-                {dirty
-                  ? "Unsaved. He picks it up on his next message."
-                  : "Saved. HTML comments are stripped before he sees it."}
+                {dirty ? (
+                  <>
+                    Unsaved — he picks it up on his next message.{" "}
+                    <span className="tabular-nums">
+                      {draft.length > current.body.length ? "+" : ""}
+                      {(draft.length - current.body.length).toLocaleString()} chars
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    Saved. Anything in <code>{"<!-- -->"}</code> is a note to yourself — stripped
+                    before he reads it. <span className="font-mono">⌘S</span> saves.
+                  </>
+                )}
               </span>
               <div className="flex-1" />
               {dirty ? (

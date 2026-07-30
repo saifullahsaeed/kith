@@ -25,12 +25,10 @@ const inputClass =
 export function ChatTab({
   config,
   connection,
-  serverDefaults,
   onSave,
 }: {
   config: ServerConfig;
   connection: ConnectionState;
-  serverDefaults: ServerConfig;
   onSave: (config: ServerConfig) => void;
 }) {
   const local = connection.kind === "ollama";
@@ -42,8 +40,7 @@ export function ChatTab({
   const dirty =
     (local && draft.numCtx !== config.numCtx) ||
     draft.numPredict !== config.numPredict ||
-    draft.think !== config.think ||
-    draft.system !== config.system;
+    draft.think !== config.think;
 
   function edit(patch: Partial<ServerConfig>) {
     setDraft((current) => ({ ...current, ...patch }));
@@ -63,7 +60,7 @@ export function ChatTab({
         think: draft.think,
       });
       // The persona stays a local override; everything else comes back from the server.
-      onSave({ ...server, system: draft.system });
+      onSave(server);
       setSaved(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -121,29 +118,6 @@ export function ChatTab({
             </span>
           </span>
         </label>
-      </section>
-
-      <section>
-        <div className="mb-3 flex items-baseline gap-3">
-          <h2 className="text-sm font-semibold">Who he is</h2>
-          <p className="text-muted-foreground min-w-0 flex-1 text-xs">
-            His persona, merged from the <code>persona/</code> folder on the server.
-          </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => edit({ system: serverDefaults.system })}
-            disabled={draft.system === serverDefaults.system}
-          >
-            Reset to his own
-          </Button>
-        </div>
-        <textarea
-          rows={12}
-          className={`${inputClass} resize-y font-mono text-xs leading-relaxed`}
-          value={draft.system}
-          onChange={(event) => edit({ system: event.target.value })}
-        />
       </section>
 
       {error ? <p className="text-destructive text-sm">{error}</p> : null}

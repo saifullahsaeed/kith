@@ -24,12 +24,10 @@ export function useBackendConfig() {
   const [status, setStatus] = useState<ConnectionStatus>("loading");
   const [error, setError] = useState("");
   const [config, setConfig] = useState<ServerConfig>(FALLBACK_CONFIG);
-  const [serverDefaults, setServerDefaults] = useState<ServerConfig>(FALLBACK_CONFIG);
 
   const load = useCallback((signal?: AbortSignal) => {
     fetchServerConfig(signal)
       .then((server) => {
-        setServerDefaults(server);
         setConfig(server);
         setStatus("ready");
       })
@@ -53,5 +51,5 @@ export function useBackendConfig() {
   // the interface updates without a round trip.
   const updateConfig = useCallback((next: ServerConfig) => setConfig(next), []);
 
-  return { status, error, config, serverDefaults, updateConfig, reload };
+  return { status, error, config, updateConfig, reload };
 }

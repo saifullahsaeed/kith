@@ -38,12 +38,10 @@ const MIND_DEFAULT = 400;
  * Split out so its hooks only run once the backend is reachable. */
 export function Workspace({
   config,
-  serverDefaults,
   onSaveConfig,
   onConnectionSaved,
 }: {
   config: ServerConfig;
-  serverDefaults: ServerConfig;
   onSaveConfig: (config: ServerConfig) => void;
   /** Called after the provider/model is saved, so the header stops showing the old one. */
   onConnectionSaved: () => void;
@@ -228,7 +226,6 @@ export function Workspace({
           <SettingsPage
             tab={route.settingsTab}
             config={config}
-            serverDefaults={serverDefaults}
             onSelectTab={(t) => navigate(pathForSettings(t))}
             onSaveConfig={onSaveConfig}
             onConnectionSaved={onConnectionSaved}

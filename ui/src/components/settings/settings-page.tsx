@@ -23,7 +23,7 @@ const TABS: { id: SettingsTab; label: string; hint: string; icon: typeof Cpu }[]
   { id: "model", label: "Model", hint: "where he thinks", icon: Cpu },
   { id: "persona", label: "Persona", hint: "who he is, in his own files", icon: FileText },
   { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench },
-  { id: "chat", label: "Conversation", hint: "how he thinks, and who he is", icon: MessageSquare },
+  { id: "chat", label: "Conversation", hint: "reply length and reasoning", icon: MessageSquare },
   {
     id: "advanced",
     label: "Advanced",
@@ -51,7 +51,6 @@ const TABS: { id: SettingsTab; label: string; hint: string; icon: typeof Cpu }[]
 export function SettingsPage({
   tab,
   config,
-  serverDefaults,
   onSelectTab,
   onSaveConfig,
   onConnectionSaved,
@@ -59,7 +58,6 @@ export function SettingsPage({
 }: {
   tab: SettingsTab;
   config: ServerConfig;
-  serverDefaults: ServerConfig;
   onSelectTab: (tab: SettingsTab) => void;
   onSaveConfig: (config: ServerConfig) => void;
   onConnectionSaved: () => void;
@@ -172,12 +170,7 @@ export function SettingsPage({
             ) : tab === "persona" ? (
               <PersonaTab />
             ) : tab === "chat" ? (
-              <ChatTab
-                config={config}
-                connection={snapshot.connection}
-                serverDefaults={serverDefaults}
-                onSave={onSaveConfig}
-              />
+              <ChatTab config={config} connection={snapshot.connection} onSave={onSaveConfig} />
             ) : (
               <AdvancedTab />
             )}

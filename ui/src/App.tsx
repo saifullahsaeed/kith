@@ -15,7 +15,7 @@ import { useSetup } from "@/hooks/use-setup";
  */
 export default function App() {
   const setup = useSetup();
-  const { status, error, config, serverDefaults, updateConfig, reload } = useBackendConfig();
+  const { status, error, config, updateConfig, reload } = useBackendConfig();
 
   if (setup.status === "error") return <ConnectionSplash state="error" detail={setup.error} />;
   if (setup.status === "loading" || status === "loading")
@@ -36,12 +36,7 @@ export default function App() {
   return (
     // Every "are you sure?" in the app goes through this instead of window.confirm.
     <ConfirmProvider>
-      <Workspace
-        config={config}
-        serverDefaults={serverDefaults}
-        onSaveConfig={updateConfig}
-        onConnectionSaved={reload}
-      />
+      <Workspace config={config} onSaveConfig={updateConfig} onConnectionSaved={reload} />
     </ConfirmProvider>
   );
 }
