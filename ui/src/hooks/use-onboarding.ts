@@ -16,9 +16,12 @@ import {
 
 /** Where someone is in the flow. Linear: pick a provider, connect it, choose a
  *  model, choose how he searches, see what else is ready. */
-export type OnboardingStep = "choose" | "connect" | "model" | "search" | "ready";
+export type OnboardingStep = "choose" | "connect" | "model" | "search" | "access" | "ready";
 
-const ORDER: OnboardingStep[] = ["choose", "connect", "model", "search", "ready"];
+// Access comes after the choices and before "ready": it is the only step that asks the
+// operating system for something rather than asking the person, and putting it last would
+// mean the first notification he ever sends is also the first prompt you ever see.
+const ORDER: OnboardingStep[] = ["choose", "connect", "model", "search", "access", "ready"];
 
 /**
  * The flow's state machine, kept out of the components so they stay about layout.
@@ -129,7 +132,7 @@ export function useOnboarding(
       // fetched after the write, not before.
       const fresh = await fetchSetup().catch(() => null);
       setChecks(fresh?.checks ?? []);
-      setStep("ready");
+      setStep("access");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -139,8 +142,11 @@ export function useOnboarding(
 
   const chosenModel: ModelOption | null = probe.models.find((entry) => entry.id === model) ?? null;
 
+  const finishAccess = useCallback(() => setStep("ready"), []);
+
   return {
     step,
+    finishAccess,
     provider,
     providers,
     baseUrl,

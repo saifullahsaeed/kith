@@ -16,9 +16,7 @@ export interface ConversationDetail extends ConversationSummary {
   messages_: { role: string; content: string }[];
 }
 
-export async function fetchConversations(
-  limit = 50,
-): Promise<{
+export async function fetchConversations(limit = 50): Promise<{
   conversations: ConversationSummary[];
   storage: { folder: string; files: number; bytes: number };
 }> {
@@ -27,10 +25,24 @@ export async function fetchConversations(
   return await response.json();
 }
 
+/** One part of a stored turn — the same shapes the live stream produces. */
+export type StoredPart =
+  | { kind: "text"; text: string }
+  | { kind: "reasoning"; text: string }
+  | { kind: "tool"; id: string; name: string; arguments: Record<string, unknown>; result?: unknown }
+  | { kind: "usage"; uncached: number; cached: number; out: number };
+
+export interface StoredTurn {
+  role: "user" | "assistant";
+  parts: StoredPart[];
+}
+
 export async function fetchConversation(id: string): Promise<{
   id: string;
   title: string;
   messages: { role: string; content: string }[];
+  /** The turn's actual shape — reasoning, prose, calls with results — for rendering back. */
+  timeline: StoredTurn[];
 }> {
   const response = await fetch(`/api/conversations/${id}`);
   if (!response.ok) throw new Error(`could not open that conversation (${response.status})`);

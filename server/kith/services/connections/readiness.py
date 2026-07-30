@@ -63,23 +63,34 @@ def report(connection: Connection, search: SearchSetup) -> list[Check]:
 
 
 def _computer() -> Check:
+    """Where he works, now that it is your machine rather than a container.
+
+    This used to report on Docker, and reported a problem whenever it was not running.
+    There is nothing to report in that sense any more — the folder either exists or is
+    created on first use — so the check answers the question someone actually has: where
+    are his files, and what is he allowed to do with them.
+    """
+    from kith.services import permissions
+
     status = sandbox.status()
-    if status.get("container") == "running":
-        return Check("computer", "His computer", Health.OK, "The sandbox is running.")
-    if status.get("dockerAvailable"):
-        return Check(
-            "computer",
-            "His computer",
-            Health.OK,
-            "Docker is available — his sandbox starts the first time he needs it.",
-        )
+    root = status.get("root", "")
+    mode = str(status.get("mode") or permissions.Mode.ASK)
+    described = {
+        "ask": "He asks before touching anything outside it.",
+        "auto": "He works outside it without asking; dangerous things still ask.",
+        "bypass": "Nothing is checked — he can do anything you can.",
+    }.get(mode, "")
     return Check(
         "computer",
         "His computer",
-        Health.DEGRADED,
-        "Docker isn't running, so he has no machine of his own.",
-        "He can still think, search and remember. Start Docker Desktop to give him a "
-        "shell, files, and the ability to build his own tools.",
+        Health.OK if mode != "bypass" else Health.DEGRADED,
+        f"He works in {root}. {described}",
+        (
+            "Bypass means no gate at all. Switch to Ask or Auto in the title bar unless you "
+            "meant it."
+            if mode == "bypass"
+            else ""
+        ),
     )
 
 

@@ -15,6 +15,7 @@ from kith.schemas import (
     AutonomyControlSchema,
     AutonomyStatusSchema,
 )
+from kith.services import permissions
 from kith.services.agent_loop import usage_snapshot
 
 
@@ -32,6 +33,15 @@ def autonomy_status():
 def autonomy_control(payload):
     action = payload.get("action")
     if action == "start":
+        # Roaming in ask-mode is a trap. A tick that needs permission fails, records a
+        # question, and moves on — and with nobody at the keyboard at 4am that question
+        # goes unanswered, so he spends the night refusing himself. Anything he wants to
+        # do outside his own folder simply never happens, and nothing says why.
+        #
+        # Turning him loose therefore means at least auto. Bypass is left alone: someone
+        # who chose it has already made a stronger version of this decision.
+        if permissions.mode() is permissions.Mode.ASK:
+            permissions.set_mode(str(permissions.Mode.AUTO))
         return autonomy.start(payload.get("intervalSeconds"))
     if action == "stop":
         return autonomy.stop()

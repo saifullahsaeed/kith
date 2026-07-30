@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Bell, Brain, LayoutDashboard, MessageSquare, Moon, Settings2, Sun } from "lucide-react";
+import { Bell, Brain, LayoutDashboard, Moon, PanelLeft, Plus, Settings2, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { HeaderControls } from "@/components/header-controls";
 import { PresenceOrb } from "@/components/presence";
 import { moodHue, type Mood } from "@/lib/backend/mood";
@@ -21,6 +22,7 @@ export function AppHeader({
   mindOpen,
   historyOpen,
   onOpenHistory,
+  onNewConversation,
   onOpenInbox,
   onOpenMind,
   onOpenPanel,
@@ -39,6 +41,7 @@ export function AppHeader({
   mindOpen?: boolean;
   historyOpen?: boolean;
   onOpenHistory?: () => void;
+  onNewConversation?: () => void;
   onOpenInbox: () => void;
   onOpenMind: () => void;
   onOpenPanel: () => void;
@@ -64,6 +67,31 @@ export function AppHeader({
     // window, and window-controls-gap keeps the traffic lights off the presence orb.
     // Both classes do nothing in a browser tab. See index.css → "Desktop window chrome".
     <header className="window-drag-region window-controls-gap relative z-10 flex items-center gap-3 border-b border-border/60 bg-background/60 px-4 py-2.5 backdrop-blur-md">
+      {onOpenHistory ? (
+        <TooltipIconButton
+          tooltip={historyOpen ? "Hide conversations" : "Your conversations"}
+          side="bottom"
+          variant="ghost"
+          size="icon"
+          className={cn("size-7", historyOpen && "bg-accent/60 text-foreground")}
+          onClick={onOpenHistory}
+        >
+          <PanelLeft className="size-4" />
+        </TooltipIconButton>
+      ) : null}
+      {onNewConversation ? (
+        <TooltipIconButton
+          tooltip="New conversation"
+          side="bottom"
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          onClick={onNewConversation}
+        >
+          <Plus className="size-4" />
+        </TooltipIconButton>
+      ) : null}
+
       <PresenceOrb roaming={roaming} idle={!roaming} size={11} color={hue} />
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-medium tracking-tight">Kith</span>
@@ -89,19 +117,6 @@ export function AppHeader({
       {/* Which model is answering. Nothing showed this, and that is how turns ran for
           days on a model nobody had selected — the settings page said one thing and a
           stale client override sent another. A name on screen makes that unmissable. */}
-      {onOpenHistory ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onOpenHistory}
-          title="Your conversations"
-          className={cn("text-muted-foreground", historyOpen && "text-foreground bg-accent/60")}
-        >
-          <MessageSquare className="size-3.5" />
-          <span className="hidden sm:inline">History</span>
-        </Button>
-      ) : null}
-
       <HeaderControls
         effort={effort}
         supportsEffort={supportsEffort}

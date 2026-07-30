@@ -2,6 +2,7 @@
 
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
+import { PermissionPrompt } from "@/components/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
 import {
@@ -143,6 +144,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
           >
             <ThreadScrollToBottom />
             <ThreadFollowupSuggestions />
+            <PermissionPrompt />
             <Composer />
             <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
               <ThreadSuggestions />

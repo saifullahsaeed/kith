@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Brain, PanelRightClose, Play, Square, Zap } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
+import { fetchPermissions, setPermissionMode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { formatTokens, realTokens, sumUsage, usageTitle, type Usage } from "@/lib/tokens";
 import type { useAutonomy } from "@/hooks/use-autonomy";
@@ -117,6 +119,35 @@ export function MindPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [activity.length]);
 
+  const confirm = useConfirm();
+
+  /**
+   * Turning him loose, with the mode question asked out loud.
+   *
+   * Roaming in ask-mode is a trap: a tick that needs permission records a question and
+   * moves on, and at 4am nobody answers it — so he spends the night refusing himself and
+   * nothing says why. The server therefore requires at least Auto. Changing someone's
+   * safety setting for them without saying so is not a thing to do quietly, so this asks
+   * first, in the words of what actually changes.
+   */
+  const turnLoose = useCallback(async () => {
+    const state = await fetchPermissions().catch(() => null);
+    if (state?.mode === "ask") {
+      const ok = await confirm({
+        title: "Switch to Auto and let him roam?",
+        description:
+          "While roaming he works with nobody watching, so Ask mode would leave him stuck " +
+          "on questions until you came back. Auto lets him act outside his folder without " +
+          "asking each time — genuinely dangerous things still ask. You can change it back " +
+          "from the title bar.",
+        confirmLabel: "Switch and roam",
+      });
+      if (!ok) return;
+      await setPermissionMode("auto").catch(() => {});
+    }
+    await start();
+  }, [confirm, start]);
+
   const ticks = groupTicks(activity);
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
 
@@ -164,7 +195,7 @@ export function MindPanel({
             Stop
           </Button>
         ) : (
-          <Button size="sm" onClick={() => void start()}>
+          <Button size="sm" onClick={() => void turnLoose()}>
             <Play className="size-3.5" />
             Let it roam
           </Button>

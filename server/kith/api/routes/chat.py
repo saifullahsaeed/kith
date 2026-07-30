@@ -116,16 +116,64 @@ def _present_state() -> str:
     return "\n\n".join(block for block in blocks if block).strip()
 
 
-def _save_reply(conversation_id: str, parts: list[str]) -> None:
-    """Store what he said, once, at the end.
+class _Recorder:
+    """Writes a turn to the transcript as it happens, keeping its shape.
 
-    Per-delta would mean a line in the transcript per token. The parts are accumulated and
-    joined instead — and written on the error and disconnect paths too, because a turn that
-    was interrupted is exactly the one whose half-answer you want to keep.
+    Deltas are buffered and flushed as blocks rather than written per token: a line per
+    token would be a hundred-thousand-line file for one afternoon, and the block is the
+    unit anything reading it back wants anyway.
+
+    A block is flushed when the channel changes — reasoning to prose, prose to a tool call —
+    which is exactly how the live view decides where one part ends and the next begins. That
+    is deliberate: a resumed conversation should look like the one you had, not like a
+    transcript of it.
     """
-    text = "".join(parts).strip()
-    if text:
-        conversations.record(AGENT_DB_PATH, conversation_id, "assistant", text)
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = conversation_id
+        self.channel = ""
+        self.buffer: list[str] = []
+        self.said: list[str] = []
+
+    def saw(self, event: dict) -> None:
+        kind = event.get("type")
+        if kind == "delta":
+            role = "reasoning" if event.get("role") == "reasoning" else "text"
+            if role != self.channel:
+                self._flush()
+                self.channel = role
+            self.buffer.append(event.get("text") or "")
+            return
+        # Anything else ends whatever block was open, so ordering survives.
+        self._flush()
+        if kind in ("tool_call", "tool_result", "stats"):
+            conversations.record_event(self.conversation_id, kind, event)
+
+    def finish(self, error: str | None = None, stopped: bool = False) -> None:
+        self._flush()
+        if error:
+            conversations.record_event(self.conversation_id, "error", {"message": error})
+        if stopped:
+            conversations.record_event(self.conversation_id, "stopped", {})
+        # The whole reply as one message, which is what the next turn's prompt needs. Written
+        # on the error and disconnect paths too: an interrupted turn is exactly the one whose
+        # half-answer you want to keep.
+        text = "".join(self.said).strip()
+        if text:
+            conversations.record(AGENT_DB_PATH, self.conversation_id, "assistant", text)
+
+    def _flush(self) -> None:
+        text = "".join(self.buffer)
+        self.buffer = []
+        if not text.strip():
+            self.channel = ""
+            return
+        if self.channel == "reasoning":
+            conversations.record_event(self.conversation_id, "reasoning", {"text": text})
+        elif self.channel == "text":
+            conversations.record_event(self.conversation_id, "said", {"text": text})
+            self.said.append(text)
+        self.channel = ""
 
 
 @api.post("/chat")
@@ -163,26 +211,25 @@ def chat(payload):
         # Tell the client which conversation it is in before anything else, so a chat
         # started without an id can attach itself and reload into the same place.
         yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
-        reply: list[str] = []
+        # A turn is a loop, and the transcript keeps its shape: what he reasoned, what he
+        # said, what he called and what came back, in the order it happened. Anything less
+        # and a resumed conversation is a summary of itself.
+        recorder = _Recorder(conversation_id)
         try:
             for event in stream_agent(
                 messages, config, ollama_host(), AGENT_DB_PATH, conversation_id=conversation_id
             ):
-                if event.get("type") == "delta" and event.get("role") == "text":
-                    reply.append(event.get("text") or "")
-                elif event.get("type") in ("tool_call", "tool_result", "stats"):
-                    conversations.record_event(conversation_id, event["type"], event)
+                recorder.saw(event)
                 yield json.dumps(event) + "\n"
                 if event.get("type") == "error":
-                    conversations.record_event(conversation_id, "error", {"message": event.get("message")})
-                    _save_reply(conversation_id, reply)
+                    recorder.finish(error=event.get("message"))
                     return
-            _save_reply(conversation_id, reply)
+            recorder.finish()
             yield json.dumps({"type": "done"}) + "\n"
         except GeneratorExit:
             # Client disconnected (e.g. Stop was clicked) — end quietly, but keep what he
             # had already said. A stopped answer is still an answer that was given.
-            _save_reply(conversation_id, reply)
+            recorder.finish(stopped=True)
             raise
         except Exception as exc:
             yield json.dumps({"type": "error", "message": str(exc)}) + "\n"

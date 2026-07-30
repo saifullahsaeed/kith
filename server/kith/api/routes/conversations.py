@@ -49,6 +49,8 @@ def read_conversation(conversation_id: str):
         {
             **meta,
             "messages": conversations.messages(conversation_id),
+            # What the interface renders: the turn's actual shape, not a paragraph of it.
+            "timeline": conversations.timeline(conversation_id),
             "entries": conversations.read(conversation_id),
         }
     )

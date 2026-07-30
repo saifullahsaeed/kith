@@ -41,6 +41,19 @@ if (!app.requestSingleInstanceLock()) {
   app.exit(0);
 } else {
   // Both must happen before whenReady to take effect.
+  //
+  // The name first, and it is not cosmetic. Unset, Electron calls itself "Electron"
+  // everywhere it matters: the menu bar, the About panel, the Cmd-Tab switcher, and —
+  // the one that bites — macOS Notification Center, which groups and labels notifications
+  // by app identity. Notifications from Kith arriving as "Electron", under a setting the
+  // user would have to know to look for, is the difference between the feature working and
+  // appearing not to.
+  app.setName("Kith");
+  app.setAboutPanelOptions({
+    applicationName: "Kith",
+    applicationVersion: app.getVersion(),
+    credits: "A mind that lives on this machine.",
+  });
   enableSandbox();
   identifyToRenderer();
   app.on("second-instance", () => showMainWindow());

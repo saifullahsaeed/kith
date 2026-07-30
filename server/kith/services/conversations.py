@@ -161,6 +161,67 @@ def messages(conversation_id: str) -> list[dict]:
     return out
 
 
+def timeline(conversation_id: str) -> list[dict]:
+    """The conversation as parts, ready to be rendered back exactly as it happened.
+
+    ``messages()`` above is the prompt view — plain text, because that is what a model needs
+    handed back. This is the *interface* view: reasoning blocks, prose between tool rounds,
+    each call with the result it got, in arrival order.
+
+    Two views over one append-only file rather than two stores. The alternative was
+    reconstructing a turn's shape from a paragraph, which cannot be done: once you have
+    thrown away which sentence went with which tool call, no amount of cleverness gets it
+    back, and a resumed conversation becomes a summary of itself.
+    """
+    out: list[dict] = []
+    current: dict | None = None
+
+    def assistant() -> dict:
+        nonlocal current
+        if current is None or current["role"] != "assistant":
+            current = {"role": "assistant", "parts": []}
+            out.append(current)
+        return current
+
+    calls: dict[str, dict] = {}
+    for entry in read(conversation_id):
+        kind = entry.get("type")
+        if kind == "message" and entry.get("role") == "user":
+            current = {"role": "user", "parts": [{"kind": "text", "text": entry.get("content") or ""}]}
+            out.append(current)
+        elif kind == "reasoning":
+            assistant()["parts"].append({"kind": "reasoning", "text": entry.get("text") or ""})
+        elif kind == "said":
+            assistant()["parts"].append({"kind": "text", "text": entry.get("text") or ""})
+        elif kind == "tool_call":
+            part = {
+                "kind": "tool",
+                "id": str(entry.get("id") or ""),
+                "name": entry.get("name") or "",
+                "arguments": entry.get("arguments") or {},
+            }
+            calls[part["id"]] = part
+            assistant()["parts"].append(part)
+        elif kind == "tool_result":
+            # Attached to its call rather than appended, so a result never shows up as a
+            # part of its own — which is how the live view does it too.
+            call = calls.get(str(entry.get("id") or ""))
+            if call is not None:
+                call["result"] = entry.get("result")
+        elif kind == "stats":
+            stats = entry.get("stats") or {}
+            assistant()["parts"].append(
+                {
+                    "kind": "usage",
+                    "uncached": int(stats.get("uncachedTokens") or 0),
+                    "cached": int(stats.get("cachedTokens") or 0),
+                    "out": int(stats.get("responseTokens") or 0),
+                }
+            )
+    # A turn with nothing in it is a turn that failed before it said anything.
+    return [message for message in out if message["parts"]]
+
+
 def read(conversation_id: str) -> list[dict]:
     """Every line of the transcript, skipping any that got mangled.
 

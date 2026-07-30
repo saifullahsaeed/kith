@@ -2,18 +2,51 @@
   "name": "kith-desktop",
   "private": true,
   "version": "0.1.0",
-  "description": "Desktop shell for Kith — owns the window, the tray, and the app lifecycle.",
+  "description": "Desktop shell for Kith \u2014 owns the window, the tray, and the app lifecycle.",
   "//": "Deliberately NOT \"type\": \"module\". Electron's main process and any sandboxed preload must be CommonJS; declaring ESM here silently breaks a sandboxed preload if one is ever added.",
   "main": "out/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "icons": "python3 scripts/make-tray-icon.py",
     "start": "npm run build && electron .",
-    "dev": "npm run build && electron . --dev"
+    "dev": "npm run build && electron . --dev",
+    "package": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
     "electron": "^43.2.0",
-    "typescript": "~6.0.2"
+    "typescript": "~6.0.2",
+    "electron-builder": "^25.1.8"
+  },
+  "productName": "Kith",
+  "build": {
+    "appId": "com.kith.desktop",
+    "productName": "Kith",
+    "files": [
+      "out/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSDesktopFolderUsageDescription": "Kith needs this to read files you point him at on your Desktop.",
+        "NSDocumentsFolderUsageDescription": "Kith needs this to read files you point him at in Documents.",
+        "NSDownloadsFolderUsageDescription": "Kith needs this to read files you point him at in Downloads.",
+        "NSUserNotificationAlertStyle": "alert"
+      }
+    }
   }
 }

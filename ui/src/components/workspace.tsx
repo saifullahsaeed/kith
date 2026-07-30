@@ -24,6 +24,8 @@ import { parseLocation, pathForHome, pathForSettings, pathForTab, pathForTask } 
 import {
   createBackendAdapter,
   fetchConversation,
+  USAGE_PART,
+  type StoredTurn,
   patchServerConfig,
   type ServerConfig,
 } from "@/lib/backend";
@@ -85,12 +87,7 @@ export function Workspace({
     const detail = await fetchConversation(id).catch(() => null);
     if (!detail) return;
     setConversationId(id);
-    setResumed(
-      detail.messages.map((message) => ({
-        role: message.role === "assistant" ? "assistant" : "user",
-        content: [{ type: "text", text: message.content }],
-      })) as ThreadMessageLike[],
-    );
+    setResumed(toThreadMessages(detail.timeline));
     setThreadKey((n) => n + 1);
   }, []);
 
@@ -174,6 +171,7 @@ export function Workspace({
               }}
               historyOpen={historyOpen}
               onOpenHistory={() => setHistoryOpen((open) => !open)}
+              onNewConversation={newConversation}
               unread={inbox.unread}
               mindOpen={mindOpen}
               onOpenInbox={() => {
@@ -249,4 +247,45 @@ export function Workspace({
       </AssistantRuntimeProvider>
     </TooltipProvider>
   );
+}
+
+/**
+ * A stored conversation, rebuilt as the thread saw it.
+ *
+ * Not just the words: the reasoning blocks he opened, the prose between tool rounds, and
+ * each call with the result it got. Reopening a conversation should show you the one you
+ * had — a paragraph where six rounds of work used to be is a summary, and no amount of
+ * cleverness reconstructs the shape once it is gone.
+ */
+function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
+  const out: unknown[] = [];
+  for (const turn of timeline) {
+    const content: unknown[] = [];
+    for (const part of turn.parts) {
+      if (part.kind === "text") content.push({ type: "text", text: part.text });
+      else if (part.kind === "reasoning") content.push({ type: "reasoning", text: part.text });
+      else if (part.kind === "tool") {
+        content.push({
+          type: "tool-call",
+          toolCallId: part.id,
+          toolName: part.name,
+          args: part.arguments,
+          argsText: JSON.stringify(part.arguments),
+          result: part.result,
+        });
+      } else {
+        // Token counts ride back as the same data part the live stream uses, so the footer
+        // reads the same on a resumed turn as it did on a fresh one.
+        content.push({
+          type: "data",
+          name: USAGE_PART,
+          data: { rounds: [{ uncached: part.uncached, cached: part.cached, out: part.out }] },
+        });
+      }
+    }
+    if (content.length) out.push({ role: turn.role, content });
+  }
+  // One cast, at the boundary: the shapes above are the library's own, and its content
+  // union narrows by role in a way that defeats inference through a map.
+  return out as ThreadMessageLike[];
 }

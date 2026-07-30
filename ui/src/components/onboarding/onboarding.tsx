@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PresenceOrb } from "@/components/presence";
+import { AccessStep } from "@/components/onboarding/access-step";
 import { ConnectStep } from "@/components/onboarding/connect-step";
 import { ModelStep } from "@/components/onboarding/model-step";
 import { ProviderChoice } from "@/components/onboarding/provider-choice";
@@ -25,6 +26,10 @@ const COPY = {
   search: {
     title: "How should he search?",
     lead: "He looks things up on his own. This decides who pays for that, and who can see it.",
+  },
+  access: {
+    title: "Two things macOS decides",
+    lead: "Neither can be granted from in here, so this is the one place that asks.",
   },
   ready: { title: "Ready.", lead: "Here's what he can do." },
 } as const;
@@ -118,6 +123,8 @@ export function Onboarding({
                   onProbe={flow.setSearchProbe}
                 />
               ) : null}
+
+              {flow.step === "access" ? <AccessStep onDone={flow.finishAccess} /> : null}
 
               {flow.step === "ready" ? (
                 <ReadyStep

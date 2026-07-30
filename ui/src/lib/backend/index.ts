@@ -36,3 +36,4 @@ export {
 } from "./setup";
 export * from "./permissions";
 export * from "./conversations";
+export { USAGE_PART } from "./adapter";

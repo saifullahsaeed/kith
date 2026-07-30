@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-import { Check, ChevronDown, Gauge, ShieldCheck, X } from "lucide-react";
+import { Check, ChevronDown, Gauge, ShieldCheck } from "lucide-react";
 
 import {
-  answerPermission,
   fetchPermissions,
   setPermissionMode,
   MODE_LABELS,
@@ -100,11 +99,6 @@ export function HeaderControls({
           setMode(next as PermissionMode);
           void setPermissionMode(next as PermissionMode).catch(() => {});
         }}
-        pending={pending}
-        onAnswer={(id, allow, scope) => {
-          setPending((was) => was.filter((one) => one.id !== id));
-          void answerPermission(id, allow, scope).catch(() => {});
-        }}
       />
     </div>
   );
@@ -118,8 +112,6 @@ function Picker({
   options,
   selected,
   onSelect,
-  pending = [],
-  onAnswer,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -128,10 +120,6 @@ function Picker({
   options: { value: string; label: string; hint: string }[];
   selected: string;
   onSelect: (value: string) => void;
-  /** Things he is waiting on. Answered here rather than in the chat, because a tick can
-   *  raise one with nobody looking at a conversation. */
-  pending?: PermissionRequest[];
-  onAnswer?: (id: string, allow: boolean, scope: "session" | "always") => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -173,47 +161,6 @@ function Picker({
           onPointerDown={(event) => event.stopPropagation()}
           className="border-border/70 bg-popover/95 absolute end-0 top-full z-50 mt-1 w-72 rounded-xl border p-1 shadow-xl backdrop-blur-xl"
         >
-          {pending.length > 0 && onAnswer ? (
-            <div className="border-border/60 mb-1 border-b pb-1">
-              {pending.map((request) => (
-                <div key={request.id} className="px-2.5 py-2">
-                  <p className="text-[11px] leading-snug">{request.why}</p>
-                  <p
-                    className="text-muted-foreground/70 mt-0.5 truncate font-mono text-[10px]"
-                    title={request.what}
-                  >
-                    {request.what}
-                  </p>
-                  <div className="mt-1.5 flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => onAnswer(request.id, true, "session")}
-                      className="bg-kith-soft/60 hover:bg-kith-soft rounded px-2 py-0.5 text-[11px]"
-                    >
-                      Allow once
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onAnswer(request.id, true, "always")}
-                      className="hover:bg-accent rounded px-2 py-0.5 text-[11px]"
-                      title="Remember this, across restarts"
-                    >
-                      Always
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onAnswer(request.id, false, "session")}
-                      className="text-muted-foreground hover:text-destructive ms-auto rounded p-0.5"
-                      title="No"
-                    >
-                      <X className="size-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
           {options.map((option) => (
             <button
               key={option.value}
