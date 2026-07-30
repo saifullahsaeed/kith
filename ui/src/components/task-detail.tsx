@@ -82,6 +82,42 @@ export function TaskDetailPage({
     load();
   }, [load]);
 
+  /**
+   * Keep the page current while it is open.
+   *
+   * It loaded once and then never again, which is the wrong behaviour for the one screen you
+   * are most likely to be watching *while he works*: he ticks a checklist item, adds a
+   * comment, attaches a deliverable, and none of it appeared until you navigated away and
+   * back. Faster while the task is his current one, because that is when things change.
+   *
+   * The guard matters as much as the poll. Replacing state underneath someone who is typing
+   * in the description would throw their sentence away, so a refresh is skipped whenever a
+   * field on this page has focus — you cannot lose an edit to a background fetch.
+   */
+  const active = task?.status === "doing";
+  useEffect(() => {
+    const tick = () => {
+      // Skip only when there is genuinely an edit in flight — a field with something typed in
+      // it. The first version skipped whenever *any* field had focus, and the comment box is
+      // a field people leave focused: one click on it and the page stopped updating
+      // altogether, which is worse than the problem this guard exists to prevent.
+      const editing = document.activeElement;
+      const midEdit =
+        editing instanceof HTMLElement &&
+        (editing.isContentEditable ||
+          ((editing instanceof HTMLInputElement || editing instanceof HTMLTextAreaElement) &&
+            editing.value.trim().length > 0));
+      if (!midEdit) load();
+    };
+    const timer = window.setInterval(tick, active ? 3_000 : 12_000);
+    // Coming back to the window is the other moment you expect it to be current.
+    window.addEventListener("focus", tick);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", tick);
+    };
+  }, [active, load]);
+
   const refresh = () => {
     load();
     onChanged();

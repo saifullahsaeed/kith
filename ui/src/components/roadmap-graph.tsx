@@ -139,13 +139,17 @@ function Canvas({
     if (roadmap) onRoadmap?.(roadmap);
   }, [roadmap, onRoadmap]);
 
-  // Re-read while any milestone has work in progress. This is the point of the canvas being
-  // the page: you can watch him move through the graph rather than refresh to find out.
+  // Always re-read, faster while something is in progress. It only polled *while* working
+  // before, which meant a milestone he finished on a tick — the exact moment the graph
+  // changes shape — never appeared until something else happened to refetch it.
   const working = roadmap?.milestones.some((one) => one.tasks_doing > 0) ?? false;
   useEffect(() => {
-    if (!working) return;
-    const timer = setInterval(load, 4_000);
-    return () => clearInterval(timer);
+    const timer = setInterval(load, working ? 4_000 : 15_000);
+    window.addEventListener("focus", load);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", load);
+    };
   }, [working, load]);
 
   // Rebuild the canvas whenever the graph changes. Positions come from the server when

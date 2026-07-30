@@ -227,7 +227,27 @@ export function ControlPanel({
   // make it current is an admission that it might not be. The reason a toggle existed at all
   // was cost — polling the whole snapshot every six seconds forever — and the fix for that
   // is to poll at the rate the situation deserves rather than to make someone manage it.
-  const busy = Boolean(snap?.tasks?.some((task) => task.status === "doing"));
+  // "Is anything happening" — a task in progress, or a tick running at all. The first version
+  // only looked at `doing`, so between picking a task up and marking it doing he was working
+  // and the panel was refreshing every twenty seconds.
+  const [ticking, setTicking] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const check = () =>
+      fetch("/api/autonomy")
+        .then((response) => response.json())
+        .then((status: { running?: boolean; ticking?: boolean }) => {
+          if (alive) setTicking(Boolean(status.running || status.ticking));
+        })
+        .catch(() => {});
+    check();
+    const timer = window.setInterval(check, 5_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  const busy = ticking || Boolean(snap?.tasks?.some((task) => task.status === "doing"));
   useEffect(() => {
     const id = window.setInterval(load, busy ? 3_000 : 20_000);
     return () => window.clearInterval(id);
@@ -2595,6 +2615,22 @@ function Workspace() {
   useEffect(() => {
     load(".");
   }, [load]);
+
+  // He writes files while you are looking at the folder they land in, and this listed once.
+  // Held back while an inline rename or a new-folder name is being typed, since replacing the
+  // listing under either would throw away what was typed.
+  useEffect(() => {
+    const tick = () => {
+      if (editing || creating !== null || busy) return;
+      load(path);
+    };
+    const timer = window.setInterval(tick, 8_000);
+    window.addEventListener("focus", tick);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", tick);
+    };
+  }, [editing, creating, busy, path, load]);
 
   const join = (name: string) => (path === "." ? name : `${path}/${name}`);
   const crumbs = path === "." ? [] : path.split("/");
