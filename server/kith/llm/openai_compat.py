@@ -42,6 +42,18 @@ def is_openrouter(config: Config) -> bool:
     return "openrouter.ai" in (config.base_url or "")
 
 
+def _refuses_reasoning(response: requests.Response) -> bool:
+    """Is this 400 specifically about the reasoning switch?
+
+    Matched on the provider's words rather than retried blindly, so a genuine bad
+    request still surfaces as one instead of being quietly sent twice.
+    """
+    try:
+        return "reasoning" in response.text.lower()
+    except requests.exceptions.RequestException:
+        return False
+
+
 def _pinned_provider() -> str:
     """The upstream to pin OpenRouter to, read per request because it is editable.
 
@@ -83,6 +95,11 @@ def stream_once(
             # Fallbacks stay on so availability never breaks; the pin is a strong
             # preference that keeps every round on the same warm cache.
             payload["provider"] = {"order": [pinned], "allow_fallbacks": True}
+        # Whether he reasons before answering. Sent only to OpenRouter, where it is a
+        # documented extension — a strict OpenAI-compatible host rejects the whole
+        # request rather than ignoring an unknown key. Until now this setting reached
+        # Ollama only, so on a cloud model the switch did nothing at all.
+        payload["reasoning"] = {"enabled": bool(config.think)}
     if tools:
         payload["tools"] = tools
         # "none" is how the API says "you may not call anything this turn". It matters
@@ -112,6 +129,19 @@ def stream_once(
     except requests.exceptions.RequestException as exc:
         yield {"type": "error", "message": f"Could not reach the cloud model at {url}: {exc}"}
         return
+
+    # Some models cannot have reasoning turned off — "Reasoning is mandatory for this
+    # endpoint and cannot be disabled", HTTP 400. Asking for it is still right, because
+    # on every other model it saves real tokens; being refused just means dropping the
+    # request to reason less, not failing the turn.
+    if response.status_code == 400 and "reasoning" in payload and _refuses_reasoning(response):
+        response.close()
+        payload.pop("reasoning")
+        try:
+            response = requests.post(url, json=payload, headers=headers, stream=True, timeout=(10, 90))
+        except requests.exceptions.RequestException as exc:
+            yield {"type": "error", "message": f"Could not reach the cloud model at {url}: {exc}"}
+            return
 
     if response.status_code != 200:
         detail = ""

@@ -1479,7 +1479,9 @@ function ProjectCard({
           ) : null}
         </div>
         {project.description ? (
-          <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{project.description}</p>
+          <div className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
+            <MarkdownInline>{project.description}</MarkdownInline>
+          </div>
         ) : null}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
           <span className="tabular-nums">
