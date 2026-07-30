@@ -72,3 +72,40 @@ export async function answerPermission(
   });
   if (!response.ok) throw new Error(`could not answer (${response.status})`);
 }
+
+/**
+ * Ask the desktop shell to post a native notification.
+ *
+ * Returns whether one actually appeared. The browser's own Notification API cannot do this
+ * from here: it reports permission "granted", throws nothing, and macOS drops it, because
+ * a notification from a page has no app for macOS to attribute. Only the shell's main
+ * process does — so this goes to the server, which asks the shell.
+ *
+ * `false` means Kith is running as a bare server rather than in the app. That is a fact
+ * about the setup and worth saying out loud, because "sent one" with nothing on screen is
+ * the most confusing possible outcome.
+ */
+export async function sendTestNotification(): Promise<boolean> {
+  const response = await fetch("/api/system/notify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "Kith", body: "This is how he'll reach you." }),
+  });
+  if (!response.ok) return false;
+  const body = (await response.json()) as { shown?: boolean };
+  return Boolean(body.shown);
+}
+
+/** Open one of macOS's settings panes, by name. Returns whether it opened. */
+export async function openSettingsPane(
+  pane: "fullDisk" | "notifications" | "files",
+): Promise<boolean> {
+  const response = await fetch("/api/system/settings-pane", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pane }),
+  });
+  if (!response.ok) return false;
+  const body = (await response.json()) as { opened?: boolean };
+  return Boolean(body.opened);
+}

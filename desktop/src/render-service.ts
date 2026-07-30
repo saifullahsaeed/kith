@@ -22,7 +22,9 @@ import * as crypto from "node:crypto";
 import * as http from "node:http";
 import { URL } from "node:url";
 
-import { BrowserWindow, session } from "electron";
+import { showMainWindow } from "./window";
+
+import { BrowserWindow, Notification, session, shell } from "electron";
 
 /** Matches the sandbox implementation this replaces (playwright's 30s goto). */
 const LOAD_TIMEOUT_MS = 30_000;
@@ -81,7 +83,9 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
     response.end(payload);
   };
 
-  if (request.method !== "POST" || !request.url?.startsWith("/render")) {
+  const route = (request.url ?? "").split("?")[0] ?? "";
+  const ROUTES = ["/render", "/notify", "/open-pane"];
+  if (request.method !== "POST" || !ROUTES.includes(route)) {
     return reply(404, { error: "not found" });
   }
   // Constant-time compare: a token check that leaks timing is not a token check.
@@ -91,6 +95,9 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
     return reply(401, { error: "bad or missing token" });
   }
+
+  if (route === "/notify") return notify(request, reply);
+  if (route === "/open-pane") return openPane(request, reply);
 
   let target: string;
   try {
@@ -234,4 +241,70 @@ function isLocalAddress(rawUrl: string): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Post a native notification, from the main process.
+ *
+ * It has to be the main process. The renderer's HTML5 Notification API looks like it
+ * works — `Notification.permission` reads "granted" and nothing throws — and then macOS
+ * silently drops it, because a web notification from a page has no app identity to
+ * attribute to. Electron's own Notification does, which is what makes it appear in
+ * Notification Center and what makes the first one act as the permission prompt.
+ *
+ * `isSupported()` is checked so a machine that cannot do this says so instead of the call
+ * succeeding into nothing — "sent one" with nothing on screen is worse than an error.
+ */
+async function notify(
+  request: http.IncomingMessage,
+  reply: (status: number, body: unknown) => void,
+): Promise<void> {
+  let title = "Kith";
+  let body = "";
+  try {
+    const parsed = JSON.parse(await readBody(request)) as { title?: unknown; body?: unknown };
+    if (typeof parsed.title === "string" && parsed.title.trim()) title = parsed.title.trim();
+    if (typeof parsed.body === "string") body = parsed.body;
+  } catch (error) {
+    return reply(400, { error: `bad request: ${(error as Error).message}` });
+  }
+  if (!Notification.isSupported()) {
+    return reply(503, { error: "this machine can't show notifications" });
+  }
+  const notification = new Notification({ title, body });
+  notification.on("click", () => showMainWindow());
+  notification.show();
+  reply(200, { shown: true });
+}
+
+/**
+ * Open one of macOS's own settings panes.
+ *
+ * From here rather than from the page, for two reasons. The renderer's window.open is
+ * routed through the navigation hardening, which allows http, https and mailto only — so
+ * `x-apple.systempreferences:` was silently dropped and the button did nothing. And the
+ * pane is chosen from a fixed list by name: the alternative was widening the scheme
+ * allowlist, and deliverables carry agent-authored URLs, so "any settings pane he names"
+ * is not a capability worth handing over for the sake of one button.
+ */
+async function openPane(
+  request: http.IncomingMessage,
+  reply: (status: number, body: unknown) => void,
+): Promise<void> {
+  const PANES: Record<string, string> = {
+    fullDisk: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+    notifications: "x-apple.systempreferences:com.apple.preference.notifications",
+    files: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders",
+  };
+  let name = "";
+  try {
+    const parsed = JSON.parse(await readBody(request)) as { pane?: unknown };
+    name = String(parsed.pane ?? "");
+  } catch (error) {
+    return reply(400, { error: `bad request: ${(error as Error).message}` });
+  }
+  const target = PANES[name];
+  if (!target) return reply(400, { error: `unknown pane: ${name}` });
+  await shell.openExternal(target);
+  reply(200, { opened: name });
 }

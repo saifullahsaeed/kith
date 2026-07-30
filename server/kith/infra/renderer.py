@@ -138,3 +138,51 @@ def render(url: str) -> str | None:
     if not isinstance(text, str):
         raise RuntimeError("desktop renderer returned no text")
     return text
+
+
+def notify(title: str, body: str) -> bool:
+    """Post a native notification through the desktop shell.
+
+    False when there is no shell registered — running as a bare server, there is no app
+    identity for macOS to attribute a notification to, and saying so is better than
+    pretending it went out.
+
+    This exists because the renderer's own Notification API does not work: it reports
+    permission "granted", throws nothing, and macOS drops the notification, because a
+    notification from a page has no app to attribute. The shell's main process does.
+    """
+    return _ask("/notify", {"title": title, "body": body}) is not None
+
+
+def open_settings_pane(pane: str) -> bool:
+    """Open one of macOS's own settings panes, by name.
+
+    By name rather than by URL: the pane list lives in the shell. A page asking for
+    "x-apple.systempreferences:<anything>" is a wider capability than one button needs,
+    and deliverables carry agent-authored links.
+    """
+    return _ask("/open-pane", {"pane": pane}) is not None
+
+
+def _ask(route: str, payload: dict) -> dict | None:
+    """One short request to the shell. None when it is not there or says no.
+
+    Short timeout on purpose: these are things a person is waiting on with a finger still
+    on the button, and a shell that has gone away should fail immediately rather than
+    holding the click for a minute.
+    """
+    with _lock:
+        endpoint = _endpoint
+    if endpoint is None:
+        return None
+    request = urllib.request.Request(
+        f"{endpoint.url}{route}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "X-Kith-Token": endpoint.token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return json.loads(response.read().decode())
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError):
+        return None

@@ -40,3 +40,33 @@ def register_renderer():
 def forget_renderer():
     renderer.unregister()
     return jsonify({"registered": False})
+
+
+@api.post("/system/notify")
+@api.doc(
+    summary="Post a native notification",
+    description=(
+        "Goes out through the desktop shell, which is the only process with an app "
+        "identity macOS will attribute a notification to. Answers `{shown: false}` when "
+        "Kith is running as a bare server rather than in the app — that is a fact about "
+        "the setup, not an error."
+    ),
+)
+def system_notify():
+    payload = request.get_json(silent=True) or {}
+    shown = renderer.notify(
+        str(payload.get("title") or "Kith"),
+        str(payload.get("body") or ""),
+    )
+    return jsonify({"shown": shown})
+
+
+@api.post("/system/settings-pane")
+@api.doc(
+    summary="Open a macOS settings pane",
+    description="One of: fullDisk, notifications, files. Named rather than given as a URL.",
+)
+def system_settings_pane():
+    payload = request.get_json(silent=True) or {}
+    opened = renderer.open_settings_pane(str(payload.get("pane") or ""))
+    return jsonify({"opened": opened})
