@@ -8,7 +8,7 @@ from flask import Response
 
 from kith.api.blueprint import api
 from kith.autonomy import runner as autonomy
-from kith.config import AGENT_DB_PATH, OLLAMA_HOST, default_config, merge_overrides
+from kith.config import AGENT_DB_PATH, default_config, merge_overrides, ollama_host
 from kith.domain import clock
 from kith.schemas import (
     ChatRequestSchema,
@@ -94,7 +94,7 @@ def chat(payload):
 
     def generate():
         try:
-            for event in stream_agent(messages, config, OLLAMA_HOST, AGENT_DB_PATH):
+            for event in stream_agent(messages, config, ollama_host(), AGENT_DB_PATH):
                 yield json.dumps(event) + "\n"
                 if event.get("type") == "error":
                     return

@@ -16,9 +16,17 @@ from kith import settings
 from kith.infra.db import config_store
 from kith.services.persona import load_persona
 
+
 # Re-exported from settings so callers have one import for "where things are", and
 # there is still exactly one place these are read from the environment.
-OLLAMA_HOST = settings.OLLAMA_HOST
+def ollama_host() -> str:
+    """Where Ollama listens. A function, not a constant: it is editable in settings,
+    and a constant read at import could not reflect a change."""
+    from kith.services import tuning
+
+    return str(tuning.value("ollama_host"))
+
+
 DATA_DIR = settings.DATA_DIR
 CONFIG_DB_PATH = DATA_DIR / "config.db"  # server configuration
 AGENT_DB_PATH = DATA_DIR / "agent.db"  # the agent's memory/workspace

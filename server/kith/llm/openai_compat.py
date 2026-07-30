@@ -23,7 +23,6 @@ from typing import Any
 
 import requests
 
-from kith import settings
 from kith.config import Config
 
 # Optionally pin OpenRouter to one upstream host. Default routing spreads requests
@@ -31,7 +30,6 @@ from kith.config import Config
 # prefix caching rarely hits. Pinning a caching-capable host keeps every round on
 # the same warm cache. Set e.g. KITH_OR_PROVIDER=DeepInfra ; watch the effect in
 # /api/usage → cacheHitRate. Empty = OpenRouter's default routing.
-_PINNED_PROVIDER = settings.OPENROUTER_PROVIDER
 
 
 def is_openrouter(config: Config) -> bool:
@@ -42,6 +40,17 @@ def is_openrouter(config: Config) -> bool:
     once rather than being spelled slightly differently in two places.
     """
     return "openrouter.ai" in (config.base_url or "")
+
+
+def _pinned_provider() -> str:
+    """The upstream to pin OpenRouter to, read per request because it is editable.
+
+    Imported at call time: this module is the transport and importing a service at
+    module scope would make the dependency cycle real.
+    """
+    from kith.services import tuning
+
+    return str(tuning.value("openrouter_provider"))
 
 
 def stream_once(
@@ -69,10 +78,11 @@ def stream_once(
         # Usage accounting: returns cache-hit tokens and real cost, which is how we
         # confirm prompt caching is actually working.
         payload["usage"] = {"include": True}
-        if _PINNED_PROVIDER:
+        pinned = _pinned_provider()
+        if pinned:
             # Fallbacks stay on so availability never breaks; the pin is a strong
             # preference that keeps every round on the same warm cache.
-            payload["provider"] = {"order": [_PINNED_PROVIDER], "allow_fallbacks": True}
+            payload["provider"] = {"order": [pinned], "allow_fallbacks": True}
     if tools:
         payload["tools"] = tools
         # "none" is how the API says "you may not call anything this turn". It matters

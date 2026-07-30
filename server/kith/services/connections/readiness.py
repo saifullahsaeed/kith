@@ -18,10 +18,11 @@ from enum import StrEnum
 
 import requests
 
-from kith import settings
+from kith.config import ollama_host
 from kith.domain.connection import Connection
 from kith.domain.search import SearchKind, SearchSetup
 from kith.infra import sandbox
+from kith.services import tuning
 from kith.services.connections.providers import ProviderError
 from kith.services.connections.providers.ollama import OllamaProvider
 
@@ -84,8 +85,8 @@ def _computer() -> Check:
 
 def _memory() -> Check:
     """Embeddings run locally through Ollama even when he thinks in the cloud."""
-    model = settings.EMBED_MODEL
-    local = Connection.local(base_url=settings.OLLAMA_HOST)
+    model = str(tuning.value("embed_model"))
+    local = Connection.local(base_url=ollama_host())
     try:
         pulled = OllamaProvider().has_model(local, model)
     except ProviderError:

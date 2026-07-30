@@ -6,7 +6,7 @@
  *   /                          → home (chat + mind)
  *   /control-panel/<tab>       → the panel open on a tab (e.g. /control-panel/memories)
  *   /tasks/<id>                → the panel open on that task's detail
- *   /settings/<tab>            → settings open on a tab (model | tools | chat)
+ *   /settings/<tab>            → settings on a tab (model | tools | chat | advanced)
  */
 
 // The panel's internal tab values. The URL uses these verbatim except for the
@@ -44,7 +44,7 @@ function slugTab(slug: string): PanelTab | null {
 
 /** Settings' tabs. Model and Tools are separate because they are separate decisions
  *  with separate costs — per token against per search — and each saves on its own. */
-const SETTINGS_TABS = ["model", "tools", "chat"] as const;
+const SETTINGS_TABS = ["model", "tools", "chat", "advanced"] as const;
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 

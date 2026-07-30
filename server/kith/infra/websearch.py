@@ -40,6 +40,7 @@ from kith.domain.search import SearchKind
 from kith.infra import sandbox
 from kith.infra.db import config_store
 from kith.llm import openai_compat
+from kith.services import tuning
 
 # Exa charges one flat fee for up to ten results and only then bills per extra
 # result, so there is never a reason to ask for more than ten.
@@ -55,13 +56,13 @@ _PROVIDER = settings.SEARCH_PROVIDER
 # Pinned rather than left to OpenRouter's default: native search varies by model
 # and prices by "context size", while Exa behaves identically whatever he thinks
 # with and costs a flat, predictable amount.
-_ENGINE = settings.SEARCH_ENGINE
+
 
 # The carrier model for the plugin call. Blank = whatever he thinks with, which
 # is right for a cheap model; point this at a cheap slug if he ever moves to an
 # expensive one, since the plugin feeds its results back through the model as
 # prompt tokens (~2.5k per search) and those bill at the carrier's rate.
-_SEARCH_MODEL = settings.SEARCH_MODEL
+
 
 # Probing a blocked SearXNG costs ~2s (a docker exec into the sandbox plus the
 # request) and it is blocked for hours at a time, so paying that on *every* search
@@ -200,9 +201,9 @@ def _openrouter(query: str, limit: int, config: Config) -> list[dict]:
         raise RuntimeError("no OpenRouter key configured (Settings → base URL + API key)")
 
     payload: dict[str, Any] = {
-        "model": _SEARCH_MODEL or config.model,
+        "model": tuning.value("search_model") or config.model,
         "messages": [{"role": "user", "content": query}],
-        "plugins": [{"id": "web", "engine": _ENGINE, "max_results": limit}],
+        "plugins": [{"id": "web", "engine": tuning.value("search_engine"), "max_results": limit}],
         # We only want the citations the plugin attaches, never the model's prose.
         # Not 1: some providers reject a max_tokens that small.
         "max_tokens": 16,

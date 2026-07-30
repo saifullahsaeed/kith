@@ -19,6 +19,7 @@ from kith import settings
 from kith.domain.connection import Connection
 from kith.domain.search import DEFAULT_SEARX_URL, SearchKind, SearchSetup
 from kith.infra.db import config_store
+from kith.services import tuning
 
 #: Stored under the same names the environment uses, so a value means one thing
 #: wherever it is read from.
@@ -111,7 +112,7 @@ class SearchManager:
                 "blurb": "Search on the key he already thinks with.",
                 "tradeoff": (
                     "Nothing to install and it doesn't go down. About half a cent a "
-                    f"search, billed to the same key — via {settings.SEARCH_ENGINE}."
+                    f"search, billed to the same key — via {tuning.value('search_engine')}."
                 ),
                 "requires": "Nothing — it uses the key you just set up",
                 "needsUrl": False,

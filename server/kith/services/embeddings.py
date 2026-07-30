@@ -15,16 +15,15 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from kith import settings
-from kith.config import OLLAMA_HOST
+from kith.config import ollama_host
 from kith.infra.db import repositories as repo
 from kith.llm import ollama
 
-EMBED_MODEL = settings.EMBED_MODEL
-
 
 def embed(text: str) -> list[float] | None:
-    return ollama.embed(OLLAMA_HOST, text, EMBED_MODEL)
+    from kith.services import tuning
+
+    return ollama.embed(ollama_host(), text, str(tuning.value("embed_model")))
 
 
 def remember(

@@ -231,3 +231,74 @@ export function formatContext(tokens: number | null): string {
   }
   return `${Math.round(tokens / 1000)}K`;
 }
+
+// -- everything configurable ------------------------------------------------ //
+
+/** One knob, carrying its own documentation so this file needs no second copy. */
+export interface Tunable {
+  key: string;
+  env: string;
+  label: string;
+  help: string;
+  default: number | string;
+  group: string;
+  kind: "int" | "float" | "text";
+  min: number | null;
+  max: number | null;
+  unit: string;
+  value: number | string;
+  isDefault: boolean;
+  /** An environment variable is winning, so editing the field would do nothing. */
+  fromEnv: boolean;
+}
+
+export interface TunableGroup {
+  key: string;
+  label: string;
+  blurb: string;
+  settings: Tunable[];
+}
+
+/** A deployment path. Read-only: the databases are open by the time anyone sees this. */
+export interface ConfigPath {
+  label: string;
+  value: string;
+  env: string;
+}
+
+export interface TuningSnapshot {
+  groups: TunableGroup[];
+  paths: ConfigPath[];
+}
+
+export async function fetchTuning(signal?: AbortSignal): Promise<TuningSnapshot> {
+  const response = await fetch("/api/tuning", { signal });
+  if (!response.ok) throw new Error(`/api/tuning returned ${response.status}`);
+  return (await response.json()) as TuningSnapshot;
+}
+
+/** Change settings. Values are clamped server-side, so what comes back is what he'll
+ *  actually use — which may not be exactly what was sent. */
+export async function saveTuning(
+  updates: Record<string, number | string>,
+): Promise<TuningSnapshot> {
+  const response = await fetch("/api/tuning", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  const body = (await response.json()) as { state: TuningSnapshot; error?: string };
+  if (!response.ok) throw new Error(body.error ?? `saving failed (${response.status})`);
+  return body.state;
+}
+
+export async function resetTuning(keys?: string[]): Promise<TuningSnapshot> {
+  const response = await fetch("/api/tuning/reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(keys ? { keys } : {}),
+  });
+  const body = (await response.json()) as TuningSnapshot & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? `reset failed (${response.status})`);
+  return body;
+}

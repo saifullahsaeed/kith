@@ -23,6 +23,10 @@ export type {
   ProviderKind,
   ReadinessCheck,
   SetupSnapshot,
+  ConfigPath,
+  Tunable,
+  TunableGroup,
+  TuningSnapshot,
 } from "./setup";
 export {
   completeSetup,
@@ -32,4 +36,7 @@ export {
   probeConnection,
   probeSearch,
   saveSearch,
+  fetchTuning,
+  saveTuning,
+  resetTuning,
 } from "./setup";

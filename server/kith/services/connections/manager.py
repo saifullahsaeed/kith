@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from kith import settings
+from kith.config import ollama_host
 from kith.domain.connection import Connection, ModelInfo, Pick, ProviderKind, Tier
 from kith.infra.db import config_store
 from kith.services.connections import providers
@@ -141,7 +141,7 @@ class ConnectionManager:
         """
         resolved = ProviderKind(kind)
         if resolved is ProviderKind.OLLAMA:
-            return Connection.local(model=model.strip(), base_url=base_url.strip() or settings.OLLAMA_HOST)
+            return Connection.local(model=model.strip(), base_url=base_url.strip() or ollama_host())
 
         candidate = (
             Connection.openrouter(api_key=api_key.strip(), model=model.strip())

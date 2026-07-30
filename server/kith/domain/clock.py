@@ -12,13 +12,21 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from kith import settings
 from kith.infra.db import repositories as repo
 
-try:
-    LOCAL_TZ = ZoneInfo(settings.TIMEZONE)
-except (ZoneInfoNotFoundError, ValueError):
-    LOCAL_TZ = UTC
+
+def local_tz() -> ZoneInfo | type[UTC]:
+    """His zone, read per call because it is editable in settings.
+
+    Falls back to UTC on an unknown name rather than raising: a mistyped zone should
+    make his timestamps unsurprising, not stop him working.
+    """
+    from kith.services import tuning
+
+    try:
+        return ZoneInfo(str(tuning.value("timezone")))
+    except (ZoneInfoNotFoundError, ValueError):
+        return UTC
 
 
 def now_utc() -> datetime:
@@ -30,7 +38,7 @@ def now_iso() -> str:
 
 
 def _local(dt: datetime) -> datetime:
-    return dt.astimezone(LOCAL_TZ)
+    return dt.astimezone(local_tz())
 
 
 def _time_of_day(hour: int) -> str:
@@ -162,5 +170,5 @@ def _parse(iso: str | None, assume_local: bool = False) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=LOCAL_TZ if assume_local else UTC)
+        dt = dt.replace(tzinfo=local_tz() if assume_local else UTC)
     return dt

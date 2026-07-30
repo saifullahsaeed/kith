@@ -20,6 +20,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     setup,
     sources,
     tasks,
+    tuning,
     workspace,
 )
 

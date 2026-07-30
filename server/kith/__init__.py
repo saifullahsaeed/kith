@@ -17,7 +17,7 @@ from kith.api.routes import api
 from kith.autonomy import runner
 from kith.config import AGENT_DB_PATH, CONFIG_DB_PATH
 from kith.infra.db import config_store, migrations
-from kith.services import embeddings
+from kith.services import embeddings, tuning
 from kith.services.persona import fragment_paths
 
 __all__ = ["create_app"]
@@ -57,7 +57,7 @@ def create_app() -> APIFlask:
     runner.ensure_loop()  # keep the checker alive so reminders/schedules fire on time
     print(f"[kith] config db: {CONFIG_DB_PATH}")
     print(f"[kith] agent db:  {AGENT_DB_PATH}")
-    print(f"[kith] embeddings: {embeddings.EMBED_MODEL}")
+    print(f"[kith] embeddings: {tuning.value('embed_model')}")
     print(f"[kith] web ui:   {served or '(not served — the vite dev server is in front)'}")
     if served:
         print(

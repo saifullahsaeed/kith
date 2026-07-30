@@ -25,11 +25,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from kith.autonomy import directives
-from kith.config import AGENT_DB_PATH, OLLAMA_HOST, default_config
+from kith.config import AGENT_DB_PATH, default_config, ollama_host
 from kith.domain import clock, stall
 from kith.infra import sandbox
 from kith.infra.db import repositories as repo
-from kith.services import memory_context
+from kith.services import memory_context, tuning
 from kith.services.agent_loop import stream_agent
 
 # Injected into the system prompt for a tick (not part of the everyday persona).
@@ -57,22 +57,15 @@ from kith.services.agent_loop import stream_agent
 # rarely even then, so he doesn't spiral into a private obsession. These are how
 # many idle ticks pass between each; with the idle backoff below that's tens of
 # minutes apart in wall-clock, not seconds.
-_REFLECT_EVERY = 20
-_CURIOUS_EVERY = 30
-_CONSOLIDATE_EVERY = 60
 # Hard cap on open curiosities — past this he stops wandering onto new ones and
 # either explores what he has or rests, instead of piling up a rabbit hole.
-_MAX_OPEN_CURIOSITIES = 3
 # When caught up (no active work), roam this slowly regardless of the set interval,
 # so an empty board doesn't burn tokens every few seconds.
-_IDLE_INTERVAL = 120.0
 
 # Floor between ticks however they are triggered, so a burst of replies or due
 # reminders cannot spin the loop faster than he can actually work.
-_MIN_GAP = 3.0
 
 # A tick is a step, not an essay: bounding output keeps 24/7 running affordable.
-_TICK_MAX_TOKENS = 2_000
 
 # Everything needed to actually execute a task: tasks/projects, memory & notes,
 # knowledge (sources + web), the sandbox, and deferring/handing back. Deliberately
@@ -302,7 +295,9 @@ class AutonomyRunner:
         while not self._stop.is_set():
             try:
                 now = time.monotonic()
-                gap_ok = self._last_tick_mono is None or (now - self._last_tick_mono) >= _MIN_GAP
+                gap_ok = self._last_tick_mono is None or (now - self._last_tick_mono) >= tuning.value(
+                    "min_gap"
+                )
                 # Replies + due reminders/schedules fire regardless of roaming (but
                 # not faster than the floor); roaming ticks only when turned loose.
                 if gap_ok and (self._has_due() or (self._running and self._due())):
@@ -337,7 +332,7 @@ class AutonomyRunner:
         interval = self._interval
         try:
             if not repo.tasks.active_tasks(AGENT_DB_PATH):
-                interval = max(self._interval, _IDLE_INTERVAL)
+                interval = max(self._interval, tuning.value("idle_interval"))
         except Exception:
             pass
         # Not yet time if a tick ran within the interval.
@@ -384,7 +379,7 @@ class AutonomyRunner:
         #   / wonder > rest. Inner life must never outrank your work.
         resuming = not pending and bool(awaiting)
         top = pending or resuming or due
-        breaking = self._stall >= stall.STALL_BREAK
+        breaking = self._stall >= tuning.value("stall_break")
         # Caught up: nothing pending/due, not breaking a loop, and no active tasks.
         idle = not (top or breaking or active)
         open_curiosities = (
@@ -398,13 +393,13 @@ class AutonomyRunner:
             if idle
             else 0
         )
-        consolidating = idle and self._tick_count % _CONSOLIDATE_EVERY == 0
-        reflecting = idle and not consolidating and self._tick_count % _REFLECT_EVERY == 0
+        consolidating = idle and self._tick_count % tuning.value("consolidate_every") == 0
+        reflecting = idle and not consolidating and self._tick_count % tuning.value("reflect_every") == 0
         curious = (
             idle
             and not (consolidating or reflecting)
-            and open_curiosities < _MAX_OPEN_CURIOSITIES
-            and self._tick_count % _CURIOUS_EVERY == 0
+            and open_curiosities < tuning.value("max_open_curiosities")
+            and self._tick_count % tuning.value("curious_every") == 0
         )
 
         if pending:
@@ -470,7 +465,7 @@ class AutonomyRunner:
             nxt = clock.next_fire_after(sched.get("every_minutes"), sched.get("daily_at"))
             repo.schedules.reschedule(AGENT_DB_PATH, sched["id"], nxt)
             self._emit("reminder", f"(standing) {sched['note']}")
-        tick_config = replace(config, num_predict=min(config.num_predict, _TICK_MAX_TOKENS))
+        tick_config = replace(config, num_predict=min(config.num_predict, tuning.value("tick_max_tokens")))
 
         final_text = ""
         tick_in = tick_out = 0
@@ -479,7 +474,7 @@ class AutonomyRunner:
         started = time.monotonic()
         journal_before = _latest_journal_id()
         for event in stream_agent(
-            messages, tick_config, OLLAMA_HOST, AGENT_DB_PATH, max_rounds=16, allow=_ALLOW.get(mode)
+            messages, tick_config, ollama_host(), AGENT_DB_PATH, max_rounds=16, allow=_ALLOW.get(mode)
         ):
             kind = event["type"]
             if kind == "tool_call":
@@ -568,7 +563,7 @@ class AutonomyRunner:
             if shape:
                 self._recent_shapes.append(shape)
 
-        if self._stall >= stall.STALL_GIVEUP:
+        if self._stall >= tuning.value("stall_giveup"):
             # He wouldn't let go on his own — set the stuck thing aside for him.
             given_up = _give_up(active)
             if given_up:

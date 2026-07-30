@@ -18,10 +18,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from kith import settings, tools
+from kith import tools
 from kith.config import Config
 from kith.domain.tool_markup import ToolMarkupFilter
 from kith.llm import ollama, openai_compat
+from kith.services import tuning
 
 # Tools that may run concurrently with each other. The bar is deliberately high:
 # each one must be network-bound (so overlapping actually saves wall-clock), free
@@ -32,7 +33,6 @@ _PARALLEL_SAFE = frozenset({"web_search", "fetch_url", "browse_page", "search_so
 
 # Enough to collapse the batches of six searches he actually makes, low enough
 # that a round can't open dozens of sockets (or docker execs) at once.
-_MAX_PARALLEL = 6
 
 # Rounds held back at the end of every turn for *landing* the work. Without a
 # reserve, research expands to fill the entire budget: he spends all 40 rounds
@@ -46,7 +46,6 @@ _MAX_PARALLEL = 6
 # capped at a third of the budget below, since a tick's budget varies (autonomy
 # ticks get 16, not the full MAX_ROUNDS) and a fixed reserve could otherwise eat
 # most of a short turn.
-_LANDING_RESERVE = settings.LANDING_RESERVE
 
 # What he may still do once he's landing: record, deliver, tick things off, hand
 # back. Notably *not* search or fetch — the point of the reserve is that gathering
@@ -113,7 +112,6 @@ def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = 
 # loop is fine — that's how real agents do multi-step work; what has to stay small
 # is the *payload each round carries* (see the grep/ranged-read/spill-to-file
 # tools and prompt-cache alignment). The thrash-guard stops genuine spinning.
-MAX_ROUNDS = settings.MAX_ROUNDS
 
 # Process-wide token meter. Every model call — chat and autonomy alike — flows
 # through stream_agent, so this is the one true tally of what Kith costs. Read it
@@ -140,26 +138,22 @@ def _record(stats: dict | None) -> None:
     _usage["calls"] += 1
 
 
-# Tool outputs re-send in full on every subsequent round, so a long research turn
-# would balloon without some pruning. But the pruning has to be sized to the model
-# actually in use: these constants were set for a local 4B on a 40k window, and a
-# hard "keep the last 4" is ruinous on a cloud model with a 1M window — he forgets
-# the six searches he ran two rounds ago and re-runs them, tick after tick.
-#
-# So the live set is bounded by CHARACTERS, not by count: keep the newest results
-# whole until the budget is spent, and only then start stubbing. 240k chars is
-# roughly 60k tokens — deep enough to hold a whole turn's research, still a small
-# fraction of a 1M window, and cheap because a stable prefix caches.
-_LIVE_TOOL_CHARS = settings.LIVE_TOOL_CHARS
-# A floor, so a few huge pages can't squeeze out everything he just read.
-_KEEP_FULL_TOOL_RESULTS = settings.KEEP_FULL_TOOL_RESULTS
-# Stubs keep a usable head now, not a 400-char sliver — enough that he can still
-# see WHAT a dropped result was about and judge whether to fetch it again.
-_TOOL_STUB_CHARS = settings.TOOL_STUB_CHARS
-
-
 def _compact_tool_history(convo: list[dict[str, Any]]) -> None:
-    """Stub the oldest tool outputs once the live set outgrows its char budget."""
+    """Stub the oldest tool outputs once the live set outgrows its char budget.
+
+    Tool output re-sends in full on every subsequent round, so a long research turn
+    would balloon without pruning. The pruning has to be sized to the model actually
+    in use: a hard "keep the last four" is ruinous on a 1M-context model, where he
+    forgets the six searches he ran two rounds ago and re-runs them, tick after tick.
+
+    So the live set is bounded by characters rather than by count — keep the newest
+    results whole until the budget is spent, and only then start stubbing. All three
+    numbers are settings, read here rather than at import so raising them for a
+    bigger model takes effect on the next turn instead of the next restart.
+    """
+    keep_whole = tuning.value("keep_full_tool_results")
+    char_budget = tuning.value("live_tool_chars")
+    stub_chars = tuning.value("tool_stub_chars")
     tool_positions = [i for i, m in enumerate(convo) if m.get("role") == "tool"]
 
     # Walk newest-first, spending the budget on the most recent results.
@@ -167,7 +161,7 @@ def _compact_tool_history(convo: list[dict[str, Any]]) -> None:
     spent = 0
     for rank, i in enumerate(reversed(tool_positions)):
         size = len(convo[i].get("content") or "")
-        if rank < _KEEP_FULL_TOOL_RESULTS or spent + size <= _LIVE_TOOL_CHARS:
+        if rank < keep_whole or spent + size <= char_budget:
             keep.add(i)
             spent += size
         else:
@@ -178,10 +172,10 @@ def _compact_tool_history(convo: list[dict[str, Any]]) -> None:
             continue
         msg = convo[i]
         content = msg.get("content") or ""
-        if len(content) > _TOOL_STUB_CHARS and not msg.get("_stubbed"):
+        if len(content) > stub_chars and not msg.get("_stubbed"):
             name = msg.get("tool_name", "tool")
             msg["content"] = (
-                content[:_TOOL_STUB_CHARS] + f"\n…[earlier {name} output trimmed to save room — "
+                content[:stub_chars] + f"\n…[earlier {name} output trimmed to save room — "
                 "if you still need it, save what matters to a file next time; re-run the tool to see it again]"
             )
             msg["_stubbed"] = True
@@ -198,8 +192,8 @@ def stream_agent(
     convo = list(messages)
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
-    budget = max_rounds or MAX_ROUNDS
-    reserve = min(_LANDING_RESERVE, max(2, budget // 3))
+    budget = max_rounds or tuning.value("max_rounds")
+    reserve = min(tuning.value("landing_reserve"), max(2, budget // 3))
     landing = False
     persisted = False  # did anything this turn leave a trace?
     nudged = False  # the "don't walk away empty-handed" nudge fires at most once
@@ -330,9 +324,10 @@ def _batches(planned: list[dict]) -> Iterator[list[dict]]:
     relative order of safe and unsafe work intact — so a write that he sequenced
     after a fetch still happens after it.
     """
+    at_once = tuning.value("max_parallel")
     batch: list[dict] = []
     for step in planned:
-        if step["name"] in _PARALLEL_SAFE and not step["repeat"] and len(batch) < _MAX_PARALLEL:
+        if step["name"] in _PARALLEL_SAFE and not step["repeat"] and len(batch) < at_once:
             batch.append(step)
             continue
         if batch:

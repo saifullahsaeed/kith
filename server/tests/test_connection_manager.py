@@ -115,9 +115,12 @@ class TestCandidate:
         assert candidate.endpoint == "https://openrouter.ai/api/v1"
         assert candidate.api_key == "k"  # pasted keys carry whitespace
 
-    def test_local_uses_the_address_chat_will_use(self, config_db, monkeypatch):
-        # A probe that tests a different address than the chat path is worthless.
-        monkeypatch.setattr("kith.settings.OLLAMA_HOST", "http://10.0.0.5:11434")
+    def test_local_uses_the_address_chat_will_use(self, config_db):
+        # A probe that tests a different address than the chat path is worthless — so
+        # this reads the same tunable the chat path reads, not a copy of it.
+        from kith.services import tuning
+
+        tuning.apply({"ollama_host": "http://10.0.0.5:11434"})
         m = ConnectionManager(config_db=config_db)
         assert m.candidate("ollama").endpoint == "http://10.0.0.5:11434"
 

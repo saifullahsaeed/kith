@@ -56,17 +56,28 @@ def similar(a: frozenset[str], b: frozenset[str]) -> bool:
     if not a or not b:
         return False
     union = len(a | b)
-    return union > 0 and len(a & b) / union >= PROSE_MATCH
+    return union > 0 and len(a & b) / union >= _threshold("prose_match")
 
 
 def same_shape(a: frozenset[str], b: frozenset[str]) -> bool:
     """Did two ticks reach for the same kinds of tool?"""
-    if len(a) < SHAPE_MIN_TOOLS or len(b) < SHAPE_MIN_TOOLS:
+    if len(a) < _threshold("shape_min_tools") or len(b) < _threshold("shape_min_tools"):
         return False
     union = len(a | b)
-    return union > 0 and len(a & b) / union >= SHAPE_MATCH
+    return union > 0 and len(a & b) / union >= _threshold("shape_match")
 
 
 def advanced(tools_used: frozenset[str]) -> bool:
     """Did this tick leave the work further along than it found it?"""
     return bool(tools_used & ADVANCE_TOOLS)
+
+
+def _threshold(key: str) -> float:
+    """A tuning value, imported lazily to keep this module free of service imports.
+
+    This file is the pure loop-detection logic and is tested without a database; the
+    import happens at call time so that stays true.
+    """
+    from kith.services import tuning
+
+    return tuning.value(key)

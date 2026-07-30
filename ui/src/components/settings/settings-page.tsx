@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Cpu, Loader2, MessageSquare, Settings2, Wrench, X } from "lucide-react";
+import { Cpu, Loader2, MessageSquare, Settings2, SlidersHorizontal, Wrench, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AdvancedTab } from "@/components/settings/advanced-tab";
 import { ChatTab } from "@/components/settings/chat-tab";
 import { ModelTab } from "@/components/settings/model-tab";
 import { ToolsTab } from "@/components/settings/tools-tab";
@@ -12,6 +13,12 @@ const TABS: { id: SettingsTab; label: string; hint: string; icon: typeof Cpu }[]
   { id: "model", label: "Model", hint: "where he thinks", icon: Cpu },
   { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench },
   { id: "chat", label: "Conversation", hint: "how he thinks, and who he is", icon: MessageSquare },
+  {
+    id: "advanced",
+    label: "Advanced",
+    hint: "his pace, limits and addresses",
+    icon: SlidersHorizontal,
+  },
 ];
 
 /**
@@ -143,13 +150,15 @@ export function SettingsPage({
                 checks={snapshot.checks}
                 onSaved={load}
               />
-            ) : (
+            ) : tab === "chat" ? (
               <ChatTab
                 config={config}
                 connection={snapshot.connection}
                 serverDefaults={serverDefaults}
                 onSave={onSaveConfig}
               />
+            ) : (
+              <AdvancedTab />
             )}
           </div>
         </div>
