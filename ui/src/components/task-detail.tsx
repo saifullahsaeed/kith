@@ -158,122 +158,129 @@ export function TaskDetailPage({
   const milestones = projects.find((one) => one.id === task.project_id)?.milestones ?? [];
 
   return (
-    <div>
-      {/* breadcrumb + back */}
-      <button
-        onClick={onBack}
-        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ArrowLeft className="size-4" />
-        {trail ?? "Projects"}
-        <ChevronRight className="size-3.5 text-muted-foreground/50" />
-        <span className="font-mono">#{task.id}</span>
-      </button>
+    <div className="flex h-full flex-col">
+      {/* Header: pinned, so what the task IS never scrolls away from the discussion of it. */}
+      <div className="border-border/60 shrink-0 border-b px-6 pt-5 pb-4 md:px-8">
+        {/* breadcrumb + back */}
+        <button
+          onClick={onBack}
+          className="text-muted-foreground hover:text-foreground mb-3 inline-flex items-center gap-1.5 text-sm transition-colors"
+        >
+          <ArrowLeft className="size-4" />
+          {trail ?? "Projects"}
+          <ChevronRight className="size-3.5 text-muted-foreground/50" />
+          <span className="font-mono">#{task.id}</span>
+        </button>
 
-      {/* header: what it is, and whether it can be worked on */}
-      <div className="mb-5">
-        <div className="flex items-start gap-3">
-          <span className="bg-muted/70 mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-emerald-500">
-            <ListChecks className="size-4" />
-          </span>
-          <input
-            value={task.goal}
-            onChange={(e) => setTask({ ...task, goal: e.target.value })}
-            onBlur={(e) => e.target.value !== task.goal && patch({ goal: e.target.value })}
-            title="Click to rename"
-            className="focus:ring-ring/25 hover:bg-accent/40 focus:bg-card/70 -mx-2 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-xl font-semibold tracking-tight outline-none transition-colors focus:ring-[3px]"
-          />
-        </div>
+        {/* header: what it is, and whether it can be worked on */}
+        <div>
+          <div className="flex items-start gap-3">
+            <span className="bg-muted/70 mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-emerald-500">
+              <ListChecks className="size-4" />
+            </span>
+            <input
+              value={task.goal}
+              onChange={(e) => setTask({ ...task, goal: e.target.value })}
+              onBlur={(e) => e.target.value !== task.goal && patch({ goal: e.target.value })}
+              title="Click to rename"
+              className="focus:ring-ring/25 hover:bg-accent/40 focus:bg-card/70 -mx-2 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-xl font-semibold tracking-tight outline-none transition-colors focus:ring-[3px]"
+            />
+          </div>
 
-        {/* Whether this is actually workable, stated first, because a status of "todo" on a
+          {/* Whether this is actually workable, stated first, because a status of "todo" on a
             task the roadmap is holding back is the page telling you something untrue about
             the most important thing on it. */}
-        {held.length > 0 ? (
-          <div className="border-orange-400/30 bg-orange-400/5 mt-3 ml-12 flex items-start gap-2.5 rounded-xl border px-3 py-2.5">
-            <Lock className="mt-0.5 size-3.5 shrink-0 text-orange-400/90" />
-            <p className="text-xs leading-relaxed">
-              <span className="text-orange-400/90">Not available yet.</span>{" "}
-              <span className="text-muted-foreground">
-                It waits for {held.join(", ")} — he will not pick it up until that is done, whatever
-                its status says.
-              </span>
-            </p>
-          </div>
-        ) : null}
-      </div>
+          {held.length > 0 ? (
+            <div className="border-orange-400/30 bg-orange-400/5 mt-3 ml-12 flex items-start gap-2.5 rounded-xl border px-3 py-2.5">
+              <Lock className="mt-0.5 size-3.5 shrink-0 text-orange-400/90" />
+              <p className="text-xs leading-relaxed">
+                <span className="text-orange-400/90">Not available yet.</span>{" "}
+                <span className="text-muted-foreground">
+                  It waits for {held.join(", ")} — he will not pick it up until that is done,
+                  whatever its status says.
+                </span>
+              </p>
+            </div>
+          ) : null}
+        </div>
 
-      {/* Properties as a panel, not a row of labelled form fields. Every task system worth
+        {/* Properties as a panel, not a row of labelled form fields. Every task system worth
           copying does it this way, and for a reason: these are attributes of the thing, read
           far more often than they are changed, so they want to be scannable rather than
           prominent. */}
-      <div className="border-border/60 bg-card/30 mb-6 grid gap-x-6 gap-y-3 rounded-xl border px-4 py-3 sm:grid-cols-2 lg:grid-cols-3">
-        <Prop label="Status">
-          <Dropdown
-            value={task.status}
-            onChange={(v) => patch({ status: v })}
-            className="w-full"
-            options={STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))}
-            ariaLabel="Status"
-          />
-        </Prop>
-        <Prop label="Priority">
-          <Dropdown
-            value={task.priority}
-            onChange={(v) => patch({ priority: v })}
-            options={PRIORITIES}
-            className="w-full"
-            ariaLabel="Priority"
-          />
-        </Prop>
-        <Prop label="Due">
-          <input
-            type="date"
-            value={task.due_at ? task.due_at.slice(0, 10) : ""}
-            onChange={(e) =>
-              patch({ due_at: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })
-            }
-            className={`${FIELD_INPUT} w-full`}
-          />
-        </Prop>
-        <Prop label="Project">
-          <Dropdown
-            value={task.project_id == null ? "none" : String(task.project_id)}
-            onChange={(v) => patch({ project_id: v === "none" ? null : Number(v) })}
-            options={[
-              { value: "none", label: "No project" },
-              ...projects.map((p) => ({ value: String(p.id), label: p.name })),
-            ]}
-            className="w-full"
-            ariaLabel="Project"
-          />
-        </Prop>
-        {/* The field that decides when he gets to it. It was not on this page at all, which
+        <div className="border-border/60 bg-card/30 mt-4 grid gap-x-6 gap-y-3 rounded-xl border px-4 py-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <Prop label="Status">
+            <Dropdown
+              value={task.status}
+              onChange={(v) => patch({ status: v })}
+              className="w-full"
+              options={STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))}
+              ariaLabel="Status"
+            />
+          </Prop>
+          <Prop label="Priority">
+            <Dropdown
+              value={task.priority}
+              onChange={(v) => patch({ priority: v })}
+              options={PRIORITIES}
+              className="w-full"
+              ariaLabel="Priority"
+            />
+          </Prop>
+          <Prop label="Due">
+            <input
+              type="date"
+              value={task.due_at ? task.due_at.slice(0, 10) : ""}
+              onChange={(e) =>
+                patch({ due_at: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })
+              }
+              className={`${FIELD_INPUT} w-full`}
+            />
+          </Prop>
+          <Prop label="Project">
+            <Dropdown
+              value={task.project_id == null ? "none" : String(task.project_id)}
+              onChange={(v) => patch({ project_id: v === "none" ? null : Number(v) })}
+              options={[
+                { value: "none", label: "No project" },
+                ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+              ]}
+              className="w-full"
+              ariaLabel="Project"
+            />
+          </Prop>
+          {/* The field that decides when he gets to it. It was not on this page at all, which
             meant the one attribute that gates the work was the one you could not see. */}
-        <Prop label="Milestone">
-          <Dropdown
-            value={task.milestone_id == null ? "none" : String(task.milestone_id)}
-            onChange={(v) => patch({ milestone_id: v === "none" ? null : Number(v) })}
-            options={[
-              { value: "none", label: "No milestone" },
-              ...milestones.map((m) => ({
-                value: String(m.id),
-                label: m.status === "done" ? `${m.title} ✓` : m.title,
-              })),
-            ]}
-            className="w-full"
-            ariaLabel="Milestone"
-          />
-        </Prop>
-        <Prop label="Raised by">
-          <span className="text-muted-foreground py-1.5 text-sm">
-            {task.created_by === "user" ? "you" : "himself"}
-          </span>
-        </Prop>
+          <Prop label="Milestone">
+            <Dropdown
+              value={task.milestone_id == null ? "none" : String(task.milestone_id)}
+              onChange={(v) => patch({ milestone_id: v === "none" ? null : Number(v) })}
+              options={[
+                { value: "none", label: "No milestone" },
+                ...milestones.map((m) => ({
+                  value: String(m.id),
+                  label: m.status === "done" ? `${m.title} ✓` : m.title,
+                })),
+              ]}
+              className="w-full"
+              ariaLabel="Milestone"
+            />
+          </Prop>
+          <Prop label="Raised by">
+            <span className="text-muted-foreground py-1.5 text-sm">
+              {task.created_by === "user" ? "you" : "himself"}
+            </span>
+          </Prop>
+        </div>
       </div>
 
-      {/* two-column: work on the left, conversation on the right */}
-      <div className="grid gap-6 lg:grid-cols-5">
-        <div className="space-y-6 lg:col-span-3">
+      {/* Two panels that scroll independently, which is what every task manager worth
+          copying does and what the previous layout was not: the conversation was a column in
+          the page flow, so reading old comments scrolled the description and the checklist
+          off the screen, and on a wide window everything sat in a 64rem gutter with the rest
+          of the display empty. A desktop app should use the window it was given. */}
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 space-y-6 overflow-y-auto px-6 py-5 md:px-8">
           <section>
             <H>Description</H>
             {/* Click to edit, so the Markdown he writes here is actually seen. This was
@@ -384,74 +391,74 @@ export function TaskDetailPage({
           </section>
         </div>
 
-        {/* conversation */}
-        <div className="lg:col-span-2">
-          <div className="flex flex-col rounded-xl border border-border/70 bg-card/40 lg:sticky lg:top-2 lg:max-h-[calc(100dvh-9rem)]">
-            <div className="border-b border-border/60 px-4 py-3">
-              <H>Conversation</H>
-              <p className="text-xs text-muted-foreground">Talk to him about this task.</p>
-            </div>
-            <div className="min-h-40 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-              {task.comments.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center">
-                  <span className="flex size-9 items-center justify-center rounded-xl bg-muted/70 text-muted-foreground">
-                    <MessageCircle className="size-4" />
-                  </span>
-                  <p className="max-w-[22ch] text-xs leading-relaxed text-muted-foreground">
-                    No comments yet — write to him here and he'll pick it up.
-                  </p>
-                </div>
-              ) : (
-                task.comments.map((c) =>
-                  c.author === "user" ? (
-                    <div key={c.id} className="flex justify-end">
-                      <div className="max-w-[85%] rounded-2xl rounded-br-sm border border-kith/20 bg-kith-soft px-3 py-2 text-sm">
-                        <p className="break-words whitespace-pre-wrap">{c.body}</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={c.id} className="flex items-start gap-2">
-                      <span className="mt-1.5">
-                        <PresenceOrb size={7} />
-                      </span>
-                      <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-border/70 bg-card px-3 py-2 text-sm">
-                        {/* His progress notes are where he writes lists and links,
-                            and this was the one place his Markdown showed raw. */}
-                        <Markdown>{c.body}</Markdown>
-                      </div>
-                    </div>
-                  ),
-                )
-              )}
-            </div>
-            <div className="border-t border-border/60 p-3">
-              <div className="flex items-end gap-2 rounded-xl border border-border/60 bg-background/60 p-1.5 focus-within:border-ring/60">
-                <textarea
-                  rows={1}
-                  value={reply}
-                  onChange={(e) => setReply(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void sendReply();
-                    }
-                  }}
-                  placeholder="Comment on this task…"
-                  className="max-h-24 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm outline-none"
-                />
-                <Button
-                  size="icon"
-                  className="size-8 shrink-0 rounded-full"
-                  onClick={sendReply}
-                  disabled={!reply.trim()}
-                  aria-label="Send"
-                >
-                  <Send className="size-4" />
-                </Button>
+        {/* Pinned. Fixed width, its own scroll, composer always at the bottom — the shape a
+            conversation panel has everywhere, and the reason it works: the thread can be
+            arbitrarily long without ever moving the thing you are discussing. */}
+        <aside className="border-border/60 bg-card/20 hidden w-[24rem] shrink-0 flex-col border-s xl:flex 2xl:w-[28rem]">
+          <div className="border-border/60 shrink-0 border-b px-4 py-3">
+            <H>Conversation</H>
+            <p className="text-muted-foreground text-xs">Talk to him about this task.</p>
+          </div>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            {task.comments.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-8 text-center">
+                <span className="flex size-9 items-center justify-center rounded-xl bg-muted/70 text-muted-foreground">
+                  <MessageCircle className="size-4" />
+                </span>
+                <p className="max-w-[22ch] text-xs leading-relaxed text-muted-foreground">
+                  No comments yet — write to him here and he'll pick it up.
+                </p>
               </div>
+            ) : (
+              task.comments.map((c) =>
+                c.author === "user" ? (
+                  <div key={c.id} className="flex justify-end">
+                    <div className="max-w-[85%] rounded-2xl rounded-br-sm border border-kith/20 bg-kith-soft px-3 py-2 text-sm">
+                      <p className="break-words whitespace-pre-wrap">{c.body}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div key={c.id} className="flex items-start gap-2">
+                    <span className="mt-1.5">
+                      <PresenceOrb size={7} />
+                    </span>
+                    <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-border/70 bg-card px-3 py-2 text-sm">
+                      {/* His progress notes are where he writes lists and links,
+                            and this was the one place his Markdown showed raw. */}
+                      <Markdown>{c.body}</Markdown>
+                    </div>
+                  </div>
+                ),
+              )
+            )}
+          </div>
+          <div className="border-border/60 shrink-0 border-t p-3">
+            <div className="flex items-end gap-2 rounded-xl border border-border/60 bg-background/60 p-1.5 focus-within:border-ring/60">
+              <textarea
+                rows={1}
+                value={reply}
+                onChange={(e) => setReply(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendReply();
+                  }
+                }}
+                placeholder="Comment on this task…"
+                className="max-h-24 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm outline-none"
+              />
+              <Button
+                size="icon"
+                className="size-8 shrink-0 rounded-full"
+                onClick={sendReply}
+                disabled={!reply.trim()}
+                aria-label="Send"
+              >
+                <Send className="size-4" />
+              </Button>
             </div>
           </div>
-        </div>
+        </aside>
       </div>
     </div>
   );

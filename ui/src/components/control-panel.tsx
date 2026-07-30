@@ -534,17 +534,18 @@ export function ControlPanel({
           </NavGroup>
         </nav>
 
-        <main className="min-w-0 flex-1 overflow-y-auto">
+        {/* A task page manages its own scrolling — two panels, independently — so the
+            scroll container moves inside it. Everything else still scrolls here. */}
+        <main
+          className={cn("min-w-0 flex-1", openTask != null ? "overflow-hidden" : "overflow-y-auto")}
+        >
           {!snap ? (
             <div className="flex h-full items-center justify-center gap-3 text-sm text-muted-foreground">
               <RefreshCw className="size-4 animate-spin" />
               Loading his mind…
             </div>
           ) : openTask != null ? (
-            <div
-              key={`task-${openTask}`}
-              className="mx-auto max-w-5xl animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
-            >
+            <div key={`task-${openTask}`} className="h-full animate-[kith-rise_0.35s_ease-out]">
               <TaskDetailPage
                 taskId={openTask}
                 projects={snap.projects ?? []}
@@ -557,7 +558,7 @@ export function ControlPanel({
           ) : openProject != null ? (
             <div
               key={`project-${openProject}`}
-              className="mx-auto max-w-[92rem] animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
+              className="animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
             >
               <ProjectPage
                 {...props}
@@ -570,7 +571,10 @@ export function ControlPanel({
           ) : (
             <div
               key={tab}
-              className="mx-auto max-w-5xl animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
+              // Generous rather than unbounded. These are lists of cards, so the width is
+              // useful — but a 2,000px line of prose inside one is worse than a gutter, and
+              // some of these hold his notes and journal entries.
+              className="mx-auto max-w-[105rem] animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
             >
               {tab === "overview" ? (
                 <Overview snap={snap} timeline={timeline} query={query} onNavigate={openTab} />
