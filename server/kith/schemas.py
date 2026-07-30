@@ -5,7 +5,7 @@ APIFlask, are what the generated OpenAPI spec is built from.
 from __future__ import annotations
 
 from apiflask import Schema
-from apiflask.fields import Boolean, Integer, List, Nested, String
+from apiflask.fields import Boolean, Dict, Integer, List, Nested, String
 from marshmallow import EXCLUDE
 
 
@@ -31,6 +31,10 @@ class ConfigSchema(Schema):
         }
     )
     apiKey = String(load_only=True, metadata={"description": "Cloud API key (write-only; never returned)"})
+    capabilities = Dict(
+        dump_only=True,
+        metadata={"description": "What this model accepts: images, files, reasoning, modalities"},
+    )
     apiKeySet = Boolean(dump_only=True, metadata={"description": "Whether a cloud API key is stored"})
 
 

@@ -8,6 +8,7 @@ Per-request overrides from a caller are applied on top (see ``merge_overrides``)
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -84,6 +85,36 @@ def to_wire(config: Config) -> dict:
         "effort": config.effort,
         "baseUrl": config.base_url,
         "apiKeySet": bool(config.api_key),
+        "capabilities": model_capabilities(),
+    }
+
+
+def model_capabilities() -> dict:
+    """What the model in use can be given, as recorded when it was chosen.
+
+    A local model gets the conservative answer rather than a guess: Ollama does not
+    publish modalities, and offering an image button that silently drops the image is
+    worse than not offering one.
+    """
+    unknown = {"known": False, "images": False, "files": False, "reasoning": False, "modalities": ["text"]}
+    stored = config_store.load_settings(CONFIG_DB_PATH)
+    raw = stored.get("model_capabilities")
+    if not raw:
+        return unknown
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (TypeError, ValueError):
+        return unknown
+    return {
+        # `known` separates "this model cannot take an image" from "nobody has asked yet",
+        # which are the same False and want opposite treatment: an attach button must not
+        # appear on a guess, while an effort dial is safe to offer optimistically because
+        # the transport already retries a reasoning-related 400 without it.
+        "known": True,
+        "images": bool(parsed.get("images")),
+        "files": bool(parsed.get("files")),
+        "reasoning": bool(parsed.get("reasoning")),
+        "modalities": list(parsed.get("modalities") or ["text"]),
     }
 
 

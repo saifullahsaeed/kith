@@ -11,6 +11,7 @@ cannot save a connection that has since stopped working.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -25,6 +26,10 @@ from kith.services.connections.providers import ProviderError
 #: A derived check alone cannot tell "never set up" from "set up locally, Ollama is
 #: simply off right now", and re-running onboarding on the second case would be wrong.
 ONBOARDED_KEY = "onboarded"
+
+#: What the chosen model can be given. Cached at adoption because asking the provider on
+#: every render would put a network call behind a button's disabled state.
+CAPABILITIES_KEY = "model_capabilities"
 
 #: Where a cloud key waits while a local connection is in use. Switching provider used to
 #: delete it outright, which meant "try the local model for a minute" cost you a trip to
@@ -467,6 +472,19 @@ class ConnectionManager:
                 "api_key": candidate.api_key or previous_key or kept_key,
                 KEPT_KEY: "",
             }
+        # Remember what this model can be given, so the interface can decide whether to
+        # offer an attach button without a catalogue round trip on every render. Captured
+        # here because this is the one moment we hold both the choice and the evidence.
+        chosen_info = next((m for m in result.models if m.id == candidate.model), None)
+        if chosen_info is not None:
+            updates[CAPABILITIES_KEY] = json.dumps(
+                {
+                    "images": "image" in chosen_info.input_modalities,
+                    "files": "file" in chosen_info.input_modalities,
+                    "reasoning": chosen_info.supports_reasoning,
+                    "modalities": list(chosen_info.input_modalities),
+                }
+            )
         config_store.update_settings(self.config_db, {**updates, ONBOARDED_KEY: True})
         return self.current(), self.concerns(candidate, result.models)
 

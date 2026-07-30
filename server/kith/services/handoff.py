@@ -184,17 +184,45 @@ def reveal(host_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _inside_handoff(host_path: Path) -> Path:
-    """Refuse anything outside the handoff folder.
+def _openable_roots() -> list[Path]:
+    """The folders this endpoint will open something from.
 
-    The check that makes this endpoint narrow rather than "open any file on this
-    machine". ``resolve()`` first, so ``../`` and symlinks are settled before the
-    comparison rather than after it.
+    Narrow on purpose. "Hand a path to the operating system" is a capability worth being
+    careful with, and the list is the folders Kith itself owns: where he works, where his
+    databases are, where his persona is, and the handoff folder from when he lived in a
+    container. Everything else is refused by name.
+
+    It has to be a list rather than one root because the sandbox went away: his files are
+    real folders on your machine now, and the settings page reveals each of them.
+    """
+    from kith import settings
+    from kith.infra import workspace
+
+    roots = [workspace.root(), settings.DATA_DIR, HANDOFF_DIR]
+    persona = settings.PERSONA_DIR or settings.DEFAULT_PERSONA_DIR
+    if persona:
+        roots.append(Path(persona))
+    resolved = []
+    for root in roots:
+        try:
+            resolved.append(Path(root).expanduser().resolve())
+        except OSError:
+            continue
+    return resolved
+
+
+def _inside_handoff(host_path: Path) -> Path:
+    """Refuse anything outside the folders Kith owns.
+
+    ``resolve()`` first, so ``../`` and symlinks are settled before the comparison rather
+    than after it — the version of this check that stripped and then tested let
+    ``/etc/passwd`` through.
     """
     target = Path(host_path).expanduser().resolve()
-    root = HANDOFF_DIR.expanduser().resolve()
-    if not target.is_relative_to(root):
-        raise HandoffError(f"Only files under {root} can be opened from here.")
+    roots = _openable_roots()
+    if not any(target.is_relative_to(root) for root in roots):
+        listed = ", ".join(str(root) for root in roots)
+        raise HandoffError(f"Only things under {listed} can be opened from here.")
     if not target.exists():
         raise HandoffError(f"{target.name} isn't there any more.")
     return target

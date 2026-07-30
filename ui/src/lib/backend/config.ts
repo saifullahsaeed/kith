@@ -9,6 +9,7 @@ export const FALLBACK_CONFIG: ServerConfig = {
   numPredict: 8192,
   system: "",
   think: true,
+  effort: "",
   baseUrl: "",
   apiKeySet: false,
 };
@@ -23,7 +24,9 @@ export async function fetchServerConfig(signal?: AbortSignal): Promise<ServerCon
 /** Persist settings to the SERVER (so autonomy uses them too, not just chat).
  * `apiKey` is write-only — send it to set/change the cloud key; omit to leave it. */
 export async function patchServerConfig(
-  patch: Partial<Pick<ServerConfig, "model" | "numCtx" | "numPredict" | "think" | "baseUrl">> & {
+  patch: Partial<
+    Pick<ServerConfig, "model" | "numCtx" | "numPredict" | "think" | "effort" | "baseUrl">
+  > & {
     apiKey?: string;
   },
 ): Promise<ServerConfig> {

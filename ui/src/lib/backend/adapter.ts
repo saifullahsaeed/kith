@@ -38,7 +38,12 @@ export const USAGE_PART = "round-usage";
  * limits are server settings with a server-side store; reading them from anywhere else
  * could only ever agree or be wrong.
  */
-export function createBackendAdapter(): ChatModelAdapter {
+export function createBackendAdapter(conversation?: {
+  /** Read fresh each run, so resuming does not mean rebuilding the runtime. */
+  get: () => string;
+  /** The server reports the id it opened on the first turn; keep it for the next one. */
+  set: (id: string) => void;
+}): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
       let response: Response;
@@ -46,7 +51,11 @@ export function createBackendAdapter(): ChatModelAdapter {
         response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: toWireMessages(messages) }),
+          body: JSON.stringify({
+            messages: toWireMessages(messages),
+            // Omitted on the first turn; the server opens one and tells us which.
+            ...(conversation?.get() ? { conversationId: conversation.get() } : {}),
+          }),
           signal: abortSignal,
         });
       } catch (error) {
@@ -107,6 +116,11 @@ export function createBackendAdapter(): ChatModelAdapter {
       try {
         for await (const event of readEvents(response)) {
           if (event.type === "error") throw new Error(event.message);
+
+          if (event.type === "conversation") {
+            conversation?.set(event.id);
+            continue;
+          }
 
           if (event.type === "delta") {
             append(event.role === "reasoning" ? "reasoning" : "text", event.text);

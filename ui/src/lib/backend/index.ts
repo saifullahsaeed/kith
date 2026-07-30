@@ -34,3 +34,5 @@ export {
   saveTuning,
   resetTuning,
 } from "./setup";
+export * from "./permissions";
+export * from "./conversations";

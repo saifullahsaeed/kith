@@ -270,6 +270,12 @@ export interface ConfigPath {
   label: string;
   value: string;
   env: string;
+  /** What is in it, where the server measured it. */
+  bytes?: number;
+  entries?: number;
+  /** Worth a reveal-in-Finder button — a real folder rather than a build path. */
+  open?: boolean;
+  note?: string;
 }
 
 export interface TuningSnapshot {

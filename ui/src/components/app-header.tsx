@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Bell, Brain, LayoutDashboard, Moon, Settings2, Sun } from "lucide-react";
+import { Bell, Brain, LayoutDashboard, MessageSquare, Moon, Settings2, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { HeaderControls } from "@/components/header-controls";
 import { PresenceOrb } from "@/components/presence";
 import { moodHue, type Mood } from "@/lib/backend/mood";
+import { cn } from "@/lib/utils";
 
 /** The presence bar: Kith as a living thing (orb + mood + what he's doing right
  * now), then his inbox, mind, panel, and settings. */
@@ -12,8 +14,13 @@ export function AppHeader({
   status,
   mood,
   model,
+  effort = "",
+  supportsEffort = false,
+  onEffort,
   unread,
   mindOpen,
+  historyOpen,
+  onOpenHistory,
   onOpenInbox,
   onOpenMind,
   onOpenPanel,
@@ -24,8 +31,14 @@ export function AppHeader({
   mood: Mood | null;
   /** The model he is actually thinking with, straight from the server. */
   model?: string;
+  effort?: string;
+  /** Whether this model accepts a reasoning parameter at all. */
+  supportsEffort?: boolean;
+  onEffort?: (effort: string) => void;
   unread: number;
   mindOpen?: boolean;
+  historyOpen?: boolean;
+  onOpenHistory?: () => void;
   onOpenInbox: () => void;
   onOpenMind: () => void;
   onOpenPanel: () => void;
@@ -76,6 +89,25 @@ export function AppHeader({
       {/* Which model is answering. Nothing showed this, and that is how turns ran for
           days on a model nobody had selected — the settings page said one thing and a
           stale client override sent another. A name on screen makes that unmissable. */}
+      {onOpenHistory ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onOpenHistory}
+          title="Your conversations"
+          className={cn("text-muted-foreground", historyOpen && "text-foreground bg-accent/60")}
+        >
+          <MessageSquare className="size-3.5" />
+          <span className="hidden sm:inline">History</span>
+        </Button>
+      ) : null}
+
+      <HeaderControls
+        effort={effort}
+        supportsEffort={supportsEffort}
+        onEffort={(next) => onEffort?.(next)}
+      />
+
       {model ? (
         <button
           type="button"

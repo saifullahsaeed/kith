@@ -1,6 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react";
+import {
+  AssistantRuntimeProvider,
+  useLocalRuntime,
+  type ThreadMessageLike,
+} from "@assistant-ui/react";
 
 import { Thread } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -10,12 +14,18 @@ import { SettingsPage } from "@/components/settings/settings-page";
 import { WorkspaceFileViewer } from "@/components/workspace-file-viewer";
 import { InboxPanel } from "@/components/inbox-panel";
 import { MindPanel } from "@/components/mind-panel";
+import { HistoryPanel } from "@/components/history-panel";
 import { useAutonomy } from "@/hooks/use-autonomy";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
 import { moodHue } from "@/lib/backend/mood";
 import { parseLocation, pathForHome, pathForSettings, pathForTab, pathForTask } from "@/lib/router";
-import { createBackendAdapter, type ServerConfig } from "@/lib/backend";
+import {
+  createBackendAdapter,
+  fetchConversation,
+  patchServerConfig,
+  type ServerConfig,
+} from "@/lib/backend";
 
 const MIND_MIN = 320;
 const MIND_MAX = 720;
@@ -35,10 +45,48 @@ export function Workspace({
   /** Called after the provider/model is saved, so the header stops showing the old one. */
   onConnectionSaved: () => void;
 }) {
+  // Which conversation the chat is in. Held in a ref as well as state: the adapter reads
+  // it fresh on every run, and a resumed conversation must not rebuild the runtime while a
+  // stream is open.
+  const [conversationId, setConversationId] = useState("");
+  const conversationRef = useRef("");
+  conversationRef.current = conversationId;
+  // Messages to seed the thread with when resuming. Bumping `threadKey` remounts the
+  // runtime, which is the only way to replace a local runtime's messages wholesale.
+  const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
+  const [threadKey, setThreadKey] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   // No config passed: the server reads its own settings, so there is nothing here that
   // can go stale. Memoised so the runtime is never recreated mid-stream.
-  const adapter = useMemo(() => createBackendAdapter(), []);
-  const runtime = useLocalRuntime(adapter);
+  const adapter = useMemo(
+    () =>
+      createBackendAdapter({
+        get: () => conversationRef.current,
+        set: (id) => setConversationId((was) => was || id),
+      }),
+    [],
+  );
+  const runtime = useLocalRuntime(adapter, { initialMessages: resumed });
+
+  const openConversation = useCallback(async (id: string) => {
+    const detail = await fetchConversation(id).catch(() => null);
+    if (!detail) return;
+    setConversationId(id);
+    setResumed(
+      detail.messages.map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: [{ type: "text", text: message.content }],
+      })) as ThreadMessageLike[],
+    );
+    setThreadKey((n) => n + 1);
+  }, []);
+
+  const newConversation = useCallback(() => {
+    setConversationId("");
+    setResumed([]);
+    setThreadKey((n) => n + 1);
+  }, []);
 
   const autonomy = useAutonomy();
   const inbox = useMessages();
@@ -94,7 +142,7 @@ export function Workspace({
 
   return (
     <TooltipProvider>
-      <AssistantRuntimeProvider runtime={runtime}>
+      <AssistantRuntimeProvider key={threadKey} runtime={runtime}>
         <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
           {/* Ambient wash — leans green while he roams, amber while he's here. */}
           <div className="kith-ambient" style={{ ["--wash" as string]: wash }} />
@@ -104,6 +152,16 @@ export function Workspace({
               status={autonomy.status?.current ?? null}
               mood={mood}
               model={config.model}
+              effort={config.effort}
+              // Offered unless the provider has said otherwise: an unknown model is the
+              // normal case right after a switch, and the transport retries a reasoning 400.
+              supportsEffort={!config.capabilities?.known || config.capabilities.reasoning}
+              onEffort={(effort) => {
+                onSaveConfig({ ...config, effort });
+                void patchServerConfig({ effort });
+              }}
+              historyOpen={historyOpen}
+              onOpenHistory={() => setHistoryOpen((open) => !open)}
               unread={inbox.unread}
               mindOpen={mindOpen}
               onOpenInbox={() => {
@@ -115,6 +173,16 @@ export function Workspace({
               onOpenSettings={() => navigate(pathForSettings())}
             />
             <div className="flex min-h-0 flex-1">
+              {historyOpen ? (
+                <div className="w-64 shrink-0 border-e border-border/60">
+                  <HistoryPanel
+                    activeId={conversationId}
+                    onOpen={(id) => void openConversation(id)}
+                    onNew={newConversation}
+                    onClose={() => setHistoryOpen(false)}
+                  />
+                </div>
+              ) : null}
               {/* Chat window */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 <Thread />

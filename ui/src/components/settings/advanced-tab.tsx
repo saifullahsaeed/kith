@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RotateCcw, TerminalSquare } from "lucide-react";
+import { FolderOpen, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { openOnHost } from "@/lib/files";
 import {
   fetchTuning,
   resetTuning,
@@ -105,22 +106,52 @@ export function AdvancedTab() {
       ))}
 
       <section>
-        <div className="mb-3">
-          <h2 className="text-sm font-semibold">Where things live</h2>
-          <p className="text-muted-foreground text-xs">
-            Set before launch, so they're shown rather than editable — his databases are already
-            open by the time you're reading this.
+        <div className="mb-3 flex items-baseline gap-3">
+          <h2 className="text-sm font-semibold">On this computer</h2>
+          <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+            He works in real folders now, not a container. These are the ones, with what is in them
+            — clickable, because a path you can only read is a path you have to retype.
           </p>
+          <span className="text-muted-foreground/70 font-mono text-[11px] tabular-nums">
+            {formatBytes(snapshot.paths.reduce((sum, path) => sum + (path.bytes ?? 0), 0))} total
+          </span>
         </div>
         <div className="divide-y rounded-xl border">
           {snapshot.paths.map((path) => (
-            <div key={path.label} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 p-3">
-              <span className="text-sm font-medium">{path.label}</span>
-              <code className="text-muted-foreground min-w-0 flex-1 font-mono text-[11px] break-all">
-                {path.value}
-              </code>
-              {path.env ? (
-                <code className="text-muted-foreground/60 font-mono text-[10px]">{path.env}</code>
+            <div key={path.label} className="flex items-start gap-3 p-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-medium">{path.label}</span>
+                  {path.bytes !== undefined ? (
+                    <span className="text-muted-foreground/70 font-mono text-[10px] tabular-nums">
+                      {formatBytes(path.bytes)}
+                      {path.entries !== undefined ? ` · ${path.entries} items` : ""}
+                    </span>
+                  ) : null}
+                  {path.env ? (
+                    <code className="text-muted-foreground/50 ms-auto font-mono text-[10px]">
+                      {path.env}
+                    </code>
+                  ) : null}
+                </div>
+                <code className="text-muted-foreground mt-0.5 block font-mono text-[11px] break-all">
+                  {path.value}
+                </code>
+                {path.note ? (
+                  <p className="text-muted-foreground/70 mt-0.5 text-[11px]">{path.note}</p>
+                ) : null}
+              </div>
+              {path.open ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => void openOnHost(path.value, true)}
+                  title="Show it in Finder"
+                >
+                  <FolderOpen className="size-3.5" />
+                  Reveal
+                </Button>
               ) : null}
             </div>
           ))}
@@ -213,4 +244,13 @@ function Row({
       </label>
     </div>
   );
+}
+
+/** Bytes at the coarseness a person reads: nobody wants 1,721,233. */
+function formatBytes(count: number): string {
+  if (!count) return "0 B";
+  if (count < 1024) return `${count} B`;
+  if (count < 1024 * 1024) return `${(count / 1024).toFixed(0)} KB`;
+  if (count < 1024 * 1024 * 1024) return `${(count / 1024 / 1024).toFixed(1)} MB`;
+  return `${(count / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
