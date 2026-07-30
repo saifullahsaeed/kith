@@ -3,3 +3,10 @@ flask-cors>=4.0
 requests>=2.31
 tzdata>=2024.1
 sqlalchemy>=2.0,<3
+
+# OpenRouter's own SDK. Worth a dependency for what it exposes beyond the
+# OpenAI-compatible surface: the model catalogue carries Artificial Analysis
+# benchmark scores and an open-weights flag, and it can be filtered and sorted
+# server-side — which is what lets the model picker recommend by measured ability
+# instead of by price. Generated from their OpenAPI spec, so it tracks the API.
+openrouter>=1.1,<2

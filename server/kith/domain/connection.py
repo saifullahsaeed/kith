@@ -55,6 +55,16 @@ class ModelInfo:
     completion_per_mtok: float | None = None
     context: int | None = None
     supports_tools: bool | None = None
+    #: Artificial Analysis' agentic index, where the provider publishes one: how well
+    #: the model sustains multi-step tool use. The single most relevant number here,
+    #: because that is the whole of what Kith does — and the one thing price does not
+    #: predict. ``None`` where it has not been measured, which is most of a catalogue.
+    agentic_index: float | None = None
+    coding_index: float | None = None
+    #: The weights are published, so the model can outlive the company serving it.
+    open_weights: bool = False
+    #: ISO date the provider intends to withdraw it. Never recommend one of these.
+    retires_on: str | None = None
 
     @property
     def label(self) -> str:
@@ -65,6 +75,25 @@ class ModelInfo:
         """Genuinely free, as opposed to unpriced."""
         return self.prompt_per_mtok == 0 and self.completion_per_mtok == 0
 
+    @property
+    def is_recommendable(self) -> bool:
+        """Fit to put in front of someone as a suggestion.
+
+        Excludes the variants that work but make a bad thing to be handed as a default:
+        ``:free`` is rate-limited hard enough to stall him mid-task, ``:batch`` answers
+        in minutes to hours, a model with a withdrawal date stops working on a date
+        nobody chose, and a preview can change behaviour or disappear underneath a setup
+        that was working. None of them are hidden — all stay searchable in the full list,
+        because someone who wants one and knows why should be able to have it.
+        """
+        return (
+            self.supports_tools is not False
+            and not self.retires_on
+            and ":free" not in self.id
+            and not self.id.endswith(":batch")
+            and "preview" not in self.id.lower()
+        )
+
     def public(self) -> dict:
         return {
             "id": self.id,
@@ -73,6 +102,45 @@ class ModelInfo:
             "completionPerMTok": self.completion_per_mtok,
             "context": self.context,
             "supportsTools": self.supports_tools,
+            "agenticIndex": self.agentic_index,
+            "codingIndex": self.coding_index,
+            "openWeights": self.open_weights,
+            "retiresOn": self.retires_on,
+        }
+
+
+class Tier(StrEnum):
+    """Why a model is being recommended — the three reasons anyone actually picks one.
+
+    Not a ranking of one axis. Someone choosing between these is choosing between
+    *kinds* of good: the best available, the best per dollar, or one whose weights are
+    published so it cannot be taken away.
+    """
+
+    FRONTIER = "frontier"
+    VALUE = "value"
+    OPEN = "open"
+
+
+@dataclass(frozen=True)
+class Pick:
+    """A recommended model, and the evidence for recommending it.
+
+    The reason is not decoration. A bare list of three slugs asks someone to trust it;
+    "highest agentic score in the catalogue (55.3)" lets them check it, and disagree.
+    """
+
+    tier: Tier
+    model_id: str
+    headline: str
+    reason: str
+
+    def public(self) -> dict:
+        return {
+            "tier": str(self.tier),
+            "modelId": self.model_id,
+            "headline": self.headline,
+            "reason": self.reason,
         }
 
 

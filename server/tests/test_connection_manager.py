@@ -8,6 +8,7 @@ OpenRouter is up — and a test that fails when someone's wifi drops teaches not
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -76,10 +77,33 @@ def manager_with(config_db: Path, providers) -> ConnectionManager:
     return m
 
 
-def model(mid: str, price: float | None = 1.0, ctx: int = 200_000, tools: bool | None = True):
+def model(
+    mid: str,
+    price: float | None = 1.0,
+    ctx: int = 200_000,
+    tools: bool | None = True,
+    agentic: float | None = None,
+    open_weights: bool = False,
+    retires_on: str | None = None,
+):
     return ModelInfo(
-        id=mid, prompt_per_mtok=price, completion_per_mtok=price, context=ctx, supports_tools=tools
+        id=mid,
+        prompt_per_mtok=price,
+        completion_per_mtok=price,
+        context=ctx,
+        supports_tools=tools,
+        agentic_index=agentic,
+        open_weights=open_weights,
+        retires_on=retires_on,
     )
+
+
+def ids(picks) -> list[str]:
+    return [pick.model_id for pick in picks]
+
+
+def tiers(picks) -> dict:
+    return {str(pick.tier): pick.model_id for pick in picks}
 
 
 class TestCandidate:
@@ -165,38 +189,82 @@ class TestProbe:
 
 
 class TestSuggest:
-    def test_a_ladder_rather_than_three_of_the_same(self, config_db):
+    """Three reasons to pick a model, each with the number behind it."""
+
+    CATALOGUE: ClassVar = [
+        model("frontier/best", price=5.0, agentic=55.3),
+        model("mid/solid", price=0.50, agentic=45.0),
+        model("cheap/capable", price=0.14, agentic=31.1),
+        model("cheap/incapable", price=0.01, agentic=4.0),
+        model("open/strong", price=3.0, agentic=50.1, open_weights=True),
+        model("open/cheap", price=0.30, agentic=35.4, open_weights=True),
+    ]
+
+    def picks(self, config_db, catalogue=None):
+        return ConnectionManager(config_db=config_db).suggest(
+            ProviderKind.OPENROUTER, catalogue if catalogue is not None else self.CATALOGUE
+        )
+
+    def test_three_tiers_for_three_different_reasons(self, config_db):
+        chosen = tiers(self.picks(config_db))
+        assert chosen["frontier"] == "frontier/best"  # highest agentic score
+        assert chosen["value"] == "cheap/capable"  # cheapest clearing the floor
+        assert chosen["open"] == "open/strong"  # best with published weights
+
+    def test_the_value_pick_ignores_cheaper_but_incapable_models(self, config_db):
+        # The whole point of the floor: $0.01 with an agentic score of 4 is not a
+        # bargain, it's work you get handed back.
+        assert tiers(self.picks(config_db))["value"] != "cheap/incapable"
+
+    def test_every_pick_carries_its_evidence(self, config_db):
+        for pick in self.picks(config_db):
+            assert pick.headline
+            # The score is in the reason so the claim can be checked, not just trusted.
+            assert any(char.isdigit() for char in pick.reason), pick.reason
+
+    def test_one_model_is_never_recommended_twice(self, config_db):
+        # A catalogue where the strongest model also has published weights.
         catalogue = [
-            model("cheap/one", price=0.01),
-            model("cheap/two", price=0.02),
-            model("mid/one", price=0.5),
-            model("top/one", price=4.0),
+            model("open/best", price=5.0, agentic=55.0, open_weights=True),
+            model("open/second", price=1.0, agentic=40.0, open_weights=True),
+            model("cheap/ok", price=0.10, agentic=31.0),
         ]
-        picks = ConnectionManager(config_db=config_db).suggest(ProviderKind.OPENROUTER, catalogue)
-        assert picks == ["cheap/one", "mid/one", "top/one"]
+        picks = self.picks(config_db, catalogue)
+        assert len(ids(picks)) == len(set(ids(picks)))
+        # It takes the top tier and the next-best open model fills the open slot.
+        assert tiers(picks)["frontier"] == "open/best"
+        assert tiers(picks)["open"] == "open/second"
 
-    def test_dynamically_priced_routers_are_skipped(self, config_db):
-        # OpenRouter reports these as unpriced; ranking them by cost is meaningless.
-        catalogue = [model("openrouter/auto", price=None), model("real/model", price=1.0)]
-        picks = ConnectionManager(config_db=config_db).suggest(ProviderKind.OPENROUTER, catalogue)
-        assert picks == ["real/model"]
-
-    def test_unusable_models_are_never_suggested(self, config_db):
+    def test_unrecommendable_variants_are_never_picked(self, config_db):
         catalogue = [
-            model("no/tools", tools=False),
-            model("tiny/context", ctx=8_000),
-            model("some/model:free"),
-            model("some/model:batch"),
-            model("good/model"),
+            model("some/model:free", price=0.0, agentic=50.0),
+            model("some/model:batch", price=0.1, agentic=50.0),
+            model("some/model-preview", price=0.1, agentic=50.0),
+            model("going/away", price=0.1, agentic=50.0, retires_on="2026-09-01"),
+            model("no/tools", price=0.1, agentic=50.0, tools=False),
+            model("tiny/context", price=0.1, agentic=50.0, ctx=8_000),
+            model("good/model", price=0.2, agentic=33.0),
         ]
-        picks = ConnectionManager(config_db=config_db).suggest(ProviderKind.OPENROUTER, catalogue)
-        assert picks == ["good/model"]
+        assert ids(self.picks(config_db, catalogue)) == ["good/model"]
 
-    def test_local_beats_small_beats_ollamas_cloud(self, config_db):
+    def test_without_published_scores_it_says_so_instead_of_guessing(self, config_db):
+        # A generic OpenAI-compatible endpoint reports ids and prices, nothing else.
+        catalogue = [model("a/cheap", price=0.1), model("a/dear", price=9.0)]
+        picks = ConnectionManager(config_db=config_db).suggest(ProviderKind.OPENAI_COMPATIBLE, catalogue)
+        chosen = tiers(picks)
+        assert chosen["value"] == "a/cheap"
+        assert chosen["frontier"] == "a/dear"
+        # It must not imply the expensive one is better than measured.
+        assert all("no benchmark" in p.reason or "poor proxy" in p.reason for p in picks)
+
+    def test_local_models_are_ranked_but_not_scored(self, config_db):
         catalogue = [model("glm-5.2:cloud"), model("qwen2.5:3b"), model("qwen3:14b")]
         picks = ConnectionManager(config_db=config_db).suggest(ProviderKind.OLLAMA, catalogue)
         # The card promises nothing leaves your machine, so a hosted tag comes last.
-        assert picks == ["qwen3:14b", "qwen2.5:3b", "glm-5.2:cloud"]
+        assert ids(picks) == ["qwen3:14b", "qwen2.5:3b", "glm-5.2:cloud"]
+        assert picks[0].headline == "Runs on your machine"
+        assert "lose track" in picks[1].reason
+        assert "Ollama's servers" in picks[2].reason
 
 
 class TestConcerns:

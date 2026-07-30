@@ -135,8 +135,11 @@ export function useOnboarding(
   }, []);
 
   const toModels = useCallback(() => {
-    // The server ranks these; taking its first is a better default than alphabetical.
-    setModel((current) => current || probe.suggested[0] || "");
+    // Pre-select the "best value" pick rather than the strongest: it's the one most
+    // people should start on, and the frontier tier is the expensive default to walk
+    // into by accident. Falls back to whatever came first if that tier is missing.
+    const value = probe.suggested.find((pick) => pick.tier === "value");
+    setModel((current) => current || value?.modelId || probe.suggested[0]?.modelId || "");
     setStep("model");
   }, [probe.suggested]);
 

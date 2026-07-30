@@ -16,7 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from kith import settings
-from kith.domain.connection import Connection, ModelInfo, ProviderKind
+from kith.domain.connection import Connection, ModelInfo, Pick, ProviderKind, Tier
 from kith.infra.db import config_store
 from kith.services.connections import providers
 from kith.services.connections.providers import ProviderError
@@ -37,21 +37,18 @@ SUGGESTION_CONTEXT = 65_536
 #: How many starting points to pin above the full list.
 SUGGESTION_COUNT = 3
 
-#: Three price points, in dollars per million prompt tokens, and the cheapest model
-#: that clears each. Bands rather than the three cheapest overall: a catalogue this
-#: size makes the bottom three nearly identical micro-models, which is a poor set of
-#: options and — measurably, on this project — poor advice. The cheap tier builds
-#: things, then cannot check its own work against a spec. A ladder shows the real
-#: range and lets someone spend deliberately.
-PRICE_TIERS = (0.0, 0.30, 2.00)
-
-#: Queued endpoints answer in minutes to hours. Fine for bulk work, useless for
-#: something you are watching, so they never appear as a suggestion.
-_ASYNC_SUFFIX = ":batch"
+#: The agentic score a model has to clear before it is offered as good value.
+#:
+#: Not a round number picked for looking principled. Across OpenRouter's tool-capable
+#: catalogue the agentic index runs 0 to 55 with a median near 21, and the models that
+#: measurably finish multi-step work start around here. Below it they build things
+#: enthusiastically and then cannot check their own work — which is exactly what this
+#: project watched happen, at some expense, before the score was available to consult.
+AGENTIC_FLOOR = 30.0
 
 #: Above this, a model is cheap enough that its limits show up as lost work rather
-#: than saved money. Set at the tier boundary so one number governs both.
-BUDGET_CEILING = PRICE_TIERS[1]
+#: than saved money. Used to warn, never to block.
+BUDGET_CEILING = 0.30
 
 
 class KeyState(StrEnum):
@@ -77,7 +74,8 @@ class ProbeResult:
     reachable: bool
     detail: str = ""
     models: tuple[ModelInfo, ...] = ()
-    suggested: tuple[str, ...] = ()
+    #: Recommendations, each with the reason for it. Ordered strongest-first.
+    suggested: tuple[Pick, ...] = ()
     key_state: KeyState = KeyState.NOT_REQUIRED
     #: Something worth showing about the credential: remaining credit, or the
     #: provider's own words for why it said no.
@@ -94,7 +92,7 @@ class ProbeResult:
             "usable": self.usable,
             "detail": self.detail,
             "models": [model.public() for model in self.models],
-            "suggested": list(self.suggested),
+            "suggested": [pick.public() for pick in self.suggested],
             "keyState": str(self.key_state),
             "keyDetail": self.key_detail,
         }
@@ -223,53 +221,154 @@ class ConnectionManager:
             return KeyState.NOT_REQUIRED
         return KeyState.MISSING if not candidate.api_key else KeyState.REJECTED
 
-    def suggest(self, kind: ProviderKind, models: list[ModelInfo]) -> list[str]:
-        """A few sensible starting points, cheapest first.
+    def suggest(self, kind: ProviderKind, models: list[ModelInfo]) -> list[Pick]:
+        """Three recommendations, each for a different reason.
 
-        Computed from what the provider actually reports rather than a hardcoded list
-        of slugs, which would rot within weeks. Nothing here claims to rank quality —
-        a catalogue lists price, context and tool support, and not one of those is a
-        measure of how well a model reasons. What it can honestly offer is a ladder:
-        the cheapest model clearing the bar at each of three price points.
+        Not a ranking of one axis, because the choice isn't one: someone picking a
+        model is choosing between the strongest available, the best per dollar, and one
+        whose weights are published and so cannot be withdrawn. Three points on a price
+        ladder — what this used to return — made all three look like the same decision
+        taken at different budgets.
+
+        Every pick carries its evidence, so it can be checked rather than trusted.
+        Where a provider publishes no measurements, that is said plainly instead of
+        being papered over with price.
         """
         if kind is ProviderKind.OLLAMA:
-            # Genuinely local and big enough first, then small, then Ollama's hosted
-            # tags — which work but contradict the reason to pick this provider.
-            ranked = sorted(
-                models,
-                key=lambda m: (
-                    self._providers.is_cloud(m.id),
-                    self._providers.is_small(m.id),
-                    m.id,
-                ),
-            )
-            return [model.id for model in ranked[:SUGGESTION_COUNT]]
+            return self._local_picks(models)
 
-        usable = [
-            model
-            for model in models
-            # Unknown tool support passes: a generic endpoint never reports it, and
-            # excluding those would leave the list empty.
-            if model.supports_tools is not False
-            and (model.context or 0) >= SUGGESTION_CONTEXT
-            # Falsy covers both unpriced and dynamically priced: neither can be
-            # ranked by cost, and a router's per-request price is not knowable.
-            and model.prompt_per_mtok
-            # Free tiers are heavily rate-limited — a poor first impression.
-            and ":free" not in model.id
-            and not model.id.endswith(_ASYNC_SUFFIX)
+        candidates = [m for m in models if m.is_recommendable and (m.context or 0) >= SUGGESTION_CONTEXT]
+        if any(m.agentic_index is not None for m in candidates):
+            return self._measured_picks(candidates)
+        return self._price_picks(candidates)
+
+    def _measured_picks(self, models: list[ModelInfo]) -> list[Pick]:
+        """The good case: the provider publishes agentic scores, so this is evidence."""
+        scored = [m for m in models if m.agentic_index is not None]
+        by_ability = sorted(scored, key=lambda m: -(m.agentic_index or 0))
+        taken: set[str] = set()
+        picks: list[Pick] = []
+
+        def take(candidates: list[ModelInfo], tier: Tier, headline: str, reason) -> None:
+            """Fill a tier with the best candidate not already recommended.
+
+            Taking the *next* one rather than skipping the tier matters: the strongest
+            model in the catalogue is often also the strongest with published weights,
+            and a tier that silently disappeared would leave someone who cares about
+            open weights with nothing to choose.
+            """
+            model = next((m for m in candidates if m.id not in taken), None)
+            if model is None:
+                return
+            taken.add(model.id)
+            picks.append(Pick(tier=tier, model_id=model.id, headline=headline, reason=reason(model)))
+
+        take(
+            by_ability,
+            Tier.FRONTIER,
+            "The strongest",
+            lambda m: (
+                f"Top agentic score here ({_score(m)}) — the best at seeing a long "
+                "job through, and the most expensive way to run him."
+            ),
+        )
+
+        # Cheapest that still clears the bar, rather than cheapest outright: below the
+        # floor the saving is undone by work he has to be given back.
+        affordable = sorted(
+            (m for m in scored if (m.agentic_index or 0) >= AGENTIC_FLOOR and m.prompt_per_mtok),
+            key=lambda m: m.prompt_per_mtok or 0,
+        )
+        take(
+            affordable,
+            Tier.VALUE,
+            "Best value",
+            lambda m: (
+                f"The cheapest model that still scores well on agentic work "
+                f"({_score(m)}). Where most people should start."
+            ),
+        )
+
+        take(
+            [m for m in by_ability if m.open_weights],
+            Tier.OPEN,
+            "Open weights",
+            lambda m: (
+                f"The strongest model here whose weights are published "
+                f"({_score(m)}), so it can outlive whoever is serving it today."
+            ),
+        )
+        return picks
+
+    def _price_picks(self, models: list[ModelInfo]) -> list[Pick]:
+        """No published measurements, so say what we do know and no more.
+
+        A generic OpenAI-compatible endpoint reports ids and little else. Inventing a
+        ranking from a name would be worse than admitting there isn't one.
+        """
+        priced = sorted((m for m in models if m.prompt_per_mtok), key=lambda m: m.prompt_per_mtok or 0)
+        if not priced:
+            return [
+                Pick(
+                    tier=Tier.VALUE,
+                    model_id=model.id,
+                    headline="Available",
+                    reason="This endpoint doesn't publish prices or benchmarks, so this is "
+                    "simply what it offers.",
+                )
+                for model in models[:SUGGESTION_COUNT]
+            ]
+        cheapest, dearest = priced[0], priced[-1]
+        picks = [
+            Pick(
+                tier=Tier.VALUE,
+                model_id=cheapest.id,
+                headline="Cheapest",
+                reason="The lowest price here. This endpoint publishes no benchmark "
+                "scores, so nothing is claimed about how well it works.",
+            )
         ]
-        usable.sort(key=lambda model: model.prompt_per_mtok or 0)
-
-        ladder: list[str] = []
-        for floor in PRICE_TIERS:
-            pick = next(
-                (m.id for m in usable if (m.prompt_per_mtok or 0) >= floor and m.id not in ladder),
-                None,
+        if dearest.id != cheapest.id:
+            picks.append(
+                Pick(
+                    tier=Tier.FRONTIER,
+                    model_id=dearest.id,
+                    headline="Most expensive",
+                    reason="Usually the flagship, though price is a poor proxy and this "
+                    "endpoint offers nothing better to go on.",
+                )
             )
-            if pick:
-                ladder.append(pick)
-        return ladder[:SUGGESTION_COUNT]
+        return picks
+
+    def _local_picks(self, models: list[ModelInfo]) -> list[Pick]:
+        """What is already pulled, best-suited first.
+
+        Ollama publishes neither context nor benchmarks, so parameter count is the only
+        signal there is — and it says so rather than dressing size up as quality.
+        """
+        ranked = sorted(
+            models,
+            key=lambda m: (self._providers.is_cloud(m.id), self._providers.is_small(m.id), m.id),
+        )
+        picks = []
+        for model in ranked[:SUGGESTION_COUNT]:
+            if self._providers.is_cloud(model.id):
+                headline, reason = (
+                    "Hosted by Ollama",
+                    "Works, but it runs on Ollama's servers rather than your machine.",
+                )
+            elif self._providers.is_small(model.id):
+                headline, reason = (
+                    "Small and quick",
+                    "Fast and light, but small models lose track on long, multi-step work.",
+                )
+            else:
+                headline, reason = (
+                    "Runs on your machine",
+                    "Free, private, and big enough to be worth pointing at real work.",
+                )
+            picks.append(Pick(tier=Tier.VALUE, model_id=model.id, headline=headline, reason=reason))
+        return picks
 
     def concerns(self, connection: Connection, models: tuple[ModelInfo, ...]) -> list[str]:
         """Things worth saying about a specific choice, without blocking it."""
@@ -346,6 +445,13 @@ class ConnectionManager:
             },
         )
         return self.current(), self.concerns(candidate, result.models)
+
+
+def _score(model: ModelInfo | None) -> str:
+    """An agentic index as prose. One decimal: the source publishes no more."""
+    if model is None or model.agentic_index is None:
+        return "unscored"
+    return f"{model.agentic_index:.1f}"
 
 
 def _configured_before_onboarding(stored: dict) -> bool:

@@ -11,6 +11,8 @@ export type {
   ConnectionState,
   Credentials,
   KeyState,
+  Pick,
+  Tier,
   SearchKind,
   SearchOption,
   SearchProbeOutcome,

@@ -30,6 +30,27 @@ export interface ModelOption {
   completionPerMTok: number | null;
   context: number | null;
   supportsTools: boolean | null;
+  /** Artificial Analysis' agentic index: how well it sustains multi-step tool use.
+   *  The most relevant number here, since that is all Kith does. Null where the
+   *  provider publishes no measurement, which is most of any catalogue. */
+  agenticIndex: number | null;
+  codingIndex: number | null;
+  /** The weights are published, so the model can outlive whoever serves it. */
+  openWeights: boolean;
+  /** ISO date the provider intends to withdraw it. */
+  retiresOn: string | null;
+}
+
+/** Why a model is being recommended. Three kinds of good, not one axis. */
+export type Tier = "frontier" | "value" | "open";
+
+/** A recommendation and its evidence. The reason is load-bearing: it lets someone
+ *  check the suggestion instead of trusting it. */
+export interface Pick {
+  tier: Tier;
+  modelId: string;
+  headline: string;
+  reason: string;
 }
 
 /** A capability that isn't required, with the cost of its absence. */
@@ -101,7 +122,7 @@ export interface ProbeOutcome {
   usable: boolean;
   detail: string;
   models: ModelOption[];
-  suggested: string[];
+  suggested: Pick[];
   keyState: KeyState;
   /** Remaining credit, or the provider's own words for why it said no. */
   keyDetail: string;

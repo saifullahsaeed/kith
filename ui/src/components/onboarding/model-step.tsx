@@ -1,19 +1,36 @@
 import { useMemo, useState } from "react";
-import { Check, Search, Sparkles } from "lucide-react";
+import { Check, Gauge, PackageOpen, Search, Sparkles, Wallet } from "lucide-react";
 
-import { formatContext, formatPrice, type ModelOption } from "@/lib/backend";
+import {
+  formatContext,
+  formatPrice,
+  type ModelOption,
+  type Pick as ModelPick,
+  type Tier,
+} from "@/lib/backend";
 
 /** A catalogue can run to hundreds of entries. Rendering them all costs a visible
  *  frame drop on the first keystroke, and nobody scrolls past forty. */
 const MAX_ROWS = 40;
 
+const TIER_ICONS: Record<Tier, typeof Sparkles> = {
+  frontier: Gauge,
+  value: Wallet,
+  open: PackageOpen,
+};
+
 /**
  * Choosing a model out of a list that might be three long or four hundred.
  *
- * The suggestions on top are a price ladder from the server, not a quality ranking —
- * a catalogue reports price, context and tool support, none of which measure how well
- * a model reasons. Showing three spread across the range is the honest version, and it
- * means the common case is one click without touching the search box.
+ * The three cards on top are not a price ladder, which is what they used to be. They
+ * are three different reasons to pick a model — the strongest, the best per dollar,
+ * and the strongest with published weights — and each carries the number it was chosen
+ * on, so the recommendation can be checked rather than taken on faith.
+ *
+ * The number that matters is the agentic index: how well a model sustains multi-step
+ * tool use, which is the entirety of what Kith does and the one thing price does not
+ * predict. Where a provider publishes no measurements the cards say so plainly instead
+ * of dressing price up as quality.
  */
 export function ModelStep({
   models,
@@ -22,7 +39,7 @@ export function ModelStep({
   onSelect,
 }: {
   models: ModelOption[];
-  suggested: string[];
+  suggested: ModelPick[];
   selected: string;
   onSelect: (id: string) => void;
 }) {
@@ -31,8 +48,8 @@ export function ModelStep({
   const picks = useMemo(
     () =>
       suggested
-        .map((id) => models.find((entry) => entry.id === id))
-        .filter(Boolean) as ModelOption[],
+        .map((pick) => ({ pick, model: models.find((entry) => entry.id === pick.modelId) }))
+        .filter((entry): entry is { pick: ModelPick; model: ModelOption } => Boolean(entry.model)),
     [suggested, models],
   );
 
@@ -50,20 +67,16 @@ export function ModelStep({
   return (
     <div className="space-y-4">
       {picks.length > 0 && !query ? (
-        <div>
-          <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Sparkles className="size-3.5 text-kith" />A few to start with, cheapest first
-          </p>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {picks.map((option) => (
-              <SuggestionCard
-                key={option.id}
-                option={option}
-                active={option.id === selected}
-                onSelect={() => onSelect(option.id)}
-              />
-            ))}
-          </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {picks.map(({ pick, model }) => (
+            <PickCard
+              key={pick.modelId}
+              pick={pick}
+              model={model}
+              active={pick.modelId === selected}
+              onSelect={() => onSelect(pick.modelId)}
+            />
+          ))}
         </div>
       ) : null}
 
@@ -72,14 +85,14 @@ export function ModelStep({
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
           <input
             className="w-full rounded-md border bg-transparent py-2 pr-3 pl-9 text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-            placeholder={`Search ${models.length} models…`}
+            placeholder={`Search all ${models.length} models…`}
             value={query}
             spellCheck={false}
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
 
-        <div className="mt-2 max-h-64 overflow-y-auto rounded-md border">
+        <div className="mt-2 max-h-56 overflow-y-auto rounded-md border">
           {filtered.rows.length === 0 ? (
             <p className="text-muted-foreground p-4 text-center text-sm">
               Nothing matches “{query}”.
@@ -100,44 +113,75 @@ export function ModelStep({
             </p>
           ) : null}
         </div>
+        <p className="text-muted-foreground/70 mt-2 text-xs">
+          Ranked by how well each model handles multi-step work, best first.
+        </p>
       </div>
     </div>
   );
 }
 
-function SuggestionCard({
-  option,
+function PickCard({
+  pick,
+  model,
   active,
   onSelect,
 }: {
-  option: ModelOption;
+  pick: ModelPick;
+  model: ModelOption;
   active: boolean;
   onSelect: () => void;
 }) {
+  const Icon = TIER_ICONS[pick.tier] ?? Sparkles;
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`flex flex-col rounded-lg border p-3 text-left transition-all duration-150 hover:border-kith/50 hover:bg-card ${
+      className={`flex flex-col rounded-xl border p-3 text-left transition-all duration-150 hover:border-kith/50 hover:bg-card ${
         active ? "border-kith bg-kith-soft/40 ring-2 ring-ring/40" : "bg-card/60"
       }`}
     >
-      <span className="flex items-start justify-between gap-2">
-        <span className="truncate text-sm font-medium" title={option.id}>
-          {shortName(option.id)}
-        </span>
-        {active ? <Check className="mt-0.5 size-4 shrink-0 text-kith" /> : null}
+      <span className="flex items-center gap-2">
+        <Icon className={`size-4 shrink-0 ${active ? "text-kith" : "text-muted-foreground"}`} />
+        <span className="text-sm font-semibold">{pick.headline}</span>
+        {active ? <Check className="ml-auto size-4 shrink-0 text-kith" /> : null}
       </span>
-      <span className="text-muted-foreground mt-1 font-mono text-[11px]">
-        {formatPrice(option.promptPerMTok)}
+
+      <span className="mt-2 truncate text-xs font-medium" title={model.id}>
+        {shortName(model.id)}
+      </span>
+      <span className="text-muted-foreground mt-0.5 font-mono text-[11px]">
+        {formatPrice(model.promptPerMTok)}
         <span className="text-muted-foreground/60"> in</span> ·{" "}
-        {formatPrice(option.completionPerMTok)}
-        <span className="text-muted-foreground/60"> out /Mtok</span>
+        {formatPrice(model.completionPerMTok)}
+        <span className="text-muted-foreground/60"> out</span>
       </span>
-      <span className="text-muted-foreground/70 mt-0.5 text-[11px]">
-        {formatContext(option.context)} context
+
+      <span className="mt-2 flex flex-wrap gap-1">
+        {model.agenticIndex !== null ? (
+          <Badge title="Artificial Analysis agentic index — sustained multi-step tool use">
+            agentic {model.agenticIndex.toFixed(1)}
+          </Badge>
+        ) : null}
+        <Badge>{formatContext(model.context)} ctx</Badge>
+        {model.openWeights ? <Badge>open weights</Badge> : null}
+      </span>
+
+      <span className="text-muted-foreground/85 mt-2 flex-1 text-[11px] leading-relaxed">
+        {pick.reason}
       </span>
     </button>
+  );
+}
+
+function Badge({ children, title }: { children: React.ReactNode; title?: string }) {
+  return (
+    <span
+      title={title}
+      className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-[10px]"
+    >
+      {children}
+    </span>
   );
 }
 
@@ -168,6 +212,15 @@ function Row({
           no tools
         </span>
       ) : null}
+      {option.openWeights ? (
+        <span className="text-muted-foreground/60 shrink-0 text-[10px]">open</span>
+      ) : null}
+      <span
+        className="text-muted-foreground w-14 shrink-0 text-right font-mono text-xs"
+        title="agentic index"
+      >
+        {option.agenticIndex !== null ? option.agenticIndex.toFixed(1) : "—"}
+      </span>
       <span className="text-muted-foreground shrink-0 font-mono text-xs">
         {formatContext(option.context)}
       </span>
