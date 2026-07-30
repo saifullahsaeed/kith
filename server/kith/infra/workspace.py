@@ -100,11 +100,10 @@ def internal() -> Path:
     return directory
 
 
-#: Legacy alias. The container's home was ``/home/kith``; a few places still ask for
-#: "HOME" to strip a prefix or anchor a path.
-def _home() -> str:
-    return str(root())
-
+#: The container's home. It appears in fourteen rows of his own memory, in notes he wrote,
+#: in messages he sent, and in every task working-file path he was ever given — so it
+#: cannot simply stop meaning anything. Paths under it are mapped onto the real workspace.
+LEGACY_HOME = "/home/kith"
 
 HOME = str(DEFAULT_ROOT)
 
@@ -119,6 +118,16 @@ def resolve(path: str) -> str:
     text = (path or "").strip()
     if not text:
         return str(root())
+
+    # The container's home, rewritten. On macOS /home is an autofs mount, so creating
+    # /home/kith fails with "Operation not supported" — which is exactly how this showed
+    # up: he was handed /home/kith/work/task-41.md, could not create it, and reported
+    # himself blocked on a task he was perfectly able to do. Anything that still says
+    # /home/kith means "his folder", because for two years that is what it meant.
+    if text == LEGACY_HOME or text.startswith(LEGACY_HOME + "/"):
+        text = text[len(LEGACY_HOME) :].lstrip("/")
+        return str(root() / text) if text else str(root())
+
     expanded = Path(text).expanduser()
     if expanded.is_absolute():
         return str(expanded)

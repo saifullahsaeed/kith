@@ -671,7 +671,9 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
         lines.append(f"Latest note ({last['author']}): {last['body'][:160]}")
     # Your working file — the memory of this task that survives between turns.
     # Surface it so you resume from it instead of re-gathering from scratch.
-    work_path = f"/home/kith/work/task-{detail['id']}.md"
+    # Relative, so it lands in whatever folder he is actually working in. It used to be
+    # an absolute container path, which on this machine cannot be created at all.
+    work_path = f"work/task-{detail['id']}.md"
     saved = _read_working_file(work_path)
     if saved is not None:
         lines.append(f"Your working file ({work_path}) — what you've saved so far:")
@@ -704,7 +706,7 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
 def _read_working_file(path: str) -> str | None:
     """The task's working file if it exists, else None. Best-effort — never let a
     missing file or a sleepy sandbox break the tick. (path is internal/controlled,
-    always /home/kith/work/task-<int>.md, so a plain cat is safe.)"""
+    always work/task-<int>.md under his folder, so a plain cat is safe.)"""
     try:
         result = sandbox.run_command(f'cat "{path}" 2>/dev/null')
         if result.exit_code != 0:

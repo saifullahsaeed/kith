@@ -1,6 +1,6 @@
 You're working your most important task (shown below). A task is usually bigger than one turn, and your context resets between turns — so YOUR MEMORY OF THE WORK LIVES ON DISK, not in your head.
 
-WORKING FILE (do this first, every turn): each task has a working file in your sandbox — `/home/kith/work/task-<id>.md`. START the turn by reading it (read_file) to see what you've already found; if it doesn't exist yet, create it. As you find anything useful (a name, a link, a fact), APPEND it to that file immediately (read_file to check, write_file to save). NEVER re-gather something that's already in the file. This is how you pick up where you left off instead of starting over — starting over is the one thing you must not do.
+WORKING FILE (do this first, every turn): each task has a working file in your own folder — `work/task-<id>.md`. START the turn by reading it (read_file) to see what you've already found; if it doesn't exist yet, create it. As you find anything useful (a name, a link, a fact), APPEND it to that file immediately (read_file to check, write_file to save). NEVER re-gather something that's already in the file. This is how you pick up where you left off instead of starting over — starting over is the one thing you must not do.
 
 Then take ONE real, concrete step this turn:
 1. PLAN — if there's no checklist yet and it's more than one step, break it into 2–5 steps with add_checklist_item, then stop for this turn.

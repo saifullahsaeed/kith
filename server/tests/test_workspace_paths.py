@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from kith.api.routes.workspace import _relative
+from kith.infra import workspace
 
 
 class TestRefusals:
@@ -74,3 +75,32 @@ class TestAccepted:
         # He writes filenames with spaces; quoting is the shell layer's problem, not a
         # reason to refuse them here.
         assert _relative("work/my report — final.md") == "work/my report — final.md"
+
+
+class TestTheContainersOldHome:
+    """`/home/kith` was his home for the life of the Docker sandbox.
+
+    It is in fourteen rows of his own memory, in notes he wrote, in messages he sent, and in
+    every task working-file path he was ever handed. On macOS `/home` is an autofs mount, so
+    creating `/home/kith` fails with "Operation not supported" — and that is how this
+    surfaced: he was given `/home/kith/work/task-41.md`, could not create it, and reported
+    himself blocked on a task he was perfectly capable of doing.
+    """
+
+    def test_the_old_home_means_his_folder(self):
+        assert workspace.resolve("/home/kith") == str(workspace.root())
+
+    def test_a_path_under_it_is_rewritten(self):
+        assert workspace.resolve("/home/kith/work/task-41.md") == str(
+            workspace.root() / "work" / "task-41.md"
+        )
+
+    def test_a_trailing_slash_does_not_produce_a_double_one(self):
+        assert workspace.resolve("/home/kith/") == str(workspace.root())
+
+    def test_a_similarly_named_path_is_not_swallowed(self):
+        """`/home/kithara` is somebody else's directory, not a prefix match."""
+        assert workspace.resolve("/home/kithara/x") == "/home/kithara/x"
+
+    def test_other_absolute_paths_are_untouched(self):
+        assert workspace.resolve("/etc/hosts") == "/etc/hosts"

@@ -26,7 +26,7 @@ def shell(path: Path, args: dict):
 
 @tool(
     "read_file",
-    "Read a file from your computer (relative paths are under /home/kith). Output "
+    "Read a file from your computer (relative paths are under your own folder). Output "
     "is line-numbered. For anything big, don't read it whole — grep to find the "
     "line you want, then read a window with `offset`/`limit`. A read without a "
     "range returns the first 400 lines and tells you if there's more.",
