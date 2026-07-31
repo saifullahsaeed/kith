@@ -129,24 +129,54 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
     default:
       break;
   }
-  // The generic line: the most identifying argument, then a hint of the answer.
+  // The generic line: the most identifying argument, then what came back.
+  //
+  // Never key names. The first version ended with `Object.keys(r).slice(0,3).join(", ")`,
+  // so four consecutive list_tasks calls each read "· items, total, showing" — the shape of
+  // the answer instead of the answer, repeated, which is worse than saying nothing because
+  // it looks like content. If there is no value worth printing, print none.
   const subject = args.path ?? args.name ?? args.title ?? args.goal ?? args.query ?? args.id;
-  const answer = Array.isArray(result)
-    ? `${result.length} item${result.length === 1 ? "" : "s"}`
-    : typeof result === "string"
-      ? `${lines(result)} line${lines(result) === 1 ? "" : "s"}`
-      : result && typeof result === "object"
-        ? Object.keys(r).slice(0, 3).join(", ")
-        : "";
+  const answer = describe(result);
   return [short(subject), answer].filter(Boolean).join(" · ");
+}
+
+/** A paged listing: `{items, total, showing}`. The commonest result in the system. */
+function paged(value: unknown): { items: unknown[]; total: number } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.items) || typeof v.total !== "number") return null;
+  return { items: v.items, total: v.total };
+}
+
+/** What came back, in a few words, or "" when there is nothing worth saying. */
+function describe(result: unknown): string {
+  const page = paged(result);
+  if (page) return page.total === 0 ? "none" : `${page.total.toLocaleString()}`;
+  if (Array.isArray(result)) {
+    return result.length ? `${result.length.toLocaleString()}` : "none";
+  }
+  if (typeof result === "string") {
+    const n = result.split("\n").length;
+    return result.trim() ? `${n.toLocaleString()} line${n === 1 ? "" : "s"}` : "nothing";
+  }
+  if (result && typeof result === "object") {
+    const r = result as Record<string, unknown>;
+    // A value, not a key. `ok: true` on its own says nothing anyone needs.
+    for (const key of ["note", "status", "message", "id", "committed", "trashed"]) {
+      if (r[key] !== undefined && r[key] !== null && r[key] !== "") {
+        return String(r[key]).replace(/\s+/g, " ").slice(0, 48);
+      }
+    }
+  }
+  return "";
 }
 
 /* ── the formatted body ─────────────────────────────────────────────────── */
 
+// Not uppercase. LIMIT / OFFSET / CONTAINS / ITEMS / TOTAL / SHOWING read as a database
+// dump rather than as an answer, and shouting six field names at someone is not clarity.
 const Label: FC<{ children: ReactNode }> = ({ children }) => (
-  <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
-    {children}
-  </span>
+  <span className="shrink-0 text-[11px] font-medium text-muted-foreground/60">{children}</span>
 );
 
 const Shell: FC<{ command: string; output: string; code: number }> = ({
@@ -247,6 +277,33 @@ const Locations: FC<{ text: string }> = ({ text }) => {
           </button>
         );
       })}
+    </div>
+  );
+};
+
+/** One record from a listing, on one line: what it is, then what it says.
+ *
+ * A stack of labelled fields per row turns a list of ten tasks into eighty lines. The
+ * identifying fields go first and small, the human one takes the rest of the width.
+ */
+const Row: FC<{ value: Record<string, unknown> }> = ({ value }) => {
+  const id = value.id ?? value.name;
+  const title =
+    value.goal ?? value.title ?? value.name ?? value.topic ?? value.entry ?? value.content;
+  const status = value.status ?? value.priority;
+  return (
+    <div className="flex min-w-0 items-baseline gap-2 text-xs">
+      {id !== undefined && value.id !== undefined ? (
+        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">#{String(id)}</span>
+      ) : null}
+      <span className="min-w-0 flex-1 truncate">
+        {String(title ?? JSON.stringify(value)).slice(0, 160)}
+      </span>
+      {status ? (
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {String(status)}
+        </span>
+      ) : null}
     </div>
   );
 };
@@ -360,6 +417,41 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
       );
     }
 
+    // A paged listing. Six labelled rows — LIMIT 100 / OFFSET 0 / CONTAINS — / ITEMS [] /
+    // TOTAL 0 / SHOWING none of 0 — to say "there are no tasks" is the generic renderer
+    // being technically complete and practically useless. This is the commonest result
+    // shape in the system, so it earns a case of its own.
+    const page = paged(result);
+    if (page) {
+      if (!page.items.length) {
+        return <p className="text-xs text-muted-foreground">Nothing found.</p>;
+      }
+      return (
+        <div className="flex flex-col gap-1.5">
+          {page.total > page.items.length ? (
+            <Label>
+              {page.items.length} of {page.total.toLocaleString()}
+            </Label>
+          ) : (
+            <Label>
+              {page.total.toLocaleString()} {page.total === 1 ? "item" : "items"}
+            </Label>
+          )}
+          <div className="max-h-80 divide-y divide-border/40 overflow-auto rounded-lg ring-1 ring-border/60">
+            {page.items.map((item, i) => (
+              <div key={i} className="px-2.5 py-1.5">
+                {item && typeof item === "object" ? (
+                  <Row value={item as Record<string, unknown>} />
+                ) : (
+                  <span className="text-xs">{String(item)}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     const object = result as Record<string, unknown>;
     // A single text-ish field is prose, not a record — printing "output:" above it is noise.
     const keys = Object.keys(object);
@@ -430,9 +522,24 @@ export function parseArgs(argsText?: string): Args {
  * that mattered today came from the arguments. `add_milestone` with `after: [35]` going in and
  * a milestone with no order coming out is only visible if both halves are legible.
  */
+//: Arguments that are plumbing rather than intent. `limit: 100, offset: 0, contains: ""` is
+//: what the caller did *not* say — the schema's defaults, echoed back — and three rows of it
+//: above the answer buries the one argument that mattered.
+const PLUMBING = new Set(["limit", "offset", "contains"]);
+
 export const ToolArgs: FC<{ argsText?: string }> = ({ argsText }) => {
-  const args = parseArgs(argsText);
+  const parsed = parseArgs(argsText);
+  const args = Object.fromEntries(
+    Object.entries(parsed).filter(
+      ([key, value]) =>
+        !(PLUMBING.has(key) && (value === 0 || value === "" || value === null || value === 100)) &&
+        value !== "" &&
+        value !== null &&
+        value !== undefined,
+    ),
+  );
   const keys = Object.keys(args);
+  if (!keys.length && Object.keys(parsed).length) return null; // only defaults — say nothing
   if (!keys.length) {
     // Unparsed but present: mid-stream, or a tool that takes a bare string.
     return argsText?.trim() ? (
