@@ -6,6 +6,7 @@ from flask import jsonify, request
 
 from kith.api.blueprint import api
 from kith.config import AGENT_DB_PATH
+from kith.infra.db import repositories as repo
 from kith.services import conversations
 
 
@@ -83,6 +84,31 @@ def rename_conversation(conversation_id: str):
         return jsonify({"error": "a title is required"}), 400
     try:
         return jsonify(conversations.rename(AGENT_DB_PATH, conversation_id, title))
+    except KeyError:
+        return jsonify({"error": f"no conversation {conversation_id}"}), 404
+
+
+@api.put("/conversations/<conversation_id>/project")
+@api.doc(
+    summary="What this session is working on",
+    description=(
+        "Bind the conversation to a project, or pass null to unbind. This is what decides "
+        "which project's `.kith/memory.md` he is shown here, and which tasks he advances "
+        "when this session is left working — so two sessions on two projects stay out of "
+        "each other's way."
+    ),
+)
+def set_conversation_project(conversation_id: str):
+    payload = request.get_json(silent=True) or {}
+    raw = payload.get("projectId")
+    try:
+        project_id = int(raw) if raw not in (None, "", 0, "0") else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "projectId must be a number, or null to unbind"}), 400
+    if project_id is not None and repo.projects.get_project(AGENT_DB_PATH, project_id) is None:
+        return jsonify({"error": f"there is no project #{project_id}"}), 404
+    try:
+        return jsonify(conversations.set_project(AGENT_DB_PATH, conversation_id, project_id))
     except KeyError:
         return jsonify({"error": f"no conversation {conversation_id}"}), 404
 

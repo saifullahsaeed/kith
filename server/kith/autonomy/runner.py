@@ -48,7 +48,7 @@ from kith.autonomy.toolsets import _ALLOW
 from kith.config import AGENT_DB_PATH, default_config, ollama_host
 from kith.domain import clock, stall
 from kith.infra.db import repositories as repo
-from kith.services import memory_context, tuning
+from kith.services import memory_context, session_context, tuning
 from kith.services.agent_loop import stream_agent
 
 # Injected into the system prompt for a tick (not part of the everyday persona).
@@ -243,6 +243,15 @@ class AutonomyRunner:
     def recent(self) -> list[dict]:
         return list(self._buffer)
 
+    def publish(self, kind: str, text: str, **fields) -> None:
+        """Put a line on the Mind feed from outside the loop.
+
+        A conversation is work too, and it used to be the one kind that left no trace here.
+        Public rather than reaching into `_emit` from another module, so the feed keeps a
+        single door and adding a field to a line stays one edit.
+        """
+        self._emit(kind, text, **fields)
+
     # -- internals ---------------------------------------------------------- #
 
     def _loop(self) -> None:
@@ -324,9 +333,83 @@ class AutonomyRunner:
             self._current = None
             self._tick_lock.release()
 
+    def _next_session(self) -> dict | None:
+        """The working session whose turn it is, and what it has claimed.
+
+        Longest-waiting first, which ``working_sessions`` already orders for us, and the
+        conversation is touched at the end of its tick so it goes to the back of the queue.
+        A busy session cannot starve the others simply by having more to do.
+
+        None means nobody is working — which happens on "Run once", and there the whole
+        board is fair game exactly as it was.
+        """
+        sessions = self._sessions()
+        return sessions[0] if sessions else None
+
+    def _sessions(self) -> list[dict]:
+        try:
+            return repo.conversations.working_sessions(AGENT_DB_PATH)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _in_scope(row: dict, project: int | None, claimed: set[int]) -> bool:
+        """Is this task (or milestone) this session's to work on?
+
+        Two rules, and the second is the one that keeps sessions out of each other's way:
+
+        * A session bound to a project works that project and nothing else. This is what
+          makes two projects at once actually two projects — before it, both sessions read
+          the same global board and both advanced whatever happened to be top priority.
+        * A session bound to nothing works everything *except* what another working session
+          has claimed. So a general session still picks up one-off errands and unfiled work,
+          and cannot wander into the middle of a project someone else is driving.
+
+        With nobody working — "Run once" — `claimed` is empty and this is the whole board,
+        which is the behaviour that button has always had.
+        """
+        pid = row.get("project_id")
+        if project:
+            return pid == project
+        return pid not in claimed
+
     def _tick(self) -> None:
+        """Advance one session, bound to it for the whole step.
+
+        The binding is what lets a tool record which session did the work: starting a project
+        mid-step is that session adopting it, and a handler is called as ``(path, args)`` with
+        no idea who asked. Set here rather than deeper in because the step is the unit that
+        belongs to a session — every tool call inside it does too.
+        """
+        # Whose turn it is. Everything that reads the board reads it through this, because
+        # work belongs to a session now and a tick that ignored that was two sessions racing
+        # for the same top-priority task.
+        session = self._next_session()
+        conversation_id = str(session["id"]) if session else ""
+        with session_context.working_in(conversation_id):
+            try:
+                self._step(session, conversation_id)
+            finally:
+                # Back of the queue, so the next tick takes a different session. Ordered by
+                # `updated_at`, so touching it here is the round-robin — without it the
+                # busiest session would hold the loop and the others would never run.
+                if conversation_id:
+                    try:
+                        repo.conversations.touch(AGENT_DB_PATH, conversation_id)
+                    except Exception:
+                        pass
+
+    def _step(self, session: dict | None, conversation_id: str) -> None:
         config = default_config()
-        active = repo.tasks.active_tasks(AGENT_DB_PATH)  # highest priority first
+
+        project = int(session["project_id"]) if session and session.get("project_id") else None
+        claimed = {int(s["project_id"]) for s in self._sessions() if s.get("project_id")}
+
+        active = [
+            task
+            for task in repo.tasks.active_tasks(AGENT_DB_PATH)  # highest priority first
+            if self._in_scope(task, project, claimed)
+        ]
 
         now = clock.now_iso()
         pending = self._new_pending()
@@ -336,7 +419,11 @@ class AutonomyRunner:
         due = bool(reminders_due or schedules_due)
         # A laid-out project with no tasks under it is work, not quiet. Read before
         # `idle` is computed, because otherwise a whole project sits inert and he rests.
-        unplanned = repo.projects.milestones_needing_tasks(AGENT_DB_PATH)
+        unplanned = [
+            milestone
+            for milestone in repo.projects.milestones_needing_tasks(AGENT_DB_PATH)
+            if self._in_scope(milestone, project, claimed)
+        ]
         self._tick_count += 1
 
         # Precedence, most important first: answer your person, then anything due, then
@@ -380,8 +467,8 @@ class AutonomyRunner:
             # your sign-off — and in the second case resting silently is the worst thing he
             # can do. You would see "caught up" and assume there was nothing to look at,
             # while the whole board sat waiting on an answer nobody knew was owed.
-            self._current, note = self._why_idle()
-            self._emit("status", self._current)
+            self._current, note = self._why_idle(project, claimed)
+            self._emit("status", self._current, conversation=conversation_id)
             if note:
                 self._say_youre_the_blocker(note)
             # And stop working, because there is nothing left to work on.
@@ -396,10 +483,15 @@ class AutonomyRunner:
             # cases that are not simply finished: blocked on a question, or waiting on a
             # milestone. Those are all "nothing I can do next", and in each of them the
             # honest thing is to stop and have said why — which the note above just did.
-            for row in repo.conversations.working_sessions(AGENT_DB_PATH):
-                repo.conversations.set_working(AGENT_DB_PATH, row["id"], False)
+            #
+            # This session, not every session. It used to stop all of them, which was
+            # invisible while the board was global and everyone ran out of work together —
+            # and is plainly wrong now: one project finishing would have downed every other
+            # session mid-task.
+            if conversation_id:
+                repo.conversations.set_working(AGENT_DB_PATH, conversation_id, False)
             return
-        self._emit(mode, self._current)
+        self._emit(mode, self._current, conversation=conversation_id)
 
         # Persona and mode directive alone in the system message, so it is byte-identical
         # across every tick that runs in this mode and a provider can cache it once and
@@ -417,6 +509,12 @@ class AutonomyRunner:
         present = memory_context.context_block(AGENT_DB_PATH)
         if present:
             blocks.append(f"[Your memory right now]\n{present}")
+        # What this project knows about itself. A conversation has been shown this since
+        # `.kith/memory.md` existed and a tick never was — so everything the project learned
+        # was visible while you were watching and invisible the moment he was on his own,
+        # which is precisely backwards. The unattended step is the one with nobody to remind
+        # him how the thing is built.
+        blocks.append(self._project_memory(project))
         state = "\n\n".join(block for block in blocks if block).strip()
         messages = [{"role": "system", "content": f"{config.system}\n\n{directive}"}]
         if state:
@@ -426,11 +524,11 @@ class AutonomyRunner:
         # Reminders fire once, then retire; schedules fire, then roll to next time.
         for reminder in reminders_due:
             repo.reminders.set_reminder_status(AGENT_DB_PATH, reminder["id"], "done")
-            self._emit("reminder", reminder["note"])
+            self._emit("reminder", reminder["note"], conversation=conversation_id)
         for sched in schedules_due:
             nxt = clock.next_fire_after(sched.get("every_minutes"), sched.get("daily_at"))
             repo.schedules.reschedule(AGENT_DB_PATH, sched["id"], nxt)
-            self._emit("reminder", f"(standing) {sched['note']}")
+            self._emit("reminder", f"(standing) {sched['note']}", conversation=conversation_id)
         tick_config = replace(config, num_predict=min(config.num_predict, tuning.value("tick_max_tokens")))
 
         final_text = ""
@@ -458,7 +556,7 @@ class AutonomyRunner:
             # nothing is left half-applied, and no file is half-written.
             if self._cancel.is_set():
                 cancelled = True
-                self._emit("status", "stopped")
+                self._emit("status", "stopped", conversation=conversation_id)
                 break
             kind = event["type"]
             if kind == "tool_call":
@@ -474,6 +572,7 @@ class AutonomyRunner:
                     _describe_call(event["name"], event["arguments"]),
                     tool=event["name"],
                     args=_short_args(event["arguments"]),
+                    conversation=conversation_id,
                 )
             elif kind == "delta" and event["role"] == "text":
                 final_text += event["text"]
@@ -496,10 +595,11 @@ class AutonomyRunner:
                         "cached": int(stats.get("cachedTokens") or 0),
                         "out": int(stats.get("responseTokens") or 0),
                     },
+                    conversation=conversation_id,
                 )
             elif kind == "error":
                 error_msg = event["message"]
-                self._emit("error", event["message"])
+                self._emit("error", event["message"], conversation=conversation_id)
         self._tokens_in += tick_in
         self._tokens_out += tick_out
         self._tokens_uncached += tick_uncached
@@ -508,7 +608,7 @@ class AutonomyRunner:
         self._last_tick_uncached = tick_uncached + tick_out
 
         if final_text.strip():
-            self._emit("thought", final_text.strip()[:600])
+            self._emit("thought", final_text.strip()[:600], conversation=conversation_id)
 
         # Loop detection reads his journal — but journalling is something he has to
         # *remember* to do, and when he doesn't, the detector goes permanently blind
@@ -526,7 +626,7 @@ class AutonomyRunner:
                 pass
 
         self._detect_stall(active, breaking, tools_used)
-        self._emit("done", "step complete")
+        self._emit("done", "step complete", conversation=conversation_id)
 
         # Durable flight recorder — one row per tick, so how he's doing is
         # reviewable over time even though the live Mind feed is in-memory.
@@ -558,16 +658,29 @@ class AutonomyRunner:
         except Exception:
             pass
 
-    def _why_idle(self) -> tuple[str, str]:
+    def _why_idle(self, project: int | None = None, claimed: set[int] | None = None) -> tuple[str, str]:
         """Why there is nothing to do, and whether you need telling.
 
         Returns the status line and, when you are the reason, what to say. Deliberately reads
         two different things: tasks whose status is `waiting` (he asked you something) and
         tasks held by the roadmap (their milestone waits on one that is not finished). Both
         mean "he cannot proceed without you"; neither shows up as work he can do.
+
+        Scoped to the session that ran out of work, for the same reason the tick is: a
+        session that finished its project should say so, not report on questions outstanding
+        somewhere else entirely.
         """
-        asked = [task for task in repo.tasks.list_tasks(AGENT_DB_PATH) if task["status"] == "waiting"]
-        held = repo.tasks.waiting_on_the_roadmap(AGENT_DB_PATH)
+        held_by = claimed or set()
+        asked = [
+            task
+            for task in repo.tasks.list_tasks(AGENT_DB_PATH)
+            if task["status"] == "waiting" and self._in_scope(task, project, held_by)
+        ]
+        held = [
+            task
+            for task in repo.tasks.waiting_on_the_roadmap(AGENT_DB_PATH)
+            if self._in_scope(task, project, held_by)
+        ]
         if asked:
             return (
                 f"waiting on you — {len(asked)} question{'' if len(asked) == 1 else 's'}",
@@ -642,6 +755,20 @@ class AutonomyRunner:
             self._recent_sigs.clear()
             self._recent_shapes.clear()
 
+    def _project_memory(self, project: int | None) -> str:
+        """`.kith/memory.md` for the project this session is on, or nothing."""
+        if not project:
+            return ""
+        try:
+            from kith.services import project_memory
+
+            row = repo.projects.get_project(AGENT_DB_PATH, project)
+            if not row or not row.get("directory"):
+                return ""
+            return project_memory.block(row["directory"], row.get("name") or "")
+        except Exception:
+            return ""
+
     def _emit(
         self,
         kind: str,
@@ -649,6 +776,7 @@ class AutonomyRunner:
         tokens: dict | None = None,
         tool: str | None = None,
         args: dict | None = None,
+        conversation: str = "",
     ) -> None:
         """Push one line onto the live Mind feed.
 
@@ -656,6 +784,11 @@ class AutonomyRunner:
         interface can show a per-request count as a quiet figure on the line instead of
         another sentence in the stream. Feed items are a flat {kind, text, at} shape and
         older readers ignore a key they don't know, so this stays additive.
+
+        ``conversation`` is which session the line belongs to, and it is what lets the Mind
+        panel show *this* session's work instead of everything at once. Absent on the global
+        lines — a status change, a step run with nobody working — which the panel treats as
+        belonging to whatever you are looking at, because they do.
         """
         item = {"kind": kind, "text": text, "at": _now()}
         if tokens:
@@ -664,6 +797,8 @@ class AutonomyRunner:
             item["tool"] = tool
         if args:
             item["args"] = args
+        if conversation:
+            item["conversation"] = conversation
         self._buffer.append(item)
         with self._state_lock:
             subscribers = list(self._subscribers)

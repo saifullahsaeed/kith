@@ -43,7 +43,7 @@ def create_project(path: Path, args: dict):
     Not every project has code, though, and one that does not should not be handed a pretend
     directory: a shortlist or a piece of research is a project with rows and no folder.
     """
-    from kith.services import project_memory
+    from kith.services import project_memory, session_context
 
     directory = str(args.get("directory") or "").strip()
     if directory:
@@ -53,8 +53,15 @@ def create_project(path: Path, args: dict):
         # to be filled in instead of the file being invented from scratch later.
         project_memory.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
+        session_context.adopt(path, made.get("id"))
         return {**made, "memory": f"{directory}/.kith/memory.md"}
-    return repo.projects.add_project(path, args["name"], args.get("description") or "")
+    made = repo.projects.add_project(path, args["name"], args.get("description") or "")
+    # The conversation that started it is the one working on it. Nothing used to write this
+    # down, so `conversations.project_id` existed in the schema, was read on every chat turn
+    # to decide which project memory to show, and was never once set — which is why two
+    # sessions saw the same everything.
+    session_context.adopt(path, made.get("id"))
+    return made
 
 
 @tool(
@@ -89,6 +96,8 @@ def list_projects(path: Path, args: dict):
     required=("id",),
 )
 def update_project(path: Path, args: dict):
+    from kith.services import session_context
+
     out = repo.projects.update_project(
         path, args["id"], args.get("status"), args.get("name"), args.get("description")
     )
@@ -98,6 +107,11 @@ def update_project(path: Path, args: dict):
         from kith.services import permissions
 
         permissions.forget_linked_projects()
+    # Finishing or parking a project is the one update that should *not* claim it: a session
+    # whose project has just been marked done is a session with nothing left to do, and
+    # binding it there would keep it pointed at closed work.
+    if args.get("status") in (None, "active"):
+        session_context.adopt(path, args["id"])
     return out
 
 
@@ -140,6 +154,9 @@ def add_milestone(path: Path, args: dict):
     So: idempotent on the milestone, and `after` is honoured whether the milestone was just
     made or already there.
     """
+    from kith.services import session_context
+
+    session_context.adopt(path, args["project_id"])
     title = str(args["title"]).strip()
     target = next(
         (
@@ -273,7 +290,7 @@ def link_folder(path: Path, args: dict):
     anywhere outside the workspace with no record of why. This is one named folder, named by
     them, revoked when the work ends.
     """
-    from kith.services import permissions, project_memory
+    from kith.services import permissions, project_memory, session_context
 
     folder = str(args.get("folder") or "").strip()
     if not folder:
@@ -297,6 +314,7 @@ def link_folder(path: Path, args: dict):
     # given.
     permissions.forget_linked_projects()
     project_memory.ensure(resolved)
+    session_context.adopt(path, args["id"])
     return {
         **updated,
         "memory": str(project_memory.path_for(resolved)),

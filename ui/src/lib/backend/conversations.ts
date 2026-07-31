@@ -9,6 +9,12 @@ export interface ConversationSummary {
   messages: number;
   /** Absolute path to the JSONL transcript, so the settings page can reveal it. */
   transcript: string;
+  /** What this session is working on. Null for a conversation that has not adopted a
+   *  project — which is most of them, and is fine. It decides which project's memory he is
+   *  shown here and which tasks he advances when this session is left working. */
+  projectId: number | null;
+  /** Whether he keeps taking steps here without being asked again. */
+  working: boolean;
 }
 
 export interface ConversationDetail extends ConversationSummary {
@@ -37,13 +43,13 @@ export interface StoredTurn {
   parts: StoredPart[];
 }
 
-export async function fetchConversation(id: string): Promise<{
-  id: string;
-  title: string;
-  messages: { role: string; content: string }[];
-  /** The turn's actual shape — reasoning, prose, calls with results — for rendering back. */
-  timeline: StoredTurn[];
-}> {
+export async function fetchConversation(id: string): Promise<
+  ConversationSummary & {
+    messages: { role: string; content: string }[];
+    /** The turn's actual shape — reasoning, prose, calls with results — for rendering back. */
+    timeline: StoredTurn[];
+  }
+> {
   const response = await fetch(`/api/conversations/${id}`);
   if (!response.ok) throw new Error(`could not open that conversation (${response.status})`);
   return await response.json();
@@ -56,6 +62,20 @@ export async function renameConversation(id: string, title: string): Promise<voi
     body: JSON.stringify({ title }),
   });
   if (!response.ok) throw new Error(`could not rename (${response.status})`);
+}
+
+/** Point this session at a project, or pass null to unbind it. */
+export async function setConversationProject(
+  id: string,
+  projectId: number | null,
+): Promise<ConversationSummary> {
+  const response = await fetch(`/api/conversations/${id}/project`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) throw new Error(`could not set the project (${response.status})`);
+  return (await response.json()) as ConversationSummary;
 }
 
 /** Remove from the list. The transcript file stays unless `purge`. */

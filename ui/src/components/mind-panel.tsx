@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlarmClock,
   BookOpenText,
@@ -225,31 +225,49 @@ function groupTicks(activity: ActivityItem[]): Tick[] {
   return ticks;
 }
 
-/** The Mind window: watch Kith think and act on his own, and turn him loose. */
+/** The Mind window: watch Kith think and act, in the session you are looking at. */
 export function MindPanel({
   autonomy,
+  conversationId = "",
   width,
   onClose,
 }: {
   autonomy: Autonomy;
+  /** The conversation on screen. The feed narrows to it, so switching sessions switches
+   *  what the panel is about — it used to show every session's work at once, which with two
+   *  projects going was one stream of interleaved steps belonging to neither. */
+  conversationId?: string;
   width: number;
   onClose: () => void;
 }) {
   const { status, activity, stop, tick, cancel } = autonomy;
-  // Any session mid-work. The panel is a view of everything at once, so it asks the
-  // plural question; the per-session control lives with the session.
+  // Any session mid-work. The panel's header speaks for the machine, so it asks the plural
+  // question; the per-session control lives on the session bar above the thread.
   const working = (status?.working ?? []).length > 0;
   const ticking = status?.ticking ?? false;
   const stopping = status?.stopping ?? false;
+  // "Everything" is still available, because watching two projects advance at once is a
+  // real thing to want — it is just the wrong default when you are reading one of them.
+  const [everything, setEverything] = useState(false);
 
   const feedRef = useRef<HTMLDivElement>(null);
+
+  const shown = useMemo(() => {
+    if (everything || !conversationId) return activity;
+    // A line with no conversation is about the machine rather than about one piece of work
+    // — a status change, a step run from "Run once" with nobody working — so every session
+    // shows it. Dropping those would make an idle panel look broken.
+    return activity.filter((item) => !item.conversation || item.conversation === conversationId);
+  }, [activity, conversationId, everything]);
+
   useEffect(() => {
     const el = feedRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [activity.length]);
+  }, [shown.length]);
 
-  const ticks = groupTicks(activity);
+  const ticks = groupTicks(shown);
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
+  const hidden = activity.length - shown.length;
 
   return (
     <aside
@@ -265,9 +283,9 @@ export function MindPanel({
           <div className="flex items-center gap-2 text-sm font-semibold">
             Mind
             {working ? (
-              <span className="inline-flex items-center gap-1 text-[11px] font-normal text-roam">
-                <span className="size-1.5 animate-pulse rounded-full bg-roam" />
-                roaming
+              <span className="text-roam inline-flex items-center gap-1 text-[11px] font-normal">
+                <span className="bg-roam size-1.5 animate-pulse rounded-full" />
+                working
               </span>
             ) : null}
           </div>
@@ -325,6 +343,27 @@ export function MindPanel({
           </Button>
         )}
         <div className="flex-1" />
+        {/* Only offered when narrowing is actually hiding something, so it is a way out of
+            a filter rather than a switch to reason about on an empty feed. */}
+        {conversationId && (hidden > 0 || everything) ? (
+          <button
+            type="button"
+            onClick={() => setEverything((all) => !all)}
+            className={cn(
+              "rounded px-1.5 py-0.5 text-[11px] transition-colors",
+              everything
+                ? "bg-accent/60 text-foreground"
+                : "text-muted-foreground/60 hover:text-foreground",
+            )}
+            title={
+              everything
+                ? "Showing every session. Click for this conversation only."
+                : `${hidden} line${hidden === 1 ? "" : "s"} from other sessions`
+            }
+          >
+            {everything ? "All sessions" : `+${hidden}`}
+          </button>
+        ) : null}
         <span
           className="text-[11px] tabular-nums text-muted-foreground"
           title={
@@ -350,10 +389,20 @@ export function MindPanel({
             <span className="flex size-11 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
               <Brain className="size-5" />
             </span>
-            <p className="max-w-[15rem] text-sm text-muted-foreground">
-              His mind is quiet. Hit <span className="font-medium text-foreground">Run once</span>{" "}
-              to watch him take a self-directed step, or{" "}
-              <span className="font-medium text-foreground">Let it roam</span> to set him loose.
+            <p className="max-w-[16rem] text-sm text-muted-foreground">
+              {conversationId ? (
+                <>
+                  Nothing here yet in this conversation. Talk to him, or hit{" "}
+                  <span className="text-foreground font-medium">Keep working</span> above the
+                  thread to let him carry on by himself.
+                </>
+              ) : (
+                <>
+                  His mind is quiet. Hit{" "}
+                  <span className="text-foreground font-medium">Run once</span> to watch him take
+                  a self-directed step.
+                </>
+              )}
             </p>
           </div>
         ) : (

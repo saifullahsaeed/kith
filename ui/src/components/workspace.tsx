@@ -15,6 +15,7 @@ import { WorkspaceFileViewer } from "@/components/workspace-file-viewer";
 import { InboxPanel } from "@/components/inbox-panel";
 import { MindPanel } from "@/components/mind-panel";
 import { HistoryPanel } from "@/components/history-panel";
+import { SessionBar } from "@/components/session-bar";
 import { useAutonomy } from "@/hooks/use-autonomy";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
@@ -33,6 +34,13 @@ import {
 const MIND_MIN = 320;
 const MIND_MAX = 720;
 const MIND_DEFAULT = 400;
+
+/** Where the open conversation is remembered across a reload.
+ *
+ * Without it a refresh dropped you on a blank chat with your conversation one click away in
+ * a panel that was also closed — so the app forgot what you were doing every time it
+ * reloaded, which is the one thing a window is supposed to be good at. */
+const LAST_CONVERSATION = "kith-conversation";
 
 /** The ready-state app: chat runtime, header, and the autonomy ("Mind") panel.
  * Split out so its hooks only run once the backend is reachable. */
@@ -57,6 +65,10 @@ export function Workspace({
   const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
   const [threadKey, setThreadKey] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // What this session is working on. Held here rather than fetched inside the bar because
+  // it changes from two directions — you set it, and so does he, by starting a project or
+  // filing a task mid-turn.
+  const [projectId, setProjectId] = useState<number | null>(null);
 
   // No config passed: the server reads its own settings, so there is nothing here that
   // can go stale. Memoised so the runtime is never recreated mid-stream.
@@ -84,15 +96,47 @@ export function Workspace({
     const detail = await fetchConversation(id).catch(() => null);
     if (!detail) return;
     setConversationId(id);
+    setProjectId(detail.projectId ?? null);
     setResumed(toThreadMessages(detail.timeline));
     setThreadKey((n) => n + 1);
+    remember(id);
   }, []);
 
   const newConversation = useCallback(() => {
     setConversationId("");
+    setProjectId(null);
     setResumed([]);
     setThreadKey((n) => n + 1);
+    remember("");
   }, []);
+
+  // Reopen where you were. A reload used to land on an empty chat with the history panel
+  // closed, so the conversation you were mid-way through was two clicks away and looked
+  // gone. Runs once: if the stored conversation has since been deleted, `openConversation`
+  // finds nothing and this quietly stays a fresh chat.
+  useEffect(() => {
+    let stored = "";
+    try {
+      stored = localStorage.getItem(LAST_CONVERSATION) || "";
+    } catch {
+      /* private mode, or no storage — a fresh chat is a fine answer */
+    }
+    if (stored) void openConversation(stored);
+  }, [openConversation]);
+
+  // The session's own state, re-read whenever the conversation changes underneath us — a
+  // chat started from an empty composer gets its id from the stream, not from us.
+  const refreshSession = useCallback(() => {
+    if (!conversationId) return;
+    void fetchConversation(conversationId)
+      .then((detail) => setProjectId(detail.projectId ?? null))
+      .catch(() => {});
+  }, [conversationId]);
+
+  useEffect(() => {
+    remember(conversationId);
+    refreshSession();
+  }, [conversationId, refreshSession]);
 
   const autonomy = useAutonomy();
   const inbox = useMessages();
@@ -161,6 +205,16 @@ export function Workspace({
   // Any session mid-work. Was a single `running` flag; work belongs to sessions now, so
   // the question is plural and the glow means "something is happening", not "roaming is on".
   const roaming = (autonomy.status?.working ?? []).length > 0;
+  // Whether *this* session is one of them. Derived rather than kept in state: the server is
+  // the only thing that knows — he stops himself when the work runs out — and a local copy
+  // would keep saying "working" after that, which is the exact lie the button exists to
+  // prevent.
+  const sessionWorking = (autonomy.status?.working ?? []).includes(conversationId);
+  // He adopts a project by working on one, so what the session is bound to can change
+  // part-way through a turn. One re-read per completed step or turn, which is the cheapest
+  // signal that anything could have changed at all.
+  const finished = autonomy.activity.filter((item) => item.kind === "done").length;
+  useEffect(refreshSession, [finished, refreshSession]);
   // The room glows green while he is working, otherwise the colour of his mood.
   const wash = roaming ? "var(--roam)" : moodHue(mood?.label);
 
@@ -210,6 +264,14 @@ export function Workspace({
               ) : null}
               {/* Chat window */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                <SessionBar
+                  conversationId={conversationId}
+                  projectId={projectId}
+                  working={sessionWorking}
+                  onProject={setProjectId}
+                  onKeepWorking={() => void autonomy.start(conversationId)}
+                  onStop={() => void autonomy.stop(conversationId)}
+                />
                 <Thread />
               </div>
               {/* draggable divider */}
@@ -228,6 +290,7 @@ export function Workspace({
               {mindOpen ? (
                 <MindPanel
                   autonomy={autonomy}
+                  conversationId={conversationId}
                   width={mindWidth}
                   onClose={() => setMindOpen(false)}
                 />
@@ -261,6 +324,16 @@ export function Workspace({
       </AssistantRuntimeProvider>
     </TooltipProvider>
   );
+}
+
+/** Keep (or clear) the conversation to reopen on the next load. */
+function remember(conversationId: string): void {
+  try {
+    if (conversationId) localStorage.setItem(LAST_CONVERSATION, conversationId);
+    else localStorage.removeItem(LAST_CONVERSATION);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**

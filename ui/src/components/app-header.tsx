@@ -104,9 +104,12 @@ export function AppHeader({
               {mood.label}
             </span>
           ) : null}
+          {/* "roaming" was a mode you switched on for the whole machine, and it is gone —
+              work belongs to a session now. The word had to go with it, or the header names
+              a thing the app no longer has. */}
           <span className={roaming ? "text-roam" : "text-muted-foreground/60"}>
             {mood?.label ? " · " : ""}
-            {roaming ? "roaming" : "here"}
+            {roaming ? "working" : "here"}
           </span>
           {doing ? <span className="text-muted-foreground/50"> · {doing}</span> : null}
         </span>

@@ -46,6 +46,10 @@ export interface ActivityItem {
   /** Present on "tool" items: its arguments, trimmed for display. Which one is the subject of
    *  the sentence is decided in the interface, since that changes with the wording. */
   args?: Record<string, string>;
+  /** Which session this line belongs to. Absent on the genuinely global lines — a status
+   *  change, a step run with nobody working — which every session shows, because they are
+   *  about the machine rather than about one piece of work. */
+  conversation?: string;
 }
 
 export type AutonomyAction = "start" | "stop" | "tick" | "cancel";

@@ -65,6 +65,11 @@ class Conversation:
     created_at: str
     updated_at: str
     messages: int
+    #: What this session is working on, and whether it keeps going without being asked.
+    #: Both are properties of the conversation rather than of the app, which is what makes
+    #: two projects at once possible: you switch sessions and the work switches with you.
+    project_id: int | None = None
+    working: bool = False
 
     def public(self) -> dict:
         return {
@@ -75,6 +80,8 @@ class Conversation:
             "updatedAt": self.updated_at,
             "messages": self.messages,
             "transcript": str(transcript_path(self.id)),
+            "projectId": self.project_id,
+            "working": self.working,
         }
 
 
@@ -407,7 +414,22 @@ def _to_public(row: dict) -> dict:
         created_at=str(row.get("created_at") or ""),
         updated_at=str(row.get("updated_at") or ""),
         messages=int(row.get("messages") or 0),
+        project_id=int(row["project_id"]) if row.get("project_id") else None,
+        working=bool(row.get("working")),
     ).public()
+
+
+def set_project(agent_db: Path, conversation_id: str, project_id: int | None) -> dict:
+    """Point this session at a project, or at nothing.
+
+    He binds a session himself by working on something — starting a project, filing a task
+    under one — and this is the same decision made by hand, for the times that guess is
+    wrong or you want to say it up front.
+    """
+    if repo.conversations.get(agent_db, conversation_id) is None:
+        raise KeyError(conversation_id)
+    repo.conversations.set_project(agent_db, conversation_id, project_id)
+    return get(agent_db, conversation_id)
 
 
 def _now() -> str:

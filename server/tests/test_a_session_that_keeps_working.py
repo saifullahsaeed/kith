@@ -141,7 +141,7 @@ class TestItStopsWhenThereIsNothingLeft:
 
         # An empty board: nothing pending, nothing due, no tasks, nothing to plan.
         monkeypatch.setattr(runner, "_new_pending", lambda: [])
-        monkeypatch.setattr(runner, "_why_idle", lambda: ("caught up", ""))
+        monkeypatch.setattr(runner, "_why_idle", lambda *_a: ("caught up", ""))
         monkeypatch.setattr(module.repo.tasks, "active_tasks", lambda _p: [])
         monkeypatch.setattr(module.repo.tasks, "tasks_awaiting_kith", lambda _p: [])
         monkeypatch.setattr(module.repo.reminders, "due_reminders", lambda _p, _n: [])

@@ -133,7 +133,7 @@ def _update_task(path: Path, a: dict) -> dict | None:
         repo.tasks.set_task_milestone(path, a["id"], a.get("milestone_id"))
     elif "project_id" in a:
         repo.tasks.set_task_project(path, a["id"], a.get("project_id"))
-    return repo.tasks.update_task(
+    out = repo.tasks.update_task(
         path,
         a["id"],
         a.get("status"),
@@ -142,6 +142,14 @@ def _update_task(path: Path, a: dict) -> dict | None:
         a.get("due_at"),
         a.get("description"),
     )
+    # Moving a task along is working on its project, whether or not this call is the one that
+    # named it. That covers the ordinary case a create-only rule would miss: picking up a
+    # project someone laid out yesterday, where the first thing he touches is a task that
+    # already exists.
+    from kith.services import session_context
+
+    session_context.adopt(path, (out or {}).get("project_id"))
+    return out
 
 
 _VERIFY_MIN_BRIEF = 80
@@ -168,7 +176,9 @@ _VERIFY_MIN_BRIEF = 80
     required=("goal",),
 )
 def add_task(path: Path, args: dict):
-    return repo.tasks.add_task(
+    from kith.services import session_context
+
+    made = repo.tasks.add_task(
         path,
         args["goal"],
         args.get("priority") or "normal",
@@ -179,6 +189,12 @@ def add_task(path: Path, args: dict):
         args.get("project_id"),
         args.get("milestone_id"),
     )
+    # Filing work under a project is working on that project. Read back off the row rather
+    # than off the arguments, because a task given only a milestone still lands in a project
+    # — the repository resolves it — and a session that laid out a roadmap this way would
+    # otherwise be bound to nothing.
+    session_context.adopt(path, made.get("project_id"))
+    return made
 
 
 @tool(

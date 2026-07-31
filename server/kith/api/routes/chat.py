@@ -6,11 +6,13 @@ import base64
 import itertools
 import json
 import re
+import time
 from pathlib import Path
 
 from flask import Response
 
 from kith.api.blueprint import api
+from kith.autonomy.prompts import _describe_call, _short_args
 from kith.config import (
     AGENT_DB_PATH,
     default_config,
@@ -24,7 +26,7 @@ from kith.infra.db import repositories as repo
 from kith.schemas import (
     ChatRequestSchema,
 )
-from kith.services import conversations, memory_context
+from kith.services import conversations, memory_context, session_context
 from kith.services.agent_loop import stream_agent
 
 #: What a conversation is for.
@@ -308,6 +310,100 @@ class _Recorder:
         self.channel = ""
 
 
+class _MindFeed:
+    """A chat turn, on the record.
+
+    Chat used to leave no trace anywhere except its own transcript: no line on the Mind
+    feed, no row in the flight recorder. Every mode the runner has wrote both, and the one
+    path where most of the real work happens wrote neither — so "what has he been doing"
+    could be answered for the unattended steps and not for the afternoon you spent together,
+    and a tick that cost 40k tokens was visible while a chat turn that cost 200k was not.
+
+    It matters more now that the Mind panel is per session. A conversation you have never
+    left working would otherwise show an empty panel forever, which reads as broken rather
+    than as "he has not gone off on his own here".
+
+    Deliberately the same shapes the runner emits — `reply` as the head, `tool`, `tokens`,
+    `done` — so the panel renders a turn exactly as it renders a step. A second vocabulary
+    for the same events would have meant a second renderer.
+    """
+
+    def __init__(self, conversation_id: str, opening: str = "") -> None:
+        self.conversation_id = conversation_id
+        self.opening = opening
+        self.tools: list[str] = []
+        self.rounds = 0
+        self.tokens_in = 0
+        self.tokens_out = 0
+        self.tokens_uncached = 0
+        self.said = ""
+        self.error: str | None = None
+        self.started = time.monotonic()
+        self._publish("reply", f"you: {opening.strip()[:80]}" if opening.strip() else "you: (attachment)")
+
+    def _publish(self, kind: str, text: str, **fields) -> None:
+        try:
+            from kith.autonomy.runner import runner
+
+            runner.publish(kind, text, conversation=self.conversation_id, **fields)
+        except Exception:
+            # A feed line must never be the thing that takes a turn down.
+            pass
+
+    def saw(self, event: dict) -> None:
+        kind = event.get("type")
+        if kind == "tool_call":
+            self.tools.append(event["name"])
+            self._publish(
+                "tool",
+                _describe_call(event["name"], event.get("arguments") or {}),
+                tool=event["name"],
+                args=_short_args(event.get("arguments") or {}),
+            )
+        elif kind == "delta" and event.get("role") == "text":
+            self.said += event.get("text") or ""
+        elif kind == "stats":
+            stats = event.get("stats") or {}
+            fresh = int(stats.get("uncachedTokens") or 0)
+            out = int(stats.get("responseTokens") or 0)
+            self.rounds += 1
+            self.tokens_in += int(stats.get("promptTokens") or 0)
+            self.tokens_out += out
+            self.tokens_uncached += fresh
+            self._publish(
+                "tokens",
+                f"{fresh + out:,} tokens",
+                tokens={
+                    "round": self.rounds,
+                    "uncached": fresh,
+                    "cached": int(stats.get("cachedTokens") or 0),
+                    "out": out,
+                },
+            )
+        elif kind == "error":
+            self.error = event.get("message")
+            self._publish("error", str(self.error))
+
+    def finish(self) -> None:
+        self._publish("done", "turn complete")
+        outcome = f"error: {self.error}" if self.error else (self.said.strip()[:280] or "answered")
+        try:
+            repo.messages.add_tick_log(
+                AGENT_DB_PATH,
+                clock.now_iso(),
+                "chat",
+                self.opening.strip()[:80] or None,
+                self.tools,
+                self.tokens_in,
+                self.tokens_out,
+                round(time.monotonic() - self.started, 2),
+                outcome,
+                tokens_uncached=self.tokens_uncached,
+            )
+        except Exception:
+            pass
+
+
 @api.post("/chat")
 @api.input(ChatRequestSchema, arg_name="payload")
 @api.doc(
@@ -351,38 +447,12 @@ def chat(payload):
         # and a resumed conversation is a summary of itself.
         recorder = _Recorder(conversation_id)
         try:
-            for event in stream_agent(
-                messages,
-                config,
-                ollama_host(),
-                AGENT_DB_PATH,
-                conversation_id=conversation_id,
-                # Rounds stay on the declared knob (max_rounds, 40) rather than the tick's
-                # hardcoded 16. A conversation genuinely wants more room than an unattended
-                # step: you are here, so a long turn is one you can watch and stop, and the
-                # tick's 16 exists because nobody is.
-                #
-                # `expect_durable` stays off, and that was learned the hard way an hour after
-                # turning it on. A tick that leaves nothing behind really is a failure — the
-                # whole point of one is to make progress nobody asked to watch. But a
-                # conversation is not that, and cannot be told apart upfront: "what have you
-                # been working on" is answered by answering it. With durability demanded, he
-                # replied honestly that the board was empty and then wrote
-                # `session-findings-2026-07-31.md` to satisfy the rule — a file nobody wanted,
-                # about nothing, because the harness insisted on an artefact.
-                #
-                # The distinction that matters is not chat versus tick. It is "asked to do
-                # something" versus "asked something", and the transport does not know which
-                # it is carrying. So the directive above asks him to do the work, and nothing
-                # forces him to manufacture evidence of having done it.
-            ):
-                recorder.saw(event)
-                yield json.dumps(event) + "\n"
-                if event.get("type") == "error":
-                    recorder.finish(error=event.get("message"))
-                    return
-            recorder.finish()
-            yield json.dumps({"type": "done"}) + "\n"
+            # Bound for the whole turn, so a tool that acts on a project records that this
+            # session is the one working on it. Starting a project here and having nothing
+            # know whose it was is how `conversations.project_id` stayed null from the day it
+            # was added: read on every turn to pick the project memory, written by nobody.
+            with session_context.working_in(conversation_id):
+                yield from _turn(recorder, messages, config, conversation_id, latest)
         except GeneratorExit:
             # Client disconnected (e.g. Stop was clicked) — end quietly, but keep what he
             # had already said. A stopped answer is still an answer that was given.
@@ -396,3 +466,47 @@ def chat(payload):
         mimetype="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _turn(recorder: _Recorder, messages: list, config, conversation_id: str, opening: str = ""):
+    """One turn of the loop, streamed as it happens.
+
+    Split out from the route so the session binding can wrap it in a `with` and every tool
+    call inside knows which conversation it belongs to.
+    """
+    watcher = _MindFeed(conversation_id, opening)
+    for event in stream_agent(
+        messages,
+        config,
+        ollama_host(),
+        AGENT_DB_PATH,
+        conversation_id=conversation_id,
+        # Rounds stay on the declared knob (max_rounds, 40) rather than the tick's
+        # hardcoded 16. A conversation genuinely wants more room than an unattended
+        # step: you are here, so a long turn is one you can watch and stop, and the
+        # tick's 16 exists because nobody is.
+        #
+        # `expect_durable` stays off, and that was learned the hard way an hour after
+        # turning it on. A tick that leaves nothing behind really is a failure — the
+        # whole point of one is to make progress nobody asked to watch. But a
+        # conversation is not that, and cannot be told apart upfront: "what have you
+        # been working on" is answered by answering it. With durability demanded, he
+        # replied honestly that the board was empty and then wrote
+        # `session-findings-2026-07-31.md` to satisfy the rule — a file nobody wanted,
+        # about nothing, because the harness insisted on an artefact.
+        #
+        # The distinction that matters is not chat versus tick. It is "asked to do
+        # something" versus "asked something", and the transport does not know which
+        # it is carrying. So the directive above asks him to do the work, and nothing
+        # forces him to manufacture evidence of having done it.
+    ):
+        recorder.saw(event)
+        watcher.saw(event)
+        yield json.dumps(event) + "\n"
+        if event.get("type") == "error":
+            recorder.finish(error=event.get("message"))
+            watcher.finish()
+            return
+    recorder.finish()
+    watcher.finish()
+    yield json.dumps({"type": "done"}) + "\n"
