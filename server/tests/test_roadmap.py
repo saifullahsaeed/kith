@@ -8,6 +8,8 @@ with it — and about the ways a dependency graph goes wrong.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from kith.infra.db import repositories as repo
@@ -61,7 +63,7 @@ class TestTheGate:
         assert len(repo.tasks.active_tasks(db)) == 1
 
     def test_held_back_work_is_distinguishable_from_no_work(self, db, project):
-        """"Nothing to do" and "not this milestone's turn" are different sentences, and a
+        """ "Nothing to do" and "not this milestone's turn" are different sentences, and a
         blocked board that looks like an empty one is how someone concludes it is broken."""
         first = milestone(db, project, "Design")
         second = milestone(db, project, "Build")
@@ -244,3 +246,71 @@ class TestTheMilestoneLink:
         assert repo.tasks.active_tasks(db) == []
         repo.tasks.set_task_milestone(db, row["id"], None)
         assert len(repo.tasks.active_tasks(db)) == 1
+
+
+class TestADependencyHasToPointAtSomething:
+    """The bug that made a five-step roadmap look like it had no order at all.
+
+    Asked to plan a project, he created five milestones and ordered them by calling
+    ``add_milestone`` with ``after: [0]`` — a *position*, not an id. Four rows were written
+    pointing at milestone 0, which does not exist, and every layer downstream hid it:
+    :func:`roadmap` drops a dependency whose target is not a known milestone, so the graph
+    drew no edges and reported "5 ready to work". He believed he had laid out an order. The
+    screen showed a plan with no order in it. Nothing anywhere mentioned the number 0.
+
+    Validating at the write is the only place that catches it, because it is the only place
+    that still knows the id was wrong.
+    """
+
+    def test_an_id_that_is_not_a_milestone_is_refused(self, db, project):
+        first = milestone(db, project, "Scope it")
+        with pytest.raises(ValueError) as caught:
+            repo.projects.add_dependency(db, first, 0)
+        # The message has to name the mistake he actually made, or he retries the same call.
+        assert "not a milestone" in str(caught.value)
+        assert "position" in str(caught.value)
+
+    def test_the_waiting_milestone_must_exist_too(self, db, project):
+        first = milestone(db, project, "Scope it")
+        with pytest.raises(ValueError):
+            repo.projects.add_dependency(db, 9999, first)
+
+    def test_nothing_is_stored_when_it_is_refused(self, db, project):
+        first = milestone(db, project, "Scope it")
+        with pytest.raises(ValueError):
+            repo.projects.add_dependency(db, first, 0)
+        assert repo.projects.dependencies(db, project) == []
+
+    def test_a_cross_project_edge_is_refused(self, db, project):
+        other = repo.projects.add_project(db, "Something else", "")["id"]
+        here = milestone(db, project, "Ours")
+        there = milestone(db, other, "Theirs")
+        with pytest.raises(ValueError) as caught:
+            repo.projects.add_dependency(db, here, there)
+        # A roadmap is read per project, so this would be stored and then never shown or
+        # honoured — the same silent nothing in a different disguise.
+        assert "same project" in str(caught.value)
+
+    def test_the_tool_turns_the_refusal_into_a_warning_he_can_read(self, db, project):
+        from kith.tools import registry
+
+        first = repo.projects.add_milestone(db, project, "Scope it")
+        add = registry.get("add_milestone")
+        handler = add.run if hasattr(add, "run") else add
+        result = handler(db, {"project_id": project, "title": "Build it", "after": [0]})
+
+        # The milestone is still created — losing it as well would turn one mistake into two.
+        assert result["id"] != first["id"]
+        assert result.get("warnings"), "he has to be told the ordering did not happen"
+        assert "not a milestone" in " ".join(result["warnings"])
+
+    def test_ordering_by_real_ids_still_works(self, db, project):
+        ids = [milestone(db, project, f"Step {n}") for n in range(1, 5)]
+        for earlier, later in itertools.pairwise(ids):
+            repo.projects.add_dependency(db, later, earlier)
+
+        graph = repo.projects.roadmap(db, project)
+        ready = [n["id"] for n in graph["milestones"] if n["ready"]]
+
+        # Exactly one thing to start on, which is the entire point of a roadmap.
+        assert ready == [ids[0]]

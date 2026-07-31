@@ -72,16 +72,17 @@ def update_project(path: Path, args: dict):
         "after": {
             "type": "array",
             "items": INT,
-            "description": "Milestone ids this one waits for. Its tasks stay out of your way "
-            "until they are all done.",
+            "description": "Ids of milestones this one waits for — the numeric id a "
+            "milestone already has, NOT its position in the list you are creating. Its tasks "
+            "stay out of your way until they are all done. If you are laying out a fresh "
+            "roadmap and do not have the ids yet, add them all first and then call "
+            "order_milestones with the ids in order.",
         },
     },
     required=("project_id", "title"),
 )
 def add_milestone(path: Path, args: dict):
-    created = repo.projects.add_milestone(
-        path, args["project_id"], args["title"], args.get("target_at")
-    )
+    created = repo.projects.add_milestone(path, args["project_id"], args["title"], args.get("target_at"))
     problems = []
     for earlier in args.get("after") or []:
         try:

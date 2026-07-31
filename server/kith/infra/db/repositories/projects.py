@@ -194,9 +194,29 @@ def add_dependency(path: Path, milestone_id: int, depends_on_id: int) -> None:
     Refuses a cycle, because a cycle is not a slow roadmap — it is a roadmap where nothing
     is ever available, and he would sit doing nothing with no way to see why. Cheaper to
     refuse the edge than to explain the deadlock later.
+
+    Refuses an id that is not a milestone of this project, for a worse reason. This used to
+    accept any integer, and he ordered a five-step roadmap by calling ``add_milestone`` with
+    ``after: [0]`` — a position, not an id. Four rows were written pointing at milestone 0,
+    which does not exist. Every layer downstream then hid it: :func:`roadmap` drops a
+    dependency whose target is not a known milestone, so the graph drew no edges at all and
+    reported "5 ready to work". He believed he had laid out an order, the interface showed a
+    plan with no order in it, and nothing anywhere said the word "0". A refusal here becomes
+    a warning on his own tool result, which he can read and correct.
     """
     if milestone_id == depends_on_id:
         raise ValueError("a milestone cannot wait for itself")
+    known = {m["id"]: m for m in list_milestones(path)}
+    for label, wanted in (("milestone", milestone_id), ("the one it waits for", depends_on_id)):
+        if wanted not in known:
+            raise ValueError(
+                f"{label} {wanted} is not a milestone — pass the numeric id a milestone "
+                "already has, not its position in a list"
+            )
+    if known[milestone_id]["project_id"] != known[depends_on_id]["project_id"]:
+        # A roadmap is read per project, so a cross-project edge is stored and then never
+        # shown or honoured anywhere: the same silent nothing in a different disguise.
+        raise ValueError("both milestones have to be on the same project")
     if _reaches(path, depends_on_id, milestone_id):
         raise ValueError("that would make a loop — the other one already waits for this")
     with session(path) as db:
@@ -305,7 +325,5 @@ def blocked_milestone_ids(path: Path) -> set[int]:
     for edge in dependencies(path):
         waits.setdefault(edge["milestone_id"], []).append(edge["depends_on_id"])
     return {
-        milestone_id
-        for milestone_id, deps in waits.items()
-        if any(status.get(dep) != "done" for dep in deps)
+        milestone_id for milestone_id, deps in waits.items() if any(status.get(dep) != "done" for dep in deps)
     }
