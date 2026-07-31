@@ -323,9 +323,35 @@ def check_path(kind: Kind, target: Path, root: Path) -> Decision:
     if mode() is Mode.AUTO and not sensitive and kind != "delete":
         return Decision(True)
 
+    # A skill is not ordinary work product, and "outside his workspace" is a true but
+    # useless thing to say about one. He has a tool for authoring skills and a skill that
+    # tells him how; the write it ends in landed here as an anonymous out-of-folder path,
+    # so in ask-mode the prompt asked about a file in a directory nobody recognises. The
+    # gate itself is right to stay — a skill steers him, so installing one is a bigger
+    # decision than saving a report, and it should be a decision rather than a default —
+    # but it has to say what it is, or you are approving a path instead of a capability.
+    skills_dir = _skills_root()
+    if skills_dir and str(resolved).startswith(skills_dir) and kind in {"write", "delete"}:
+        name = _skill_named(resolved, skills_dir)
+        doing = "change" if kind == "write" else "remove"
+        return _refuse(
+            kind,
+            str(resolved),
+            f"he wants to {doing} {name} — one of his own skills, which is how he decides "
+            "what he knows how to do",
+            signature,
+        )
+
     where = "somewhere sensitive" if sensitive else "outside his workspace"
     verb = {"read": "read", "write": "write to", "delete": "delete", "command": "use"}[kind]
     return _refuse(kind, str(resolved), f"he wants to {verb} something {where}", signature)
+
+
+def _skill_named(target: Path, skills_dir: str) -> str:
+    """ "the `x` skill" for a path inside a skill, or a general phrase when it is the root."""
+    rest = str(target)[len(skills_dir) :].strip("/")
+    first = rest.split("/", 1)[0] if rest else ""
+    return f"the `{first}` skill" if first else "his skills folder"
 
 
 def check_command(command: str, root: Path) -> Decision:

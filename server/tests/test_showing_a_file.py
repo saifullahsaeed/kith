@@ -280,3 +280,67 @@ class TestThePolicyThatLetsAPdfRender:
         # Unchanged by any of this, and worth keeping true: it is what stops markdown he
         # wrote from phoning home by referencing an image.
         assert "img-src 'self' data: blob:" in self._policy()
+
+
+class TestAskingAboutASkillRatherThanAPath:
+    """He can author a skill; the prompt has to say that is what he is doing.
+
+    Skills live outside his workspace by design — a skill is a capability, not work product —
+    so writing one lands in the generic out-of-folder branch. In ask-mode that produced "he
+    wants to write to something outside his workspace" about a directory nobody recognises,
+    for an action he has a dedicated tool and a dedicated skill for.
+
+    The gate stays. A skill steers him, so installing one should be a decision rather than a
+    default. What changes is that the decision is legible: you are approving a capability, and
+    the sentence should name it.
+    """
+
+    def _ask(self, kind, target):
+        from kith.infra import workspace as ws
+        from kith.services import permissions
+
+        before = permissions.mode()
+        try:
+            permissions.set_mode("ask")
+            return permissions.check_path(kind, target, ws.root())
+        finally:
+            permissions.set_mode(str(before).split(".")[-1].lower())
+
+    def test_writing_a_new_skill_names_it(self):
+        from pathlib import Path
+
+        from kith.services import skills
+
+        decision = self._ask("write", Path(skills.root()) / "money-bugs" / "SKILL.md")
+        assert not decision.allowed
+        text = str(getattr(decision, "reason", "") or getattr(decision, "why", ""))
+        assert "`money-bugs` skill" in text, text
+        # And not the sentence that says nothing.
+        assert "outside his workspace" not in text
+
+    def test_removing_one_says_remove_not_write(self):
+        from pathlib import Path
+
+        from kith.services import skills
+
+        decision = self._ask("delete", Path(skills.root()) / "ts-bug-scanner")
+        text = str(getattr(decision, "reason", "") or getattr(decision, "why", ""))
+        assert "remove" in text and "`ts-bug-scanner` skill" in text, text
+
+    def test_an_ordinary_outside_file_is_unchanged(self):
+        from pathlib import Path
+
+        decision = self._ask("write", Path.home() / "Documents" / "notes.txt")
+        text = str(getattr(decision, "reason", "") or getattr(decision, "why", ""))
+        # The general case still reads as the general case; this did not widen.
+        assert "outside his workspace" in text, text
+
+    def test_reading_a_skill_is_not_gated_by_this(self):
+        from pathlib import Path
+
+        from kith.services import skills
+
+        # read_skill has to keep working. Only authoring is a decision.
+        decision = self._ask("read", Path(skills.root()) / "skill-creator" / "SKILL.md")
+        text = str(getattr(decision, "reason", "") or getattr(decision, "why", ""))
+        assert "skill — one of his own" not in text
