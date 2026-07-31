@@ -158,8 +158,10 @@ export function Workspace({
     };
   }, [navigate]);
 
-  const roaming = autonomy.status?.running ?? false;
-  // The room glows green while he roams, otherwise the colour of his mood.
+  // Any session mid-work. Was a single `running` flag; work belongs to sessions now, so
+  // the question is plural and the glow means "something is happening", not "roaming is on".
+  const roaming = (autonomy.status?.working ?? []).length > 0;
+  // The room glows green while he is working, otherwise the colour of his mood.
   const wash = roaming ? "var(--roam)" : moodHue(mood?.label);
 
   return (

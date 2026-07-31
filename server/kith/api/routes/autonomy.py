@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import queue
 
+from apiflask import abort
 from flask import Response, jsonify, request
 
 from kith.api.blueprint import api
@@ -15,7 +16,6 @@ from kith.schemas import (
     AutonomyControlSchema,
     AutonomyStatusSchema,
 )
-from kith.services import permissions
 from kith.services.agent_loop import usage_snapshot
 
 
@@ -29,22 +29,38 @@ def autonomy_status():
 @api.post("/autonomy")
 @api.input(AutonomyControlSchema, arg_name="payload")
 @api.output(AutonomyStatusSchema)
-@api.doc(summary="Control autonomy", description="action = 'start' | 'stop' | 'tick' (run one step now).")
+@api.doc(
+    summary="Control a session's work",
+    description=(
+        "action = 'start' (this session keeps working) | 'stop' (it stops; all of them "
+        "when no conversationId is given) | 'tick' (one step now) | 'cancel' (abandon the "
+        "step in flight, leaving the session working)."
+    ),
+)
 def autonomy_control(payload):
     action = payload.get("action")
-    if action == "start":
-        # Roaming in ask-mode is a trap. A tick that needs permission fails, records a
-        # question, and moves on — and with nobody at the keyboard at 4am that question
-        # goes unanswered, so he spends the night refusing himself. Anything he wants to
-        # do outside his own folder simply never happens, and nothing says why.
+    conversation = str(payload.get("conversationId") or "").strip()
+    if action in ("start", "continue"):
+        # Named per session now. Roaming was one switch over one board — on meant every open
+        # task everywhere was fair game and off meant nothing happened at all, so with two
+        # projects going there was no way to say "continue this one".
         #
-        # Turning him loose therefore means at least auto. Bypass is left alone: someone
-        # who chose it has already made a stronger version of this decision.
-        if permissions.mode() is permissions.Mode.ASK:
-            permissions.set_mode(str(permissions.Mode.AUTO))
-        return autonomy.start(payload.get("intervalSeconds"))
-    if action == "stop":
-        return autonomy.stop()
+        # It also no longer changes your permission mode behind your back. That existed
+        # because roaming ran at 4am with nobody to answer a question, so ask-mode meant he
+        # spent the night refusing himself. A session you started and can watch is a
+        # different proposition, and silently widening what he may do is not a thing to do
+        # on someone's behalf.
+        if not conversation:
+            # abort, not a returned dict: @api.output serialises the return value through
+            # AutonomyStatusSchema, which has no `error` field — so a returned error came
+            # back as {} with a 400 and nothing saying why. Fourth time that schema has
+            # eaten something.
+            abort(400, "conversationId required — work belongs to a session")
+        return autonomy.keep_working(conversation)
+    if action in ("stop", "rest"):
+        # No conversation means all of them, which is what "stop" means when you are not
+        # looking at a particular one.
+        return autonomy.rest(conversation)
     if action == "tick":
         return autonomy.tick_now()
     # Stopping the step in flight is deliberately not the same action as stopping roaming.

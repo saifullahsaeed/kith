@@ -35,8 +35,16 @@ export function useAutonomy() {
     return close;
   }, [refresh]);
 
-  const start = useCallback(async () => setStatus(await controlAutonomy("start")), []);
-  const stop = useCallback(async () => setStatus(await controlAutonomy("stop")), []);
+  // Per session. Roaming was one switch over one board, so with two projects going there
+  // was no way to say "continue this one" — which is exactly what you want with two open.
+  const start = useCallback(
+    async (conversationId: string) => setStatus(await controlAutonomy("start", conversationId)),
+    [],
+  );
+  const stop = useCallback(
+    async (conversationId?: string) => setStatus(await controlAutonomy("stop", conversationId)),
+    [],
+  );
   const tick = useCallback(async () => {
     await controlAutonomy("tick");
     refresh();

@@ -91,15 +91,11 @@ class AutonomyRunner:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
-        self._running = False
         # Set to stop the step that is running, without touching whether he roams.
         self._cancel = threading.Event()
         # None means "whatever the setting says". Only set when a caller asks for a
         # specific cadence, so a change in settings reaches a loop already running —
         # this used to be a hardcoded 5.0, which no setting could reach.
-        self._interval: float | None = None
-        self._quiet = 25.0
-        self._last_user_activity = 0.0
         self._last_tick_mono: float | None = None
         self._last_tick_at: str | None = None
         self._current: str | None = None
@@ -124,10 +120,6 @@ class AutonomyRunner:
 
     # -- public control ----------------------------------------------------- #
 
-    def note_user_activity(self) -> None:
-        """Called on each chat request so autonomy defers while you're active."""
-        self._last_user_activity = time.monotonic()
-
     def ensure_loop(self) -> None:
         """Start the background thread if it isn't running. The thread fires due
         reminders/schedules even when he isn't roaming, so standing jobs are
@@ -138,23 +130,32 @@ class AutonomyRunner:
                 self._thread = threading.Thread(target=self._loop, daemon=True, name="kith-autonomy")
                 self._thread.start()
 
-    def _roam_interval(self) -> float:
-        """Seconds between steps while he has work: what was asked for, else the setting."""
-        return self._interval if self._interval is not None else float(tuning.value("roam_interval"))
+    def keep_working(self, conversation_id: str) -> dict:
+        """This session takes the next step on its own until it is done or you stop it.
 
-    def start(self, interval_seconds: float | None = None) -> dict:
-        with self._state_lock:
-            if interval_seconds:
-                self._interval = max(3.0, float(interval_seconds))
-            self._running = True
+        Per session, which is the whole difference from roaming. Roaming was one switch over
+        one board: on meant every open task everywhere was fair game, off meant nothing
+        happened at all, and with two projects going there was no way to say "continue this
+        one". A session is the thing you actually want to start and stop.
+        """
+        repo.conversations.set_working(AGENT_DB_PATH, conversation_id, True)
         self.ensure_loop()
-        self._emit("status", "autonomy on")
+        self._emit("status", "working")
         return self.status()
 
-    def stop(self) -> dict:
-        with self._state_lock:
-            self._running = False
-        self._emit("status", "autonomy off")
+    def rest(self, conversation_id: str = "") -> dict:
+        """Stop taking steps. One session, or all of them when none is named.
+
+        Naming none stops everything, which is what a person means by "stop" when they are
+        not looking at a particular conversation — and it is what the old global switch did,
+        so nothing that called it loses its meaning.
+        """
+        if conversation_id:
+            repo.conversations.set_working(AGENT_DB_PATH, conversation_id, False)
+        else:
+            for row in repo.conversations.working_sessions(AGENT_DB_PATH):
+                repo.conversations.set_working(AGENT_DB_PATH, row["id"], False)
+        self._emit("status", "resting")
         return self.status()
 
     def tick_now(self) -> dict:
@@ -181,11 +182,17 @@ class AutonomyRunner:
         self._emit("status", "stopping this step")
         return self.status()
 
+    def _working_ids(self) -> list[str]:
+        try:
+            return [row["id"] for row in repo.conversations.working_sessions(AGENT_DB_PATH)]
+        except Exception:
+            return []
+
     def status(self) -> dict:
         return {
-            "running": self._running,
-            "intervalSeconds": self._roam_interval(),
-            "quietSeconds": self._quiet,
+            # Which sessions are mid-work. Replaces the single `running` boolean, which
+            # could only ever be true for everything or false for everything.
+            "working": self._working_ids(),
             "ticking": self._tick_lock.locked(),
             "stopping": self._cancel.is_set(),
             "lastTick": self._last_tick_at,
@@ -239,19 +246,40 @@ class AutonomyRunner:
     # -- internals ---------------------------------------------------------- #
 
     def _loop(self) -> None:
+        """Advance what is already underway. Never decide that something should be.
+
+        Two reasons to act, and neither is a schedule. Something is due — a reminder, a
+        standing job, a reply he owes you. Or a session is working, which is a thing you
+        turned on for that session and can turn off for that session.
+
+        What is gone from here is the whole apparatus for guessing when he may act: a roam
+        switch, an interval, a 600-second idle backoff, a quiet period after you last spoke.
+        Every one of them was answering "when may he work without me", and a session answers
+        that by existing. The floor between steps stays, because a burst of due reminders
+        should not spin this faster than he can actually work.
+        """
         while not self._stop.is_set():
             try:
                 now = time.monotonic()
                 gap_ok = self._last_tick_mono is None or (now - self._last_tick_mono) >= tuning.value(
                     "min_gap"
                 )
-                # Replies + due reminders/schedules fire regardless of roaming (but
-                # not faster than the floor); roaming ticks only when turned loose.
-                if gap_ok and (self._has_due() or (self._running and self._due())):
+                if gap_ok and (self._has_due() or self._sessions_working()):
                     self._safe_tick(forced=False)
             except Exception:
                 pass
-            self._stop.wait(1.0)  # poll granularity — small so a 5s interval lands on time
+            self._stop.wait(1.0)
+
+    def _sessions_working(self) -> bool:
+        """Is any session mid-work?
+
+        Cheap enough for a one-second poll: one indexed read of a table with as many rows as
+        you have had conversations.
+        """
+        try:
+            return bool(repo.conversations.working_sessions(AGENT_DB_PATH))
+        except Exception:
+            return False
 
     def _new_pending(self) -> list[dict]:
         """Replies from his person he hasn't attempted to answer yet."""
@@ -269,21 +297,6 @@ class AutonomyRunner:
             or repo.reminders.due_reminders(AGENT_DB_PATH, now)
             or repo.schedules.due_schedules(AGENT_DB_PATH, now)
         )
-
-    def _due(self) -> bool:
-        now = time.monotonic()
-        if now - self._last_user_activity < self._quiet:
-            return False
-        # Caught up? Roam far slower so an empty board doesn't burn tokens; snap
-        # back to the fast interval the moment there's real work again.
-        interval = self._roam_interval()
-        try:
-            if not repo.tasks.active_tasks(AGENT_DB_PATH):
-                interval = max(interval, tuning.value("idle_interval"))
-        except Exception:
-            pass
-        # Not yet time if a tick ran within the interval.
-        return self._last_tick_mono is None or now - self._last_tick_mono >= interval
 
     def _safe_tick(self, forced: bool) -> None:
         if not self._tick_lock.acquire(blocking=False):
@@ -371,6 +384,20 @@ class AutonomyRunner:
             self._emit("status", self._current)
             if note:
                 self._say_youre_the_blocker(note)
+            # And stop working, because there is nothing left to work on.
+            #
+            # Without this a session runs forever. Measured: a task to write three haiku
+            # finished in a few steps, and the loop then took thirty more, waking every
+            # second to rediscover an empty board. It cost little because an idle tick calls
+            # no model — but "keep going until I stop you" has to mean "until the work is
+            # done or you stop me", or the promise is one nobody would make deliberately.
+            #
+            # Stopping here rather than at the end of a task is what makes it right in the
+            # cases that are not simply finished: blocked on a question, or waiting on a
+            # milestone. Those are all "nothing I can do next", and in each of them the
+            # honest thing is to stop and have said why — which the note above just did.
+            for row in repo.conversations.working_sessions(AGENT_DB_PATH):
+                repo.conversations.set_working(AGENT_DB_PATH, row["id"], False)
             return
         self._emit(mode, self._current)
 

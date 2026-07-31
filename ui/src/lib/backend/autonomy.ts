@@ -3,9 +3,8 @@
 import type { Usage } from "@/lib/tokens";
 
 export interface AutonomyStatus {
-  running: boolean;
-  intervalSeconds: number;
-  quietSeconds: number;
+  /** Ids of the sessions taking steps right now. */
+  working?: string[];
   ticking: boolean;
   /** A stop was asked for and the step is winding up. */
   stopping?: boolean;
@@ -59,12 +58,12 @@ export async function fetchAutonomyStatus(): Promise<AutonomyStatus> {
 
 export async function controlAutonomy(
   action: AutonomyAction,
-  intervalSeconds?: number,
+  conversationId?: string,
 ): Promise<AutonomyStatus> {
   const response = await fetch("/api/autonomy", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...(intervalSeconds ? { intervalSeconds } : {}) }),
+    body: JSON.stringify({ action, ...(conversationId ? { conversationId } : {}) }),
   });
   if (!response.ok) throw new Error(`/api/autonomy returned ${response.status}`);
   return (await response.json()) as AutonomyStatus;

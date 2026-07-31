@@ -11,7 +11,6 @@ from pathlib import Path
 from flask import Response
 
 from kith.api.blueprint import api
-from kith.autonomy import runner as autonomy
 from kith.config import (
     AGENT_DB_PATH,
     default_config,
@@ -327,7 +326,6 @@ class _Recorder:
     responses={200: "NDJSON stream of agent events"},
 )
 def chat(payload):
-    autonomy.note_user_activity()  # defer self-directed ticks while you're here
     config = merge_overrides(default_config(), payload.get("config") or {})
     history = payload.get("messages") or []
 

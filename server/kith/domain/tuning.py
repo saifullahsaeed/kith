@@ -216,35 +216,6 @@ TUNABLES: tuple[Tunable, ...] = (
     ),
     # -- rhythm ------------------------------------------------------------- #
     Tunable(
-        key="roam_interval",
-        env="KITH_ROAM_INTERVAL",
-        label="Pause between steps while he has work",
-        help="The gap between self-directed steps when there's something on his board. "
-        "This is the one that decides what he costs while you're not watching: a step "
-        "carries the whole task's context, so at a few seconds apart he can spend more "
-        "per hour than a day of conversation.",
-        default=30.0,
-        group="rhythm",
-        kind="float",
-        minimum=3,
-        maximum=3600,
-        unit="seconds",
-    ),
-    Tunable(
-        key="idle_interval",
-        env="KITH_IDLE_INTERVAL",
-        label="Pause when he's caught up",
-        help="The slower cadence he falls back to with an empty board, so nothing is "
-        "burned checking for work that isn't there. Only applies when he has nothing "
-        "active — while he's working, the setting above governs.",
-        default=120.0,
-        group="rhythm",
-        kind="float",
-        minimum=5,
-        maximum=3600,
-        unit="seconds",
-    ),
-    Tunable(
         key="min_gap",
         env="KITH_MIN_GAP",
         label="Shortest gap between ticks",

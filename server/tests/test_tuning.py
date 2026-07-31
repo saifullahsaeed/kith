@@ -114,10 +114,13 @@ class TestResolution:
 
 class TestWriting:
     def test_saving_takes_effect_without_a_restart(self):
-        before = tuning.value("idle_interval")
-        tuning.apply({"idle_interval": 30})
+        # Was idle_interval, which no longer exists: it was the 600-second backoff for
+        # roaming over an empty board, and roaming is gone. min_gap is the same kind of knob
+        # — a live-read number the loop consults every second — so it tests the same thing.
+        before = tuning.value("min_gap")
+        tuning.apply({"min_gap": 7})
         # The whole reason these are read live rather than snapshotted at import.
-        assert tuning.value("idle_interval") == 30 != before
+        assert tuning.value("min_gap") == 7 != before
 
     def test_a_batch_saves_together(self):
         tuning.apply({"max_rounds": 60, "landing_reserve": 8})

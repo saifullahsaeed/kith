@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   AlarmClock,
   BookOpenText,
@@ -13,7 +13,6 @@ import {
   Moon,
   NotebookPen,
   PanelRightClose,
-  Play,
   Puzzle,
   Search,
   Send,
@@ -29,8 +28,6 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { useConfirm } from "@/components/ui/confirm";
-import { fetchPermissions, setPermissionMode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { formatTokens, realTokens, sumUsage, usageTitle, type Usage } from "@/lib/tokens";
 import type { useAutonomy } from "@/hooks/use-autonomy";
@@ -238,8 +235,10 @@ export function MindPanel({
   width: number;
   onClose: () => void;
 }) {
-  const { status, activity, start, stop, tick, cancel } = autonomy;
-  const running = status?.running ?? false;
+  const { status, activity, stop, tick, cancel } = autonomy;
+  // Any session mid-work. The panel is a view of everything at once, so it asks the
+  // plural question; the per-session control lives with the session.
+  const working = (status?.working ?? []).length > 0;
   const ticking = status?.ticking ?? false;
   const stopping = status?.stopping ?? false;
 
@@ -248,35 +247,6 @@ export function MindPanel({
     const el = feedRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [activity.length]);
-
-  const confirm = useConfirm();
-
-  /**
-   * Turning him loose, with the mode question asked out loud.
-   *
-   * Roaming in ask-mode is a trap: a tick that needs permission records a question and
-   * moves on, and at 4am nobody answers it — so he spends the night refusing himself and
-   * nothing says why. The server therefore requires at least Auto. Changing someone's
-   * safety setting for them without saying so is not a thing to do quietly, so this asks
-   * first, in the words of what actually changes.
-   */
-  const turnLoose = useCallback(async () => {
-    const state = await fetchPermissions().catch(() => null);
-    if (state?.mode === "ask") {
-      const ok = await confirm({
-        title: "Switch to Auto and let him roam?",
-        description:
-          "While roaming he works with nobody watching, so Ask mode would leave him stuck " +
-          "on questions until you came back. Auto lets him act outside his folder without " +
-          "asking each time — genuinely dangerous things still ask. You can change it back " +
-          "from the title bar.",
-        confirmLabel: "Switch and roam",
-      });
-      if (!ok) return;
-      await setPermissionMode("auto").catch(() => {});
-    }
-    await start();
-  }, [confirm, start]);
 
   const ticks = groupTicks(activity);
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
@@ -294,7 +264,7 @@ export function MindPanel({
         <div className="min-w-0 flex-1 leading-tight">
           <div className="flex items-center gap-2 text-sm font-semibold">
             Mind
-            {running ? (
+            {working ? (
               <span className="inline-flex items-center gap-1 text-[11px] font-normal text-roam">
                 <span className="size-1.5 animate-pulse rounded-full bg-roam" />
                 roaming
@@ -303,7 +273,9 @@ export function MindPanel({
           </div>
           <div className="truncate text-[11px] text-muted-foreground">
             {status?.current ||
-              (running ? `thinking every ${status?.intervalSeconds}s` : "idle — resting")}
+              (working
+                ? `working — ${(status?.working ?? []).length} session${(status?.working ?? []).length === 1 ? "" : "s"}`
+                : "idle — resting")}
           </div>
         </div>
         <Button
@@ -319,21 +291,19 @@ export function MindPanel({
 
       {/* controls */}
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
-        {/* Two independent things, and they were sharing one word. This button decides
-            whether there is a NEXT step; the one beside it decides whether THIS step keeps
-            going. When both can be stopped, this one says which — a bare "Stop" twice over
-            tells you nothing about what you are about to stop. */}
-        {running ? (
+        {/* "Let it roam" is gone, and its absence is the point. It was a mode you entered —
+            one switch over one board — so it needed a partner button for "just once". Work
+            belongs to a session now: a session is continuing or it is not, and you say which
+            in that session.
+
+            What survives here is the plural stop, because this panel watches every session
+            at once and "stop" with nothing selected means all of them. */}
+        {working ? (
           <Button size="sm" variant="outline" onClick={() => void stop()}>
             <Square className="size-3.5" />
-            {ticking ? "Stop roaming" : "Stop"}
+            Stop {(status?.working ?? []).length > 1 ? "all" : ""}
           </Button>
-        ) : (
-          <Button size="sm" onClick={() => void turnLoose()}>
-            <Play className="size-3.5" />
-            Let it roam
-          </Button>
-        )}
+        ) : null}
         {/* Mid-step this is the only way out, and it used to be greyed out — so watching him
             start down a wrong path meant watching him finish it, up to sixteen rounds later.
             Never disabled while a step runs: that was the whole problem. */}

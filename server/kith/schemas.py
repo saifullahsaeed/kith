@@ -84,13 +84,12 @@ class HealthSchema(Schema):
 
 
 class AutonomyStatusSchema(Schema):
-    running = Boolean()
-    intervalSeconds = Integer(metadata={"description": "Seconds between self-directed ticks"})
-    quietSeconds = Integer(metadata={"description": "Idle time required before a tick fires"})
-    ticking = Boolean(metadata={"description": "A tick is running right now"})
-    stopping = Boolean(
-        metadata={"description": "A stop was asked for and the running step is winding up"}
+    working = List(
+        String(),
+        metadata={"description": "Ids of the sessions taking steps right now"},
     )
+    ticking = Boolean(metadata={"description": "A tick is running right now"})
+    stopping = Boolean(metadata={"description": "A stop was asked for and the running step is winding up"})
     lastTick = String(allow_none=True)
     current = String(allow_none=True, metadata={"description": "What it's doing right now"})
     ticks = Integer(metadata={"description": "Total self-directed ticks run this session"})
@@ -120,8 +119,12 @@ class AutonomyControlSchema(Schema):
     action = String(
         required=True,
         metadata={
-            "description": "'start' (roam), 'stop' (stop roaming), 'tick' (one step now), "
-            "or 'cancel' (stop the step running now, leaving roaming as it is)"
+            "description": "'start' (this session keeps working), 'stop' (it stops — all "
+            "sessions when no conversationId is given), 'tick' (one step now), or 'cancel' "
+            "(abandon the step in flight, leaving the session working)"
         },
     )
-    intervalSeconds = Integer(required=False)
+    conversationId = String(
+        required=False,
+        metadata={"description": "Which session. Required to start working; optional to stop."},
+    )

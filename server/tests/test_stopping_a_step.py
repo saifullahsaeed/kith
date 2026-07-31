@@ -12,6 +12,21 @@ The two are deliberately independent. Cancelling says "not this step"; stopping 
 from __future__ import annotations
 
 
+def _runner_on(db, monkeypatch):
+    """A runner pointed at a temp database.
+
+    `kith.autonomy.runner` resolves to the singleton instance, not the module — the package
+    __init__ re-exports it and shadows the submodule — so patching "kith.autonomy.runner.
+    AGENT_DB_PATH" sets an attribute on the object and the method keeps reading the real one.
+    The module itself is only reachable through sys.modules.
+    """
+    import sys
+
+    module = sys.modules["kith.autonomy.runner"]
+    monkeypatch.setattr(module, "AGENT_DB_PATH", db)
+    return module.AutonomyRunner()
+
+
 class TestTheTwoStopsAreDifferent:
     def test_cancelling_leaves_roaming_alone(self):
         from kith.autonomy.runner import AutonomyRunner
@@ -27,20 +42,58 @@ class TestTheTwoStopsAreDifferent:
         finally:
             runner._tick_lock.release()
 
-    def test_stopping_roaming_does_not_kill_the_running_step(self):
-        from kith.autonomy.runner import AutonomyRunner
+    def test_resting_does_not_kill_the_running_step(self, db, monkeypatch):
+        """Was "stopping roaming"; roaming is gone and this is now per session.
 
-        runner = AutonomyRunner()
-        runner._running = True
+        The distinction it protects is unchanged: "no more steps" is not "abandon this one",
+        and a step that is nearly done should be allowed to land.
+        """
+        from kith.infra.db import repositories as repo
+        from kith.services import conversations
+
+        opened = conversations.start(db, "a session")["id"]
+        repo.conversations.set_working(db, opened, True)
+
+        runner = _runner_on(db, monkeypatch)
         runner._tick_lock.acquire()
         try:
-            runner.stop()
-            assert runner._running is False
-            # And the step in flight is untouched — "no more steps" is not "abandon this one",
-            # which matters because a step that is nearly done should be allowed to land.
+            runner.rest(opened)
+            assert repo.conversations.is_working(db, opened) is False
             assert not runner._cancel.is_set()
         finally:
             runner._tick_lock.release()
+
+    def test_one_session_stopping_leaves_the_others_working(self, db, monkeypatch):
+        """The whole reason this is per session rather than one switch.
+
+        Roaming could only ever be on for everything or off for everything, so with two
+        projects going there was no way to say "stop this one".
+        """
+        from kith.infra.db import repositories as repo
+        from kith.services import conversations
+
+        one = conversations.start(db, "first")["id"]
+        two = conversations.start(db, "second")["id"]
+        repo.conversations.set_working(db, one, True)
+        repo.conversations.set_working(db, two, True)
+
+        _runner_on(db, monkeypatch).rest(one)
+
+        assert repo.conversations.is_working(db, one) is False
+        assert repo.conversations.is_working(db, two) is True
+
+    def test_stopping_with_no_session_named_stops_all_of_them(self, db, monkeypatch):
+        from kith.infra.db import repositories as repo
+        from kith.services import conversations
+
+        ids = [conversations.start(db, f"s{n}")["id"] for n in range(3)]
+        for one in ids:
+            repo.conversations.set_working(db, one, True)
+
+        # What a person means by "stop" when they are not looking at a particular one.
+        _runner_on(db, monkeypatch).rest()
+
+        assert not repo.conversations.working_sessions(db)
 
     def test_cancelling_when_nothing_is_running_does_nothing(self):
         from kith.autonomy.runner import AutonomyRunner
