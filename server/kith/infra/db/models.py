@@ -279,6 +279,11 @@ class Conversation(Base):
     #: OpenRouter stickiness, per conversation: its prefix is shared across its own turns
     #: and with nothing else, which is exactly the unit that wants one warm cache.
     session_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: What this session is working on. None for a conversation that is only a conversation.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Whether he takes the next step on his own when this one finishes. What roaming used
+    #: to be, scoped to the session instead of to the whole machine.
+    working: Mapped[bool] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -69,7 +69,7 @@ CHAT_DIRECTIVE = (
 )
 
 
-def _build_messages(messages, config):
+def _build_messages(messages, config, conversation_id: str = ""):
     """The persona, then the turns, then the state he is in right now.
 
     The order is a caching decision, and it is worth more than it looks. Everything a
@@ -97,7 +97,7 @@ def _build_messages(messages, config):
         if message.get("role") not in ("user", "assistant"):
             continue
         out.append(_with_attachments(message))
-    now = _present_state()
+    now = _present_state(conversation_id)
     if now:
         out.append({"role": "system", "content": now})
     return out
@@ -194,7 +194,7 @@ def _save_attachment(attachment: dict) -> str:
     return f"{ATTACHMENT_DIR}/{target.name}"
 
 
-def _present_state() -> str:
+def _present_state(conversation_id: str = "") -> str:
     """Everything about him that is true only at this moment."""
     blocks = [
         memory_context.self_block(AGENT_DB_PATH),
@@ -210,32 +210,42 @@ def _present_state() -> str:
     # What he knows about the project he is in. Injected rather than fetched, deliberately:
     # a file he has to remember to open is a file he will not open, which is the shape of
     # nearly every failure this codebase has a comment about.
-    blocks.append(_project_memory_block())
+    blocks.append(_project_memory_block(conversation_id))
     return "\n\n".join(block for block in blocks if block).strip()
 
 
-def _project_memory_block() -> str:
-    """`.kith/memory.md` for the active project, if exactly one is active.
+def _project_memory_block(conversation_id: str = "") -> str:
+    """`.kith/memory.md` for whatever this session is working on.
 
-    One, not all: with two projects open their memories would both arrive and he would have
-    to work out which folder he is in from context, which is the same guessing this exists to
-    remove. Two active projects is also precisely the case sessions are meant to solve — each
-    with its own folder — so this stays narrow rather than growing a heuristic it will not
-    need for long.
+    Asked of the session, not of the board. The first version looked for "the only active
+    project with a folder", which is a guess that gives the right answer exactly until there
+    are two — and two at once is the point of sessions, so it was a guess with a deadline.
+
+    Falls back to the single-active-project case for a conversation that has not adopted a
+    project yet, because a session usually acquires one part-way through rather than at the
+    start, and until it does the one open project is very probably the one being discussed.
     """
     from kith.services import project_memory
 
     try:
-        active = [
-            row
-            for row in repo.projects.list_projects(AGENT_DB_PATH)
-            if row.get("status") == "active" and row.get("directory")
-        ]
+        project = None
+        if conversation_id:
+            bound = repo.conversations.project_of(AGENT_DB_PATH, conversation_id)
+            if bound:
+                project = repo.projects.get_project(AGENT_DB_PATH, bound)
+        if project is None:
+            active = [
+                row
+                for row in repo.projects.list_projects(AGENT_DB_PATH)
+                if row.get("status") == "active" and row.get("directory")
+            ]
+            if len(active) != 1:
+                return ""
+            project = active[0]
     except Exception:
         return ""
-    if len(active) != 1:
+    if not project or not project.get("directory"):
         return ""
-    project = active[0]
     return project_memory.block(project["directory"], project.get("name") or "")
 
 
@@ -320,14 +330,18 @@ def chat(payload):
     autonomy.note_user_activity()  # defer self-directed ticks while you're here
     config = merge_overrides(default_config(), payload.get("config") or {})
     history = payload.get("messages") or []
-    messages = _build_messages(history, config)
 
     # Which conversation this belongs to. Opened on the first message rather than when the
     # window opens, so idly launching the app does not litter the history with empties.
+    #
+    # Resolved *before* the prompt is built, not after: what this session is working on
+    # decides which project's memory he is shown, and building the prompt first meant that
+    # question was asked with no session to ask it about.
     conversation_id = str(payload.get("conversationId") or "").strip()
     latest = next((m.get("content", "") for m in reversed(history) if m.get("role") == "user"), "")
     if not conversation_id:
         conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
+    messages = _build_messages(history, config, conversation_id)
     conversations.record(AGENT_DB_PATH, conversation_id, "user", latest)
 
     def generate():

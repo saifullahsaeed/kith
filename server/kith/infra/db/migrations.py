@@ -391,6 +391,20 @@ def _migrations():
         # let it decide which of them are allowed to interrupt you.
         conn.execute("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'note'")
 
+    def v25_session_work(conn):
+        # A conversation becomes the unit of work. Two columns carry it.
+        #
+        # `project_id`: what this session is working on. Project memory was being injected by
+        # finding "the only active project with a folder", which is a guess that stops working
+        # the moment you have two — and two at once is the whole point of sessions.
+        #
+        # `working`: whether he keeps going after finishing a step. This replaces roaming, and
+        # the difference is that roaming was one global switch over one global board. "Should
+        # he pick something up" is not one question with one answer once work belongs to
+        # sessions; it is a property of each.
+        conn.execute("ALTER TABLE conversations ADD COLUMN project_id INTEGER")
+        conn.execute("ALTER TABLE conversations ADD COLUMN working INTEGER NOT NULL DEFAULT 0")
+
     def v24_project_directory(conn):
         # A project is work in a folder, and until now it was only rows. Nothing recorded
         # where the code actually was, so "which project is this" had to be inferred from
@@ -426,6 +440,7 @@ def _migrations():
         v22_milestone_graph,
         v23_message_kind,
         v24_project_directory,
+        v25_session_work,
     ]
 
 
