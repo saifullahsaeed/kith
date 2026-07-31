@@ -27,7 +27,8 @@ def shell(path: Path, args: dict):
 @tool(
     "read_file",
     "Read a file from your computer (relative paths are under your own folder). Output "
-    "is line-numbered. For anything big, don't read it whole — grep to find the "
+    "is line-numbered. A screenshot or image is shown to you as a picture instead, so "
+    "you can judge what you actually made. For anything big, don't read it whole — grep to find the "
     "line you want, then read a window with `offset`/`limit`. A read without a "
     "range returns the first 400 lines and tells you if there's more.",
     {
@@ -38,7 +39,22 @@ def shell(path: Path, args: dict):
     required=("path",),
 )
 def read_file(path: Path, args: dict):
-    return sandbox.read_file(args["path"], args.get("offset"), args.get("limit"))
+    wanted = args["path"]
+    # A screenshot asked for by name should be looked at, not decoded as text. He was taking
+    # Playwright captures at 1440 and 390 all day and never seeing one of them, because this
+    # function read bytes as UTF-8 and reported "not text". Routed rather than given a separate
+    # tool name so "read the screenshot" simply works.
+    if Path(str(wanted)).suffix.lower() in sandbox._IMAGE_SUFFIXES:
+        from kith.config import model_capabilities
+
+        if not model_capabilities().get("images"):
+            return {
+                "path": str(wanted),
+                "note": "That is an image and this model cannot see images. Check it another "
+                "way — its dimensions, or the DOM you rendered it from.",
+            }
+        return sandbox.read_image(str(wanted))
+    return sandbox.read_file(wanted, args.get("offset"), args.get("limit"))
 
 
 @tool(

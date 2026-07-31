@@ -420,10 +420,48 @@ def stream_agent(
                     else:
                         delegated = False  # the guardrail is switched off
                 yield {"type": "tool_result", "id": step["id"], "name": step["name"], "result": result}
+                image = _image_from(result)
+                if image:
+                    # A tool result is a JSON string and cannot carry an image part, so the
+                    # picture arrives as the next message instead. Without this he could take a
+                    # screenshot and never see it — which is exactly what he was doing while
+                    # redesigning a UI. The data URI is stripped from the tool result so the
+                    # same 600KB is not also sitting in the transcript as base64 text.
+                    convo.append(
+                        {
+                            "role": "tool",
+                            "tool_name": step["name"],
+                            "content": json.dumps({**result, "image": "(shown below)"}),
+                        }
+                    )
+                    convo.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": f"Here is {result.get('path', 'the image')}:"},
+                                {"type": "image_url", "image_url": {"url": image}},
+                            ],
+                        }
+                    )
+                    continue
                 convo.append({"role": "tool", "tool_name": step["name"], "content": json.dumps(result)})
 
     # Out of tool budget — force a final answer so there's always a reply.
     yield from _final_answer(convo, config, host, tools.tool_schemas(agent_db_path))
+
+
+def _image_from(result: Any) -> str:
+    """A data URI a tool wants the model to look at, or "".
+
+    One key, checked in one place. Tools that produce pictures — reading a screenshot today,
+    rendering something tomorrow — opt in by returning it, and nothing else in the loop needs
+    to know which tools those are.
+    """
+    if not isinstance(result, dict):
+        return ""
+    inner = result.get("result") if isinstance(result.get("result"), dict) else result
+    value = inner.get("image") if isinstance(inner, dict) else None
+    return value if isinstance(value, str) and value.startswith("data:image/") else ""
 
 
 def _run(step: dict, agent_db_path: Path) -> Any:

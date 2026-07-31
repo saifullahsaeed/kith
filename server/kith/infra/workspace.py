@@ -300,6 +300,53 @@ def run_command(command: str, timeout: int = _EXEC_TIMEOUT) -> ExecResult:
     return ExecResult(exit_code=proc.returncode, output=_clip(combined))
 
 
+#: Image types worth handing to a vision model. Anything else is bytes as far as this is
+#: concerned and gets the ordinary "not text" refusal.
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+#: Cap on an image handed to the model. A screenshot at 1440 is well under this; a 20MB
+#: capture is a payload nobody meant to send and the message says how to shrink it.
+_MAX_IMAGE_BYTES = 3_000_000
+
+
+def read_image(path: str) -> dict:
+    """An image, as a data URI the model can actually look at.
+
+    This exists because of something the record made obvious. He spent hours redesigning a UI,
+    took Playwright screenshots at 1440 and 390 on every pass, attached them as deliverables —
+    and could not see a single one of them, because ``read_file`` decodes as text. His model
+    takes images. He was working blind on the one kind of task where looking is the whole job.
+
+    Returned as data rather than text because a tool result is a JSON string and cannot carry
+    an image part; the agent loop turns this into a message the model can see. See
+    :mod:`kith.services.agent_loop`.
+    """
+    import base64
+    import mimetypes
+
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.is_file():
+        raise WorkspaceError(f"there's no {path}")
+    size = target.stat().st_size
+    if size > _MAX_IMAGE_BYTES:
+        raise WorkspaceError(
+            f"{path} is {size:,} bytes, over the {_MAX_IMAGE_BYTES:,} limit for looking at an "
+            "image. Shrink it first — a screenshot does not need to be full resolution to be "
+            "judged."
+        )
+    kind = mimetypes.guess_type(target.name)[0] or "image/png"
+    encoded = base64.b64encode(target.read_bytes()).decode()
+    return {
+        "path": str(target),
+        "bytes": size,
+        # The loop looks for this key. Named plainly so a reader of a transcript can see why a
+        # picture appeared in the conversation.
+        "image": f"data:{kind};base64,{encoded}",
+        "note": "Look at the image below and describe or judge what you actually see.",
+    }
+
+
 def read_file(path: str, offset: int | None = None, limit: int | None = None) -> str:
     """Read a file, line-numbered and windowed, so it composes with grep and cannot
     dump a huge file into context."""
