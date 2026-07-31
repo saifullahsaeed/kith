@@ -36,8 +36,8 @@ def _tick_prompt(active_tasks: list[dict], due_reminders: list[dict] | None = No
         )
     return (
         "You have no active tasks right now — and that's fine; being caught up is a good state. "
-        "Don't invent busywork or re-poke things you've already finished. Rest: reflect, follow a "
-        "genuine curiosity, or just note that you're clear. Only set a new task if something truly matters."
+        "Don't invent busywork or re-poke things you've already finished. Rest, or just note "
+        "that you're clear. Only set a new task if something truly matters."
     )
 
 
@@ -154,7 +154,6 @@ def _due_prompt(reminders: list[dict], schedules: list[dict]) -> str:
     )
 
 
-
 def _resume_prompt(awaiting: list[dict]) -> str:
     task = awaiting[0]
     comments = repo.tasks.list_task_comments(AGENT_DB_PATH, task["id"])
@@ -196,7 +195,7 @@ def _latest_journal_id() -> int:
 def _give_up(active: list[dict]) -> str:
     """Escalate the thing he's stuck on. A task he can't move gets set to 'waiting'
     and his person is notified (with a link) — NOT dropped, because a stall is
-    usually a missing tool/access, not a pointless task. Only a lingering curiosity
+    usually a missing tool/access, not a pointless task. Only a lingering question
     (nothing owed to anyone) is quietly let go."""
     if active:
         task = active[0]
@@ -213,18 +212,10 @@ def _give_up(active: list[dict]) -> str:
             f"Set '{task['goal']}' to waiting and flagged it for my person — I couldn't move it alone.",
         )
         return task["goal"]
-    exploring = [
-        c for c in repo.curiosities.list_curiosities(AGENT_DB_PATH) if c["status"] in ("open", "exploring")
-    ]
-    if exploring:
-        curiosity = exploring[0]
-        repo.curiosities.update_curiosity(AGENT_DB_PATH, curiosity["id"], status="dropped")
-        repo.journal.add_journal(
-            AGENT_DB_PATH, f"Let go of '{curiosity['topic']}' — going in circles. Moving on."
-        )
-        return curiosity["topic"]
+    # There used to be a second thing to give up on here: an open curiosity, dropped when he
+    # was going in circles. Curiosities are gone, and with them the only case where "stuck"
+    # meant something other than stuck on a task.
     return ""
-
 
 
 #: How much of one tool argument travels down the activity feed. A file's entire contents

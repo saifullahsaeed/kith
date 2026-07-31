@@ -13,7 +13,7 @@ from __future__ import annotations
 
 # Everything needed to actually execute a task: tasks/projects, memory & notes,
 # knowledge (sources + web), the sandbox, and deferring/handing back. Deliberately
-# excludes identity/mood/people-mgmt, curiosity, schedule/reminder management, and
+# excludes mood, and
 # the heavy tool-builder schemas — none of which move a work task forward, and all
 # of which bloat the per-round prompt.
 _WORK = {
