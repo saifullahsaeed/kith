@@ -241,9 +241,11 @@ export function MindPanel({
   onClose: () => void;
 }) {
   const { status, activity, stop, tick, cancel } = autonomy;
-  // Any session mid-work. The panel's header speaks for the machine, so it asks the plural
-  // question; the per-session control lives on the session bar above the thread.
-  const working = (status?.working ?? []).length > 0;
+  // How many sessions are carrying on by themselves. The panel's header speaks for the
+  // machine, so it asks the plural question; stopping *one* lives on the session bar above
+  // the thread, next to the session it belongs to.
+  const sessions = (status?.working ?? []).length;
+  const working = sessions > 0;
   const ticking = status?.ticking ?? false;
   const stopping = status?.stopping ?? false;
   // "Everything" is still available, because watching two projects advance at once is a
@@ -255,7 +257,7 @@ export function MindPanel({
   const shown = useMemo(() => {
     if (everything || !conversationId) return activity;
     // A line with no conversation is about the machine rather than about one piece of work
-    // — a status change, a step run from "Run once" with nobody working — so every session
+    // — a status change, a step run from "Run" with nobody working — so every session
     // shows it. Dropping those would make an idle panel look broken.
     return activity.filter((item) => !item.conversation || item.conversation === conversationId);
   }, [activity, conversationId, everything]);
@@ -309,39 +311,57 @@ export function MindPanel({
 
       {/* controls */}
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
-        {/* "Let it roam" is gone, and its absence is the point. It was a mode you entered —
-            one switch over one board — so it needed a partner button for "just once". Work
-            belongs to a session now: a session is continuing or it is not, and you say which
-            in that session.
+        {/* One slot for the step in front of you: it starts one, or it cuts short the one
+            running. Two buttons sat here, both saying "Stop" behind the same square icon —
+            one abandoning the step in flight, one stopping every session from carrying on —
+            and nothing on screen said which was which.
 
-            What survives here is the plural stop, because this panel watches every session
-            at once and "stop" with nothing selected means all of them. */}
-        {working ? (
-          <Button size="sm" variant="outline" onClick={() => void stop()}>
-            <Square className="size-3.5" />
-            Stop {(status?.working ?? []).length > 1 ? "all" : ""}
-          </Button>
-        ) : null}
-        {/* Mid-step this is the only way out, and it used to be greyed out — so watching him
-            start down a wrong path meant watching him finish it, up to sixteen rounds later.
-            Never disabled while a step runs: that was the whole problem. */}
+            "Interrupt" rather than a third "Stop", because it is a different verb and it now
+            shares a screen with two other things called Stop: this session's, on the session
+            bar, and every session's, next to it. Stopping is about whether he continues;
+            interrupting is about the step he is inside, which he may well follow with
+            another. Same word for both was the whole confusion.
+
+            "Run once" was the other half of "Let it roam": once meant "just this, do not set
+            him loose". Roaming is gone, so the word contrasted with nothing. */}
         {ticking ? (
           <Button
             size="sm"
             variant="outline"
             onClick={() => void cancel()}
             disabled={stopping}
-            title="Stop the step he is taking now. Roaming is left as it is."
+            // Never disabled while a step runs, which it used to be — so watching him start
+            // down a wrong path meant watching him finish it, up to sixteen rounds later.
+            title="Cut short the step he is taking now. A session carrying on takes another."
           >
             <Square className={cn("size-3.5", stopping && "animate-pulse")} />
-            {stopping ? "Stopping…" : "Stop"}
+            {stopping ? "Stopping…" : "Interrupt"}
           </Button>
         ) : (
-          <Button size="sm" variant="outline" onClick={() => void tick()}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void tick()}
+            title="Take one self-directed step now."
+          >
             <Zap className="size-3.5" />
-            Run once
+            Run
           </Button>
         )}
+        {/* The other scope, and deliberately not a second button competing with the first.
+            Stopping one session lives on the session bar above the thread, where the session
+            is; this is the "all of them" one, so it names how many and stays out of the way
+            until there is something to stop. */}
+        {sessions > 0 ? (
+          <button
+            type="button"
+            onClick={() => void stop()}
+            className="text-muted-foreground/70 hover:text-destructive text-[11px] underline-offset-2 transition-colors hover:underline"
+            title="Stop every session from carrying on by itself. A step already running finishes."
+          >
+            Stop {sessions === 1 ? "the session" : `all ${sessions} sessions`}
+          </button>
+        ) : null}
         <div className="flex-1" />
         {/* Only offered when narrowing is actually hiding something, so it is a way out of
             a filter rather than a switch to reason about on an empty feed. */}
@@ -398,9 +418,8 @@ export function MindPanel({
                 </>
               ) : (
                 <>
-                  His mind is quiet. Hit{" "}
-                  <span className="text-foreground font-medium">Run once</span> to watch him take
-                  a self-directed step.
+                  His mind is quiet. Hit <span className="text-foreground font-medium">Run</span>{" "}
+                  to watch him take a self-directed step.
                 </>
               )}
             </p>

@@ -202,9 +202,10 @@ export function Workspace({
     };
   }, [navigate]);
 
-  // Any session mid-work. Was a single `running` flag; work belongs to sessions now, so
-  // the question is plural and the glow means "something is happening", not "roaming is on".
-  const roaming = (autonomy.status?.working ?? []).length > 0;
+  // Any session mid-work. Was a single `running` flag called `roaming` all the way up the
+  // tree; work belongs to sessions now, so the question is plural and the glow means
+  // "something is happening" rather than "the roam switch is on".
+  const working = (autonomy.status?.working ?? []).length > 0;
   // Whether *this* session is one of them. Derived rather than kept in state: the server is
   // the only thing that knows — he stops himself when the work runs out — and a local copy
   // would keep saying "working" after that, which is the exact lie the button exists to
@@ -216,17 +217,17 @@ export function Workspace({
   const finished = autonomy.activity.filter((item) => item.kind === "done").length;
   useEffect(refreshSession, [finished, refreshSession]);
   // The room glows green while he is working, otherwise the colour of his mood.
-  const wash = roaming ? "var(--roam)" : moodHue(mood?.label);
+  const wash = working ? "var(--roam)" : moodHue(mood?.label);
 
   return (
     <TooltipProvider>
       <AssistantRuntimeProvider key={threadKey} runtime={runtime}>
         <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
-          {/* Ambient wash — leans green while he roams, amber while he's here. */}
+          {/* Ambient wash — leans green while he works, amber while he's here. */}
           <div className="kith-ambient" style={{ ["--wash" as string]: wash }} />
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             <AppHeader
-              roaming={roaming}
+              working={working}
               status={autonomy.status?.current ?? null}
               mood={mood}
               model={config.model}

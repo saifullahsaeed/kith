@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 /** The presence bar: Kith as a living thing (orb + mood + what he's doing right
  * now), then his inbox, mind, panel, and settings. */
 export function AppHeader({
-  roaming,
+  working,
   status,
   mood,
   model,
@@ -28,7 +28,7 @@ export function AppHeader({
   onOpenPanel,
   onOpenSettings,
 }: {
-  roaming: boolean;
+  working: boolean;
   status: string | null;
   mood: Mood | null;
   /** The model he is actually thinking with, straight from the server. */
@@ -92,24 +92,24 @@ export function AppHeader({
         </TooltipIconButton>
       ) : null}
 
-      <PresenceOrb roaming={roaming} idle={!roaming} size={11} color={hue} />
+      <PresenceOrb working={working} idle={!working} size={11} color={hue} />
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-medium tracking-tight">Kith</span>
         <span className="truncate font-mono text-[11px] tracking-wide">
           {mood?.label ? (
             <span
-              style={{ color: roaming ? undefined : hue }}
-              className={roaming ? "text-muted-foreground/80" : ""}
+              style={{ color: working ? undefined : hue }}
+              className={working ? "text-muted-foreground/80" : ""}
             >
               {mood.label}
             </span>
           ) : null}
-          {/* "roaming" was a mode you switched on for the whole machine, and it is gone —
-              work belongs to a session now. The word had to go with it, or the header names
-              a thing the app no longer has. */}
-          <span className={roaming ? "text-roam" : "text-muted-foreground/60"}>
+          {/* This said "roaming", which was a mode you switched on for the whole machine and
+              which is gone — work belongs to a session now. The word had to go with it, or
+              the header names a thing the app no longer has. */}
+          <span className={working ? "text-roam" : "text-muted-foreground/60"}>
             {mood?.label ? " · " : ""}
-            {roaming ? "working" : "here"}
+            {working ? "working" : "here"}
           </span>
           {doing ? <span className="text-muted-foreground/50"> · {doing}</span> : null}
         </span>
@@ -171,7 +171,7 @@ export function AppHeader({
       >
         <Brain className="size-4" />
         Mind
-        {roaming ? <span className="ml-0.5 size-1.5 animate-pulse rounded-full bg-roam" /> : null}
+        {working ? <span className="ml-0.5 size-1.5 animate-pulse rounded-full bg-roam" /> : null}
       </Button>
       <Button
         variant="ghost"
