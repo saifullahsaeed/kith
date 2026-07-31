@@ -128,9 +128,31 @@ function hardenNavigation(window: BrowserWindow): void {
   // any sub-frame bypasses the check entirely.
   window.webContents.on("will-frame-navigate", (event) => {
     if (isLocalApp(event.url)) return;
+    if (!event.isMainFrame && isBuiltInPdfViewer(event.url)) return;
     event.preventDefault();
     openExternally(event.url);
   });
+}
+
+/** Chromium's own PDF reader, which renders inside a sub-frame of its own.
+ *
+ * The file viewer shows a PDF by handing a blob to an `<embed>`; Chromium then navigates a
+ * sub-frame to this extension to do the actual rendering. The blob passes the check above —
+ * its origin really is ours — but the extension frame does not, and blocking it produced a
+ * failure that pointed nowhere: the reader's toolbar painted, the page never arrived, and
+ * the title read as the blob's UUID because there was no document to take a name from.
+ * Nothing appeared on screen to connect that to a navigation guard, and the one line it
+ * wrote went to a terminal nobody running the app will ever see.
+ *
+ * The ID is fixed and built into Chromium — it is not an installed extension and cannot be
+ * one, since Electron loads none. Allowed by exact prefix and only in a sub-frame, so this
+ * permits the reader to draw and nothing else: `chrome-extension:` stays refused everywhere
+ * else, including for the main frame.
+ */
+const BUILT_IN_PDF_VIEWER = "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/";
+
+function isBuiltInPdfViewer(url: string): boolean {
+  return url.startsWith(BUILT_IN_PDF_VIEWER);
 }
 
 function isLocalApp(url: string): boolean {
