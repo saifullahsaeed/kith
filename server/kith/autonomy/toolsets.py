@@ -31,6 +31,18 @@ _WORK = {
     "update_project",
     "add_milestone",
     "update_milestone",
+    # He could create milestones and never order them. Both of these were registered,
+    # described in the persona, and absent from every allow-list — so the instruction
+    # "say what has to happen first with `order_milestones`" named a tool he did not
+    # have, in the one place where a missing tool is invisible: he simply did not call
+    # it, and a roadmap with no edges looks like a roadmap.
+    #
+    # It cost a real project. Four milestones in an obvious chain — fixtures, then
+    # normalisation, then the CLI, then verification — all four offered as ready to work
+    # at once, which is precisely the "packaging a release before the thing is built"
+    # failure the roadmap exists to prevent.
+    "order_milestones",
+    "unlink_milestones",
     "recall",
     "remember",
     "take_note",
