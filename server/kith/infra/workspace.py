@@ -317,10 +317,37 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None) ->
     except OSError as exc:
         raise WorkspaceError(f"cannot read {path}: {exc}") from None
     window = lines[start - 1 : end]
-    body = "\n".join(f"{start + i:6d}\t{line}" for i, line in enumerate(window))
-    if len(lines) > end:
-        body += f"\n… [showing lines {start}-{min(end, len(lines))} of {len(lines)}; read with offset={end + 1} for more]"
-    return _clip(body)
+
+    # Fill up to the output budget a whole line at a time, and remember which line we stopped
+    # on. Two things were wrong with slicing the finished string instead.
+    #
+    # It cut mid-line — a CSS rule or a JSX attribute sheared in half, which is not something
+    # anyone can reason about. And worse, the "read with offset=" hint below only fired when
+    # the *line* window ran out, so a short file over the byte budget produced a dead end:
+    # "[truncated, 16078 chars total]" with no offset and no next step. Watched him hit
+    # exactly that — a 79-line stylesheet, asked for whole, half returned, no way to ask for
+    # the rest — so he read the same two files five times in one step and got the same first
+    # half every time.
+    rendered: list[str] = []
+    used = 0
+    for index, line in enumerate(window):
+        numbered = f"{start + index:6d}\t{line}"
+        if rendered and used + len(numbered) + 1 > _OUTPUT_LIMIT:
+            break
+        rendered.append(numbered)
+        used += len(numbered) + 1
+    shown = len(rendered)
+    body = "\n".join(rendered)
+
+    last = start + shown - 1
+    if shown < len(window) or len(lines) > end:
+        # Whichever limit bit, the sentence is the same and it always carries the offset.
+        reason = "output limit" if shown < len(window) else f"{count}-line window"
+        body += (
+            f"\n… [showing lines {start}-{last} of {len(lines)} — stopped at the {reason}; "
+            f"read with offset={last + 1} for the rest]"
+        )
+    return body
 
 
 def read_raw(path: str, max_bytes: int = _MAX_UI_READ) -> str:
