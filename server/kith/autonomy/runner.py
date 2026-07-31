@@ -105,6 +105,8 @@ class AutonomyRunner:
         self._stop = threading.Event()
 
         self._running = False
+        # Set to stop the step that is running, without touching whether he roams.
+        self._cancel = threading.Event()
         # None means "whatever the setting says". Only set when a caller asks for a
         # specific cadence, so a change in settings reaches a loop already running —
         # this used to be a hardcoded 5.0, which no setting could reach.
@@ -170,12 +172,32 @@ class AutonomyRunner:
         threading.Thread(target=self._safe_tick, args=(True,), daemon=True).start()
         return self.status()
 
+    def cancel_tick(self) -> dict:
+        """Stop the step that is running now, and leave roaming exactly as it is.
+
+        Two separate things were sharing one word. "Stop" turned roaming off, and a step
+        already in flight kept going regardless — for up to sixteen rounds, with the only
+        control on screen greyed out while it ran. So watching him start down a wrong path
+        meant watching him finish it.
+
+        Independent on purpose: stopping this step does not decide whether there should be a
+        next one. If he is roaming, the loop takes the next step as usual; if he is not,
+        this is simply the end of it.
+        """
+        with self._state_lock:
+            if not self._tick_lock.locked():
+                return self.status()
+            self._cancel.set()
+        self._emit("status", "stopping this step")
+        return self.status()
+
     def status(self) -> dict:
         return {
             "running": self._running,
             "intervalSeconds": self._roam_interval(),
             "quietSeconds": self._quiet,
             "ticking": self._tick_lock.locked(),
+            "stopping": self._cancel.is_set(),
             "lastTick": self._last_tick_at,
             "current": self._current,
             "ticks": self._tick_count,
@@ -275,6 +297,9 @@ class AutonomyRunner:
     def _safe_tick(self, forced: bool) -> None:
         if not self._tick_lock.acquire(blocking=False):
             return  # a tick is already running
+        # Cleared here rather than after the tick: a cancel arriving in the moment between
+        # one step ending and the next beginning would otherwise kill the innocent step.
+        self._cancel.clear()
         try:
             self._tick()
         except Exception as exc:
@@ -417,6 +442,7 @@ class AutonomyRunner:
         rounds = 0
         tools_used: list[str] = []
         error_msg: str | None = None
+        cancelled = False
         started = time.monotonic()
         journal_before = _latest_journal_id()
         for event in stream_agent(
@@ -429,6 +455,14 @@ class AutonomyRunner:
             # A tick that leaves nothing behind is a tick that will be repeated.
             expect_durable=True,
         ):
+            # Cancellation happens here rather than inside the agent loop, because here it
+            # is safe by construction: stream_agent is a generator, so abandoning it stops
+            # it between events. A tool call that has already run has already finished —
+            # nothing is left half-applied, and no file is half-written.
+            if self._cancel.is_set():
+                cancelled = True
+                self._emit("status", "stopped")
+                break
             kind = event["type"]
             if kind == "tool_call":
                 tools_used.append(event["name"])
@@ -497,7 +531,18 @@ class AutonomyRunner:
 
         # Durable flight recorder — one row per tick, so how he's doing is
         # reviewable over time even though the live Mind feed is in-memory.
-        outcome = f"error: {error_msg}" if error_msg else (final_text.strip()[:280] or "step complete")
+        # A step you stopped is its own outcome. Not an error — nothing went wrong — and not
+        # "step complete", which would be a lie about work that was cut off partway. It gets
+        # a row either way: /api/activity counts rows, and a stopped step with no row is
+        # indistinguishable from a step that never happened, which is exactly the ambiguity
+        # a Stop button exists to remove.
+        if cancelled:
+            did = f" after {', '.join(dict.fromkeys(tools_used))}" if tools_used else ""
+            outcome = f"stopped{did}"
+        elif error_msg:
+            outcome = f"error: {error_msg}"
+        else:
+            outcome = final_text.strip()[:280] or "step complete"
         try:
             repo.messages.add_tick_log(
                 AGENT_DB_PATH,

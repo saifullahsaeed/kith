@@ -41,6 +41,9 @@ export function useAutonomy() {
     await controlAutonomy("tick");
     refresh();
   }, [refresh]);
+  // Stops the step in flight and leaves roaming alone — so this is not `stop` with a
+  // different name, and the two are never interchangeable.
+  const cancel = useCallback(async () => setStatus(await controlAutonomy("cancel")), []);
 
-  return { status, activity, start, stop, tick, refresh };
+  return { status, activity, start, stop, tick, cancel, refresh };
 }

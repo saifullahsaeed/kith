@@ -7,6 +7,8 @@ export interface AutonomyStatus {
   intervalSeconds: number;
   quietSeconds: number;
   ticking: boolean;
+  /** A stop was asked for and the step is winding up. */
+  stopping?: boolean;
   lastTick: string | null;
   current: string | null;
   ticks?: number;
@@ -47,7 +49,7 @@ export interface ActivityItem {
   args?: Record<string, string>;
 }
 
-export type AutonomyAction = "start" | "stop" | "tick";
+export type AutonomyAction = "start" | "stop" | "tick" | "cancel";
 
 export async function fetchAutonomyStatus(): Promise<AutonomyStatus> {
   const response = await fetch("/api/autonomy");

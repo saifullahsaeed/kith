@@ -88,6 +88,9 @@ class AutonomyStatusSchema(Schema):
     intervalSeconds = Integer(metadata={"description": "Seconds between self-directed ticks"})
     quietSeconds = Integer(metadata={"description": "Idle time required before a tick fires"})
     ticking = Boolean(metadata={"description": "A tick is running right now"})
+    stopping = Boolean(
+        metadata={"description": "A stop was asked for and the running step is winding up"}
+    )
     lastTick = String(allow_none=True)
     current = String(allow_none=True, metadata={"description": "What it's doing right now"})
     ticks = Integer(metadata={"description": "Total self-directed ticks run this session"})
@@ -108,5 +111,11 @@ class AutonomyControlSchema(Schema):
     class Meta:
         unknown = EXCLUDE
 
-    action = String(required=True, metadata={"description": "'start', 'stop', or 'tick'"})
+    action = String(
+        required=True,
+        metadata={
+            "description": "'start' (roam), 'stop' (stop roaming), 'tick' (one step now), "
+            "or 'cancel' (stop the step running now, leaving roaming as it is)"
+        },
+    )
     intervalSeconds = Integer(required=False)

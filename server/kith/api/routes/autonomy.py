@@ -47,6 +47,11 @@ def autonomy_control(payload):
         return autonomy.stop()
     if action == "tick":
         return autonomy.tick_now()
+    # Stopping the step in flight is deliberately not the same action as stopping roaming.
+    # One says "not this", the other says "not any more", and collapsing them meant you
+    # could only ever say the second.
+    if action == "cancel":
+        return autonomy.cancel_tick()
     return autonomy.status()
 
 

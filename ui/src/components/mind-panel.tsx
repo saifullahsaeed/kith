@@ -241,8 +241,10 @@ export function MindPanel({
   width: number;
   onClose: () => void;
 }) {
-  const { status, activity, start, stop, tick } = autonomy;
+  const { status, activity, start, stop, tick, cancel } = autonomy;
   const running = status?.running ?? false;
+  const ticking = status?.ticking ?? false;
+  const stopping = status?.stopping ?? false;
 
   const feedRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -320,10 +322,14 @@ export function MindPanel({
 
       {/* controls */}
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
+        {/* Two independent things, and they were sharing one word. This button decides
+            whether there is a NEXT step; the one beside it decides whether THIS step keeps
+            going. When both can be stopped, this one says which — a bare "Stop" twice over
+            tells you nothing about what you are about to stop. */}
         {running ? (
           <Button size="sm" variant="outline" onClick={() => void stop()}>
             <Square className="size-3.5" />
-            Stop
+            {ticking ? "Stop roaming" : "Stop"}
           </Button>
         ) : (
           <Button size="sm" onClick={() => void turnLoose()}>
@@ -331,10 +337,26 @@ export function MindPanel({
             Let it roam
           </Button>
         )}
-        <Button size="sm" variant="outline" onClick={() => void tick()} disabled={status?.ticking}>
-          <Zap className={cn("size-3.5", status?.ticking && "animate-pulse")} />
-          Run once
-        </Button>
+        {/* Mid-step this is the only way out, and it used to be greyed out — so watching him
+            start down a wrong path meant watching him finish it, up to sixteen rounds later.
+            Never disabled while a step runs: that was the whole problem. */}
+        {ticking ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void cancel()}
+            disabled={stopping}
+            title="Stop the step he is taking now. Roaming is left as it is."
+          >
+            <Square className={cn("size-3.5", stopping && "animate-pulse")} />
+            {stopping ? "Stopping…" : "Stop"}
+          </Button>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => void tick()}>
+            <Zap className="size-3.5" />
+            Run once
+          </Button>
+        )}
         <div className="flex-1" />
         <span
           className="text-[11px] tabular-nums text-muted-foreground"
