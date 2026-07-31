@@ -204,7 +204,28 @@ function describeTool(item: ActivityItem): {
   };
 }
 
-type Tick = { head: ActivityItem; items: ActivityItem[]; usage: Usage[] };
+type Tick = {
+  head: ActivityItem;
+  items: ActivityItem[];
+  usage: Usage[];
+  /** Not a step at all — an acknowledgement from the machine, shown as its own line. */
+  control?: boolean;
+};
+
+/** A status is never a step, so it is never inside one.
+ *
+ * "working", "resting", "stopping this step" from the controls; "caught up — resting" from a
+ * tick that found nothing to do; "stopped" from one you interrupted. None of them is work,
+ * and every one of them used to fall through to "append to whichever block came last" — so
+ * two bare `working` rows appeared inside a chat turn that had nothing to do with them,
+ * making the turn look like it did something it did not.
+ *
+ * Drawing them between the blocks rather than inside one also keeps the step count honest:
+ * a session that woke up, found an empty board and went back to sleep did not take a step,
+ * and a feed that says it did is a feed you cannot use to answer "what has he been doing". */
+function isControlLine(item: ActivityItem): boolean {
+  return item.kind === "status";
+}
 
 /** Group the flat activity stream into ticks — one titled block per self-directed
  * step, with its tool calls and thoughts nested beneath.
@@ -217,10 +238,18 @@ function groupTicks(activity: ActivityItem[]): Tick[] {
   for (const item of activity) {
     if (item.kind === "done") continue; // end-of-tick marker; the next head is the divider
     const meta = KIND[item.kind] ?? KIND.status;
-    if (meta.head || ticks.length === 0) ticks.push({ head: item, items: [], usage: [] });
+    if (isControlLine(item)) {
+      ticks.push({ head: item, items: [], usage: [], control: true });
+      continue;
+    }
+    const last = ticks[ticks.length - 1];
+    // `!last?.control` matters as much as the head check: without it the first real item
+    // after a control line would be nested inside it, which is the same bug pointing the
+    // other way.
+    if (meta.head || !last || last.control) ticks.push({ head: item, items: [], usage: [] });
     else if (item.kind === "tokens") {
-      if (item.tokens) ticks[ticks.length - 1].usage.push(item.tokens);
-    } else ticks[ticks.length - 1].items.push(item);
+      if (item.tokens) last.usage.push(item.tokens);
+    } else last.items.push(item);
   }
   return ticks;
 }
@@ -268,6 +297,9 @@ export function MindPanel({
   }, [shown.length]);
 
   const ticks = groupTicks(shown);
+  // Steps, not blocks. A control line is drawn in this list but is not work, and counting
+  // it made a session that woke up and went straight back to sleep read as thirteen steps.
+  const steps = ticks.filter((one) => !one.control).length;
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
   const hidden = activity.length - shown.length;
 
@@ -393,7 +425,7 @@ export function MindPanel({
           }
         >
           {[
-            ticks.length ? `${ticks.length} step${ticks.length === 1 ? "" : "s"}` : "",
+            steps ? `${steps} step${steps === 1 ? "" : "s"}` : "",
             // Since the server started, and only what a provider actually had to read.
             lifetime ? `${formatTokens(lifetime)} tokens` : "",
           ]
@@ -426,13 +458,28 @@ export function MindPanel({
           </div>
         ) : (
           <div className="space-y-3">
-            {ticks.map((t, i) => (
-              <TickBlock key={i} tick={t} />
-            ))}
+            {ticks.map((t, i) =>
+              t.control ? <ControlLine key={i} item={t.head} /> : <TickBlock key={i} tick={t} />,
+            )}
           </div>
         )}
       </div>
     </aside>
+  );
+}
+
+/** An acknowledgement from the machine, between the steps rather than inside one.
+ *
+ * Deliberately unlike a step: no card, no icon tile, no token figure. It is a marker in the
+ * margin, and looking like one is how you can tell at a glance that nothing was done. */
+function ControlLine({ item }: { item: ActivityItem }) {
+  return (
+    <div className="text-muted-foreground/50 flex items-center gap-2 px-1 text-[11px]">
+      <span className="bg-border/60 h-px flex-1" />
+      <span>{item.text}</span>
+      <span className="tabular-nums">{time(item.at)}</span>
+      <span className="bg-border/60 h-px w-3" />
+    </div>
   );
 }
 
