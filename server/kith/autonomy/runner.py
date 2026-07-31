@@ -42,6 +42,7 @@ from kith.autonomy.prompts import (
 from kith.autonomy.toolsets import _ALLOW
 from kith.config import AGENT_DB_PATH, default_config, ollama_host
 from kith.domain import clock, stall
+from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import memory_context, tuning
 from kith.services.agent_loop import stream_agent
@@ -493,6 +494,7 @@ class AutonomyRunner:
                 pass
 
         self._detect_stall(active, breaking, tools_used)
+        self._record_history(mode)
         self._emit("done", "step complete")
 
         # Durable flight recorder — one row per tick, so how he's doing is
@@ -597,6 +599,26 @@ class AutonomyRunner:
             self._stall = 0
             self._recent_sigs.clear()
             self._recent_shapes.clear()
+
+    def _record_history(self, mode: str) -> None:
+        """Commit whatever this step changed, so a night of work is reviewable.
+
+        Automatic rather than asked of him, because "remember to commit" is a rule that holds
+        until the one time it matters. None of his four projects had any history at all, so
+        "I redesigned the UI" was unverifiable by him *and* by the person whose files he had
+        rewritten while they slept.
+
+        The message is what he was working on, which makes ``git log`` read as a record of what
+        he did rather than a wall of "wip". Failures are swallowed and reported on the feed: not
+        being able to write history must never cost the work that was just done.
+        """
+        try:
+            summary = sandbox.commit_all(self._current or f"{mode} step")
+        except Exception as exc:
+            self._emit("status", f"couldn't record history: {exc}")
+            return
+        if summary:
+            self._emit("status", f"committed: {summary}")
 
     def _emit(
         self,

@@ -74,6 +74,130 @@ class ExecResult:
 
 
 # --------------------------------------------------------------------------- #
+# History
+# --------------------------------------------------------------------------- #
+#
+# None of his four projects had any. He would say "I redesigned the UI" and there was no way
+# for him to check what he had actually changed, and no way for anyone else to review a night
+# of unattended edits. For an agent that rewrites files while you sleep, that is the gap worth
+# closing before any of the others.
+#
+# One repository at the workspace root rather than one per project. His projects are database
+# rows, not directories — he makes folders as he goes — so per-project would need a mapping
+# that does not exist, and would miss everything he writes outside one. A single repo covers
+# all of it and `git diff` still works per directory.
+
+#: Never versioned: build output, dependencies, and his own bookkeeping. Without this the
+#: first commit is 60MB of node_modules and every diff afterwards is unreadable.
+_GITIGNORE = """\
+node_modules/
+dist/
+build/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.kith/
+"""
+
+#: Committed as, so a commit works on a machine where git has no global identity. Without
+#: these git refuses with "please tell me who you are" and the history silently never starts.
+_GIT_AUTHOR = ("Kith", "kith@localhost")
+
+
+def _git(*args: str, check: bool = False) -> ExecResult:
+    """One git command in the workspace, with an identity of its own.
+
+    Deliberately not through :func:`run_command`: that asks the permission layer, and these
+    are the app's own bookkeeping rather than something he decided to run. The identity is
+    passed per-invocation so nothing depends on, or alters, the machine's git config.
+    """
+    here = root()
+    proc = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"user.name={_GIT_AUTHOR[0]}",
+            "-c",
+            f"user.email={_GIT_AUTHOR[1]}",
+            *args,
+        ],
+        capture_output=True,
+        cwd=str(here),
+        timeout=120,
+    )
+    out = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
+    if check and proc.returncode != 0:
+        raise WorkspaceError(f"git {' '.join(args)} failed: {out.strip()[:300]}")
+    return ExecResult(exit_code=proc.returncode, output=out)
+
+
+def has_git() -> bool:
+    return shutil.which("git") is not None
+
+
+def ensure_repo() -> bool:
+    """Make the workspace a repository if it is not one. True when history is available."""
+    if not has_git():
+        return False
+    here = root()
+    if not (here / ".git").is_dir():
+        if _git("init", "-q").exit_code != 0:
+            return False
+    ignore = here / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text(_GITIGNORE)
+    return True
+
+
+def commit_all(message: str) -> str:
+    """Commit whatever changed, and say what. Empty string when there was nothing.
+
+    Best-effort by design: a failure to record history must never take down the work that was
+    just done. It returns a description instead of raising so the caller can log it and move on.
+    """
+    if not ensure_repo():
+        return ""
+    _git("add", "-A")
+    staged = _git("diff", "--cached", "--stat")
+    if not staged.output.strip():
+        return ""
+    subject = " ".join(str(message or "work").split())[:72] or "work"
+    result = _git("commit", "-q", "-m", subject)
+    if result.exit_code != 0:
+        return ""
+    return staged.output.strip().splitlines()[-1].strip()
+
+
+def diff(path: str | None = None, staged: bool = False) -> str:
+    """What has changed and is not yet committed."""
+    if not ensure_repo():
+        return "git is not available on this machine, so there is no history to compare against."
+    args = ["diff", "--cached"] if staged else ["diff"]
+    if path:
+        target = Path(resolve(path))
+        permissions.require_path("read", target, root())
+        args += ["--", str(target)]
+    out = _git(*args).output.strip()
+    if not out:
+        # An untracked file shows in neither diff, and "no changes" would be a lie.
+        fresh = _git("ls-files", "--others", "--exclude-standard").output.strip()
+        if fresh:
+            return "Nothing changed in tracked files. Not yet tracked:\n" + _clip(fresh)
+        return "Nothing has changed since the last commit."
+    return _clip(out)
+
+
+def log(limit: int = 20) -> str:
+    """Recent history, one line each."""
+    if not ensure_repo():
+        return "git is not available on this machine."
+    out = _git("log", f"-{max(1, min(limit, 200))}", "--format=%h %ad %s", "--date=format:%d %b %H:%M").output
+    return _clip(out.strip()) or "No history yet."
+
+
+# --------------------------------------------------------------------------- #
 # Where we are
 # --------------------------------------------------------------------------- #
 
@@ -579,6 +703,84 @@ def _diff(path: str, before: str, after: str, old: str, replacements: int) -> st
         # worth reporting as a success without saying so.
         return f"{made}, but the file is unchanged"
     return made + "\n" + _clip("".join(lines))
+
+
+#: What a project is checked with, in the order the presence of a file decides it. Detection
+#: rather than configuration: he should not have to be told what a project is, and the answer
+#: is sitting in the directory.
+_CHECKERS = (
+    ("tsconfig.json", "npx tsc --noEmit", "TypeScript"),
+    ("pyproject.toml", "ruff check .", "Ruff"),
+    ("ruff.toml", "ruff check .", "Ruff"),
+    ("package.json", "npm run --silent build", "the project's build"),
+)
+
+
+def check_code(path: str = ".") -> dict:
+    """Run whatever this project is checked with, and report only what is wrong.
+
+    He *could* shell out for this, and mostly did — he ran `npm run build` before claiming
+    things, which is better discipline than most. But "mostly" is the problem: a check he has
+    to remember is a check that is skipped on the tick where it mattered. Detected from the
+    directory so there is nothing to configure and nothing to get wrong.
+    """
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.is_dir():
+        target = target.parent
+    for marker, command, label in _CHECKERS:
+        if not (target / marker).is_file():
+            continue
+        proc = subprocess.run(
+            ["bash", "-lc", command],
+            capture_output=True,
+            cwd=str(target),
+            timeout=_EXEC_TIMEOUT,
+        )
+        out = (proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")).strip()
+        return {
+            "ran": command,
+            "checker": label,
+            "clean": proc.returncode == 0,
+            # On success the output is noise — a build log nobody reads. On failure it is the
+            # entire point, so it is kept.
+            "problems": "" if proc.returncode == 0 else _clip(out),
+        }
+    return {
+        "ran": "",
+        "clean": True,
+        "problems": "",
+        "note": f"Nothing in {path} says how it is checked — no tsconfig.json, pyproject.toml or package.json.",
+    }
+
+
+def glob(pattern: str, path: str = ".") -> str:
+    """Files matching a name pattern, newest first.
+
+    ``grep`` finds text and ``list_files`` shows one directory; neither answers "where are the
+    test files" or "which components exist". Newest first because the file he wants is usually
+    the one most recently touched.
+    """
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.is_dir():
+        raise WorkspaceError(f"{path} is not a folder to search in")
+    wanted = str(pattern or "").strip() or "*"
+    skip = {"node_modules", ".git", "__pycache__", ".venv", "venv", "dist", "build"}
+    found = [
+        item
+        for item in target.rglob(wanted)
+        if item.is_file() and not (skip & set(item.relative_to(target).parts))
+    ]
+    if not found:
+        return f"Nothing under {path} matches {wanted}"
+    found.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    shown = found[:200]
+    lines = [str(item.relative_to(root())) for item in shown]
+    body = "\n".join(lines)
+    if len(found) > len(shown):
+        body += f"\n… [{len(found) - len(shown)} more; narrow the pattern]"
+    return _clip(body)
 
 
 def list_files(path: str = ".") -> str:

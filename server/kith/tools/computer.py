@@ -115,6 +115,57 @@ def delete_file(path: Path, args: dict):
 
 
 @tool(
+    "check_code",
+    "Run whatever this project is checked with — TypeScript, ruff, or its build — and get back "
+    "only what is wrong. Do this before you say something is done. It works out what to run "
+    "from what is in the folder, so you do not have to know.",
+    {"path": {**STR, "description": "The project folder (default: your whole folder)."}},
+    required=(),
+)
+def check_code(path: Path, args: dict):
+    return sandbox.check_code(args.get("path") or ".")
+
+
+@tool(
+    "glob",
+    "Find files by name pattern, newest first — 'where are the tests', 'which components exist'. "
+    "Use `**/*.tsx` style patterns. grep searches inside files; this searches their names.",
+    {
+        "pattern": {**STR, "description": "A glob like '**/*.py' or 'test_*.py'."},
+        "path": {**STR, "description": "Folder to search under (default: your whole folder)."},
+    },
+    required=("pattern",),
+)
+def glob(path: Path, args: dict):
+    return sandbox.glob(args["pattern"], args.get("path") or ".")
+
+
+@tool(
+    "changes",
+    "See what you have changed and not yet committed, as a diff. Use it before you claim "
+    "something is done: it is the only way to check that what you changed is what you meant "
+    "to change, and it catches the edit you made and forgot. Pass a path to narrow it to one "
+    "file or folder. Your work is committed automatically at the end of each step, so this "
+    "shows what has happened since then.",
+    {"path": {**STR, "description": "Optional file or folder to limit the diff to."}},
+    required=(),
+)
+def changes(path: Path, args: dict):
+    return sandbox.diff(args.get("path") or None)
+
+
+@tool(
+    "history",
+    "The recent history of your folder — what changed, and when. Useful for picking up where "
+    "you left off, or checking whether you already did something.",
+    {"limit": {**INT, "description": "How many entries (default 20)."}},
+    required=(),
+)
+def history(path: Path, args: dict):
+    return sandbox.log(int(args.get("limit") or 20))
+
+
+@tool(
     "list_files",
     "List a directory on your computer (defaults to your home).",
     {"path": STR},
