@@ -234,6 +234,7 @@ const ThreadSuggestionItem: FC = () => {
 };
 
 const Composer: FC = () => {
+  const composer = useComposerRuntime();
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <ComposerPrimitive.AttachmentDropzone asChild>
@@ -249,6 +250,15 @@ const Composer: FC = () => {
             autoFocus
             enterKeyHint="send"
             aria-label="Message input"
+            // A screenshot on the clipboard is the other thing people try after dragging, and
+            // Cmd-V into a textarea otherwise does nothing at all for an image — no error, no
+            // attachment, which reads as the app ignoring you.
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData?.files ?? []);
+              if (!files.length) return;
+              event.preventDefault();
+              for (const file of files) void composer.addAttachment(file);
+            }}
           />
           <ComposerAction />
         </div>
@@ -276,16 +286,18 @@ const ComposerAttachmentStrip: FC = () => (
 const AttachButton: FC = () => {
   const composer = useComposerRuntime();
   const input = useRef<HTMLInputElement>(null);
-  // The adapter is what creates the capability, and the workspace installs it only for
-  // models whose provider says they accept an image. No adapter, no button.
   const capable = useAuiState((s) => s.thread.capabilities.attachments);
   if (!capable) return null;
   return (
     <>
+      {/* No `accept`, deliberately. This was hardcoded to `image/*`, and it is what actually
+          greyed out every PDF and zip in the file dialog — widening the adapter changed
+          nothing, because the picker's filter lives here and not there. Left off so the dialog
+          offers everything and the adapter decides what it takes, which is the one place that
+          decision belongs. */}
       <input
         ref={input}
         type="file"
-        accept="image/*"
         multiple
         className="hidden"
         onChange={(event) => {
@@ -295,7 +307,7 @@ const AttachButton: FC = () => {
         }}
       />
       <TooltipIconButton
-        tooltip="Attach an image"
+        tooltip="Attach a file"
         side="bottom"
         type="button"
         variant="ghost"
