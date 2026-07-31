@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# Start Kith: the backend, then the desktop window.
+#
+# There is a specific reason this exists rather than a line in a README. The server only
+# serves the interface when KITH_UI_DIST points at a built ui/dist, and the desktop app
+# attaches to a server that is already answering. Get either wrong and the app opens on
+# "Not Found" with nothing to say why — which happened repeatedly before this file, because
+# the working command was six lines long and lived in someone's shell history.
+#
+#   ./run          build the interface if it changed, start the server, open the window
+#   ./run server   backend only (for a browser at 127.0.0.1:8611, or a second window)
+#   ./run stop     stop both
+#   ./run --fresh  rebuild the interface even if it looks current
+#
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+port=8611
+origin="http://127.0.0.1:${port}"
+log=/tmp/kith-server.log
+electron_log=/tmp/kith-electron.log
+
+say() { printf '  %s\n' "$*"; }
+
+answering() { curl -fsS -o /dev/null --max-time 2 "${origin}/api/health" 2>/dev/null; }
+
+stop_all() {
+  # By command line rather than a pidfile: a stale pidfile after a crash is worse than
+  # no pidfile, because `stop` then silently does nothing and the next start attaches to
+  # the process you thought you had killed.
+  pkill -f "electron \." 2>/dev/null || true
+  pkill -f "${here}/server/app.py" 2>/dev/null || true
+  pkill -f "app.py" 2>/dev/null || true
+  sleep 1
+}
+
+build_ui() {
+  local dist="${here}/ui/dist/index.html"
+  if [[ "${1:-}" != "--fresh" && -f "$dist" ]]; then
+    # Rebuild only when a source file is newer than the bundle. `find -newer` rather than a
+    # timestamp file, so it stays right if someone builds by hand.
+    if [[ -z "$(find "${here}/ui/src" "${here}/ui/index.html" -newer "$dist" -print -quit 2>/dev/null)" ]]; then
+      say "interface is current"
+      return
+    fi
+  fi
+  say "building the interface…"
+  (cd "${here}/ui" && npm run build >/tmp/kith-ui-build.log 2>&1) || {
+    say "the interface failed to build — see /tmp/kith-ui-build.log"
+    exit 1
+  }
+}
+
+start_server() {
+  if answering; then
+    say "server already answering on ${port}"
+    return
+  fi
+  local python="${here}/server/.venv/bin/python"
+  [[ -x "$python" ]] || { say "no virtualenv at server/.venv — run: cd server && uv sync"; exit 1; }
+
+  say "starting the server…"
+  (
+    cd "${here}/server"
+    # </dev/null matters: without it the child inherits this shell's stdin, and if the
+    # caller piped us anywhere (./run | tee, ./run | sed) the pipe never closes and the
+    # script appears to hang long after both processes are up and answering.
+    KITH_UI_DIST="${here}/ui/dist" nohup "$python" app.py </dev/null >"$log" 2>&1 &
+    disown
+  )
+
+  # Wait for it to actually answer rather than sleeping and hoping. A fixed sleep is how
+  # you get an Electron window that opened half a second too early and shows nothing.
+  for _ in $(seq 1 40); do
+    answering && { say "server up: ${origin}"; return; }
+    sleep 0.5
+  done
+  say "the server did not come up — last lines of ${log}:"
+  tail -12 "$log" | sed 's/^/      /'
+  exit 1
+}
+
+start_app() {
+  say "opening the window…"
+  (cd "${here}/desktop" && npm run build >/tmp/kith-desktop-build.log 2>&1) || {
+    say "the desktop shell failed to compile — see /tmp/kith-desktop-build.log"
+    exit 1
+  }
+  (cd "${here}/desktop" && nohup npx electron . </dev/null >"$electron_log" 2>&1 & disown)
+  sleep 3
+  osascript -e 'tell application "Kith" to activate' 2>/dev/null || true
+  say "logs: ${log} · ${electron_log}"
+}
+
+case "${1:-all}" in
+  stop)
+    stop_all
+    say "stopped"
+    ;;
+  server)
+    build_ui "${2:-}"
+    start_server
+    ;;
+  all | --fresh)
+    build_ui "${1:-}"
+    start_server
+    start_app
+    ;;
+  *)
+    say "usage: ./run [server|stop|--fresh]"
+    exit 2
+    ;;
+esac
