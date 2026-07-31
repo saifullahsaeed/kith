@@ -323,7 +323,20 @@ def blocked_milestone_ids(path: Path) -> set[int]:
     status = {m["id"]: m["status"] for m in milestones}
     waits: dict[int, list[int]] = {}
     for edge in dependencies(path):
-        waits.setdefault(edge["milestone_id"], []).append(edge["depends_on_id"])
+        # A predecessor that does not exist is ignored, and that asymmetry is deliberate.
+        # This used to read `status.get(dep) != "done"`, which is True for a missing
+        # milestone — so a dependency on an id that was never real blocked its milestone
+        # forever, since a milestone that does not exist can never become done. Meanwhile
+        # roadmap() skips unknown predecessors, so the screen showed the same milestones as
+        # ready. He spent five hours with "5 ready to work" on the display and nothing he was
+        # allowed to touch, reflecting on the same sentence eight times because the machinery
+        # would not hand him the task he kept resolving to do.
+        #
+        # Bad rows are prevented at the write now (see add_dependency), so this is the second
+        # line: if one exists anyway — an older database, a hand-edited row — the failure has
+        # to be "he can work" rather than a deadlock nothing on screen can explain.
+        if edge["depends_on_id"] in status:
+            waits.setdefault(edge["milestone_id"], []).append(edge["depends_on_id"])
     return {
         milestone_id for milestone_id, deps in waits.items() if any(status.get(dep) != "done" for dep in deps)
     }

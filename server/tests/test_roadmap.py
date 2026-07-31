@@ -314,3 +314,71 @@ class TestADependencyHasToPointAtSomething:
 
         # Exactly one thing to start on, which is the entire point of a roadmap.
         assert ready == [ids[0]]
+
+
+class TestAMissingPredecessorMustNotDeadlockHim:
+    """Five hours of a live agent doing nothing, and the screen said everything was fine.
+
+    Four dependency rows pointed at milestone 0, which does not exist. The two functions that
+    read those rows disagreed about what it meant:
+
+    * ``roadmap()`` skipped the unknown predecessor, so the interface showed "5 ready to work".
+    * ``blocked_milestone_ids()`` asked ``status.get(dep) != "done"``, which is True for a
+      milestone that was never real — so every one of them was blocked, permanently, because
+      a milestone that does not exist can never become done.
+
+    He posted "I've run out of available work" at 05:10 and then spent 5h10m and 735,000
+    prompt tokens reflecting on the same sentence, twice resolving to start the task the
+    machinery would not hand him. The moment a fresh unblocked task arrived he finished it in
+    four minutes — he was starved, not broken.
+
+    Bad rows are refused at the write now. This is the second line: if one exists anyway, the
+    failure has to be "he can work" rather than a deadlock nothing on screen can explain.
+    """
+
+    def test_a_dependency_on_a_milestone_that_does_not_exist_is_ignored(self, db, project):
+        import sqlite3
+
+        first = milestone(db, project, "Do this")
+        with sqlite3.connect(db) as raw:
+            raw.execute("insert into milestone_deps values (?, 0)", (first,))
+
+        assert repo.projects.blocked_milestone_ids(db) == set()
+
+    def test_the_screen_and_the_task_picker_agree(self, db, project):
+        import sqlite3
+
+        ids = [milestone(db, project, f"Step {n}") for n in range(3)]
+        with sqlite3.connect(db) as raw:
+            for one in ids[1:]:
+                raw.execute("insert into milestone_deps values (?, 0)", (one,))
+
+        graph = repo.projects.roadmap(db, project)
+        ready = {m["id"] for m in graph["milestones"] if m["ready"]}
+        blocked = repo.projects.blocked_milestone_ids(db)
+
+        # The contradiction is the bug. Either answer is survivable; disagreeing is not,
+        # because the one the person sees is not the one that decides what he does.
+        assert ready & blocked == set()
+        assert ready == set(ids)
+
+    def test_his_tasks_stay_reachable(self, db, project):
+        import sqlite3
+
+        first = milestone(db, project, "Cart and checkout")
+        mine = task(db, project, first, "Build the cart")
+        with sqlite3.connect(db) as raw:
+            raw.execute("insert into milestone_deps values (?, 0)", (first,))
+
+        # The whole cost of the bug, in one assertion: this task was invisible to him for
+        # five hours while its milestone showed as ready.
+        assert mine in [t["id"] for t in repo.tasks.active_tasks(db)]
+
+    def test_a_real_unfinished_predecessor_still_blocks(self, db, project):
+        earlier = milestone(db, project, "First")
+        later = milestone(db, project, "Second")
+        repo.projects.add_dependency(db, later, earlier)
+        assert later in repo.projects.blocked_milestone_ids(db)
+
+        repo.projects.update_milestone(db, earlier, status="done")
+        assert later not in repo.projects.blocked_milestone_ids(db)
