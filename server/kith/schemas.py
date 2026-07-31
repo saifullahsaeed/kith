@@ -5,7 +5,7 @@ APIFlask, are what the generated OpenAPI spec is built from.
 from __future__ import annotations
 
 from apiflask import Schema
-from apiflask.fields import Boolean, Dict, Integer, List, Nested, String
+from apiflask.fields import Boolean, Dict, Float, Integer, List, Nested, String
 from marshmallow import EXCLUDE
 
 
@@ -104,6 +104,12 @@ class AutonomyStatusSchema(Schema):
     lastTickTokens = Integer(metadata={"description": "Tokens spent on the most recent tick"})
     lastTickUncached = Integer(
         metadata={"description": "Tokens the most recent tick actually had to read plus write"}
+    )
+    costUsd = Float(
+        metadata={
+            "description": "What autonomy has actually cost this session, in dollars, as "
+            "billed by the provider rather than estimated from token counts"
+        }
     )
 
 

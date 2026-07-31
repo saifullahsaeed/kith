@@ -329,12 +329,32 @@ def _stats(usage: dict | None, elapsed: float) -> dict[str, float]:
     # Writes bill at 1.25x-2x and reads at 0.1x-0.5x, so a run that is all writes and no
     # reads is worse than no caching. Counting both is the only way to tell them apart.
     written = int(details.get("cache_write_tokens") or 0)
+
+    # What it actually cost, in dollars, as the provider billed it.
+    #
+    # OpenRouter has been returning this all along — we ask for it explicitly with
+    # `usage: {include: true}`, and the comment where we do says it gives us "real cost" —
+    # and it was read nowhere. So every surface reported spend as a token count, which is a
+    # proxy that drifts: a cached prompt token and a fresh one cost an order of magnitude
+    # apart, and a reasoning token and a text token do not cost the same either. There is no
+    # need to estimate a number the invoice already contains.
+    cost = float(usage.get("cost") or 0.0)
+
+    # Reasoning is charged as output and reported separately, and on the measured call it was
+    # 31 of 63 completion tokens — half the response, with nothing on screen saying so. A
+    # reasoning model's "response tokens" is mostly thinking, and someone reading a total
+    # would reasonably assume it was text.
+    completion_details = usage.get("completion_tokens_details") or {}
+    reasoning = int(completion_details.get("reasoning_tokens") or 0)
+
     tps = completion / elapsed if elapsed > 0 and completion else 0.0
     return {
         "promptTokens": prompt,
         "responseTokens": completion,
+        "reasoningTokens": reasoning,
         "cachedTokens": cached,
         "cacheWriteTokens": written,
+        "costUsd": cost,
         "tokensPerSecond": round(tps, 1),
         "totalSeconds": round(elapsed, 2),
         "loadSeconds": 0.0,

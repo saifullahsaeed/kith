@@ -111,6 +111,9 @@ class AutonomyRunner:
         self._tokens_in = 0
         self._tokens_out = 0
         self._tokens_uncached = 0
+        # Dollars, as the provider billed them. Every token count here is a proxy for this,
+        # and OpenRouter returns it on every call — we simply were not reading it.
+        self._cost_usd = 0.0
         self._last_tick_tokens = 0
         self._last_tick_uncached = 0
         # Loop detection + reply bookkeeping.
@@ -191,6 +194,7 @@ class AutonomyRunner:
             "tokensIn": self._tokens_in,
             "tokensOut": self._tokens_out,
             "tokensUncached": self._tokens_uncached,
+            "costUsd": round(self._cost_usd, 6),
             "lastTickTokens": self._last_tick_tokens,
             "lastTickUncached": self._last_tick_uncached,
         }
@@ -404,6 +408,7 @@ class AutonomyRunner:
 
         final_text = ""
         tick_in = tick_out = tick_uncached = 0
+        tick_cost = 0.0
         rounds = 0
         tools_used: list[str] = []
         error_msg: str | None = None
@@ -453,6 +458,7 @@ class AutonomyRunner:
                 tick_in += int(stats.get("promptTokens") or 0)
                 tick_out += int(stats.get("responseTokens") or 0)
                 tick_uncached += fresh
+                tick_cost += float(stats.get("costUsd") or 0.0)
                 rounds += 1
                 self._emit(
                     "tokens",
@@ -470,6 +476,7 @@ class AutonomyRunner:
         self._tokens_in += tick_in
         self._tokens_out += tick_out
         self._tokens_uncached += tick_uncached
+        self._cost_usd += tick_cost
         self._last_tick_tokens = tick_in + tick_out
         self._last_tick_uncached = tick_uncached + tick_out
 

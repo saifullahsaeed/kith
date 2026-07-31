@@ -152,6 +152,8 @@ def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = 
 _usage = {
     "promptTokens": 0,
     "responseTokens": 0,
+    "reasoningTokens": 0,
+    "costUsd": 0.0,
     "cachedTokens": 0,
     "cacheWriteTokens": 0,
     "uncachedTokens": 0,
@@ -197,11 +199,25 @@ def usage_snapshot() -> dict:
 
     `uncachedTokens` is the prompt side with the cache hits taken out — the tokens he
     actually made a provider read.
+
+    `costUsd` is what all of the above is a proxy for, and it is not estimated: OpenRouter
+    returns it per call and this adds it up. Measured on a real "say pong" turn — 38,116
+    prompt tokens, 20,700 of them cached, for $0.002. Reading the token count as spend is
+    off by whatever the cache saved, which here was more than half.
+
+    `cacheEfficiency` is None when the provider reports no cache writes, which is most of
+    them. It used to divide by `writes or 1`, so with zero writes it returned the read count
+    unchanged — 20,700 from a field documented as "above 1 means reads are outrunning
+    writes". A raw count wearing a ratio's name, and indistinguishable from a genuine
+    20,700-to-1. Providers differ here: OpenAI caches automatically and charges nothing to
+    write, so there is nothing to compare against and saying so is the only honest answer.
     """
     snap = dict(_usage)
     prompt = snap["promptTokens"] or 1
     snap["cacheHitRate"] = round(snap["cachedTokens"] / prompt, 3)
-    snap["cacheEfficiency"] = round(snap["cachedTokens"] / (snap["cacheWriteTokens"] or 1), 2)
+    writes = snap["cacheWriteTokens"]
+    snap["cacheEfficiency"] = round(snap["cachedTokens"] / writes, 2) if writes else None
+    snap["costUsd"] = round(snap["costUsd"], 6)
     return snap
 
 
@@ -213,6 +229,9 @@ def _record(stats: dict | None) -> None:
     _usage["cachedTokens"] += int(stats.get("cachedTokens") or 0)
     _usage["cacheWriteTokens"] += int(stats.get("cacheWriteTokens") or 0)
     _usage["uncachedTokens"] += int(stats.get("uncachedTokens") or 0)
+    _usage["reasoningTokens"] += int(stats.get("reasoningTokens") or 0)
+    # Dollars, as billed. Every other number here is a proxy for this one.
+    _usage["costUsd"] += float(stats.get("costUsd") or 0.0)
     _usage["calls"] += 1
 
 
