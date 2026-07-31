@@ -7,6 +7,7 @@
  * anyone edits.
  */
 
+import { apiHeaders } from "./api-token";
 import { BACKEND_ORIGIN } from "./config";
 import type { RenderEndpoint } from "./render-service";
 
@@ -41,7 +42,7 @@ async function post(body: string, method: "POST" | "DELETE"): Promise<Response> 
   try {
     return await fetch(REGISTER_URL, {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers: apiHeaders({ "Content-Type": "application/json" }),
       ...(body ? { body } : {}),
       signal: abort.signal,
     });

@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from flask import Flask
@@ -47,9 +48,15 @@ _BASE = (
 )
 
 
-def policy_for(dist: Path) -> str:
-    """Build the policy, hashing whatever inline scripts the bundle actually has."""
-    hashes = " ".join(_hash(source) for source in _inline_scripts(dist / "index.html"))
+def policy_for(dist: Path, extra_inline: Sequence[str] = ()) -> str:
+    """Build the policy, hashing whatever inline scripts the page will actually have.
+
+    ``extra_inline`` is for scripts this process adds to index.html on the way out rather
+    than ones the bundle shipped with — the API token handed to the page is one. They are
+    passed in rather than looked up so this module needs to know nothing about them.
+    """
+    sources = [*_inline_scripts(dist / "index.html"), *extra_inline]
+    hashes = " ".join(_hash(source) for source in sources)
     return "; ".join(rule.format(script_hashes=hashes).strip() for rule in _BASE)
 
 
@@ -67,9 +74,9 @@ def _hash(source: str) -> str:
     return f"'sha256-{base64.b64encode(digest).decode()}'"
 
 
-def register(app: Flask, dist: Path) -> str:
+def register(app: Flask, dist: Path, extra_inline: Sequence[str] = ()) -> str:
     """Attach the policy to UI responses. Returns it, for logging at startup."""
-    policy = policy_for(dist)
+    policy = policy_for(dist, extra_inline)
 
     @app.after_request
     def _apply(response):

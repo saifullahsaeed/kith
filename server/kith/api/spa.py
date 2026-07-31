@@ -18,11 +18,13 @@ are not registered at all and the server behaves exactly as before.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from flask import Flask, send_from_directory
+from flask import Flask, make_response, send_from_directory
 
 from kith import settings
+from kith.api import auth
 
 # Long-lived hashed asset filenames (index-B0MAEQC6.js) may be cached hard; the
 # entry HTML must not be, or a rebuilt UI keeps loading yesterday's bundle.
@@ -78,10 +80,51 @@ def register(app: Flask) -> Path | None:
 
 
 def _send(root: Path, relative: str):
+    if relative == "index.html":
+        return _index(root)
     response = send_from_directory(root, relative)
     if relative.startswith(f"{_ASSET_DIR}/"):
         response.headers["Cache-Control"] = f"public, max-age={_IMMUTABLE_MAX_AGE}, immutable"
     else:
-        # index.html and the loose icons: always revalidate.
+        # The loose icons: always revalidate.
         response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+def token_script() -> str:
+    """The exact text of the inline script injected into index.html.
+
+    One function rather than an inline f-string because the Content-Security-Policy hashes
+    inline scripts byte for byte: if this text and the text CSP hashed ever differ by a
+    character, the browser silently refuses to run it and the page loads with no token and
+    401s everything. That is precisely what happened the first time — the script went in and
+    the policy did not know about it — so the two now read from the same place.
+    """
+    return f"window.__kithToken={json.dumps(auth.token(settings.DATA_DIR))};"
+
+
+def _index(root: Path):
+    """index.html, with the API token handed to the page.
+
+    The page has to present a secret on every call (see :mod:`kith.api.auth`) and there is
+    nowhere else it could come from: the file is on disk where only your user can read it,
+    and a fetch to ask for it would have to be unauthenticated, which is the same hole
+    wearing a different hat. Since this process serves both the interface and the API, it
+    can simply put it in the document it is already sending.
+
+    Injected rather than baked into the build, because the built bundle is a static artifact
+    that gets copied between machines, and a secret compiled into it would travel with it.
+    Never cached — a cached index carrying a stale token would fail every request with a 401
+    and look like the server had died.
+    """
+    html = (root / "index.html").read_text()
+    marker = "</head>"
+    script = f"<script>{token_script()}</script>"
+    if marker in html:
+        html = html.replace(marker, f"{script}{marker}", 1)
+    else:
+        html = script + html
+    response = make_response(html)
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    response.headers["Cache-Control"] = "no-store"
     return response

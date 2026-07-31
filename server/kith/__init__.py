@@ -12,7 +12,7 @@ from apiflask import APIFlask
 from flask_cors import CORS
 
 from kith import settings
-from kith.api import csp, spa
+from kith.api import auth, csp, spa
 from kith.api.routes import api
 from kith.autonomy import runner
 from kith.config import AGENT_DB_PATH, CONFIG_DB_PATH
@@ -56,6 +56,11 @@ def create_app() -> APIFlask:
 
     app.register_blueprint(api, url_prefix="/api")
 
+    # Every API call needs the shared secret from here on. See kith.api.auth for why CORS
+    # and a loopback bind were not enough: CORS stops a page reading the reply, not sending
+    # the request, and every process running as you is on loopback too.
+    auth.register(app, settings.DATA_DIR)
+
     # The desktop app serves the UI from this process so the browser origin and
     # the API origin are the same one. Off unless KITH_UI_DIST is set, which is
     # how the Docker stack (nginx in front) keeps its current behaviour.
@@ -63,7 +68,10 @@ def create_app() -> APIFlask:
     if served:
         # Hashes the bundle's inline theme script, so the pre-paint dark class keeps
         # working instead of being blocked into a white flash on every launch.
-        csp.register(app, served)
+        # The token script goes in the page on the way out, so its hash has to be in the
+        # policy too — an inline script the CSP has not hashed is silently not run, and the
+        # page then loads with no token and 401s every call.
+        csp.register(app, served, extra_inline=[spa.token_script()])
 
     config_store.init(CONFIG_DB_PATH)
     migrations.init(AGENT_DB_PATH)
