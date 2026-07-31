@@ -318,3 +318,52 @@ export async function resetTuning(keys?: string[]): Promise<TuningSnapshot> {
   if (!response.ok) throw new Error(body.error ?? `reset failed (${response.status})`);
   return body;
 }
+
+export interface SkillSummary {
+  name: string;
+  description: string;
+  license: string;
+  compatibility: string;
+  metadata: Record<string, string>;
+  allowedTools: string[];
+  /** Frontmatter fields from a newer or different tool that Kith does not act on. */
+  unsupportedFields: string[];
+  bodyChars: number;
+  resources: string[];
+  path: string;
+}
+
+export interface SkillsSnapshot {
+  root: string;
+  skills: SkillSummary[];
+  problems: { name: string; error: string }[];
+  /** What the whole set costs in every prompt — names and descriptions only. */
+  indexChars: number;
+  indexTokens: number;
+}
+
+export async function fetchSkills(): Promise<SkillsSnapshot> {
+  const response = await fetch("/api/skills");
+  if (!response.ok) throw new Error(`/api/skills returned ${response.status}`);
+  return (await response.json()) as SkillsSnapshot;
+}
+
+/** Install a skill from a folder already on this machine. Nothing is downloaded. */
+export async function installSkill(path: string): Promise<SkillSummary> {
+  const response = await fetch("/api/skills", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  const body = (await response.json()) as SkillSummary & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? `install failed (${response.status})`);
+  return body;
+}
+
+export async function removeSkill(name: string): Promise<void> {
+  const response = await fetch(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `couldn't remove it (${response.status})`);
+  }
+}

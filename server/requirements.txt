@@ -3,6 +3,9 @@ flask-cors>=4.0
 requests>=2.31
 tzdata>=2024.1
 sqlalchemy>=2.0,<3
+# Agent Skills frontmatter is YAML, and real skills use folded scalars and list forms
+# that a hand-rolled parser would choke on.
+pyyaml>=6
 
 # OpenRouter's own SDK. Worth a dependency for what it exposes beyond the
 # OpenAI-compatible surface: the model catalogue carries Artificial Analysis

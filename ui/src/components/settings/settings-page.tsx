@@ -4,6 +4,7 @@ import {
   FileText,
   Loader2,
   MessageSquare,
+  Puzzle,
   Settings2,
   SlidersHorizontal,
   Wrench,
@@ -17,11 +18,13 @@ import { ModelTab } from "@/components/settings/model-tab";
 import { ToolsTab } from "@/components/settings/tools-tab";
 import { fetchSetup, type ServerConfig, type SetupSnapshot } from "@/lib/backend";
 import { PersonaTab } from "@/components/settings/persona-tab";
+import { SkillsTab } from "@/components/settings/skills-tab";
 import type { SettingsTab } from "@/lib/router";
 
 const TABS: { id: SettingsTab; label: string; hint: string; icon: typeof Cpu }[] = [
   { id: "model", label: "Model", hint: "where he thinks", icon: Cpu },
   { id: "persona", label: "Persona", hint: "who he is, in his own files", icon: FileText },
+  { id: "skills", label: "Skills", hint: "what he knows how to do", icon: Puzzle },
   { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench },
   { id: "chat", label: "Conversation", hint: "reply length and reasoning", icon: MessageSquare },
   {
@@ -157,6 +160,8 @@ export function SettingsPage({
                   onConnectionSaved();
                 }}
               />
+            ) : tab === "skills" ? (
+              <SkillsTab />
             ) : tab === "tools" ? (
               <ToolsTab
                 search={snapshot.search.current}

@@ -21,6 +21,8 @@ export type {
   Tunable,
   TunableGroup,
   TuningSnapshot,
+  SkillSummary,
+  SkillsSnapshot,
 } from "./setup";
 export {
   completeSetup,
@@ -33,6 +35,9 @@ export {
   fetchTuning,
   saveTuning,
   resetTuning,
+  fetchSkills,
+  installSkill,
+  removeSkill,
 } from "./setup";
 export * from "./permissions";
 export * from "./conversations";

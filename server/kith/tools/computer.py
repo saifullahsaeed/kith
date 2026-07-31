@@ -1,4 +1,4 @@
-"""His sandbox — a Linux machine that is genuinely his."""
+"""Working on the machine: files, search, and the shell."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ def _shell(command: str) -> dict:
 
 @tool(
     "shell",
-    "Run a shell command on your own computer — a private Linux box where you are root. Returns combined stdout/stderr and the exit code. Do anything: install packages, build and run programs, manage files, poke around. For long-lived or background processes (servers, watchers, long builds), start them detached with `nohup … &` so they keep running after the command returns.",
-    {"command": {**STR, "description": "The shell command to run (as root)."}},
+    "Run a shell command on your person's computer, from your own folder. Returns combined stdout/stderr and the exit code. Their shell, their PATH, their installed programs — so build and run things, use the tools already there, poke around. You are NOT root and this is not a private box: anything destructive, and anything outside your folder, needs their yes and will be refused until they give it. To delete something use delete_file, not `rm` — it goes to the Trash and `rm` cannot be undone by anyone. For long-lived processes (servers, watchers, long builds), start them detached with `nohup … &`.",
+    {"command": {**STR, "description": "The shell command to run."}},
     required=("command",),
 )
 def shell(path: Path, args: dict):

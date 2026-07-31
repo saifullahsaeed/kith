@@ -15,6 +15,7 @@ from typing import Any
 
 from kith import settings
 from kith.infra.db import config_store
+from kith.services import skills
 from kith.services.persona import load_persona
 
 
@@ -66,7 +67,12 @@ def default_config() -> Config:
         model=_str_setting("KITH_MODEL", stored, "model", "qwen3:4b"),
         num_ctx=_int_setting("KITH_NUM_CTX", stored, "num_ctx", 40960),
         num_predict=_int_setting("KITH_NUM_PREDICT", stored, "num_predict", 8192, allow_unlimited=True),
-        system=settings.SYSTEM_PROMPT_OVERRIDE or load_persona(),
+        # Persona, then the skill index. The order matters for money: `config.system` is
+        # exactly the region llm.caching treats as the stable head, so anything appended here
+        # is cached across requests rather than re-billed on each one. It also has to be
+        # stable text — a count or a timestamp in there would move the seam and invalidate
+        # the persona sitting in front of it.
+        system=settings.SYSTEM_PROMPT_OVERRIDE or (load_persona() + skills.index()),
         think=_bool_setting("KITH_THINK", stored, "think", True),
         effort=_str_setting("KITH_EFFORT", stored, "effort", ""),
         base_url=_str_setting("KITH_BASE_URL", stored, "base_url", "").rstrip("/"),

@@ -28,6 +28,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     outreach,
     people,
     projects,
+    skills,
     sources,
     tasks,
     time,

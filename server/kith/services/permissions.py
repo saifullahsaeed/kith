@@ -131,6 +131,27 @@ _PROGRAM_PREFIXES = (
 )
 
 
+def _skills_root() -> str:
+    """Where installed skills live, or "" if that cannot be determined.
+
+    Their bundled scripts are things a command *runs*, exactly like an interpreter, and they
+    sit outside the workspace by design — a skill is a capability, not work product. Found by
+    running it: asked for a spreadsheet, he read the xlsx skill, followed it, and the command
+    was refused because the skill's own ``scripts/recalc.py`` counted as an out-of-folder
+    write. The skill told him to run it and the person installed it deliberately; prompting
+    there is the gate crying wolf about the feature working correctly.
+
+    Imported lazily and defensively: this module is imported by nearly everything, and a
+    permission check must not fail because a settings lookup did.
+    """
+    try:
+        from kith.services import skills
+
+        return str(skills.root())
+    except Exception:
+        return ""
+
+
 def paths_named(command: str, home: Path | None = None) -> list[Path]:
     """Every path literal in a command, resolved as far as text allows."""
     base = home or Path.home()
@@ -144,6 +165,14 @@ def paths_named(command: str, home: Path | None = None) -> list[Path]:
         if not text.startswith("/"):
             continue
         candidate = Path(os.path.normpath(text))
+        # A bare "/" is never a target anyone meant, and it turns up constantly: Python's
+        # pathlib spells joins as `Path.home() / "Kith"`, and a heredoc full of that gives a
+        # space-slash-space that reads as the filesystem root. It refused a command whose
+        # actual paths were all relative and inside his folder. The genuinely alarming ways to
+        # name the root — `rm -rf /`, `chmod 777 /` — are matched by the dangerous list
+        # instead, which is where a blast radius that size belongs.
+        if candidate == Path("/"):
+            continue
         if candidate not in found:
             found.append(candidate)
     return found
@@ -321,6 +350,11 @@ def check_command(command: str, root: Path) -> Decision:
         skip = _UNREMARKABLE_PREFIXES
         if intent == "write":
             skip = skip + _PROGRAM_PREFIXES
+            # Deletes deliberately do not get this: `rm` inside a skill's folder is someone
+            # uninstalling a capability sideways, and that is worth a question.
+            installed_skills = _skills_root()
+            if installed_skills:
+                skip = (*skip, installed_skills)
         for target in paths_named(command):
             if str(target).startswith(skip):
                 continue

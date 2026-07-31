@@ -56,6 +56,8 @@ _WORK = {
     "list_files",
     "set_reminder",
     "reach_out",
+    # A skill can apply to any kind of work, and it is one cheap call to find out.
+    "read_skill",
 }
 
 # Which tools each tick-mode actually needs — scoping keeps the prompt lean and
@@ -65,6 +67,7 @@ _ALLOW: dict[str, set[str]] = {
     "start": _WORK,
     "reply": _WORK,
     "reflect": {
+        "read_skill",
         "read_journal",
         "journal",
         "list_tasks",
@@ -79,6 +82,7 @@ _ALLOW: dict[str, set[str]] = {
         "reach_out",
     },
     "consolidate": {
+        "read_skill",
         "read_journal",
         "list_tasks",
         "recall",
@@ -88,6 +92,7 @@ _ALLOW: dict[str, set[str]] = {
         "journal",
     },
     "breakout": {
+        "read_skill",
         "list_tasks",
         "update_task",
         "journal",
@@ -97,6 +102,7 @@ _ALLOW: dict[str, set[str]] = {
         "recall",
     },
     "curious": {
+        "read_skill",
         "wonder",
         "update_curiosity",
         "web_search",

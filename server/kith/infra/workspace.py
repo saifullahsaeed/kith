@@ -459,7 +459,18 @@ def remove(path: str) -> str:
     permissions.require_path("delete", target, root())
     if not target.exists() and not target.is_symlink():
         raise WorkspaceError(f"there is nothing at {path}.")
+    return trash_path(target)
 
+
+def trash_path(target: Path) -> str:
+    """Move an absolute path to the Trash, and say where it went.
+
+    Separate from :func:`remove` because two different callers need the Trash and only one of
+    them is him. His file operations go through ``remove``, which resolves the path against
+    his workspace and asks permission first. This one is for things the app itself owns and
+    is putting away — an uninstalled skill folder — where there is no path to resolve and
+    nobody to ask. Both end up recoverable, which is the part that matters.
+    """
     bin_ = Path.home() / ".Trash"
     if not bin_.is_dir():
         # Not macOS, or a home directory without one. Say what happened rather than
@@ -467,7 +478,7 @@ def remove(path: str) -> str:
         try:
             shutil.rmtree(target) if target.is_dir() else target.unlink()
         except OSError as exc:
-            raise WorkspaceError(f"cannot delete {path}: {exc}") from None
+            raise WorkspaceError(f"cannot delete {target.name}: {exc}") from None
         return "deleted permanently (this machine has no Trash)"
 
     destination = _free_name(bin_, target.name)
@@ -475,7 +486,7 @@ def remove(path: str) -> str:
         # move, not rename: the Trash can be on a different volume from the file.
         shutil.move(str(target), str(destination))
     except OSError as exc:
-        raise WorkspaceError(f"cannot move {path} to the Trash: {exc}") from None
+        raise WorkspaceError(f"cannot move {target.name} to the Trash: {exc}") from None
     return f"in the Trash as {destination.name}"
 
 

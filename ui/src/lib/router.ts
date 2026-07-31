@@ -43,7 +43,7 @@ function slugTab(slug: string): PanelTab | null {
 
 /** Settings' tabs. Model and Tools are separate because they are separate decisions
  *  with separate costs — per token against per search — and each saves on its own. */
-const SETTINGS_TABS = ["model", "persona", "tools", "chat", "advanced"] as const;
+const SETTINGS_TABS = ["model", "persona", "skills", "tools", "chat", "advanced"] as const;
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 

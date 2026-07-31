@@ -144,6 +144,21 @@ class TestReadingPathsOutOfACommand:
         found = permissions.paths_named("rm ~/thing", home=tmp_path)
         assert found == [tmp_path / "thing"]
 
+    def test_a_bare_slash_is_not_a_path(self, tmp_path):
+        # Python spells path joins as `Path.home() / "Kith"`, so a heredoc full of pathlib
+        # gives space-slash-space over and over. Reading those as the filesystem root refused
+        # a real command whose own paths were all relative and inside his folder.
+        found = permissions.paths_named(
+            'cat > out.py <<PY\np = Path.home() / "Kith" / "x"\nPY', home=tmp_path
+        )
+        assert found == []
+
+    def test_the_alarming_ways_to_name_the_root_are_still_caught(self, gate):
+        # Dropping the bare slash must not drop `rm -rf /`. It is matched by the dangerous
+        # list, which is where a blast radius that size belongs.
+        assert asks("rm -rf /", gate)
+        assert asks("chmod 777 /", gate)
+
     def test_a_computed_path_is_invisible_and_that_is_known(self, tmp_path):
         # The limit of reading literals. It is why the check looks at every path in the
         # command rather than trying to find "the" target: in the real failure the file
@@ -239,3 +254,52 @@ class TestDeletingRecoverably:
         # one lie in this system that actually costs someone something.
         assert "permanently" in answer
         assert not (root / "a.txt").exists()
+
+
+class TestSkillScriptsAreNotOutOfFolderWrites:
+    """Found by running it, not by thinking about it.
+
+    Asked for a spreadsheet, he read the xlsx skill, followed its instructions, and the
+    command was refused — because the skill's own ``scripts/recalc.py`` lives in the skills
+    directory, which is outside his workspace, and the command also contained a redirect. One
+    intent is assigned to the whole command and applied to every path in it, so a script being
+    *run* was read as a file being written.
+
+    The skill told him to run it and the person installed it deliberately. A gate that fires
+    on the feature working correctly is the exact failure this design is trying to avoid.
+    """
+
+    @pytest.fixture
+    def with_skills(self, tmp_path, monkeypatch):
+        from kith.services import skills
+
+        # pytest's tmp_path lives under /var/folders, which the gate deliberately treats as
+        # scratch space — so every path in these tests would be exempt for the wrong reason
+        # and the assertions would pass without testing anything. Narrowing the scratch list
+        # is what makes a temp directory stand in for a real one.
+        monkeypatch.setattr(permissions, "_UNREMARKABLE_PREFIXES", ("/dev",), raising=False)
+        place = tmp_path / "skills"
+        (place / "xlsx" / "scripts").mkdir(parents=True)
+        (place / "xlsx" / "SKILL.md").write_text(
+            "---\nname: xlsx\ndescription: Spreadsheets. Use for spreadsheets.\n---\n"
+        )
+        (place / "xlsx" / "scripts" / "recalc.py").write_text("print('recalculated')")
+        monkeypatch.setenv(skills.DIR_KEY, str(place))
+        return place
+
+    def test_running_a_bundled_script_in_a_writing_command(self, gate, with_skills):
+        command = (
+            "cat > ./build.py <<'PY'\nout = 1\nPY\n"
+            f"python3 {with_skills}/xlsx/scripts/recalc.py ./sheet.xlsx 30"
+        )
+        assert not asks(command, gate)
+
+    def test_deleting_inside_a_skill_folder_still_asks(self, gate, with_skills):
+        # Uninstalling a capability sideways with `rm` is worth a question — the exemption is
+        # for writes only, and deletes deliberately do not get it.
+        assert asks(f"rm {with_skills}/xlsx/SKILL.md", gate)
+
+    def test_the_exemption_does_not_leak_to_the_rest_of_the_data_directory(self, gate, with_skills):
+        # The skills folder sits beside the databases. Widening this to the whole data
+        # directory would exempt his memory and his transcripts from the write check.
+        assert asks(f"echo corrupt > {with_skills.parent}/agent.db", gate)
