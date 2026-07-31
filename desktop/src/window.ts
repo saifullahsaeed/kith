@@ -51,6 +51,11 @@ export function createMainWindow(): BrowserWindow {
       webSecurity: true,
       allowRunningInsecureContent: false,
       webviewTag: false,
+      // `plugins` is deliberately left at its default of false. The file viewer shows a
+      // PDF in Chromium's built-in reader, which older Electron did gate behind this
+      // flag — it no longer does, and that was checked here rather than assumed:
+      // a PDF renders complete with toolbar and page thumbnails with plugins off.
+      // Turning it on to be safe would widen what the renderer can load for nothing.
       // Required, not a tuning knob. Closing the window HIDES it, and Chromium
       // throttles timers and network in hidden windows — which would quietly
       // starve the SSE activity feed exactly when the app is meant to be sitting

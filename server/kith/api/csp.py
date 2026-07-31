@@ -8,7 +8,7 @@ because the one inline script in it is load-bearing: it sets the dark class befo
 paint, and blocking it means a white flash on every single launch. A hand-written
 policy gets that wrong once and nobody connects the flash to the header.
 
-Two deliberate relaxations, both consequences of how the UI is built:
+Three deliberate relaxations, all consequences of how the UI is built:
 
 * ``style-src`` allows inline. The app uses ``style={{…}}`` in several components and
   tints its whole surface by his current mood at runtime; there is no nonce path for
@@ -16,6 +16,12 @@ Two deliberate relaxations, both consequences of how the UI is built:
 * ``img-src`` allows ``data:`` and ``blob:``. Icons are inlined and file previews are
   built client-side. Remote images stay blocked, which also means agent-authored
   markdown cannot silently phone home by referencing an image.
+* ``object-src`` allows ``blob:``. A PDF he wrote is shown in the viewer by handing a
+  blob to the browser's own PDF reader, and ``object-src`` is the directive that governs
+  the ``<embed>`` it lives in. Scoped to ``blob:`` alone — no ``'self'``, no remote — so
+  it permits exactly "render bytes this page already fetched and nothing else". The
+  alternative was refusing to show a PDF at all, or shipping a JS PDF renderer to avoid
+  one CSP token, and neither is a better trade on a local single-user app.
 """
 
 from __future__ import annotations
@@ -40,8 +46,8 @@ _BASE = (
     "font-src 'self' data:",
     "connect-src 'self'",
     "media-src 'self'",
-    "object-src 'none'",
-    "frame-src 'none'",
+    "object-src blob:",
+    "frame-src blob:",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'none'",

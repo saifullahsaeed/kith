@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import html
 import json
+import mimetypes
 import os
 import re
 import shlex
@@ -528,6 +529,38 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None) ->
     return body
 
 
+#: Bytes the viewer will stream for one picture or document. Larger than the text limit
+#: on purpose: a full-page screenshot at 2x is routinely over a megabyte, and the whole
+#: point is to see it. Still a limit, because the browser holds all of it in memory.
+_MAX_MEDIA_BYTES = 40_000_000
+
+
+def media_file(path: str) -> tuple[Path, str]:
+    """A file to be served as-is, and the type to send it as.
+
+    For the things the viewer can show without decoding them as text — a screenshot, a
+    PDF. Returns the resolved path rather than the bytes so the response can stream it
+    and answer range requests, which is how a PDF viewer reads a document: it wants the
+    trailer first, not the whole file.
+
+    Same gate as every other read. Serving raw bytes over HTTP is exactly the shape of
+    bug that turns a file viewer into "read any file on this machine", so the permission
+    check is the first thing that happens and the path is resolved before it.
+    """
+    target = Path(resolve(path))
+    permissions.require_path("read", target, root())
+    if not target.is_file():
+        raise WorkspaceError(f"there's no {path}")
+    size = target.stat().st_size
+    if size > _MAX_MEDIA_BYTES:
+        raise WorkspaceError(
+            f"{path} is {size:,} bytes, too big to show here (max {_MAX_MEDIA_BYTES:,}) — "
+            "open it in another application instead"
+        )
+    kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    return target, kind
+
+
 def read_raw(path: str, max_bytes: int = _MAX_UI_READ) -> str:
     """The file exactly as it is, for the viewer — no line numbers, no window."""
     target = Path(resolve(path))
@@ -915,26 +948,6 @@ def kind_of(path: str) -> str:
     if target.is_dir():
         return "dir"
     return "file" if target.exists() else ""
-
-
-def copy_out(source_path: str, destination: Path) -> None:
-    """Copy something to somewhere else on the machine.
-
-    A plain copy now that both ends are the same filesystem. It exists at all because the
-    file browser still offers "put a copy somewhere I choose", which is a reasonable thing
-    to want even when the original is already reachable in Finder.
-    """
-    src = Path(resolve(source_path))
-    permissions.require_path("read", src, root())
-    permissions.require_path("write", Path(destination), root())
-    try:
-        if src.is_dir():
-            shutil.copytree(src, Path(destination) / src.name, dirs_exist_ok=True)
-        else:
-            Path(destination).mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, destination)
-    except OSError as exc:
-        raise WorkspaceError(f"cannot copy {source_path}: {exc}") from None
 
 
 # --------------------------------------------------------------------------- #

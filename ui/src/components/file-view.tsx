@@ -18,13 +18,16 @@ import {
   ExternalLink,
   FileBox,
   FileCode2,
+  FileImage,
   FileText,
+  FileType2,
   FolderOpen,
   Loader2,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { rawFileUrl } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
 /* ── Extension → language table ─────────────────────────────────────────── */
@@ -94,14 +97,44 @@ const BY_NAME: Record<string, Lang> = {
 };
 const MARKDOWN = new Set(["md", "markdown", "mdx"]);
 
+/**
+ * Pictures the browser draws itself.
+ *
+ * Every one of these renders in an `<img>` with no library and no decoding on our side,
+ * which is the whole argument for showing them here: the viewer was answering "this needs
+ * its own application" for a PNG he had just taken a screenshot into.
+ *
+ * SVG is on the list, and inside an `<img>` rather than inlined into the document. An SVG
+ * can carry `<script>`, and inlining one written by an agent would be handing it script
+ * execution on this origin; an `<img>` renders the picture with scripts inert. Its source
+ * is still one click away, because for an SVG the source is often the interesting part.
+ */
+const IMAGES: Record<string, string> = {
+  png: "PNG",
+  jpg: "JPEG",
+  jpeg: "JPEG",
+  gif: "GIF",
+  webp: "WebP",
+  avif: "AVIF",
+  bmp: "Bitmap",
+  ico: "Icon",
+  svg: "SVG",
+};
+
 type Kind =
   | { type: "markdown"; label: string }
   | { type: "code"; lang: string; label: string }
-  | { type: "plain"; label: string };
+  | { type: "plain"; label: string }
+  | { type: "image"; label: string }
+  | { type: "pdf"; label: string };
 
 function classify(name: string): Kind {
   const base = (name.split("/").pop() ?? name).toLowerCase();
   const ext = base.includes(".") ? base.split(".").pop()! : "";
+  // Before the language tables, because `svg` is in both: it is a picture first and its
+  // markup second, and the source toggle is how you get to the markup.
+  if (IMAGES[ext]) return { type: "image", label: IMAGES[ext] };
+  if (ext === "pdf") return { type: "pdf", label: "PDF" };
   if (MARKDOWN.has(ext)) return { type: "markdown", label: "Markdown" };
   const named = BY_NAME[base];
   if (named) return { type: "code", lang: named.id, label: named.label };
@@ -110,10 +143,132 @@ function classify(name: string): Kind {
   return { type: "plain", label: ext ? ext.toUpperCase() : "Text" };
 }
 
+/**
+ * Should the caller skip reading this file as text?
+ *
+ * Exported because the three places that mount the viewer fetch the text body themselves,
+ * and for a PNG that fetch is worse than wasted: it reads a megabyte off disk to fail a
+ * UTF-8 decode, and that failure is what used to put "This one needs its own application"
+ * in front of a screenshot.
+ *
+ * SVG is the exception and deliberately still fetched. It *is* text — cheap to read, and
+ * the source is what you want half the time you open one — so it renders as a picture and
+ * keeps the source toggle. Asking the question this way round, rather than "is it media",
+ * is what makes that case expressible.
+ */
+export function skipTextRead(name: string): boolean {
+  const kind = classify(name);
+  return kind.type === "pdf" || (kind.type === "image" && kind.label !== "SVG");
+}
+
 /** The server says a file isn't text when it can't be decoded — which for a workbook
- *  or an image is the normal case, not a failure. */
+ *  is the normal case, not a failure. */
 function looksBinary(error: string): boolean {
   return /binary file/i.test(error);
+}
+
+/**
+ * A file's own bytes, as a URL an `<img>` or `<embed>` can use.
+ *
+ * The indirection is the API token. Every `/api` request needs a header, `fetch` is wrapped
+ * once to add it — and an image element does not go through `fetch`, so pointing `src`
+ * straight at the endpoint yields a 401 and a broken-image icon with nothing in the console
+ * to say why. So the bytes are fetched (with the header), turned into a blob URL, and that
+ * is what the element gets.
+ *
+ * Revoked on the way out. A blob URL pins its bytes in memory until it is released, and a
+ * few full-page screenshots is tens of megabytes held by a viewer that has been closed.
+ */
+function useMedia(path: string): { url: string; error: string; loading: boolean } {
+  const [state, setState] = useState<{ url: string; error: string }>({ url: "", error: "" });
+
+  useEffect(() => {
+    let cancelled = false;
+    let created = "";
+    setState({ url: "", error: "" });
+
+    fetch(rawFileUrl(path))
+      .then(async (response) => {
+        if (!response.ok) {
+          // The server sends JSON on refusal — too big, no such file, not allowed — and
+          // that sentence is the useful thing to show.
+          const body = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(body.error ?? `couldn't read it (${response.status})`);
+        }
+        return response.blob();
+      })
+      .then((blob) => {
+        created = URL.createObjectURL(blob);
+        if (cancelled) URL.revokeObjectURL(created);
+        else setState({ url: created, error: "" });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setState({ url: "", error: err instanceof Error ? err.message : String(err) });
+      });
+
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [path]);
+
+  return { ...state, loading: !state.url && !state.error };
+}
+
+/** A picture, at its own size up to the width of the window.
+ *
+ * Checkered behind, because a PNG with transparency on a dark background is otherwise
+ * indistinguishable from a PNG with a dark background — and knowing which one he produced
+ * is often the entire question being asked of the viewer. */
+function ImageBody({ path, alt }: { path: string; alt: string }) {
+  const { url, error, loading } = useMedia(path);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+
+  if (error) return <p className="p-5 text-sm text-destructive">{error}</p>;
+  if (loading) return <Loading label="Loading it…" />;
+
+  return (
+    <div className="flex min-h-full flex-col items-center gap-3 p-6">
+      <div className="checkerboard max-w-full overflow-hidden rounded-lg ring-1 ring-border/60">
+        <img
+          src={url}
+          alt={alt}
+          onLoad={(event) =>
+            setSize({
+              w: event.currentTarget.naturalWidth,
+              h: event.currentTarget.naturalHeight,
+            })
+          }
+          className="block h-auto max-w-full"
+        />
+      </div>
+      {size ? (
+        <p className="text-muted-foreground text-[11px] tabular-nums">
+          {size.w.toLocaleString()} × {size.h.toLocaleString()}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** A PDF, in the browser's own reader — pages, scrolling, search and print for free. */
+function PdfBody({ path }: { path: string }) {
+  const { url, error, loading } = useMedia(path);
+
+  if (error) return <p className="p-5 text-sm text-destructive">{error}</p>;
+  if (loading) return <Loading label="Loading it…" />;
+  // <embed> rather than <iframe>: Chromium hands the blob to its built-in PDF viewer
+  // either way, and an embed cannot navigate itself somewhere else.
+  return <embed src={url} type="application/pdf" className="size-full" title={path} />;
+}
+
+function Loading({ label }: { label: string }) {
+  return (
+    <p className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
+      <Loader2 className="size-4 animate-spin" />
+      {label}
+    </p>
+  );
 }
 
 /**
@@ -134,11 +289,8 @@ function NeedsAnApp({
   const [app, setApp] = useState<string | null>(null);
   const [busy, setBusy] = useState<"open" | "reveal" | null>(null);
   const [failed, setFailed] = useState("");
-  // Set after a handoff that widened to the folder, so the note can say so — a page
-  // arriving with its stylesheet is the difference between working and looking broken.
-  const [handedFolder, setHandedFolder] = useState(false);
 
-  // Asked by extension, so nothing is copied out of the sandbox just to label a button.
+  // Asked by extension, so the button can be labelled without touching the file.
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/workspace/opens-with?path=${encodeURIComponent(name)}`)
@@ -159,10 +311,6 @@ function NeedsAnApp({
     setBusy(reveal ? "reveal" : "open");
     setFailed("");
     onOpenOnHost(reveal)
-      .then((result) => {
-        const handoff = result as { folderHandedOver?: boolean } | undefined;
-        if (handoff?.folderHandedOver) setHandedFolder(true);
-      })
       .catch((err: unknown) => setFailed(err instanceof Error ? err.message : String(err)))
       .finally(() => setBusy(null));
   };
@@ -202,9 +350,7 @@ function NeedsAnApp({
 
       {failed ? <p className="text-destructive mt-3 max-w-sm text-xs">{failed}</p> : null}
       <p className="text-muted-foreground/60 mt-3 text-[11px]">
-        {handedFolder
-          ? "Its whole folder was copied to your Kith files, so anything it loads alongside it came too."
-          : "A copy is placed in your Kith files folder first."}
+        It opens where it lives, so anything you change there is the real file.
       </p>
     </div>
   );
@@ -300,11 +446,17 @@ export function FileViewer({
   const [view, setView] = useState<"rendered" | "source">("rendered");
   useEffect(() => setView("rendered"), [name]);
 
+  const media = kind.type === "image" || kind.type === "pdf";
+  // An SVG is a picture and a document at once, so it gets the toggle: the markup is
+  // frequently the thing being checked. A PNG has no source to show.
+  const hasSource = kind.type === "markdown" || kind.label === "SVG";
+
   const base = name.split("/").pop() || name;
   const heading = title || base;
-  const stats = content
-    ? `${content.split("\n").length.toLocaleString()} lines · ${content.length.toLocaleString()} chars`
-    : "";
+  const stats =
+    content && !media
+      ? `${content.split("\n").length.toLocaleString()} lines · ${content.length.toLocaleString()} chars`
+      : "";
 
   // Escape closes it. A Dialog gave this for free; a page has to say so, and a full-window
   // view you cannot dismiss from the keyboard is worse than the dialog it replaced.
@@ -339,7 +491,11 @@ export function FileViewer({
           holding a gap where the traffic lights are drawn. */}
       <div className="window-drag-region window-controls-gap flex shrink-0 items-start gap-3 border-b border-border/60 bg-muted/25 px-4 py-3">
         <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-background/70 text-sky-500 ring-1 ring-border/60">
-          {kind.type === "code" ? (
+          {kind.type === "image" ? (
+            <FileImage className="size-4" />
+          ) : kind.type === "pdf" ? (
+            <FileType2 className="size-4" />
+          ) : kind.type === "code" ? (
             <FileCode2 className="size-4" />
           ) : (
             <FileText className="size-4" />
@@ -359,7 +515,7 @@ export function FileViewer({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {kind.type === "markdown" && content != null ? (
+          {hasSource && content != null ? (
             <div className="inline-flex rounded-lg border border-border/60 bg-background/70 p-0.5 text-xs">
               {(["rendered", "source"] as const).map((v) => (
                 <button
@@ -398,17 +554,24 @@ export function FileViewer({
 
       {/* body */}
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto bg-background">
-        {error && looksBinary(error) ? (
+        {media && view === "rendered" ? (
+          // Shown as itself, from its own bytes — so `content` and `error` are not
+          // consulted at all. The three callers skip the text fetch for these
+          // (`showsAsMedia`), and a picture that arrived as a failed UTF-8 decode is
+          // exactly how a screenshot used to be reported as needing another application.
+          kind.type === "pdf" ? (
+            <PdfBody path={name} />
+          ) : (
+            <ImageBody path={name} alt={base} />
+          )
+        ) : error && looksBinary(error) ? (
           // Not an error — an xlsx simply isn't text, and saying so in red while
           // hiding the useful action in a 16px icon was the wrong way round.
           <NeedsAnApp name={base} onOpenOnHost={onOpenOnHost} />
         ) : error ? (
           <p className="p-5 text-sm text-destructive">{error}</p>
         ) : content == null ? (
-          <p className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Reading it…
-          </p>
+          <Loading label="Reading it…" />
         ) : (
           <FileBody kind={kind} content={content} view={view} scroller={bodyRef} />
         )}
@@ -429,6 +592,9 @@ function FileBody({
   scroller: RefObject<HTMLDivElement | null>;
 }) {
   if (!content.trim()) return <p className="p-5 text-sm text-muted-foreground">(empty file)</p>;
+  // An SVG viewed as source. Highlighted as XML, which is what it is — the fallback `<pre>`
+  // would show a wall of undifferentiated angle brackets.
+  if (kind.type === "image") return <Code code={content} language="xml" numbered />;
   if (kind.type === "markdown" && view === "rendered") {
     const headings = outlineOf(content);
     return (

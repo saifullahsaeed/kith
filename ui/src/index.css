@@ -381,3 +381,19 @@
 .dark .hljs-selector-id {
   color: oklch(0.77 0.1 205);
 }
+
+/* Behind a picture in the file viewer, so transparency is visible as transparency.
+   A PNG with an alpha channel on a dark background otherwise looks identical to a PNG
+   with a dark background painted in, and which of those he produced is frequently the
+   whole question being asked of the viewer. */
+.checkerboard {
+  --square: 10px;
+  background-color: oklch(0.28 0.008 60);
+  background-image:
+    linear-gradient(45deg, oklch(0.34 0.008 60) 25%, transparent 25% 75%, oklch(0.34 0.008 60) 75%),
+    linear-gradient(45deg, oklch(0.34 0.008 60) 25%, transparent 25% 75%, oklch(0.34 0.008 60) 75%);
+  background-position:
+    0 0,
+    var(--square) var(--square);
+  background-size: calc(var(--square) * 2) calc(var(--square) * 2);
+}

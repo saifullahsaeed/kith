@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
-import { FileViewer } from "@/components/file-view";
+import { FileViewer, skipTextRead } from "@/components/file-view";
 import { fetchWorkspaceFile } from "@/lib/backend/brain";
-import { handOffAndOpen, useFileViewer } from "@/lib/files";
+import { openWorkspaceFile, useFileViewer } from "@/lib/files";
 
 /**
  * The file viewer, mounted once and driven by the store.
@@ -21,6 +21,10 @@ export function WorkspaceFileViewer() {
     if (!path) return;
     setContent(null);
     setError("");
+    // A picture or a PDF is loaded by the viewer from its own bytes, so reading it as
+    // text here would spend a megabyte to produce a decode error — which is what the
+    // viewer used to show, as "this one needs its own application".
+    if (skipTextRead(path)) return;
     let cancelled = false;
     // The same reader the file browser and task deliverables use. Writing a second one
     // here is how I got a decoder that assumed base64 and then failed on the first
@@ -46,7 +50,7 @@ export function WorkspaceFileViewer() {
       name={path}
       content={content}
       error={error}
-      onOpenOnHost={(reveal) => handOffAndOpen(path, reveal)}
+      onOpenOnHost={(reveal) => openWorkspaceFile(path, reveal)}
     />
   );
 }

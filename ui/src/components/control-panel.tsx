@@ -54,12 +54,18 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { TaskDetailPage } from "@/components/task-detail";
-import { CodeBlock, FileViewer, Markdown, MarkdownInline } from "@/components/file-view";
+import {
+  CodeBlock,
+  FileViewer,
+  Markdown,
+  MarkdownInline,
+  skipTextRead,
+} from "@/components/file-view";
 import {
   copyText,
   formatModified,
   formatSize,
-  handOffAndOpen,
+  openWorkspaceFile,
   makeFolder,
   remove as removeFile,
   rename as renameEntry,
@@ -2719,6 +2725,9 @@ function Workspace() {
   const openFile = (name: string) => {
     const p = join(name);
     setFile({ path: p, content: null });
+    // The viewer shows a picture or a PDF from its own bytes; reading it as text here
+    // would only produce a decode error for it to display.
+    if (skipTextRead(p)) return;
     const stale = (cur: typeof file) => cur?.path !== p;
     fetchWorkspaceFile(p)
       .then((f) => setFile((cur) => (stale(cur) ? cur : { path: p, content: f.content })))
@@ -3001,14 +3010,14 @@ function Workspace() {
                   {!isDir ? (
                     <ContextMenuItem
                       icon={<ExternalLink className="size-3.5" />}
-                      onSelect={() => void handOffAndOpen(full)}
+                      onSelect={() => void openWorkspaceFile(full)}
                     >
                       Open in another app
                     </ContextMenuItem>
                   ) : null}
                   <ContextMenuItem
                     icon={<FolderOpen className="size-3.5" />}
-                    onSelect={() => void handOffAndOpen(full, true)}
+                    onSelect={() => void openWorkspaceFile(full, true)}
                   >
                     Show on your machine
                   </ContextMenuItem>
@@ -3049,7 +3058,7 @@ function Workspace() {
           content={file.content}
           error={file.error}
           onDownload={file.content ? download : undefined}
-          onOpenOnHost={(reveal) => handOffAndOpen(file.path, reveal)}
+          onOpenOnHost={(reveal) => openWorkspaceFile(file.path, reveal)}
         />
       ) : null}
     </>

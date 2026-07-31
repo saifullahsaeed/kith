@@ -106,44 +106,48 @@ export interface HandoffResult {
   /** False for anything that would execute; revealing it is still offered. */
   openable: boolean;
   note: string;
-  /** True when a whole folder came out — a page needs its stylesheet alongside it. */
-  folderHandedOver: boolean;
   /** What this machine opens it with, when that could be determined. */
   opensWith: string | null;
 }
 
-/** Copy a file out of the sandbox onto this machine. */
-export async function handOff(path: string): Promise<HandoffResult> {
-  const response = await fetch("/api/workspace/handoff", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
-  });
-  const body = (await response.json()) as HandoffResult & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `couldn't export (${response.status})`);
-  return body;
-}
-
-/** Open it with whatever this machine uses for that type, or show it in the folder. */
-export async function openOnHost(hostPath: string, reveal = false): Promise<void> {
+async function open(body: unknown): Promise<HandoffResult> {
   const response = await fetch("/api/workspace/open", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hostPath, reveal }),
+    body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `couldn't open it (${response.status})`);
-  }
+  const detail = (await response.json().catch(() => ({}))) as HandoffResult & { error?: string };
+  if (!response.ok) throw new Error(detail.error ?? `couldn't open it (${response.status})`);
+  return detail;
 }
 
-/** Export then open in one go, which is what clicking "Open in…" means. */
-export async function handOffAndOpen(path: string, reveal = false): Promise<HandoffResult> {
-  const result = await handOff(path);
-  // A file that would execute is revealed instead — the server refuses to run it, and
-  // arriving at an error dialog would be a worse answer than showing it in the folder.
-  await openOnHost(result.hostPath, reveal || !result.openable);
-  return result;
+/**
+ * Open one of his files in another application, or show it in the file manager.
+ *
+ * One request. It used to be two — copy the file out of the sandbox, then open the path
+ * that came back — and the copy is gone, because his folder is a real folder and Preview
+ * can open the file exactly where it is. The server decides whether to open or reveal:
+ * anything executable is revealed rather than run, and that call is better made where the
+ * file is than by a renderer that would have to ask first.
+ */
+export function openWorkspaceFile(path: string, reveal = false): Promise<HandoffResult> {
+  return open({ path, reveal });
+}
+
+/** Open or reveal an absolute path — his databases, his persona folder, a transcript.
+ *  Those live outside his workspace, so they are named directly. The server still
+ *  refuses anything outside the folders Kith owns. */
+export async function openOnHost(hostPath: string, reveal = false): Promise<void> {
+  await open({ hostPath, reveal });
+}
+
+/** The URL that serves a file as its own bytes rather than as text.
+ *
+ * Fetched rather than used as a `src` directly: /api needs the token header, and an
+ * `<img src>` cannot carry one — so an image element pointed at this URL gets a 401 and
+ * shows a broken-image icon with nothing in the console to explain it. See `useMedia`. */
+export function rawFileUrl(path: string): string {
+  return `/api/workspace/raw?path=${encodeURIComponent(path)}`;
 }
 
 // -- the viewer, openable from anywhere ------------------------------------- //

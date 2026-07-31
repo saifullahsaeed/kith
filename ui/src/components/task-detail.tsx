@@ -22,9 +22,9 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/presence";
-import { FileViewer, Markdown, MarkdownInline } from "@/components/file-view";
+import { FileViewer, Markdown, MarkdownInline, skipTextRead } from "@/components/file-view";
 import { EditableText } from "@/components/ui/editable-text";
-import { handOffAndOpen } from "@/lib/files";
+import { openWorkspaceFile } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import {
   createBrainItem,
@@ -525,7 +525,9 @@ function DeliverableRow({
 
   const preview = () => {
     setOpen(true);
-    if (body == null && isFile) {
+    // A screenshot he attached as a deliverable is shown by the viewer from its own
+    // bytes, so it is not read as text here — that only ever produced a decode error.
+    if (body == null && isFile && !skipTextRead(d.content)) {
       fetchWorkspaceFile(d.content)
         .then((f) => setBody(f.content))
         .catch((e) => setErr(e instanceof Error ? e.message : "couldn't read that file"));
@@ -600,7 +602,7 @@ function DeliverableRow({
             </span>
           }
           onDownload={onDownload}
-          onOpenOnHost={isFile ? (reveal) => handOffAndOpen(d.content, reveal) : undefined}
+          onOpenOnHost={isFile ? (reveal) => openWorkspaceFile(d.content, reveal) : undefined}
         />
       ) : null}
     </li>

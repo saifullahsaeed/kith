@@ -1,14 +1,11 @@
-"""Getting a file out of his sandbox and into an app you already have.
+"""Opening one of his files in an application you already have.
 
-His files live inside a Docker container, which makes them invisible to everything
-else on the machine: a spreadsheet he built can be read in the file viewer and nowhere
-else. That is a poor answer for anything the viewer can't render well — a workbook, a
-PDF, an image, an archive — and it makes his work feel like it is trapped.
+Some files are better seen somewhere else. A spreadsheet, a Word document, an archive:
+the viewer cannot render them and should not try, so the honest answer is to hand the
+file to whatever you normally open that kind of thing with, or to show it in the file
+manager.
 
-So a file can be *handed off*: copied to a folder on your machine, then opened with
-whatever you normally use for that kind of file, or shown in the file manager.
-
-Two decisions worth knowing:
+Three decisions worth knowing:
 
 **The server does the opening, not the renderer.** The desktop app deliberately runs
 with no preload and no ``contextBridge`` — every security-relevant Electron default is
@@ -16,10 +13,22 @@ already the safe one, and the interface only needs ``fetch`` to its own origin. 
 an IPC bridge to launch files would widen the renderer's reach for something the
 server can do directly. It also means this works the same in a browser.
 
-**Only inside the handoff folder.** "Open this path with the default application" is a
-capability worth being careful with, so it is not offered for arbitrary paths: a file
-is copied into ``~/Kith files`` first and only paths that resolve inside it can be
-opened. Nothing here can reach the rest of your disk.
+**Only the folders Kith owns.** "Open this path with the default application" is a
+capability worth being careful with, so it is not offered for arbitrary paths: see
+:func:`_openable_roots`. Nothing here reaches the rest of your disk.
+
+**It opens the real file, in place.** It used to copy first, into ``~/Kith files``, and
+that was not caution — it was the sandbox. His files lived in a Docker container and
+``docker cp`` was the only way anything else on the machine could see them. The
+container is gone; his folder is a real folder in your home directory, and Preview can
+open it exactly where it is.
+
+Copying afterwards cost three things. It duplicated every artifact he ever handed over.
+It meant "open" could show you a *stale* copy of a file he had since changed. And the
+copy of an ``index.html`` arrived without the stylesheet next to it, so a page he built
+opened unstyled — which looks like he built it badly. There was a whole mechanism here
+for widening a handoff to the parent folder to compensate; opening in place makes the
+problem not exist, because the stylesheet was never anywhere else.
 """
 
 from __future__ import annotations
@@ -27,22 +36,12 @@ from __future__ import annotations
 import os
 import platform
 import shlex
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from kith.infra import default_app
 from kith.infra import workspace as sandbox
-
-#: Where handed-off files land. Visible and obvious on purpose: the point is that they
-#: stop being trapped, so they go somewhere you would think to look, not a temp dir
-#: that gets swept away.
-HANDOFF_DIR = Path.home() / "Kith files"
-
-#: Files whose siblings are part of them. A page loads its stylesheet and scripts from
-#: alongside itself, so handing over the page alone hands over something broken.
-COMPANION_SUFFIXES = frozenset({".html", ".htm", ".xhtml", ".svg", ".ipynb", ".md"})
 
 #: Extensions that would run something rather than open something. Handing one to the
 #: default application means executing it, so these are revealed in the file manager
@@ -81,7 +80,7 @@ class HandoffError(RuntimeError):
 
 @dataclass(frozen=True)
 class Handoff:
-    """A file now on the machine, and what may be done with it."""
+    """A file on the machine, and what may be done with it."""
 
     sandbox_path: str
     host_path: Path
@@ -89,8 +88,6 @@ class Handoff:
     #: False for anything that would execute. Revealing it is still offered.
     openable: bool
     note: str = ""
-    #: True when a whole folder came out, not just the one file that was asked for.
-    folder_handed_over: bool = False
     #: What the machine would open it with, for the button's label. None when we
     #: can't tell, in which case the generic wording is used.
     opens_with: str | None = None
@@ -104,70 +101,53 @@ class Handoff:
             "openable": self.openable,
             "note": self.note,
             "opensWith": self.opens_with,
-            "folderHandedOver": self.folder_handed_over,
         }
 
 
-def export(path: str) -> Handoff:
-    """Copy a sandbox file — or the folder it needs — out to the handoff folder.
+def locate(path: str) -> Handoff:
+    """Where one of his files actually is, and whether it can be opened.
 
-    The sandbox layout is mirrored underneath, so two files with the same name from
-    different directories don't collide and you can still tell where something came
-    from. Overwrites on purpose: handing off the same file twice should give you the
-    current version, not ``report (3).md``.
-
-    A folder is copied whole. So is the parent of a page that loads assets from
-    alongside it: copying just ``index.html`` out of a site he built leaves its
-    stylesheet and scripts behind, and the page then opens unstyled — which looks like
-    he built it badly rather than like a file that arrived incomplete.
+    No copying: his folder is a real folder, so the answer is the path itself. What is
+    left is the part that was never about the sandbox — whether handing this to the
+    operating system would *open* something or *run* something.
     """
-    resolved = sandbox.resolve(path)
-    kind = sandbox.kind_of(path)
-    if not kind:
+    if not sandbox.kind_of(path):
         raise HandoffError(f"There's no {path} in his files.")
+    target = Path(sandbox.resolve(path))
 
-    # A page's assets sit next to it, so the folder is the thing that works.
-    widened = kind == "file" and Path(resolved).suffix.lower() in COMPANION_SUFFIXES
-    source = str(Path(resolved).parent) if widened else resolved
-
-    relative = source.removeprefix(sandbox.HOME).lstrip("/")
-    destination = HANDOFF_DIR / relative if relative else HANDOFF_DIR
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    # docker cp writes a directory *into* the destination, so a stale copy has to go
-    # first or the tree nests one level deeper on every handoff.
-    if kind == "dir" or widened:
-        if destination.exists():
-            shutil.rmtree(destination, ignore_errors=True)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        sandbox.copy_out(source, destination.parent)
-    else:
-        sandbox.copy_out(source, destination)
-
-    # What to hand to the OS: the file itself, even when its folder came along.
-    target = HANDOFF_DIR / resolved.removeprefix(sandbox.HOME).lstrip("/")
-    if not target.exists():
-        raise HandoffError(f"{path} didn't come out of the sandbox.")
-    destination = target
-
-    suffix = destination.suffix.lower()
-    executable = destination.is_file() and (suffix in EXECUTABLE_SUFFIXES or _has_execute_bit(destination))
+    suffix = target.suffix.lower()
+    executable = target.is_file() and (suffix in EXECUTABLE_SUFFIXES or _has_execute_bit(target))
     return Handoff(
         sandbox_path=path,
-        host_path=destination,
-        size=_size_of(destination),
-        folder_handed_over=widened or kind == "dir",
+        host_path=target,
+        size=_size_of(target),
         openable=not executable,
         note=(
             "This one would run rather than open, so it's shown in the folder instead." if executable else ""
         ),
-        opens_with=None if executable else default_app.for_filename(destination.name),
+        opens_with=None if executable else default_app.for_filename(target.name),
     )
+
+
+def open_workspace_file(path: str, *, reveal: bool = False) -> Handoff:
+    """Open one of his files, or show it in the file manager.
+
+    The whole action in one call. It was two — export, then open the path that came back
+    — because the first step used to copy the file somewhere the second step could reach.
+    With nothing to copy, a round trip that returns a path so the caller can immediately
+    send it back is just a round trip.
+    """
+    found = locate(path)
+    if reveal or not found.openable:
+        _launch(_openable(found.host_path), reveal=True)
+    else:
+        open_with_default_app(found.host_path)
+    return found
 
 
 def open_with_default_app(host_path: Path) -> None:
     """Hand a file to whatever the machine uses for that type."""
-    target = _inside_handoff(host_path)
+    target = _openable(host_path)
     if target.is_file() and (target.suffix.lower() in EXECUTABLE_SUFFIXES or _has_execute_bit(target)):
         raise HandoffError(
             f"{target.name} would be executed rather than opened. Showing it in the "
@@ -178,7 +158,7 @@ def open_with_default_app(host_path: Path) -> None:
 
 def reveal(host_path: Path) -> None:
     """Show a file in the file manager, selected."""
-    _launch(_inside_handoff(host_path), reveal=True)
+    _launch(_openable(host_path), reveal=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -189,16 +169,15 @@ def _openable_roots() -> list[Path]:
 
     Narrow on purpose. "Hand a path to the operating system" is a capability worth being
     careful with, and the list is the folders Kith itself owns: where he works, where his
-    databases are, where his persona is, and the handoff folder from when he lived in a
-    container. Everything else is refused by name.
+    databases are, and where his persona is. Everything else is refused by name.
 
-    It has to be a list rather than one root because the sandbox went away: his files are
-    real folders on your machine now, and the settings page reveals each of them.
+    It has to be a list rather than one root because his files are real folders on your
+    machine, and the settings page reveals each of them.
     """
     from kith import settings
     from kith.infra import workspace
 
-    roots = [workspace.root(), settings.DATA_DIR, HANDOFF_DIR]
+    roots = [workspace.root(), settings.DATA_DIR]
     persona = settings.PERSONA_DIR or settings.DEFAULT_PERSONA_DIR
     if persona:
         roots.append(Path(persona))
@@ -211,7 +190,7 @@ def _openable_roots() -> list[Path]:
     return resolved
 
 
-def _inside_handoff(host_path: Path) -> Path:
+def _openable(host_path: Path) -> Path:
     """Refuse anything outside the folders Kith owns.
 
     ``resolve()`` first, so ``../`` and symlinks are settled before the comparison rather

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flask import jsonify, request
+from flask import jsonify, request, send_file
 
 from kith.api.blueprint import api
 from kith.infra import default_app
@@ -42,48 +42,61 @@ def workspace_file():
         return jsonify({"error": str(exc)}), 400
 
 
-@api.post("/workspace/handoff")
+@api.get("/workspace/raw")
 @api.doc(
-    summary="Copy a file out of the sandbox onto this machine",
+    summary="Serve a workspace file as itself",
     description=(
-        "Copies one of his files to the handoff folder and reports where it landed, "
-        "so it can be opened in whatever you normally use for that file type. "
-        "Body: {path}. Overwrites an earlier copy, so you get the current version."
+        "The bytes of one file at ?path=, with its own content type — so a picture or a "
+        "PDF can be shown rather than decoded as text. Streamed, and answers range "
+        "requests, which is how a PDF viewer reads a document."
     ),
 )
-def workspace_handoff():
-    body = request.get_json(silent=True) or {}
-    path = str(body.get("path") or "").strip()
+def workspace_raw():
+    path = request.args.get("path") or ""
     if not path:
         return jsonify({"error": "path required"}), 400
     try:
-        return jsonify(handoff.export(path).public())
+        target, kind = sandbox.media_file(path)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
+    # conditional=True gives ETag/If-Modified-Since and Range handling for free.
+    # download_name is set but as_attachment is not, so a save keeps the real name
+    # while a view still renders in place.
+    return send_file(target, mimetype=kind, conditional=True, download_name=target.name)
 
 
 @api.post("/workspace/open")
 @api.doc(
-    summary="Open or reveal a handed-off file",
+    summary="Open or reveal a file in another application",
     description=(
-        "Opens the file with the machine's default application, or shows it in the "
-        "file manager when {reveal: true}. Only paths inside the handoff folder are "
-        "accepted, and anything executable is revealed rather than run. "
-        "Body: {hostPath, reveal?}."
+        "Opens the file with the machine's default application, or shows it in the file "
+        "manager when {reveal: true}. Takes {path} for one of his files, or {hostPath} "
+        "for an absolute path — which must be inside a folder Kith owns. Anything "
+        "executable is revealed rather than run. Body: {path | hostPath, reveal?}."
     ),
 )
 def workspace_open():
     body = request.get_json(silent=True) or {}
+    path = str(body.get("path") or "").strip()
     host_path = str(body.get("hostPath") or "").strip()
-    if not host_path:
-        return jsonify({"error": "hostPath required"}), 400
+    reveal = bool(body.get("reveal"))
+    if not path and not host_path:
+        return jsonify({"error": "path or hostPath required"}), 400
     try:
-        if body.get("reveal"):
+        # One of his files, by workspace path: the common case, and the whole action in
+        # a single request.
+        if path:
+            return jsonify({"ok": True, **handoff.open_workspace_file(path, reveal=reveal).public()})
+        # An absolute path — his databases, his persona folder, a transcript. Those are
+        # not under his workspace, so they arrive already resolved.
+        if reveal:
             handoff.reveal(Path(host_path))
         else:
             handoff.open_with_default_app(Path(host_path))
     except handoff.HandoffError as refused:
         return jsonify({"error": str(refused)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify({"ok": True})
 
 
