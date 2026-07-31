@@ -245,6 +245,26 @@ def _curiosity_prompt() -> str:
     )
 
 
+#: How much of one argument value to carry into the live feed. Long enough for a path or a
+#: short command to arrive whole, short enough that a file's entire contents does not travel
+#: down the event stream to be truncated by CSS at the other end.
+_ARG_CHARS = 120
+
+
+def _short_args(arguments: dict) -> dict:
+    """Arguments trimmed for display, as data rather than as a sentence.
+
+    Values only — the interface decides which argument is the subject of which verb, because
+    that is a presentation question and it changes when the wording changes.
+    """
+    trimmed: dict[str, str] = {}
+    for key, value in (arguments or {}).items():
+        text = value if isinstance(value, str) else str(value)
+        text = " ".join(text.split())
+        trimmed[key] = text[: _ARG_CHARS - 1] + "…" if len(text) > _ARG_CHARS else text
+    return trimmed
+
+
 def _describe_call(name: str, arguments: dict) -> str:
     if not arguments:
         return f"{name}()"

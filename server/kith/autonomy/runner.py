@@ -37,6 +37,7 @@ from kith.autonomy.prompts import (
     _reflection_prompt,
     _reply_prompt,
     _resume_prompt,
+    _short_args,
 )
 from kith.autonomy.toolsets import _ALLOW
 from kith.config import AGENT_DB_PATH, default_config, ollama_host
@@ -431,7 +432,18 @@ class AutonomyRunner:
             kind = event["type"]
             if kind == "tool_call":
                 tools_used.append(event["name"])
-                self._emit("tool", _describe_call(event["name"], event["arguments"]))
+                # The name and arguments go along as fields, not only squashed into the
+                # sentence. The interface used to recover the name by splitting the string on
+                # "(" and throwing away everything after it — so every file he read showed as
+                # "read a file" and every command as "ran a command", with the one piece of
+                # information worth having discarded on arrival. Parsing prose back into data
+                # is also unreliable: a value containing ", " breaks the split.
+                self._emit(
+                    "tool",
+                    _describe_call(event["name"], event["arguments"]),
+                    tool=event["name"],
+                    args=_short_args(event["arguments"]),
+                )
             elif kind == "delta" and event["role"] == "text":
                 final_text += event["text"]
             elif kind == "stats":
@@ -586,7 +598,14 @@ class AutonomyRunner:
             self._recent_sigs.clear()
             self._recent_shapes.clear()
 
-    def _emit(self, kind: str, text: str, tokens: dict | None = None) -> None:
+    def _emit(
+        self,
+        kind: str,
+        text: str,
+        tokens: dict | None = None,
+        tool: str | None = None,
+        args: dict | None = None,
+    ) -> None:
         """Push one line onto the live Mind feed.
 
         ``tokens`` rides alongside the text rather than being formatted into it, so the
@@ -597,6 +616,10 @@ class AutonomyRunner:
         item = {"kind": kind, "text": text, "at": _now()}
         if tokens:
             item["tokens"] = tokens
+        if tool:
+            item["tool"] = tool
+        if args:
+            item["args"] = args
         self._buffer.append(item)
         with self._state_lock:
             subscribers = list(self._subscribers)

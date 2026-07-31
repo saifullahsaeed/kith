@@ -38,6 +38,13 @@ export interface ActivityItem {
   at: string;
   /** Present on "tokens" items only: what one model request within the tick cost. */
   tokens?: Usage & { round: number };
+  /** Present on "tool" items: the tool's name, as a field rather than embedded in `text`.
+   *  The name used to be recovered by splitting `text` on "(" and discarding the rest, which
+   *  threw away the only interesting part — which file, which command. */
+  tool?: string;
+  /** Present on "tool" items: its arguments, trimmed for display. Which one is the subject of
+   *  the sentence is decided in the interface, since that changes with the wording. */
+  args?: Record<string, string>;
 }
 
 export type AutonomyAction = "start" | "stop" | "tick";

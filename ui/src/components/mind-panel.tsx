@@ -1,5 +1,32 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Brain, PanelRightClose, Play, Square, Zap } from "lucide-react";
+import {
+  AlarmClock,
+  BookOpenText,
+  Brain,
+  CircleDot,
+  Compass,
+  FileCode2,
+  FolderKanban,
+  Globe,
+  Heart,
+  ListChecks,
+  Moon,
+  NotebookPen,
+  PanelRightClose,
+  Play,
+  Puzzle,
+  Search,
+  Send,
+  Sparkles,
+  Square,
+  TerminalSquare,
+  TriangleAlert,
+  Undo2,
+  Unlock,
+  Wrench,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -11,72 +38,170 @@ import type { ActivityItem } from "@/lib/backend/autonomy";
 
 type Autonomy = ReturnType<typeof useAutonomy>;
 
-const KIND: Record<ActivityItem["kind"], { mark: string; tone: string; head?: boolean }> = {
+const KIND: Record<
+  ActivityItem["kind"],
+  { icon: LucideIcon | null; tone: string; head?: boolean }
+> = {
   // "head" kinds begin a tick — each becomes a titled block so you can see every
   // distinct thing he set out to do, and why.
-  start: { mark: "▸", tone: "bg-muted text-blue-500", head: true },
-  reply: { mark: "↩", tone: "bg-muted text-pink-500", head: true },
-  reflect: { mark: "❋", tone: "bg-muted text-kith", head: true },
-  curious: { mark: "✦", tone: "bg-muted text-teal-500", head: true },
-  consolidate: { mark: "☾", tone: "bg-muted text-indigo-500", head: true },
-  breakout: { mark: "⎋", tone: "bg-muted text-orange-500", head: true },
-  tool: { mark: "→", tone: "text-muted-foreground" },
-  thought: { mark: "·", tone: "text-muted-foreground/60" },
-  reminder: { mark: "⏰", tone: "text-orange-500" },
-  done: { mark: "·", tone: "text-muted-foreground/50" },
+  //
+  // Real icons rather than the unicode glyphs that were here (▸ ❋ ✦ ☾ ⎋). Those rendered at
+  // whatever weight and baseline the system font felt like, so the column never lined up and
+  // the feed read as typographic debris beside the rest of an app that uses lucide
+  // throughout. An icon also survives being small, which every one of these is.
+  start: { icon: CircleDot, tone: "text-blue-400", head: true },
+  reply: { icon: Undo2, tone: "text-pink-400", head: true },
+  reflect: { icon: Compass, tone: "text-kith", head: true },
+  curious: { icon: Sparkles, tone: "text-teal-400", head: true },
+  consolidate: { icon: Moon, tone: "text-indigo-400", head: true },
+  breakout: { icon: Unlock, tone: "text-orange-400", head: true },
+  tool: { icon: null, tone: "text-muted-foreground/70" }, // its own icon, by what it touched
+  thought: { icon: null, tone: "text-muted-foreground/50" },
+  reminder: { icon: AlarmClock, tone: "text-orange-400" },
+  done: { icon: null, tone: "text-muted-foreground/40" },
   // Never rendered as a feed line — pulled out in groupTicks and shown as one quiet
   // footer row per tick, because a sentence per model request would bury the thinking.
-  tokens: { mark: "", tone: "" },
-  error: { mark: "⚠", tone: "text-destructive" },
-  status: { mark: "•", tone: "text-muted-foreground" },
+  tokens: { icon: null, tone: "" },
+  error: { icon: TriangleAlert, tone: "text-destructive" },
+  status: { icon: null, tone: "text-muted-foreground/60" },
 };
 
-// Turn a raw tool call ("recall(query=sam)") into plain English so you can see
-// when he reaches for memory, notes, tasks, the web, etc.
-const TOOL_VERB: Record<string, string> = {
-  recall: "searched his memory",
-  remember: "saved a memory",
-  forget: "let a memory go",
-  set_memory_level: "re-shelved a memory",
-  take_note: "wrote a note",
-  read_notes: "read his notes",
-  update_note: "edited a note",
-  journal: "journalled",
-  read_journal: "re-read his journal",
-  add_task: "set himself a task",
-  list_tasks: "checked his tasks",
-  update_task: "updated a task",
-  wonder: "noted a curiosity",
-  list_curiosities: "reviewed his curiosities",
-  update_curiosity: "updated a curiosity",
-  set_reminder: "set a reminder",
-  list_reminders: "checked reminders",
-  cancel_reminder: "cleared a reminder",
-  schedule: "set a standing job",
-  list_schedules: "checked schedules",
-  cancel_schedule: "cleared a schedule",
-  set_mood: "named how he feels",
-  set_identity: "reshaped who he is",
-  note_about_self: "noted something about himself",
-  note_about: "noted something about you",
-  recall_person: "recalled who you are",
-  reach_out: "reached out to you",
-  search_sources: "searched what you gave him",
-  read_source: "read a source you gave him",
-  web_search: "searched the web",
-  fetch_url: "read a web page",
-  shell: "ran a command",
-  read_file: "read a file",
-  write_file: "wrote a file",
-  list_files: "looked through files",
-  create_tool: "built himself a tool",
-  list_tools: "checked his tools",
-  delete_tool: "removed a tool",
+/**
+ * What kind of thing a tool touched, and the icon for it.
+ *
+ * The point is scanning rather than decoration. A column of identical arrows tells you
+ * nothing; a column where six rows carry a terminal and two carry a globe tells you at a
+ * glance that he spent this step building and briefly looked something up — which is the
+ * question you actually have when you glance at the panel.
+ */
+const GROUP: Record<string, { icon: LucideIcon; tone: string }> = {
+  memory: { icon: Brain, tone: "text-violet-400/80" },
+  writing: { icon: NotebookPen, tone: "text-kith/80" },
+  reading: { icon: BookOpenText, tone: "text-kith/70" },
+  tasks: { icon: ListChecks, tone: "text-blue-400/80" },
+  projects: { icon: FolderKanban, tone: "text-blue-400/70" },
+  curiosity: { icon: Sparkles, tone: "text-teal-400/80" },
+  self: { icon: Heart, tone: "text-pink-400/70" },
+  time: { icon: AlarmClock, tone: "text-orange-400/80" },
+  outreach: { icon: Send, tone: "text-pink-400/80" },
+  web: { icon: Globe, tone: "text-sky-400/80" },
+  shell: { icon: TerminalSquare, tone: "text-emerald-400/80" },
+  files: { icon: FileCode2, tone: "text-amber-400/80" },
+  search: { icon: Search, tone: "text-sky-400/70" },
+  tools: { icon: Wrench, tone: "text-muted-foreground/70" },
+  skills: { icon: Puzzle, tone: "text-kith/80" },
 };
 
-function humanizeTool(text: string): string {
-  const name = text.split("(")[0];
-  return TOOL_VERB[name] ?? text;
+/**
+ * What each tool did, and to what.
+ *
+ * `verb` is the phrase; `of` names the argument that is the subject of it. Both halves matter
+ * and only the first existed: every call was rendered by splitting the raw text on "(" and
+ * looking up the bare name, so a whole afternoon of work read as "read a file / wrote a file /
+ * ran a command" over and over, with the one useful piece of information — *which* file,
+ * *which* command — discarded on the way in.
+ *
+ * The table is exhaustive on purpose, and a test asserts it stays that way. Seventeen of the
+ * fifty-five tools had no entry and fell through to the raw `name(arg=value)` string, so the
+ * feed was half plain English and half code, and which half you got depended on which tool he
+ * happened to reach for. A missing entry should fail the suite, not quietly print a function
+ * call at someone.
+ */
+const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROUP }> = {
+  // memory and notes
+  recall: { verb: "searched his memory for", of: "query", group: "memory" },
+  remember: { verb: "remembered", of: "content", group: "memory" },
+  forget: { verb: "let go of a memory", group: "memory" },
+  set_memory_level: { verb: "re-shelved a memory", group: "memory" },
+  take_note: { verb: "noted", of: "title", group: "writing" },
+  read_notes: { verb: "read his notes", group: "reading" },
+  update_note: { verb: "edited a note", group: "writing" },
+  journal: { verb: "wrote in his journal", group: "writing" },
+  read_journal: { verb: "re-read his journal", group: "reading" },
+  // tasks and projects
+  add_task: { verb: "set himself", of: "goal", group: "tasks" },
+  list_tasks: { verb: "looked over his tasks", group: "tasks" },
+  update_task: { verb: "updated a task", group: "tasks" },
+  view_task: { verb: "opened task", of: "id", group: "tasks" },
+  comment_on_task: { verb: "noted on a task", of: "comment", group: "writing" },
+  ask_on_task: { verb: "asked you", of: "question", group: "outreach" },
+  add_checklist_item: { verb: "added a step", of: "text", group: "tasks" },
+  check_item: { verb: "ticked off a step", group: "tasks" },
+  add_deliverable: { verb: "handed over", of: "title", group: "tasks" },
+  create_project: { verb: "started the project", of: "name", group: "projects" },
+  list_projects: { verb: "looked over his projects", group: "projects" },
+  update_project: { verb: "updated a project", group: "projects" },
+  add_milestone: { verb: "added the milestone", of: "title", group: "projects" },
+  update_milestone: { verb: "updated a milestone", group: "projects" },
+  order_milestones: { verb: "put the milestones in order", group: "projects" },
+  unlink_milestones: { verb: "unlinked two milestones", group: "projects" },
+  // curiosity, mood, identity, people
+  wonder: { verb: "grew curious about", of: "topic", group: "curiosity" },
+  list_curiosities: { verb: "reviewed what he is curious about", group: "curiosity" },
+  update_curiosity: { verb: "updated a curiosity", group: "curiosity" },
+  set_mood: { verb: "felt", of: "mood", group: "self" },
+  set_identity: { verb: "reshaped who he is", group: "self" },
+  note_about_self: { verb: "noted about himself", of: "note", group: "self" },
+  note_about: { verb: "noted about you", of: "note", group: "self" },
+  recall_person: { verb: "recalled who you are", group: "self" },
+  // time
+  set_reminder: { verb: "set a reminder", of: "note", group: "time" },
+  list_reminders: { verb: "checked his reminders", group: "time" },
+  cancel_reminder: { verb: "cleared a reminder", group: "time" },
+  schedule: { verb: "set a standing job", of: "note", group: "time" },
+  list_schedules: { verb: "checked his schedules", group: "time" },
+  cancel_schedule: { verb: "cleared a schedule", group: "time" },
+  // reaching out
+  reach_out: { verb: "reached out to you", group: "outreach" },
+  // knowledge and the web
+  search_sources: { verb: "searched your sources for", of: "query", group: "search" },
+  read_source: { verb: "read a source you gave him", group: "reading" },
+  web_search: { verb: "searched the web for", of: "query", group: "search" },
+  fetch_url: { verb: "read", of: "url", group: "web" },
+  browse_page: { verb: "opened", of: "url", group: "web" },
+  // the machine
+  shell: { verb: "ran", of: "command", group: "shell" },
+  read_file: { verb: "read", of: "path", group: "files" },
+  write_file: { verb: "wrote", of: "path", group: "files" },
+  delete_file: { verb: "put in the Trash", of: "path", group: "files" },
+  list_files: { verb: "looked through", of: "path", group: "files" },
+  grep: { verb: "searched files for", of: "pattern", group: "search" },
+  // his own tools and skills
+  create_tool: { verb: "built himself a tool", of: "name", group: "tools" },
+  list_tools: { verb: "checked his own tools", group: "tools" },
+  delete_tool: { verb: "removed one of his tools", group: "tools" },
+  read_skill: { verb: "opened the skill", of: "name", group: "skills" },
+};
+
+/** One feed icon, at the single size this panel uses everywhere. */
+function Glyph({ icon: Mark }: { icon: LucideIcon }) {
+  return <Mark className="size-3.5" strokeWidth={2} />;
+}
+
+/** A tool nobody has written a phrase for: its name, made readable, never raw code. */
+function fallbackVerb(name: string): string {
+  return name.replace(/_/g, " ");
+}
+
+/** The line for one tool call: what he did, the thing he did it to, and an icon for the kind
+ *  of work it was. */
+function describeTool(item: ActivityItem): {
+  verb: string;
+  subject: string;
+  icon: LucideIcon;
+  tone: string;
+} {
+  // `tool` and `args` are the current shape. `text` is parsed only for events recorded before
+  // they existed, so scrolling back through history still reads properly.
+  const name = item.tool ?? item.text.split("(")[0];
+  const entry = TOOL[name];
+  const group = entry ? GROUP[entry.group] : undefined;
+  return {
+    verb: entry?.verb ?? fallbackVerb(name),
+    subject: entry?.of ? (item.args?.[entry.of] ?? "") : "",
+    icon: group?.icon ?? Wrench,
+    tone: group?.tone ?? "text-muted-foreground/60",
+  };
 }
 
 type Tick = { head: ActivityItem; items: ActivityItem[]; usage: Usage[] };
@@ -255,11 +380,14 @@ function TickBlock({ tick }: { tick: Tick }) {
       <div className="flex items-start gap-2.5">
         <span
           className={cn(
-            "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-xs leading-none",
+            // A tick is the unit you scan for, so its mark is the heaviest thing in
+            // the block and readable from the colour alone — blue for work, amber for
+            // reflection, indigo for settling.
+            "bg-muted/60 ring-border/50 mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md ring-1",
             meta.tone,
           )}
         >
-          {meta.mark}
+          {meta.icon ? <Glyph icon={meta.icon} /> : null}
         </span>
         <div className="min-w-0 flex-1">
           <span className="break-words text-sm font-medium leading-snug whitespace-pre-wrap">
@@ -275,17 +403,60 @@ function TickBlock({ tick }: { tick: Tick }) {
         <ul className="mt-2.5 ml-[11px] space-y-2 border-l border-border/60 pl-3.5">
           {tick.items.map((item, i) => {
             const m = KIND[item.kind] ?? KIND.status;
-            const text = item.kind === "tool" ? humanizeTool(item.text) : item.text;
+            const call = item.kind === "tool" ? describeTool(item) : null;
+            const Icon = call?.icon ?? m.icon;
             return (
               <li key={i} className="flex items-start gap-2 text-xs">
-                <span className={cn("shrink-0 leading-relaxed", m.tone)}>{m.mark}</span>
                 <span
                   className={cn(
-                    "min-w-0 flex-1 break-words leading-relaxed whitespace-pre-wrap",
-                    item.kind === "thought" ? "text-foreground/90 italic" : "text-muted-foreground",
+                    "mt-[3px] flex size-3.5 shrink-0 items-center justify-center",
+                    call?.tone ?? m.tone,
                   )}
                 >
-                  {text}
+                  {Icon ? (
+                    <Glyph icon={Icon} />
+                  ) : (
+                    // A thought or a status line: a dot, so the column still aligns and the
+                    // eye is not drawn to something that is only prose.
+                    <span className="bg-current size-1 rounded-full opacity-60" />
+                  )}
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 leading-relaxed",
+                    // A tool call is one row, ellipsised, with the whole value on hover. It
+                    // used to wrap, and a long command became three ragged lines broken
+                    // mid-word ("test_ta / sk54.py") — which made a step of eight calls a
+                    // wall you had to read rather than a list you could scan. Prose still
+                    // wraps: a thought is meant to be read.
+                    call
+                      ? "truncate text-muted-foreground"
+                      : cn(
+                          "break-words whitespace-pre-wrap",
+                          item.kind === "thought"
+                            ? "text-foreground/90 italic"
+                            : "text-muted-foreground",
+                        ),
+                  )}
+                  title={call ? [call.verb, call.subject].filter(Boolean).join(" ") : undefined}
+                >
+                  {call ? (
+                    <>
+                      {call.verb}
+                      {call.subject ? (
+                        <>
+                          {" "}
+                          {/* The subject in mono: a path or a command is scannable that way,
+                              and obviously a literal rather than part of the sentence. */}
+                          <span className="text-foreground/80 font-mono text-[11px]">
+                            {call.subject}
+                          </span>
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    item.text
+                  )}
                 </span>
                 <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
                   {time(item.at)}
