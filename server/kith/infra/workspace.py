@@ -335,10 +335,55 @@ def _carry_records(previous: Path, chosen: Path) -> None:
 
 
 def internal() -> Path:
-    """Where Kith keeps its own records inside the workspace."""
-    directory = root() / INTERNAL_DIR
+    """Where Kith keeps its own records. Beside the databases, not inside his work.
+
+    This used to be ``<workspace>/.kith``, and that overloaded one name with two meanings.
+    ``.kith`` inside a folder now means *that project's* memory — the same idea as a
+    ``CLAUDE.md`` living with the code it describes — so it cannot also mean "the transcript
+    of every conversation he has ever had". A project folder that happened to be the
+    workspace root would have had both, and a project copied elsewhere would have carried
+    his whole history with it.
+
+    Moving them also deletes a failure mode rather than relocating it. History living inside
+    the workspace meant changing the workspace risked stranding it, which is why there was a
+    whole copy-and-verify step for pointing him at a different folder; with records beside
+    the databases, where the work happens is simply irrelevant to what he remembers.
+    """
+    directory = Path(settings.DATA_DIR)
     directory.mkdir(parents=True, exist_ok=True)
+    _migrate_internal(directory)
     return directory
+
+
+_migrated = False
+
+
+def _migrate_internal(destination: Path) -> None:
+    """Bring records forward from the old in-workspace location, once.
+
+    Copied rather than moved, and only when the destination has nothing of that name: a
+    half-finished migration that has eaten the original is far worse than one that leaves a
+    duplicate behind for someone to delete.
+    """
+    global _migrated
+    if _migrated:
+        return
+    _migrated = True
+    try:
+        old = Path(root()) / INTERNAL_DIR
+        if not old.is_dir():
+            return
+        for item in old.iterdir():
+            target = destination / item.name
+            if target.exists():
+                continue
+            if item.is_dir():
+                shutil.copytree(item, target)
+            else:
+                shutil.copy2(item, target)
+    except OSError:
+        # Never fatal. Failing to carry history forward must not stop him working.
+        pass
 
 
 #: The container's home. It appears in fourteen rows of his own memory, in notes he wrote,

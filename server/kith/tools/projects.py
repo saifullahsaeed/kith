@@ -6,6 +6,7 @@ import itertools
 from pathlib import Path
 
 from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES
+from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.tools import paging
 from kith.tools.paging import PAGE_PARAMS
@@ -16,11 +17,45 @@ from kith.tools.registry import tool
 @tool(
     "create_project",
     "Start a project — a bigger goal that groups several tasks and a roadmap of "
-    "milestones. Use this when work is more than a single task.",
-    {"name": STR, "description": {**STR, "description": "What the project is and what 'done' means."}},
+    "milestones. Use this when work is more than a single task. If it involves code or "
+    "files, give it a `directory`: that folder is where the work lives and where the "
+    "project keeps what it learns about itself, in `.kith/memory.md`, which you are shown "
+    "every time you work there.",
+    {
+        "name": STR,
+        "description": {**STR, "description": "What the project is and what 'done' means."},
+        "directory": {
+            **STR,
+            "description": "The folder the work lives in — relative to your own folder, or "
+            "an absolute path your person pointed you at. Leave it out for a project with no "
+            "files, like a piece of research.",
+        },
+    },
     required=("name",),
 )
 def create_project(path: Path, args: dict):
+    """Start a project, and give it a folder if it is the kind that has one.
+
+    A folder is the difference between a project and a list of intentions. It is also where
+    the project's own memory lives — `.kith/memory.md`, read to you every time you work here
+    — so a code project without one has nowhere to keep what it learns about itself.
+
+    Not every project has code, though, and one that does not should not be handed a pretend
+    directory: a shortlist or a piece of research is a project with rows and no folder.
+    """
+    from kith.services import project_memory
+
+    directory = str(args.get("directory") or "").strip()
+    if directory:
+        resolved = Path(sandbox.resolve(directory))
+        resolved.mkdir(parents=True, exist_ok=True)
+        # Created with its scaffold now rather than on first write, so the headings are there
+        # to be filled in instead of the file being invented from scratch later.
+        project_memory.ensure(resolved)
+        made = repo.projects.add_project(
+            path, args["name"], args.get("description") or "", str(resolved)
+        )
+        return {**made, "memory": f"{directory}/.kith/memory.md"}
     return repo.projects.add_project(path, args["name"], args.get("description") or "")
 
 

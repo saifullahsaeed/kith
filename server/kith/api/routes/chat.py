@@ -21,6 +21,7 @@ from kith.config import (
 )
 from kith.domain import clock
 from kith.infra import workspace as sandbox
+from kith.infra.db import repositories as repo
 from kith.schemas import (
     ChatRequestSchema,
 )
@@ -206,7 +207,36 @@ def _present_state() -> str:
     present = memory_context.context_block(AGENT_DB_PATH)
     if present:
         blocks.append(f"[Your memory right now]\n{present}")
+    # What he knows about the project he is in. Injected rather than fetched, deliberately:
+    # a file he has to remember to open is a file he will not open, which is the shape of
+    # nearly every failure this codebase has a comment about.
+    blocks.append(_project_memory_block())
     return "\n\n".join(block for block in blocks if block).strip()
+
+
+def _project_memory_block() -> str:
+    """`.kith/memory.md` for the active project, if exactly one is active.
+
+    One, not all: with two projects open their memories would both arrive and he would have
+    to work out which folder he is in from context, which is the same guessing this exists to
+    remove. Two active projects is also precisely the case sessions are meant to solve — each
+    with its own folder — so this stays narrow rather than growing a heuristic it will not
+    need for long.
+    """
+    from kith.services import project_memory
+
+    try:
+        active = [
+            row
+            for row in repo.projects.list_projects(AGENT_DB_PATH)
+            if row.get("status") == "active" and row.get("directory")
+        ]
+    except Exception:
+        return ""
+    if len(active) != 1:
+        return ""
+    project = active[0]
+    return project_memory.block(project["directory"], project.get("name") or "")
 
 
 class _Recorder:

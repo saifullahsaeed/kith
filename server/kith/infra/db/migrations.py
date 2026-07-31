@@ -391,6 +391,16 @@ def _migrations():
         # let it decide which of them are allowed to interrupt you.
         conn.execute("ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'note'")
 
+    def v24_project_directory(conn):
+        # A project is work in a folder, and until now it was only rows. Nothing recorded
+        # where the code actually was, so "which project is this" had to be inferred from
+        # whatever he happened to be reading — and a project's own memory has nowhere to live
+        # if the project does not know its own directory.
+        #
+        # Nullable, because a project that is not code (a shortlist, a piece of research) has
+        # no directory and should not be given a pretend one.
+        conn.execute("ALTER TABLE projects ADD COLUMN directory TEXT")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -415,6 +425,7 @@ def _migrations():
         v21_conversations,
         v22_milestone_graph,
         v23_message_kind,
+        v24_project_directory,
     ]
 
 

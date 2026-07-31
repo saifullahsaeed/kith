@@ -15,11 +15,23 @@ from kith.services import conversations
 
 @pytest.fixture(autouse=True)
 def workspace(tmp_path, monkeypatch):
-    """Transcripts under a temp folder, not the real ~/Kith."""
-    monkeypatch.setattr("kith.settings.WORKSPACE_DIR", str(tmp_path))
+    """Transcripts under a temp folder, not the real ones.
+
+    DATA_DIR as well as WORKSPACE_DIR, because his records moved out of the workspace and
+    next to the databases — `.kith` inside a folder now means *that project's* memory, so it
+    could not also mean the transcript of every conversation he has ever had. Patching only
+    the workspace left this reading the real transcript folder, and the test that noticed was
+    the one asserting a count: it saw 72 files instead of 2.
+    """
     from kith.infra import workspace as module
 
+    for target in ("kith.settings.WORKSPACE_DIR", "kith.settings.DATA_DIR"):
+        monkeypatch.setattr(target, str(tmp_path))
     monkeypatch.setattr(module.settings, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(module.settings, "DATA_DIR", str(tmp_path))
+    # The migration from the old location runs once per process; reset it so each test
+    # starts with nothing carried in from a previous one's temp folder.
+    monkeypatch.setattr(module, "_migrated", False, raising=False)
     yield tmp_path
 
 

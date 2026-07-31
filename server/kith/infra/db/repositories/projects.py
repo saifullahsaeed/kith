@@ -18,10 +18,17 @@ from kith.infra.db.support import utc_now_iso
 # --------------------------------------------------------------------------- #
 
 
-def add_project(path: Path, name: str, description: str = "") -> dict:
+def add_project(path: Path, name: str, description: str = "", directory: str | None = None) -> dict:
     now = utc_now_iso()
     with session(path) as db:
-        row = Project(name=name, description=description, status="active", created_at=now, updated_at=now)
+        row = Project(
+            name=name,
+            description=description,
+            status="active",
+            directory=directory or None,
+            created_at=now,
+            updated_at=now,
+        )
         db.add(row)
         db.flush()
         return as_dict(row)
