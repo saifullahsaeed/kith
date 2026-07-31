@@ -65,7 +65,7 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
     saved = _read_working_file(work_path)
     if saved is not None:
         lines.append(f"Your working file ({work_path}) — what you've saved so far:")
-        lines.append(saved[:1500] if saved.strip() else "  (empty)")
+        lines.append(_handoff(saved, work_path) if saved.strip() else "  (empty)")
     else:
         lines.append(
             f"You have no working file for this task yet. Create {work_path} and keep your findings "
@@ -89,6 +89,35 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
         hint = "All steps are done — verify it meets the definition of done, attach the deliverable, then mark the task done."
     lines += ["", hint]
     return "\n".join(lines)
+
+
+#: How much of the working file to carry into a tick. 1,500 was the old figure and it cost
+#: him every resume: the task section is only about 1,000 tokens of a 16,000-token prompt, so
+#: there was room to spare and nothing being bought with the frugality.
+_HANDOFF_CHARS = 4_000
+
+
+def _handoff(saved: str, path: str) -> str:
+    """His own notes, from the end.
+
+    The end, not the beginning, and that one word was the whole bug. He appends to this file as
+    he works, so the newest thing in it — usually a literal "### NEXT" list of what he was about
+    to do — is at the bottom. The prompt showed the first 1,500 characters of it. On a 6,805-char
+    file that is the oldest 22%, so his own handoff to himself was reliably the part he could not
+    see, and he resumed by re-reading the codebase instead. That is the App.jsx-twice and
+    styles.css-three-times in the feed.
+
+    The head is not missed: the definition of done and the plan are already in the prompt as the
+    task's description and checklist, so the top of this file is mostly a restatement of them.
+    What is unique to it is the recent work.
+    """
+    text = saved.strip()
+    if len(text) <= _HANDOFF_CHARS:
+        return text
+    return (
+        f"  […{len(text) - _HANDOFF_CHARS:,} earlier characters are still in {path} if you "
+        f"need them. The most recent part:]\n" + text[-_HANDOFF_CHARS:]
+    )
 
 
 def _read_working_file(path: str) -> str | None:

@@ -382,3 +382,48 @@ class TestAMissingPredecessorMustNotDeadlockHim:
 
         repo.projects.update_milestone(db, earlier, status="done")
         assert later not in repo.projects.blocked_milestone_ids(db)
+
+
+class TestTheHandoffBetweenTicks:
+    """A tick keeps no conversation, so his working file *is* the handoff — and it was being
+    read from the wrong end.
+
+    Nothing carries between ticks: the whole message list is a system prompt, a state line and a
+    prompt. Continuity is re-derived, and the working file is the main carrier of it. He appends
+    to that file as he works, so the newest thing in it — usually a literal "### NEXT" list of
+    what he was about to do — is at the bottom. The prompt showed the *first* 1,500 characters.
+    On his 6,749-char task-57 notes that is the oldest 22%, so his own handoff was reliably the
+    part he could not see, and he resumed by re-reading the codebase: App.jsx twice and
+    styles.css three times in one step.
+    """
+
+    def test_a_short_file_arrives_whole(self):
+        from kith.autonomy.prompts import _handoff
+
+        assert _handoff("all of it", "work/task-1.md") == "all of it"
+
+    def test_a_long_file_is_read_from_the_end(self):
+        from kith.autonomy.prompts import _handoff
+
+        text = "OLDEST\n" + ("filler line\n" * 2_000) + "### NEXT: the thing to do"
+        out = _handoff(text, "work/task-1.md")
+
+        # The bug in one assertion.
+        assert "### NEXT: the thing to do" in out
+        assert "OLDEST" not in out
+
+    def test_it_says_what_it_left_out_and_where_to_find_it(self):
+        from kith.autonomy.prompts import _HANDOFF_CHARS, _handoff
+
+        text = "x" * (_HANDOFF_CHARS + 5_000)
+        out = _handoff(text, "work/task-99.md")
+        # Silently truncating would leave him unable to tell a short file from a clipped one.
+        assert "work/task-99.md" in out
+        assert "5,000 earlier characters" in out
+
+    def test_the_budget_is_worth_spending(self):
+        from kith.autonomy.prompts import _HANDOFF_CHARS
+
+        # The task section is ~1,000 tokens of a ~16,000-token tick prompt, so frugality here
+        # bought nothing and cost every resume.
+        assert _HANDOFF_CHARS >= 4_000

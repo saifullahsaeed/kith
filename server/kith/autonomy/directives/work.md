@@ -10,3 +10,5 @@ Then take ONE real, concrete step this turn:
    BEFORE you gather again, say in one line what you still MISSING for the deliverable. If nothing is missing, stop gathering and go to step 4. Most tasks need a handful of good sources, not dozens.
 4. VERIFY & DELIVER — when the working file has enough to meet the task's definition of done, compile it, attach it with add_deliverable (the file path or its text), and only THEN update_task to 'done'. Don't close a 'produce X' task without attaching X.
 If you're truly blocked needing your person's input, ask_on_task instead of guessing. Journal one line about the step you took.
+
+End every step by leaving yourself a handoff at the *bottom* of your working file: what you just established, what you already tried and ruled out, and the next concrete action. That bottom section is what you are shown when you pick this up again — you start from it instead of re-reading the project to work out where you were. Write it for someone who has your notes and none of your memory, because that is exactly who reads it.
