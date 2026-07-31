@@ -549,6 +549,15 @@ class AutonomyRunner:
             allow=_ALLOW.get(mode),
             # A tick that leaves nothing behind is a tick that will be repeated.
             expect_durable=True,
+            # Which OpenRouter stickiness id this step lands on. Chat has always passed
+            # its conversation and a tick passed nothing, falling through to the one
+            # install-wide id — so a session's chat turns and that same session's ticks
+            # were guaranteed to be on different upstream hosts, each keeping its own copy
+            # of the persona. The cacheable region is the persona and nothing else (see
+            # caching.stable_head), and it is byte-identical between the two, so they were
+            # paying to warm the same bytes twice. Empty for a step run from "Run" with
+            # nobody working, which falls back to the install-wide id exactly as before.
+            conversation_id=conversation_id,
         ):
             # Cancellation happens here rather than inside the agent loop, because here it
             # is safe by construction: stream_agent is a generator, so abandoning it stops

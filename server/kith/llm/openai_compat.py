@@ -118,8 +118,13 @@ def stream_once(
         # Keeps a turn's rounds landing on the same upstream host, so the cache one
         # round wrote is the cache the next one reads. A preference, not a pin —
         # availability still falls back.
-        # Per conversation when we know which one, so two unrelated chats do not fight
-        # over the same upstream; the install-wide id is the fallback for ticks.
+        #
+        # Per conversation whenever we know which one, and that now covers a session's
+        # ticks as well as its chat turns. It used to cover only chat: a tick passed no
+        # conversation and fell through to the install-wide id below, so one session kept
+        # two copies of the same cached persona warm on two different hosts. The fallback
+        # is still there and still right — a step run with nobody working belongs to no
+        # session, so the install-wide id is the honest answer for it.
         payload["session_id"] = config.session_id or _session_id()
         pinned = _pinned_provider()
         if pinned:

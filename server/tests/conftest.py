@@ -7,6 +7,7 @@ transaction behaviour, and a mocked database cannot fail the way those did.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,35 @@ def config_db(tmp_path: Path) -> Path:
     path = tmp_path / "config.db"
     config_store.init(path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def no_stray_autonomy_loops():
+    """Stop every autonomy loop a test started, before the next test runs.
+
+    `keep_working` calls `ensure_loop`, which starts a daemon thread that lives until the
+    process exits. Nothing stopped them, so a runner built in one test kept waking every
+    second for the rest of the session — reading `AGENT_DB_PATH` out of the module, which
+    the *next* test then monkeypatches at its own temp database. The thread duly began
+    ticking someone else's fixtures.
+
+    That is exactly how it was found: a test asserting a tick names its session saw six
+    calls where two were expected, four of them from a runner two files away. Silent up to
+    that point, because a stray tick against an empty board does nothing observable.
+
+    The runner is reached through the bound method the thread was given. Introspective, and
+    confined to here on purpose: the alternative is a registry in production code that
+    exists only for tests.
+    """
+    yield
+    for thread in threading.enumerate():
+        if thread.name != "kith-autonomy":
+            continue
+        owner = getattr(getattr(thread, "_target", None), "__self__", None)
+        stop = getattr(owner, "_stop", None)
+        if stop is not None:
+            stop.set()
+        thread.join(timeout=2)
 
 
 @pytest.fixture(autouse=True)
