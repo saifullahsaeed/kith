@@ -133,6 +133,52 @@ class TestTheDuplicateMilestone:
         # order on it, so it was permanently available and looked like real work.
         assert len(repo.projects.list_milestones(db)) == 1
 
+    def test_re_adding_with_after_wires_the_order(self, db, project):
+        """The regression the guard itself caused, and the reason it needed a second pass.
+
+        Laying out a fresh roadmap he has no ids, so he adds the milestones bare and comes
+        back to wire the order — which is the same title again, this time with `after`. The
+        first version of the guard returned the existing milestone and dropped the `after`, so
+        he asked for three edges, got three milestones with no order, asked for the identical
+        three again, and gave up: ten calls, zero edges, every milestone available at once.
+        """
+        from kith.tools import projects as tool
+
+        first = tool.add_milestone(db, {"project_id": project, "title": "The contract is defined"})
+        second = tool.add_milestone(db, {"project_id": project, "title": "Logging works"})
+        # Now the order, on milestones that already exist.
+        again = tool.add_milestone(
+            db, {"project_id": project, "title": "Logging works", "after": [first["id"]]}
+        )
+
+        assert again["id"] == second["id"], "a duplicate row appeared"
+        edges = {(e["milestone_id"], e["depends_on_id"]) for e in repo.projects.dependencies(db)}
+        assert (second["id"], first["id"]) in edges, "the after was thrown away again"
+        # And it says so, so he does not retry a call that worked.
+        assert "waits for" in (again.get("note") or "")
+
+    def test_the_order_is_applied_on_a_freshly_made_one_too(self, db, project):
+        from kith.tools import projects as tool
+
+        first = tool.add_milestone(db, {"project_id": project, "title": "The contract is defined"})
+        second = tool.add_milestone(
+            db, {"project_id": project, "title": "Logging works", "after": [first["id"]]}
+        )
+        edges = {(e["milestone_id"], e["depends_on_id"]) for e in repo.projects.dependencies(db)}
+        assert (second["id"], first["id"]) in edges
+
+    def test_asking_for_the_same_edge_twice_is_harmless(self, db, project):
+        from kith.tools import projects as tool
+
+        first = tool.add_milestone(db, {"project_id": project, "title": "The contract is defined"})
+        for _ in range(3):
+            tool.add_milestone(
+                db, {"project_id": project, "title": "Logging works", "after": [first["id"]]}
+            )
+        # He does retry. Three identical calls must leave one milestone and one edge.
+        assert len(repo.projects.list_milestones(db)) == 2
+        assert len(repo.projects.dependencies(db)) == 1
+
     def test_a_different_title_still_gets_its_own(self, db, project):
         from kith.tools import projects as tool
 

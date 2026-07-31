@@ -82,23 +82,54 @@ def update_project(path: Path, args: dict):
     required=("project_id", "title"),
 )
 def add_milestone(path: Path, args: dict):
-    # Laying out the workout tracker he called this five times for four milestones, so the
-    # roadmap came out with "Workout data model and local persistence are defined" twice —
-    # the second one dangling with no order, permanently available, and looking like real
-    # work. Returning the existing one is better than a second row: he asked for that
-    # milestone to exist, and it does.
+    """Find or create the milestone, then apply its order either way.
+
+    Same title twice used to mean a second row: the roadmap came out with "Workout data model
+    and local persistence are defined" listed twice, the copy dangling with no order on it,
+    permanently available and looking like real work.
+
+    The obvious fix — return the existing one and stop — was worse, and it is worth writing
+    down why. Laying out a fresh roadmap he has no ids yet, so he adds the milestones first
+    with no `after`, and comes back to wire the order once he knows them. That second call is
+    the *same title* with an `after`, which the early return threw on the floor. He tried
+    three edges, got three milestones back with no order, tried the identical three again,
+    and stopped: ten calls, zero edges, and a roadmap where every milestone was available at
+    once. Silently discarding the meaningful half of a call is how you get a caller that
+    retries forever and a person who concludes the feature does not work.
+
+    So: idempotent on the milestone, and `after` is honoured whether the milestone was just
+    made or already there.
+    """
     title = str(args["title"]).strip()
-    for existing in repo.projects.list_milestones(path):
-        if existing["project_id"] == args["project_id"] and existing["title"].strip() == title:
-            return {**existing, "note": "That milestone already existed, so this is the one you have."}
-    created = repo.projects.add_milestone(path, args["project_id"], title, args.get("target_at"))
+    target = next(
+        (
+            m
+            for m in repo.projects.list_milestones(path)
+            if m["project_id"] == args["project_id"] and m["title"].strip() == title
+        ),
+        None,
+    )
+    reused = target is not None
+    if target is None:
+        target = repo.projects.add_milestone(path, args["project_id"], title, args.get("target_at"))
+
     problems = []
+    added = 0
     for earlier in args.get("after") or []:
         try:
-            repo.projects.add_dependency(path, created["id"], int(earlier))
+            repo.projects.add_dependency(path, target["id"], int(earlier))
+            added += 1
         except (TypeError, ValueError) as exc:
             problems.append(str(exc))
-    return {**created, **({"warnings": problems} if problems else {})}
+
+    out = {**target}
+    if reused:
+        out["note"] = "That milestone already existed, so this is the one you have" + (
+            f" — and it now waits for {', '.join(str(a) for a in args['after'])}." if added else "."
+        )
+    if problems:
+        out["warnings"] = problems
+    return out
 
 
 @tool(
