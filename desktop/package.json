@@ -10,11 +10,12 @@
     "icons": "python3 scripts/make-app-icon.py && python3 scripts/make-tray-icon.py",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
-    "package": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
+    "package": "npm run freeze && npm run build && electron-builder --dir",
+    "dist": "npm run freeze && npm run build && electron-builder",
     "brand": "bash scripts/brand-dev-bundle.sh",
     "prestart": "bash scripts/brand-dev-bundle.sh",
-    "predev": "bash scripts/brand-dev-bundle.sh"
+    "predev": "bash scripts/brand-dev-bundle.sh",
+    "freeze": "cd ../ui && npm run build && cd ../server && .venv/bin/pyinstaller kith-server.spec --noconfirm --log-level WARN"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
@@ -51,6 +52,15 @@
         "NSUserNotificationAlertStyle": "alert"
       },
       "icon": "resources/icon.icns"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "../server/dist/kith-server",
+        "to": "kith-server",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

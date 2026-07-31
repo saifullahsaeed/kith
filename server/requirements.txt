@@ -10,3 +10,6 @@ sqlalchemy>=2.0,<3
 # server-side — which is what lets the model picker recommend by measured ability
 # instead of by price. Generated from their OpenAPI spec, so it tracks the API.
 openrouter>=1.1,<2
+
+# Freezing the server for a packaged release (npm run freeze in desktop/).
+pyinstaller>=6.10

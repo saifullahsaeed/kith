@@ -33,6 +33,7 @@ import {
 import { registerRenderer, unregisterRenderer } from "./renderer-registration";
 import { startRenderService } from "./render-service";
 import { createTray, destroyTray } from "./tray";
+import { ensureServer, stopServer } from "./server-process";
 import { createMainWindow, markQuitting, showMainWindow } from "./window";
 
 // A second instance would fight the first over the same backend and the same
@@ -71,6 +72,13 @@ async function start(): Promise<void> {
   const window = createMainWindow();
   createTray(markQuitting);
 
+  // Start the server ourselves. Until now the shell only ever *waited* for one, which meant
+  // a packaged app opened and sat there unless the user happened to have a Python server
+  // running — see server-process.ts. Attaches instead of starting when one is already
+  // answering, so a developer's own terminal server is not duplicated.
+  const server = await ensureServer();
+  console.log(`[kith] backend: ${server}`);
+
   const up = await waitForBackend((elapsed) => {
     if (elapsed % 5_000 < 300) {
       console.log(`[kith] waiting for backend at ${BACKEND_ORIGIN}…`);
@@ -78,7 +86,7 @@ async function start(): Promise<void> {
   });
 
   if (!up) {
-    reportBackendMissing();
+    reportBackendMissing(server === "no-binary");
     return;
   }
 
@@ -148,16 +156,23 @@ async function reportChrome(window: Electron.BrowserWindow): Promise<void> {
  * running is the single most likely reason this app fails to start, and it is
  * entirely fixable by the person looking at the screen.
  */
-function reportBackendMissing(): void {
+function reportBackendMissing(noBinary = false): void {
   const seconds = Math.round(BACKEND_WAIT_MS / 1_000);
   dialog.showErrorBox(
     "Kith isn't running",
     [
       `Couldn't reach the Kith server at ${BACKEND_ORIGIN} after ${seconds} seconds.`,
       "",
-      "Start it, then open Kith again:",
-      "",
-      "    cd ~/Desktop/personal/ai-fun/kith && make server",
+      ...(noBinary
+        ? [
+            "This build has no server in it. That is a packaging fault, not something",
+            "you did — a release should carry its own server.",
+            "",
+            "From a checkout you can build one:",
+            "",
+            "    cd server && .venv/bin/pyinstaller kith-server.spec --noconfirm",
+          ]
+        : ["It started but stopped answering. Its log is at ~/.kith/server.log."]),
     ].join("\n"),
   );
   markQuitting();
@@ -172,6 +187,9 @@ function reportBackendMissing(): void {
 app.on("before-quit", () => {
   markQuitting();
   destroyTray();
+  // An orphaned server keeps the agent ticking and spending, with no window to see it in,
+  // and holds the port so the next launch attaches to a copy nothing controls.
+  stopServer();
   // Tell the backend to stop offering our renderer — the port dies with us, and a
   // stale registration would cost every later browse a timeout before falling back.
   void unregisterRenderer();

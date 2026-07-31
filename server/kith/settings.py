@@ -27,18 +27,37 @@ startup so a misconfigured run says so rather than behaving oddly.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 
-#: The ``server/`` directory — the root of everything shipped alongside the code.
+#: True when running as a frozen binary rather than from a checkout. PyInstaller sets
+#: both of these; nothing else does.
+FROZEN = bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS")
+
+#: The root of everything shipped alongside the code: ``server/`` from a checkout, and the
+#: bundle's own extraction directory when frozen.
 #:
 #: Derived once, here, rather than in each module that needs it. Modules used to walk
 #: up from their own ``__file__``, which meant moving a file into a subpackage
 #: silently changed where it looked: the persona directory resolved to an empty path
 #: and Kith started with NO personality, with only a "0 fragments" line in the log
 #: to say so.
-SERVER_ROOT = _HERE.parent
+SERVER_ROOT = Path(sys._MEIPASS) if FROZEN else _HERE.parent  # type: ignore[attr-defined]
+
+#: Where his databases go when nothing says otherwise.
+#:
+#: This is the one path that must NOT follow SERVER_ROOT. A frozen bundle unpacks to a
+#: temporary directory and deletes it on exit, so defaulting the databases beside the code —
+#: which is right from a checkout and was the only case that existed — would mean his
+#: memory, tasks, notes and journal were erased every time the app was closed. The failure
+#: is silent and total: the app starts fine, with nothing in it, every time.
+#:
+#: A dotted folder in the home directory rather than Application Support: it is the same on
+#: every platform, and someone looking for their own data should be able to find it without
+#: knowing a macOS convention.
+_DEFAULT_DATA_DIR = (Path.home() / ".kith") if FROZEN else (SERVER_ROOT / "data")
 
 
 def _text(name: str, default: str = "") -> str:
@@ -64,12 +83,17 @@ def _number(name: str, default: int) -> int:
 # Where things live
 # --------------------------------------------------------------------------- #
 
-#: Databases. Overridable so a packaged app can put them in the user's data dir.
-DATA_DIR = Path(_text("KITH_DATA_DIR") or (SERVER_ROOT / "data"))
+#: Databases. Overridable so a packaged app can put them somewhere else again.
+DATA_DIR = Path(_text("KITH_DATA_DIR") or _DEFAULT_DATA_DIR)
 
 #: The built UI to serve from this process. Empty = something else serves it
 #: (the Vite dev server), and the SPA routes are not registered at all.
-UI_DIST = _text("KITH_UI_DIST")
+#:
+#: A frozen build carries the interface with it and defaults to serving it, which is what
+#: makes the binary one self-contained thing rather than a server that needs to be told
+#: where its own front end is. It also puts the page and the API on one origin by
+#: construction — which is what lets the page be handed the API token in the document.
+UI_DIST = _text("KITH_UI_DIST") or (str(SERVER_ROOT / "ui") if FROZEN else "")
 
 #: Persona fragments. Empty = the bundled ``persona/`` directory.
 PERSONA_DIR = _text("KITH_PERSONA_DIR")

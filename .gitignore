@@ -19,6 +19,9 @@ desktop/out/
 desktop/dist/
 # electron-builder's output: a 276 MB signed .app per build, rebuilt from source every time.
 desktop/release/
+# PyInstaller: a 44 MB frozen server plus its work directory, rebuilt by `npm run freeze`.
+server/dist/
+server/build/
 desktop/resources/*.png
 
 # ── Caches and tool state ──────────────────────────────────────────────────────
