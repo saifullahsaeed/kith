@@ -317,14 +317,22 @@ def chat(payload):
                 conversation_id=conversation_id,
                 # Rounds stay on the declared knob (max_rounds, 40) rather than the tick's
                 # hardcoded 16. A conversation genuinely wants more room than an unattended
-                # step: you are here, so a long turn is a thing you can watch and stop, and
-                # the tick's 16 exists because nobody is.
+                # step: you are here, so a long turn is one you can watch and stop, and the
+                # tick's 16 exists because nobody is.
                 #
-                # What it gains is the tick's honesty about the outcome: a turn asked to do
-                # something and leaving nothing behind is now a failure here too. Chat had
-                # this off, which was right when a conversation was an intake desk and
-                # answering a question was the whole deliverable. It is wrong now.
-                expect_durable=True,
+                # `expect_durable` stays off, and that was learned the hard way an hour after
+                # turning it on. A tick that leaves nothing behind really is a failure — the
+                # whole point of one is to make progress nobody asked to watch. But a
+                # conversation is not that, and cannot be told apart upfront: "what have you
+                # been working on" is answered by answering it. With durability demanded, he
+                # replied honestly that the board was empty and then wrote
+                # `session-findings-2026-07-31.md` to satisfy the rule — a file nobody wanted,
+                # about nothing, because the harness insisted on an artefact.
+                #
+                # The distinction that matters is not chat versus tick. It is "asked to do
+                # something" versus "asked something", and the transport does not know which
+                # it is carrying. So the directive above asks him to do the work, and nothing
+                # forces him to manufacture evidence of having done it.
             ):
                 recorder.saw(event)
                 yield json.dumps(event) + "\n"
