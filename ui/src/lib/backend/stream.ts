@@ -66,20 +66,36 @@ export function toWireMessages(
  */
 function attachmentsOf(message: ThreadMessage): WireAttachment[] {
   const out: WireAttachment[] = [];
+  const seen = new Set<string>();
+
+  const take = (kind: WireAttachment["kind"], name: string, mediaType: string, data: string) => {
+    if (!data || seen.has(data)) return;
+    seen.add(data);
+    out.push({ kind, name, mediaType, data });
+  };
+
+  // The attachments themselves, which is where the bytes actually are. The adapter's `send`
+  // returns them on `attachment.content` — the previous version read `message.content` and
+  // then `continue`d past every image here, believing the first pass had taken them. Neither
+  // pass took anything: no conversation on this machine has ever carried an attachment.
+  for (const attachment of message.attachments ?? []) {
+    const media = attachment.contentType ?? "application/octet-stream";
+    const kind = media.startsWith("image/") ? "image" : "file";
+    const carried = (attachment as unknown as { kithData?: string }).kithData;
+    const fromContent = (attachment.content ?? []).find(
+      (part): part is { type: "image"; image: string } =>
+        part.type === "image" && typeof (part as { image?: unknown }).image === "string",
+    );
+    take(kind, attachment.name || "attachment", media, carried ?? fromContent?.image ?? "");
+  }
+
+  // And images sitting directly on the message, which is the shape a resumed conversation
+  // comes back in. Deduplicated by payload, so an attachment that appears both ways is sent
+  // once rather than twice — the same picture twice is double the vision tokens.
   for (const part of message.content) {
     if (part.type === "image" && typeof part.image === "string") {
-      out.push({ kind: "image", name: "image", mediaType: "image/*", data: part.image });
+      take("image", "image", "image/*", part.image);
     }
-  }
-  for (const attachment of message.attachments ?? []) {
-    const isImage = (attachment.contentType ?? "").startsWith("image/");
-    if (isImage) continue; // already carried as a content part
-    out.push({
-      kind: "file",
-      name: attachment.name,
-      mediaType: attachment.contentType ?? "application/octet-stream",
-      data: "",
-    });
   }
   return out;
 }

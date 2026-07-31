@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import base64
+import itertools
 import json
+import re
+from pathlib import Path
 
 from flask import Response
 
 from kith.api.blueprint import api
 from kith.autonomy import runner as autonomy
-from kith.config import AGENT_DB_PATH, default_config, merge_overrides, ollama_host
+from kith.config import (
+    AGENT_DB_PATH,
+    default_config,
+    merge_overrides,
+    model_capabilities,
+    ollama_host,
+)
 from kith.domain import clock
+from kith.infra import workspace as sandbox
 from kith.schemas import (
     ChatRequestSchema,
 )
@@ -73,31 +84,94 @@ def _build_messages(messages, config):
 
 
 def _with_attachments(message: dict) -> dict:
-    """Turn a message with attachments into multimodal content.
+    """Turn a message with attachments into something he can actually use.
 
-    Only images become content parts. A model that lists `image` in its modalities takes
-    them inline; anything else — a PDF, a spreadsheet, a zip — is named and pointed at
-    instead, because he has a whole computer now and reading a file with his own tools is
-    both more capable and more honest than pretending the model can see it. He can open a
-    spreadsheet with python, and no vision model can.
+    Every attachment is written into his folder first, and *then* the question of what the
+    model can see is asked. That order is the whole design.
+
+    The old version got both halves wrong. Images were inlined without checking whether the
+    model had vision at all — the docstring claimed it checked and the code did not. And a
+    non-image was reduced to "[They attached: report.pdf. Read it with your own tools.]" with
+    no path, no bytes, and nothing written anywhere: he was told to open a file that did not
+    exist. Meanwhile the composer only accepted `image/*`, so the file branch could not run
+    even in principle.
+
+    Writing it down first means the fallback is real. A model with no vision still gets told
+    about the picture and where it is, and he can open it with his own tools — `sips` for its
+    size, python for its pixels — which is a worse answer than seeing it and a much better one
+    than the attachment silently evaporating.
     """
     text = message.get("content", "") or ""
     attachments = [a for a in (message.get("attachments") or []) if isinstance(a, dict)]
     if not attachments:
         return {"role": message["role"], "content": text}
 
-    images = [a for a in attachments if str(a.get("kind")) == "image" and a.get("data")]
-    others = [a for a in attachments if a not in images]
-    if others:
-        named = ", ".join(str(a.get("name") or "a file") for a in others)
-        # A path, not a payload: it is already on the machine he works on.
-        text = f"{text}\n\n[They attached: {named}. Read it with your own tools.]".strip()
-    if not images:
-        return {"role": message["role"], "content": text}
+    saved: list[tuple[dict, str]] = []
+    for attachment in attachments:
+        try:
+            saved.append((attachment, _save_attachment(attachment)))
+        except Exception as exc:
+            saved.append((attachment, f"(could not be saved: {exc})"))
 
+    can_see = bool(model_capabilities().get("images"))
+    inline = [a for a, _ in saved if str(a.get("kind")) == "image" and a.get("data")] if can_see else []
+
+    lines = []
+    for attachment, where in saved:
+        name = str(attachment.get("name") or "a file")
+        seeing = " (shown to you below)" if attachment in inline else ""
+        lines.append(f"- `{where}`{seeing}" if where.startswith("inbox/") else f"- {name} {where}")
+    note = "They attached:\n" + "\n".join(lines)
+    if not can_see and any(str(a.get("kind")) == "image" for a, _ in saved):
+        note += "\n\nYou cannot be shown images with this model, so open it yourself if it matters."
+    text = f"{text}\n\n{note}".strip()
+
+    if not inline:
+        return {"role": message["role"], "content": text}
     parts: list[dict] = [{"type": "text", "text": text}] if text else []
-    parts += [{"type": "image_url", "image_url": {"url": str(image["data"])}} for image in images]
+    parts += [{"type": "image_url", "image_url": {"url": str(image["data"])}} for image in inline]
     return {"role": message["role"], "content": parts}
+
+
+#: Where attachments land. Inside his folder on purpose: writing there needs no permission,
+#: the path is short enough to type in a shell command, and it is somewhere a person would
+#: think to look. Named for what it is rather than hidden.
+ATTACHMENT_DIR = "inbox"
+
+
+def _save_attachment(attachment: dict) -> str:
+    """Write one attachment into his folder and return the relative path.
+
+    Relative, because the persona tells him to prefer relative paths and to write them in
+    backticks — which makes the path a link his person can click, so an attachment they sent
+    is one they can also open again from the reply.
+    """
+    data = str(attachment.get("data") or "")
+    if not data:
+        raise ValueError("no data was sent")
+    payload = data.split(",", 1)[1] if data.startswith("data:") and "," in data else data
+    raw = base64.b64decode(payload, validate=False)
+
+    # Their filename, not a generated one — he is going to talk about this file to them, and
+    # "inbox/receipt-march.pdf" is a thing they recognise. Stripped of anything that could
+    # walk out of the folder.
+    name = Path(str(attachment.get("name") or "attachment")).name
+    name = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip() or "attachment"
+
+    folder = sandbox.root() / ATTACHMENT_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / name
+    if target.exists() and target.read_bytes() != raw:
+        # A second, different file with the same name. Overwriting would silently replace
+        # something they sent earlier and might still be talking about.
+        stem, suffix = target.stem, target.suffix
+        for n in itertools.count(2):
+            candidate = folder / f"{stem}-{n}{suffix}"
+            if not candidate.exists() or candidate.read_bytes() == raw:
+                target = candidate
+                break
+    target.write_bytes(raw)
+    return f"{ATTACHMENT_DIR}/{target.name}"
 
 
 def _present_state() -> str:

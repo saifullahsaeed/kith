@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   AssistantRuntimeProvider,
-  SimpleImageAttachmentAdapter,
   useLocalRuntime,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
@@ -19,6 +18,7 @@ import { HistoryPanel } from "@/components/history-panel";
 import { useAutonomy } from "@/hooks/use-autonomy";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
+import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { moodHue } from "@/lib/backend/mood";
 import { parseLocation, pathForHome, pathForSettings, pathForTab, pathForTask } from "@/lib/router";
 import {
@@ -68,14 +68,13 @@ export function Workspace({
       }),
     [],
   );
-  // The attach button exists only when the provider says the model takes images. Offering
-  // one that silently drops the image, or 400s the turn, is worse than not offering it —
-  // and when it is absent he still has the whole computer, which is the better answer for
-  // a spreadsheet anyway.
-  const attachments = useMemo(
-    () => (config.capabilities?.images ? new SimpleImageAttachmentAdapter() : undefined),
-    [config.capabilities?.images],
-  );
+  // Always offered, and it takes anything. It used to appear only for models reporting
+  // vision, and then only accept `image/*` — so a spreadsheet could not be attached at all,
+  // and on a model without vision the paperclip simply vanished. Both were the wrong call:
+  // he has a whole computer, so a file he cannot *see* is still a file he can open, and
+  // whether to inline a picture or hand him a path is a decision the server makes next to
+  // the model config rather than one the composer makes by hiding a button.
+  const attachments = useMemo(() => new AnyFileAttachmentAdapter(), []);
   const runtime = useLocalRuntime(adapter, {
     initialMessages: resumed,
     ...(attachments ? { adapters: { attachments } } : {}),
