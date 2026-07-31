@@ -27,25 +27,44 @@ from kith.schemas import (
 from kith.services import conversations, memory_context
 from kith.services.agent_loop import stream_agent
 
+#: What a conversation is for.
+#:
+#: This used to open with "CAPTURE, DON'T DO (most important)" — asked to build something, he
+#: was to file a task, refuse to touch a work tool, and say roughly when he would get to it.
+#: The intent was sound when he could only really work unattended: a conversation was the
+#: wrong place for a long job, so it became an intake desk.
+#:
+#: The cost was that everything consequential happened at the intake desk anyway. Laying out a
+#: project, deciding a roadmap, choosing what to build first — all of it lands in a
+#: conversation, and a conversation was the one path with no round budget worth the name, no
+#: loop detection, and no row in any log. He would file the work correctly and then be unable
+#: to lift a finger, which reads as an assistant that does nothing.
+#:
+#: So a conversation is now where the work happens. He has the same tools, the same limits and
+#: the same discipline he has when nobody is watching, and the difference between the two is
+#: only that here you are present to redirect him.
 CHAT_DIRECTIVE = (
-    "Your person is talking to you directly. Follow these rules for this turn:\n\n"
-    "1. CAPTURE, DON'T DO (most important). When they give you a piece of work — 'research X', 'look into Y', "
-    "'find Z', 'build …' — your DEFAULT is to CAPTURE it, not carry it out now. Call add_task with a clear "
-    "goal, then STOP: do NOT call web_search, fetch_url, shell, or other work tools for it. Reply that you've "
-    "added it and roughly when you'll get to it. Do the work right now ONLY if they explicitly signal "
-    "immediacy — 'now', 'right now', 'go ahead', 'do it now', 'today' — or it's a trivial one-step thing you "
-    "can answer immediately.\n"
-    "2. ORIENT FIRST. Read what's above — your notes, your current tasks, your projects — and connect their "
-    "message to what's already going on. If it relates to an existing task, say so instead of starting over.\n"
-    "2b. FILE IT UNDER A PROJECT. When you capture a task, place it: if it belongs to one of your existing "
-    "projects, link it there (project_id); if it's a new, substantial line of work that doesn't fit any project, "
-    "create_project first and add the task under it (a one-off trivial errand can stay project-less). This keeps "
-    "the board organised instead of a flat pile of tasks.\n"
-    "3. NO GUESSING. If the request is ambiguous (e.g. a name you don't know), ask which they mean or say "
-    "plainly what you don't know.\n"
-    "4. Only ever use tools that actually exist in your tool list. Never invent a tool.\n"
-    "5. Always finish with a short, clear, human reply. Never leave them with raw tool output or your own "
-    "thinking-out-loud."
+    "Your person is here, talking to you. This is where the work happens — you have every "
+    "tool you have when you are on your own, and they are present to redirect you.\n\n"
+    "1. DO THE WORK. When they hand you something, start on it. Not "
+    "'I've noted that and I'll get to it' — that was a rule from when a conversation could "
+    "not carry real work, and it made you useless in the one place that matters most. Read "
+    "the file, run the command, make the change, and show them what happened.\n"
+    "2. GIVE IT A HOME FIRST, if it is more than one sitting. A project and its first "
+    "milestone's tasks, so the work survives being put down — the `running-a-project` skill "
+    "is how. Then start on the first task in the same breath. Filing is not the deliverable "
+    "any more; it is the first ten seconds of it.\n"
+    "3. ONE STEP AT A TIME, AND SAY WHAT YOU DID. Work in the smallest useful increments and "
+    "report each one plainly. They can see your tool calls, so do not narrate them — tell "
+    "them what it means and what you are doing next.\n"
+    "4. STOP WHEN YOU ARE GENUINELY STUCK, and say what you need. Not a guess dressed as an "
+    "answer, and not silence. They are right here, so asking costs almost nothing — which is "
+    "exactly why it should be a real question about a real obstacle.\n"
+    "5. NO GUESSING. If the request is ambiguous, ask which they mean or say plainly what you "
+    "do not know.\n"
+    "6. Only ever use tools that actually exist in your tool list. Never invent a tool.\n"
+    "7. Always finish with a short, clear, human reply. Never leave them with raw tool output "
+    "or your own thinking-out-loud."
 )
 
 
@@ -291,7 +310,21 @@ def chat(payload):
         recorder = _Recorder(conversation_id)
         try:
             for event in stream_agent(
-                messages, config, ollama_host(), AGENT_DB_PATH, conversation_id=conversation_id
+                messages,
+                config,
+                ollama_host(),
+                AGENT_DB_PATH,
+                conversation_id=conversation_id,
+                # Rounds stay on the declared knob (max_rounds, 40) rather than the tick's
+                # hardcoded 16. A conversation genuinely wants more room than an unattended
+                # step: you are here, so a long turn is a thing you can watch and stop, and
+                # the tick's 16 exists because nobody is.
+                #
+                # What it gains is the tick's honesty about the outcome: a turn asked to do
+                # something and leaving nothing behind is now a failure here too. Chat had
+                # this off, which was right when a conversation was an intake desk and
+                # answering a question was the whole deliverable. It is wrong now.
+                expect_durable=True,
             ):
                 recorder.saw(event)
                 yield json.dumps(event) + "\n"
