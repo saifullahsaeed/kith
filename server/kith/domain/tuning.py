@@ -269,53 +269,6 @@ TUNABLES: tuple[Tunable, ...] = (
         maximum=32_000,
         unit="tokens",
     ),
-    Tunable(
-        key="reflect_every",
-        env="KITH_REFLECT_EVERY",
-        label="Reflect every N ticks",
-        help="How often he stops working to think about how it's going. Never "
-        "reflecting means he keeps doing something that isn't working.",
-        default=20,
-        group="rhythm",
-        minimum=2,
-        maximum=500,
-        unit="ticks",
-    ),
-    Tunable(
-        key="curious_every",
-        env="KITH_CURIOUS_EVERY",
-        label="Follow a curiosity every N ticks",
-        help="How often he's allowed to go and look into something for its own sake, rather than for a task.",
-        default=30,
-        group="rhythm",
-        minimum=2,
-        maximum=500,
-        unit="ticks",
-    ),
-    Tunable(
-        key="consolidate_every",
-        env="KITH_CONSOLIDATE_EVERY",
-        label="Tidy his memory every N ticks",
-        help="How often he merges and prunes what he's stored. Rarely, and his memory "
-        "fills with near-duplicates.",
-        default=60,
-        group="rhythm",
-        minimum=5,
-        maximum=1000,
-        unit="ticks",
-    ),
-    Tunable(
-        key="max_open_curiosities",
-        env="KITH_MAX_OPEN_CURIOSITIES",
-        label="Open curiosities at once",
-        help="How many loose threads he may be pulling on. Unbounded, he collects "
-        "questions instead of answering any.",
-        default=3,
-        group="rhythm",
-        minimum=0,
-        maximum=25,
-        unit="threads",
-    ),
     # -- stalls ------------------------------------------------------------- #
     Tunable(
         key="stall_break",

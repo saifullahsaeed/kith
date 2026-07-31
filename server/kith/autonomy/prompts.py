@@ -154,17 +154,6 @@ def _due_prompt(reminders: list[dict], schedules: list[dict]) -> str:
     )
 
 
-def _reflection_prompt(active_tasks: list[dict]) -> str:
-    recent = repo.journal.list_journal(AGENT_DB_PATH, 12)
-    lately = "\n".join(f"- {j['entry']}" for j in recent) or "- (nothing logged yet)"
-    goals = "\n".join(f"- #{t['id']} [{t['status']}] {t['goal']}" for t in active_tasks[:8]) or "- (none)"
-    return (
-        f"Lately, in your own words, you have:\n{lately}\n\n"
-        f"Open goals right now:\n{goals}\n\n"
-        "Read that back honestly. Is it going somewhere, or are you repeating yourself? "
-        "Prune what's stale and choose a direction worth growing into."
-    )
-
 
 def _resume_prompt(awaiting: list[dict]) -> str:
     task = awaiting[0]
@@ -237,46 +226,9 @@ def _give_up(active: list[dict]) -> str:
     return ""
 
 
-def _consolidation_prompt() -> str:
-    recent = repo.journal.list_journal(AGENT_DB_PATH, 25)
-    lately = "\n".join(f"- {j['entry']}" for j in recent) or "- (nothing yet)"
-    mems = repo.memories.list_memories(AGENT_DB_PATH, 50)
-    held = "\n".join(f"- #{m['id']} [{m['level']}] {m['content']}" for m in mems) or "- (none)"
-    return (
-        f"Lately, in your journal:\n{lately}\n\n"
-        f"What you currently hold in memory:\n{held}\n\n"
-        "Settle it: keep what matters, strengthen what recurs, clear the noise."
-    )
 
-
-def _curiosity_prompt() -> str:
-    projects = [p for p in repo.projects.list_projects(AGENT_DB_PATH) if p.get("status") == "active"]
-    active = repo.tasks.active_tasks(AGENT_DB_PATH)
-    open_ones = [
-        c for c in repo.curiosities.list_curiosities(AGENT_DB_PATH) if c["status"] in ("open", "exploring")
-    ]
-    parts = []
-    if projects:
-        parts.append("Your projects: " + ", ".join(p["name"] for p in projects[:5]))
-    if active:
-        parts.append("Open work: " + "; ".join(t["goal"][:50] for t in active[:5]))
-    if open_ones:
-        parts.append(
-            "Threads you're already pulling:\n"
-            + "\n".join(f"- #{c['id']} {c['topic']}" for c in open_ones[:6])
-        )
-    context = "\n\n".join(parts)
-    return (
-        (context + "\n\n" if context else "")
-        + "What would make you better at this work? Wonder about a problem you've hit, a "
-        "technique or tool that would help, or the domain your work lives in — then dig in "
-        "and form a view you can actually use. Keep it tied to the work, not a private hobby."
-    )
-
-
-#: How much of one argument value to carry into the live feed. Long enough for a path or a
-#: short command to arrive whole, short enough that a file's entire contents does not travel
-#: down the event stream to be truncated by CSS at the other end.
+#: How much of one tool argument travels down the activity feed. A file's entire contents
+#: must not go over the wire to be cut off by CSS at the far end.
 _ARG_CHARS = 120
 
 

@@ -23,7 +23,6 @@ from kith.services.brain.kinds import KINDS
 FORMS: dict[str, tuple[dict, str]] = {
     "memory": ({"content": "a thing worth keeping", "tags": ["probe"]}, "memories"),
     "note": ({"title": "A note", "body": "its body"}, "notes"),
-    "curiosity": ({"topic": "why the sky is blue", "note": "wondering"}, "curiosities"),
     "person": ({"name": "Probe Person"}, "people"),
     "project": ({"name": "A project", "description": "its point"}, "projects"),
     "task": ({"goal": "do the thing", "description": "how"}, "tasks"),
@@ -81,7 +80,7 @@ class TestTheRegistryAndThePanelHaveToAgree:
     """
 
     @pytest.mark.parametrize(
-        "kind", ["memory", "note", "curiosity", "person", "project", "task", "reminder", "schedule"]
+        "kind", ["memory", "note", "person", "project", "task", "reminder", "schedule"]
     )
     def test_every_kind_with_a_form_is_creatable(self, kind):
         assert KINDS[kind].add is not None, f"the panel has an Add form for {kind}"

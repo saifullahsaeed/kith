@@ -21,7 +21,6 @@ def snapshot(path: Path) -> dict:
     ]
     messages = repo.messages.list_messages(path)
     people = repo.people.list_people(path)
-    curiosities = repo.curiosities.list_curiosities(path)
     source_list = repo.sources.list_sources(path)
     schedules = [
         {**s, "fires": clock.humanize_until(s["next_fire"])} for s in repo.schedules.list_schedules(path)
@@ -37,7 +36,6 @@ def snapshot(path: Path) -> dict:
             "reminders": len(reminders),
             "messages": len(messages),
             "people": len(people),
-            "curiosities": len(curiosities),
             "sources": len(source_list),
             "schedules": len(schedules),
             "projects": len(projects),
@@ -51,7 +49,6 @@ def snapshot(path: Path) -> dict:
         "reminders": reminders,
         "messages": messages,
         "people": people,
-        "curiosities": curiosities,
         "sources": source_list,
         "schedules": schedules,
         "mood": repo.self_model.get_mood(path),
@@ -103,15 +100,6 @@ def timeline(path: Path, limit: int = 500) -> list[dict]:
                 "at": m["created_at"],
                 "text": m["body"],
                 "meta": {"id": m["id"], "read": m["read"]},
-            }
-        )
-    for c in repo.curiosities.list_curiosities(path):
-        events.append(
-            {
-                "kind": "curiosity",
-                "at": c["created_at"],
-                "text": c["topic"],
-                "meta": {"id": c["id"], "status": c["status"]},
             }
         )
     events.sort(key=lambda e: e["at"], reverse=True)

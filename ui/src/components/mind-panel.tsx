@@ -80,7 +80,6 @@ const GROUP: Record<string, { icon: LucideIcon; tone: string }> = {
   reading: { icon: BookOpenText, tone: "text-kith/70" },
   tasks: { icon: ListChecks, tone: "text-blue-400/80" },
   projects: { icon: FolderKanban, tone: "text-blue-400/70" },
-  curiosity: { icon: Sparkles, tone: "text-teal-400/80" },
   self: { icon: Heart, tone: "text-pink-400/70" },
   time: { icon: AlarmClock, tone: "text-orange-400/80" },
   outreach: { icon: Send, tone: "text-pink-400/80" },
@@ -136,10 +135,7 @@ const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROU
   order_milestones: { verb: "put the milestones in order", group: "projects" },
   unlink_milestones: { verb: "unlinked two milestones", group: "projects" },
   link_folder: { verb: "linked a folder", of: "folder", group: "projects" },
-  // curiosity, mood, identity, people
-  wonder: { verb: "grew curious about", of: "topic", group: "curiosity" },
-  list_curiosities: { verb: "reviewed what he is curious about", group: "curiosity" },
-  update_curiosity: { verb: "updated a curiosity", group: "curiosity" },
+  // mood, identity, people
   set_mood: { verb: "felt", of: "mood", group: "self" },
   set_identity: { verb: "reshaped who he is", group: "self" },
   note_about_self: { verb: "noted about himself", of: "note", group: "self" },

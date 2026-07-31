@@ -8,7 +8,6 @@ where nothing tells you what a call will read or write.
 from kith.infra.db.repositories import (
     activity,
     conversations,
-    curiosities,
     custom_tools,
     journal,
     memories,
@@ -26,7 +25,6 @@ from kith.infra.db.repositories import (
 __all__ = [
     "activity",
     "conversations",
-    "curiosities",
     "custom_tools",
     "journal",
     "memories",

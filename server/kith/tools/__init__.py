@@ -19,7 +19,6 @@ from pathlib import Path
 from kith.services import custom_tools, permissions
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
     computer,
-    curiosity,
     identity,
     journal,
     memory,

@@ -31,13 +31,10 @@ def _load(name: str) -> str:
 AUTONOMY = _load("autonomy")
 
 #: Step back and look honestly at whether the work is actually moving.
-REFLECTION = _load("reflection")
 
 #: His own time to get sharper, anchored to the real work.
-CURIOSITY = _load("curiosity")
 
 #: Distil the journal into fewer, truer memories — the equivalent of sleep.
-CONSOLIDATION = _load("consolidation")
 
 #: Working a task through plan → act → verify → deliver.
 WORK = _load("work")
@@ -53,9 +50,6 @@ BREAKOUT = _load("breakout")
 
 ALL = {
     "autonomy": AUTONOMY,
-    "reflection": REFLECTION,
-    "curiosity": CURIOSITY,
-    "consolidation": CONSOLIDATION,
     "work": WORK,
     "resume": RESUME,
     "reply": REPLY,

@@ -1,17 +1,24 @@
-"""Autonomy — letting Kith run on its own.
+"""Taking the next step on work that is already underway.
 
-A background loop that, when enabled and the user has been quiet for a bit,
-takes one small self-directed step: it looks at its open tasks (or, with none,
-reflects and may set a goal), then runs the ordinary agent loop with an
-"autonomous tick" directive so it journals progress, updates tasks, and records
-what it learns — all through the same tools it uses in chat.
+A background loop that advances sessions which are working, fires reminders and schedules
+when they come due, and answers you when you have written to him.
+
+What it no longer does is decide *whether* he should be working. That used to be the bulk of
+this file — a roam switch, an interval, an idle backoff, a quiet period, and a nine-branch
+ladder of things to do when there was nothing to do. All of it was guessing at one question,
+"when may he act without me", and a session answers that structurally: it is working or it is
+not, and you say which.
+
+What went with the guessing: reflection, consolidation and curiosity as scheduled modes. They
+were self-directed inner life on a timer — every twentieth idle tick a reflection, every
+thirtieth a curiosity — which is a strange thing to schedule and, in practice, was work
+happening on a board nobody was watching. Reflection is still worth doing; it is a note he
+writes when he has something to say, not a mode the clock puts him in.
 
 Design notes:
-- It defers to you: a tick only fires after ``quiet_seconds`` of no chat.
-- One tick at a time (a non-blocking lock); ticks are token-bounded so they stay
-  short.
-- Activity is published to subscribers (the web UI streams it over SSE) and kept
-  in a small ring buffer so a new subscriber sees recent history.
+- One step at a time per session (a non-blocking lock), and token-bounded.
+- Activity is published to subscribers (the UI streams it over SSE) and kept in a small ring
+  buffer so a new subscriber sees recent history.
 """
 
 from __future__ import annotations
@@ -27,15 +34,12 @@ from kith.autonomy import directives
 from kith.autonomy.prompts import (
     _breakdown_prompt,
     _breakout_prompt,
-    _consolidation_prompt,
-    _curiosity_prompt,
     _describe_call,
     _due_prompt,
     _focus_prompt,
     _give_up,
     _latest_journal_id,
     _now,
-    _reflection_prompt,
     _reply_prompt,
     _resume_prompt,
     _short_args,
@@ -49,15 +53,6 @@ from kith.services.agent_loop import stream_agent
 
 # Injected into the system prompt for a tick (not part of the everyday persona).
 
-# Every so often he steps back instead of acting — so autonomy grows a direction
-# rather than looping. This tick is about honesty, not output.
-
-# Some ticks he follows his own curiosity instead of a task, so his life isn't
-# only whatever goal is in front of him.
-
-# Now and then his mind settles — like sleep. He distills the raw flood of his
-# journal into a few durable memories, strengthens what recurs, drops the noise.
-
 # When his person writes to him on his own channel, he stops what he's doing and
 # answers before anything else.
 # Working a task through its phases, one concrete step per tick: plan → act →
@@ -67,15 +62,6 @@ from kith.services.agent_loop import stream_agent
 # When he notices he's going in circles, he's made to break out — change approach
 # decisively, or give the thing up. Knowing when to quit is part of good judgment.
 
-# Self-directed inner life (reflect / follow a curiosity / consolidate) happens
-# ONLY when he's genuinely caught up — it must never crowd out your work — and
-# rarely even then, so he doesn't spiral into a private obsession. These are how
-# many idle ticks pass between each; with the idle backoff below that's tens of
-# minutes apart in wall-clock, not seconds.
-# Hard cap on open curiosities — past this he stops wandering onto new ones and
-# either explores what he has or rests, instead of piling up a rabbit hole.
-# When caught up (no active work), roam this slowly regardless of the set interval,
-# so an empty board doesn't burn tokens every few seconds.
 
 # Floor between ticks however they are triggered, so a burst of replies or due
 # reminders cannot spin the loop faster than he can actually work.
@@ -336,35 +322,12 @@ class AutonomyRunner:
         unplanned = repo.projects.milestones_needing_tasks(AGENT_DB_PATH)
         self._tick_count += 1
 
-        # Precedence, most important first:
-        #   answer your person (chat, then task replies) > due work > break a loop
-        #   > WORK your active tasks > (only when caught up, rarely) settle / reflect
-        #   / wonder > rest. Inner life must never outrank your work.
+        # Precedence, most important first: answer your person, then anything due, then
+        # break a loop you are stuck in, then work a task, then plan a milestone nobody can
+        # act on. Five branches where there were nine — the four that went were the
+        # scheduled inner life, which is not a thing a clock should decide.
         resuming = not pending and bool(awaiting)
-        top = pending or resuming or due
         breaking = self._stall >= tuning.value("stall_break")
-        # Caught up: nothing pending/due, not breaking a loop, and no active tasks.
-        idle = not (top or breaking or active or unplanned)
-        open_curiosities = (
-            len(
-                [
-                    c
-                    for c in repo.curiosities.list_curiosities(AGENT_DB_PATH)
-                    if c.get("status") in ("open", "exploring")
-                ]
-            )
-            if idle
-            else 0
-        )
-        consolidating = idle and self._tick_count % tuning.value("consolidate_every") == 0
-        reflecting = idle and not consolidating and self._tick_count % tuning.value("reflect_every") == 0
-        curious = (
-            idle
-            and not (consolidating or reflecting)
-            and open_curiosities < tuning.value("max_open_curiosities")
-            and self._tick_count % tuning.value("curious_every") == 0
-        )
-
         if pending:
             mode, self._current = "reply", f"replying: {pending[0]['body'][:40]}"
             directive, prompt = directives.REPLY, _reply_prompt(pending)
@@ -390,15 +353,6 @@ class AutonomyRunner:
             next_up = unplanned[0]
             mode, self._current = "start", f"planning: {next_up['title'][:40]}"
             directive, prompt = directives.WORK, _breakdown_prompt(next_up)
-        elif consolidating:
-            mode, self._current = "consolidate", "letting my mind settle"
-            directive, prompt = directives.CONSOLIDATION, _consolidation_prompt()
-        elif reflecting:
-            mode, self._current = "reflect", "reflecting on where I'm going"
-            directive, prompt = directives.REFLECTION, _reflection_prompt(active)
-        elif curious:
-            mode, self._current = "curious", "following a curiosity"
-            directive, prompt = directives.CURIOSITY, _curiosity_prompt()
         else:
             # Genuinely nothing to do, and not a scheduled inner-life tick — rest for real.
             # Don't call the model at all; an idle board shouldn't cost tokens.

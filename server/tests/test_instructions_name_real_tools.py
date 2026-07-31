@@ -134,11 +134,7 @@ def test_no_allow_list_names_a_tool_that_does_not_exist():
 #: Tools deliberately not offered in any unattended mode. Being on this list is a decision;
 #: being absent from it and from every allow-list is an accident, and the difference is the
 #: whole point of the test below.
-WITHHELD_ON_PURPOSE = {
-    # Curiosities are being removed as a feature. Until the table and directive go, the
-    # listing tool stays unreachable rather than being quietly offered again.
-    "list_curiosities",
-}
+WITHHELD_ON_PURPOSE: set[str] = set()
 
 
 def test_every_registered_tool_is_reachable_somewhere():

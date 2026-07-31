@@ -194,12 +194,6 @@ KINDS: dict[str, Kind] = {
             ),
             edit=lambda p, k, d: repo.people.update_person(p, k, d.get("relationship"), d.get("profile")),
         ),
-        Kind(
-            "curiosity",
-            remove=repo.curiosities.delete_curiosity,
-            add=lambda p, d: repo.curiosities.add_curiosity(p, d.get("topic", ""), d.get("note") or ""),
-            edit=lambda p, k, d: repo.curiosities.update_curiosity(p, k, d.get("status"), d.get("note")),
-        ),
         Kind("source", remove=repo.sources.delete_source),
         Kind(
             "schedule",
