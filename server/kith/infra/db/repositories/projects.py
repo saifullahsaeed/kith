@@ -396,3 +396,33 @@ def milestones_needing_tasks(path: Path) -> list[dict]:
         and milestone["id"] not in blocked
         and not open_by_milestone.get(milestone["id"])
     ]
+
+
+def set_directory(path: Path, project_id: int, directory: str | None) -> dict | None:
+    """Point a project at a folder, or unpoint it.
+
+    Separate from ``update_project`` because it is not the same kind of change. Renaming a
+    project is cosmetic; giving it a directory grants him a folder on your machine to work in
+    unrestricted, which is a decision worth making on its own.
+    """
+    with session(path) as db:
+        row = db.get(Project, project_id)
+        if row is None:
+            return None
+        row.directory = str(directory) if directory else None
+        row.updated_at = utc_now_iso()
+        db.flush()
+        return as_dict(row)
+
+
+def linked_directories(path: Path) -> list[str]:
+    """Every folder an active project is pointed at.
+
+    Read by the permission check, so it is deliberately the narrowest question that answers
+    it — a list of strings, no joins, no milestones. Only active projects: closing a project
+    should take back the freedom that came with linking its folder, otherwise a year of
+    finished work leaves a trail of directories he may still write to unasked.
+    """
+    with session(path) as db:
+        rows = db.scalars(select(Project).where(Project.status == "active")).all()
+        return [row.directory for row in rows if row.directory]

@@ -43,6 +43,28 @@ _WORK = {
     # failure the roadmap exists to prevent.
     "order_milestones",
     "unlink_milestones",
+    # Pointing a project at a folder. Same omission as order_milestones above, found the
+    # same way and one commit later: registered, described, and in no allow-list.
+    "link_folder",
+    # Standing work. He could fire a due reminder and not cancel it, keep a schedule and not
+    # list it, and never make one at all — so "remind me weekly" was a thing only reachable
+    # from a conversation, in a system whose whole point is the part where nobody is talking
+    # to him.
+    "schedule",
+    "list_schedules",
+    "cancel_schedule",
+    "list_reminders",
+    "cancel_reminder",
+    # Tools he writes for himself. The one capability that compounds, and it was unreachable
+    # from every unattended mode — he could use a tool he had made and never make one.
+    "create_tool",
+    "list_tools",
+    "delete_tool",
+    # Who he is and who you are. He could read his own memory but not add to what he knows
+    # about a person, or change his sense of himself, except while being spoken to.
+    "recall_person",
+    "note_about",
+    "set_identity",
     "recall",
     "remember",
     "take_note",

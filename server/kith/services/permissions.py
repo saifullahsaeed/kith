@@ -314,6 +314,20 @@ def check_path(kind: Kind, target: Path, root: Path) -> Decision:
     if inside and not sensitive:
         return Decision(True)  # his own workspace — unrestricted, by design
 
+    # A folder you linked to a project is his too, for as long as that project is active.
+    #
+    # This is what makes linking mean anything. Without it, pointing him at
+    # ~/Documents/my-app would prompt on every single file he writes there — a hundred clicks
+    # to do the thing you just asked for, which is not a safety feature, it is a reason to
+    # switch the gate off entirely and lose the protection everywhere.
+    #
+    # And it is *narrower* than what auto mode already does, not wider: auto allows any
+    # non-sensitive write anywhere outside the workspace, with no record of why. This grants
+    # one named folder, because you named it, and takes the grant back when the project
+    # closes.
+    if not sensitive and _inside_linked_project(resolved):
+        return Decision(True)
+
     signature = f"path:{resolved}"
     if granted(signature):
         return Decision(True)
@@ -517,3 +531,45 @@ def snapshot() -> dict:
         "grants": sorted(always_grants()),
         "sessionGrants": sorted(_session_grants),
     }
+
+
+#: Linked project folders, cached. `check_path` runs on every file operation and every path
+#: in every destructive command, so a database query per call would put SQLite in the hot
+#: path of ordinary work. Linking happens by hand, a few times a day at most, so a short
+#: window of staleness costs nothing — and `forget_linked_projects` closes it the moment
+#: something actually changes.
+_linked: tuple[float, tuple[Path, ...]] | None = None
+_LINKED_TTL = 5.0
+
+
+def forget_linked_projects() -> None:
+    """Drop the cache. Called when a project's folder or status changes."""
+    global _linked
+    _linked = None
+
+
+def _linked_project_roots() -> tuple[Path, ...]:
+    global _linked
+    now = time.monotonic()
+    if _linked is not None and now - _linked[0] < _LINKED_TTL:
+        return _linked[1]
+    roots: list[Path] = []
+    try:
+        from kith.config import AGENT_DB_PATH
+        from kith.infra.db import repositories as repo
+
+        for directory in repo.projects.linked_directories(AGENT_DB_PATH):
+            try:
+                roots.append(_resolve(Path(directory)))
+            except OSError:
+                continue
+    except Exception:
+        # Imported by nearly everything and consulted on every write: a permission check
+        # must not fail because a lookup did. No linked folders is the safe answer.
+        roots = []
+    _linked = (now, tuple(roots))
+    return _linked[1]
+
+
+def _inside_linked_project(resolved: Path) -> bool:
+    return any(_inside(resolved, root) for root in _linked_project_roots())

@@ -52,9 +52,7 @@ def create_project(path: Path, args: dict):
         # Created with its scaffold now rather than on first write, so the headings are there
         # to be filled in instead of the file being invented from scratch later.
         project_memory.ensure(resolved)
-        made = repo.projects.add_project(
-            path, args["name"], args.get("description") or "", str(resolved)
-        )
+        made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
         return {**made, "memory": f"{directory}/.kith/memory.md"}
     return repo.projects.add_project(path, args["name"], args.get("description") or "")
 
@@ -91,9 +89,16 @@ def list_projects(path: Path, args: dict):
     required=("id",),
 )
 def update_project(path: Path, args: dict):
-    return repo.projects.update_project(
+    out = repo.projects.update_project(
         path, args["id"], args.get("status"), args.get("name"), args.get("description")
     )
+    # Closing a project takes back the freedom its folder came with, and that has to land
+    # now rather than whenever a cache happens to expire.
+    if args.get("status"):
+        from kith.services import permissions
+
+        permissions.forget_linked_projects()
+    return out
 
 
 @tool(
@@ -238,3 +243,66 @@ def update_milestone(path: Path, args: dict):
     return repo.projects.update_milestone(
         path, args["id"], args.get("status"), args.get("title"), args.get("target_at")
     )
+
+
+@tool(
+    "link_folder",
+    "Point a project at a folder on your person's machine — an existing codebase they want "
+    "you working in, or a folder you are about to fill. While the project is active that "
+    "folder is yours to work in freely, the same as your own, and its `.kith/memory.md` is "
+    "read to you every time. Use the exact path they gave you. Pass no folder to unlink.",
+    {
+        "id": INT,
+        "folder": {
+            **STR,
+            "description": "Absolute path, or relative to your own folder. Leave it out to "
+            "unlink the project from its folder.",
+        },
+    },
+    required=("id",),
+)
+def link_folder(path: Path, args: dict):
+    """Attach a folder to a project, and treat it as his for as long as that project runs.
+
+    The link is the grant. Working in a folder outside his own otherwise prompts on every
+    single file — a hundred clicks to do the thing that was just asked for, which is not
+    protection, it is a reason to switch the gate off and lose it everywhere. So linking says
+    "this folder is yours", and closing the project takes that back.
+
+    Narrower than what already happens, not wider: auto mode allows any non-sensitive write
+    anywhere outside the workspace with no record of why. This is one named folder, named by
+    them, revoked when the work ends.
+    """
+    from kith.services import permissions, project_memory
+
+    folder = str(args.get("folder") or "").strip()
+    if not folder:
+        updated = repo.projects.set_directory(path, args["id"], None)
+        permissions.forget_linked_projects()
+        if not updated:
+            raise ValueError(f"there is no project #{args['id']}")
+        return {**updated, "note": "Unlinked. That folder is no longer yours to write in."}
+
+    resolved = Path(sandbox.resolve(folder))
+    if resolved.exists() and not resolved.is_dir():
+        raise ValueError(f"{folder} is a file, not a folder")
+    existed = resolved.is_dir()
+    resolved.mkdir(parents=True, exist_ok=True)
+
+    updated = repo.projects.set_directory(path, args["id"], str(resolved))
+    if not updated:
+        raise ValueError(f"there is no project #{args['id']}")
+    # Invalidated rather than waited out: he will write a file in the next breath, and a
+    # five-second stale cache would refuse the first thing he does in a folder he was just
+    # given.
+    permissions.forget_linked_projects()
+    project_memory.ensure(resolved)
+    return {
+        **updated,
+        "memory": str(project_memory.path_for(resolved)),
+        "note": (
+            "Linked to an existing folder. Read what is there before changing it."
+            if existed
+            else "Created the folder and linked it."
+        ),
+    }

@@ -129,3 +129,42 @@ def test_no_allow_list_names_a_tool_that_does_not_exist():
     stale = {mode: names for mode, names in stale.items() if names}
     # A name in the list that no longer exists is a silent no-op that hides a rename.
     assert not stale, f"allow-lists naming tools that do not exist: {stale}"
+
+
+#: Tools deliberately not offered in any unattended mode. Being on this list is a decision;
+#: being absent from it and from every allow-list is an accident, and the difference is the
+#: whole point of the test below.
+WITHHELD_ON_PURPOSE = {
+    # Curiosities are being removed as a feature. Until the table and directive go, the
+    # listing tool stays unreachable rather than being quietly offered again.
+    "list_curiosities",
+}
+
+
+def test_every_registered_tool_is_reachable_somewhere():
+    """A tool in no allow-list is dead code that looks like a capability.
+
+    This is the third time in two days: `order_milestones` (a roadmap he could create and
+    never order), then `link_folder` one commit later, and then eleven more found by asking
+    the question directly — he could fire a due reminder and not cancel it, could use a tool
+    he had built and never build one, could read his own memory and not add to it.
+
+    The earlier tests here only cover tools something *mentions*. That is the narrower
+    question, and it let all thirteen through: nothing named them, so nothing noticed they
+    were unreachable. This asks the wider one, which is the one that actually matters —
+    registered means offered somewhere, or explicitly withheld and written down.
+    """
+    registered = _registered()
+    reachable = set().union(*_ALLOW.values())
+    dead = sorted(registered - reachable - WITHHELD_ON_PURPOSE)
+    assert not dead, (
+        "these tools exist and are offered in no mode, so he can never call them "
+        f"unattended — add them to a toolset, or to WITHHELD_ON_PURPOSE with a reason: {dead}"
+    )
+
+
+def test_the_withheld_list_does_not_name_tools_that_are_gone():
+    # Otherwise it becomes a place stale names go to be forgotten, and the next real
+    # omission hides among them.
+    stale = sorted(WITHHELD_ON_PURPOSE - _registered())
+    assert not stale, f"WITHHELD_ON_PURPOSE names tools that no longer exist: {stale}"

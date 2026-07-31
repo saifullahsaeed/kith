@@ -135,6 +135,7 @@ const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROU
   update_milestone: { verb: "updated a milestone", group: "projects" },
   order_milestones: { verb: "put the milestones in order", group: "projects" },
   unlink_milestones: { verb: "unlinked two milestones", group: "projects" },
+  link_folder: { verb: "linked a folder", of: "folder", group: "projects" },
   // curiosity, mood, identity, people
   wonder: { verb: "grew curious about", of: "topic", group: "curiosity" },
   list_curiosities: { verb: "reviewed what he is curious about", group: "curiosity" },
