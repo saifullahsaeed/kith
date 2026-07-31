@@ -308,3 +308,26 @@ def _describe_call(name: str, arguments: dict) -> str:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _breakdown_prompt(milestone: dict) -> str:
+    """A milestone whose turn it is, with nothing under it to do.
+
+    Its own step, rather than something bolted onto the work prompt, because it is a
+    different job: not "make progress on this" but "work out what progress would consist
+    of". Handing him a task prompt with no task produced the thing this exists to stop —
+    he treated an inert project as an empty board and went off to reflect.
+    """
+    return (
+        f"Your project “{milestone['project']}” is at the milestone “{milestone['title']}”, "
+        f"and there is nothing filed under it — so nothing can happen, however long you roam.\n\n"
+        "Break just this milestone into tasks. One sitting's work each, concrete enough that "
+        "you could finish one and know you had. Hang them off milestone "
+        f"{milestone['id']} (`add_task` with `milestone_id`), and give them a real order of "
+        "importance rather than all the same.\n\n"
+        "Only this milestone. The ones after it are not yours to plan yet — you will know more "
+        "about them once this is done than you do now, and a plan written too early is fiction "
+        "you will feel obliged to follow.\n\n"
+        "This is the whole step. File the tasks, say what you set up, and stop — the first of "
+        "them is the next tick's job, not this one's."
+    )

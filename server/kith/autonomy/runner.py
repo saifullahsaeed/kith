@@ -25,6 +25,7 @@ from dataclasses import replace
 
 from kith.autonomy import directives
 from kith.autonomy.prompts import (
+    _breakdown_prompt,
     _breakout_prompt,
     _consolidation_prompt,
     _curiosity_prompt,
@@ -330,6 +331,9 @@ class AutonomyRunner:
         reminders_due = repo.reminders.due_reminders(AGENT_DB_PATH, now)
         schedules_due = repo.schedules.due_schedules(AGENT_DB_PATH, now)
         due = bool(reminders_due or schedules_due)
+        # A laid-out project with no tasks under it is work, not quiet. Read before
+        # `idle` is computed, because otherwise a whole project sits inert and he rests.
+        unplanned = repo.projects.milestones_needing_tasks(AGENT_DB_PATH)
         self._tick_count += 1
 
         # Precedence, most important first:
@@ -340,7 +344,7 @@ class AutonomyRunner:
         top = pending or resuming or due
         breaking = self._stall >= tuning.value("stall_break")
         # Caught up: nothing pending/due, not breaking a loop, and no active tasks.
-        idle = not (top or breaking or active)
+        idle = not (top or breaking or active or unplanned)
         open_curiosities = (
             len(
                 [
@@ -379,6 +383,13 @@ class AutonomyRunner:
             focus = repo.tasks.task_detail(AGENT_DB_PATH, active[0]["id"]) or active[0]
             mode, self._current = "start", f"working on: {focus['goal']}"
             directive, prompt = directives.WORK, _focus_prompt(focus, active)
+        elif unplanned:
+            # Below working a task he already has — a half-finished task beats planning the
+            # next thing — and above every kind of inner life, because a project nobody can
+            # act on is not a reason to go and reflect.
+            next_up = unplanned[0]
+            mode, self._current = "start", f"planning: {next_up['title'][:40]}"
+            directive, prompt = directives.WORK, _breakdown_prompt(next_up)
         elif consolidating:
             mode, self._current = "consolidate", "letting my mind settle"
             directive, prompt = directives.CONSOLIDATION, _consolidation_prompt()

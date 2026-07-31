@@ -340,3 +340,52 @@ def blocked_milestone_ids(path: Path) -> set[int]:
     return {
         milestone_id for milestone_id, deps in waits.items() if any(status.get(dep) != "done" for dep in deps)
     }
+
+
+def milestones_needing_tasks(path: Path) -> list[dict]:
+    """Milestones whose turn it is and which have nothing to do under them.
+
+    A project can be laid out and still be inert. Asked for a workout tracker he created the
+    project, wrote five milestones, ordered them correctly — and filed no tasks. Everything
+    that decides what to do next reads ``active_tasks``, so a roadmap with no tasks under it
+    is not "a plan waiting to be broken down", it is indistinguishable from an empty board.
+    He went idle, and the project sat there looking finished with 0% done and nothing that
+    could ever move it.
+
+    Telling him to file tasks did not work twice, so this is machinery instead: an available
+    milestone with no open tasks IS work — the work of breaking it down — and a tick can be
+    handed it the same way it is handed a task.
+
+    Only the milestones he could actually act on: an unfinished one, in an active project,
+    not waiting on a predecessor. Planning three milestones ahead is how a plan becomes
+    fiction, and the one in front of him is the only one he knows enough to break down.
+    """
+    from kith.infra.db.repositories.tasks import TASK_ACTIVE, list_tasks
+
+    with session(path) as db:
+        live = {
+            project.id: project.name
+            for project in db.scalars(select(Project).where(Project.status == "active")).all()
+        }
+    if not live:
+        return []
+
+    blocked = blocked_milestone_ids(path)
+    open_by_milestone: dict[int, int] = {}
+    for task in list_tasks(path):
+        if task["status"] in TASK_ACTIVE and task.get("milestone_id"):
+            open_by_milestone[task["milestone_id"]] = open_by_milestone.get(task["milestone_id"], 0) + 1
+
+    return [
+        {
+            "id": milestone["id"],
+            "title": milestone["title"],
+            "project_id": milestone["project_id"],
+            "project": live[milestone["project_id"]],
+        }
+        for milestone in list_milestones(path)
+        if milestone["project_id"] in live
+        and milestone["status"] != "done"
+        and milestone["id"] not in blocked
+        and not open_by_milestone.get(milestone["id"])
+    ]

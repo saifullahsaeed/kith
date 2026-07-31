@@ -82,7 +82,16 @@ def update_project(path: Path, args: dict):
     required=("project_id", "title"),
 )
 def add_milestone(path: Path, args: dict):
-    created = repo.projects.add_milestone(path, args["project_id"], args["title"], args.get("target_at"))
+    # Laying out the workout tracker he called this five times for four milestones, so the
+    # roadmap came out with "Workout data model and local persistence are defined" twice —
+    # the second one dangling with no order, permanently available, and looking like real
+    # work. Returning the existing one is better than a second row: he asked for that
+    # milestone to exist, and it does.
+    title = str(args["title"]).strip()
+    for existing in repo.projects.list_milestones(path):
+        if existing["project_id"] == args["project_id"] and existing["title"].strip() == title:
+            return {**existing, "note": "That milestone already existed, so this is the one you have."}
+    created = repo.projects.add_milestone(path, args["project_id"], title, args.get("target_at"))
     problems = []
     for earlier in args.get("after") or []:
         try:
