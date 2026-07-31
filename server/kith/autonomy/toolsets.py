@@ -49,6 +49,7 @@ _WORK = {
     "write_file",
     "edit_file",
     "changes",
+    "commit",
     "check_code",
     "glob",
     "history",

@@ -165,6 +165,7 @@ const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROU
   write_file: { verb: "wrote", of: "path", group: "files" },
   edit_file: { verb: "edited", of: "path", group: "files" },
   changes: { verb: "checked what he had changed", group: "files" },
+  commit: { verb: "saved a point in history", of: "message", group: "files" },
   check_code: { verb: "checked the code", of: "path", group: "shell" },
   glob: { verb: "looked for files matching", of: "pattern", group: "search" },
   history: { verb: "looked back through his history", group: "reading" },

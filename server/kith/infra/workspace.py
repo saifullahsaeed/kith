@@ -154,8 +154,15 @@ def ensure_repo() -> bool:
 def commit_all(message: str) -> str:
     """Commit whatever changed, and say what. Empty string when there was nothing.
 
-    Best-effort by design: a failure to record history must never take down the work that was
-    just done. It returns a description instead of raising so the caller can log it and move on.
+    Called by him, deliberately, and never on a timer. The first version committed at the end
+    of every tick, which was wrong twice over: a tick is not a unit of work — a task takes many,
+    so most of those commits would be mid-edit states that do not build — and a commit is a
+    claim that something is a coherent step, which is a judgement, not something a clock can
+    make. A history committed on a schedule is a keystroke log, and the point of having one is
+    to be able to read it.
+
+    Best-effort about *failing*: not being able to record history must never take down the work
+    that was just done, so this returns a description rather than raising.
     """
     if not ensure_repo():
         return ""

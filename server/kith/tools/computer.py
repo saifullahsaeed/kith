@@ -145,13 +145,37 @@ def glob(path: Path, args: dict):
     "See what you have changed and not yet committed, as a diff. Use it before you claim "
     "something is done: it is the only way to check that what you changed is what you meant "
     "to change, and it catches the edit you made and forgot. Pass a path to narrow it to one "
-    "file or folder. Your work is committed automatically at the end of each step, so this "
-    "shows what has happened since then.",
+    "file or folder. This shows everything since your last `commit`, so if it is longer than "
+    "you expected you have work you have not recorded yet.",
     {"path": {**STR, "description": "Optional file or folder to limit the diff to."}},
     required=(),
 )
 def changes(path: Path, args: dict):
     return sandbox.diff(args.get("path") or None)
+
+
+@tool(
+    "commit",
+    "Save a point in your folder's history, with a message saying what you did. Do this when "
+    "something works — a feature finished, a bug fixed, a checker passing — not on every step "
+    "and not mid-change. A commit is a claim that this is a coherent point worth coming back "
+    "to, so make it when that is true: it is how you can undo a wrong turn, and how your "
+    "person can review what you did while they were away. Check `changes` first if you are not "
+    "sure what you are about to record.",
+    {
+        "message": {
+            **STR,
+            "description": "What this change does, in one line. Written for someone reading "
+            "the history later, not for you now.",
+        }
+    },
+    required=("message",),
+)
+def commit(path: Path, args: dict):
+    summary = sandbox.commit_all(args.get("message") or "")
+    if not summary:
+        return {"committed": False, "note": "Nothing had changed, so there was nothing to record."}
+    return {"committed": True, "changed": summary}
 
 
 @tool(
