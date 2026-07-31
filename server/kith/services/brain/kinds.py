@@ -69,6 +69,24 @@ def _task_edit(path, task_id, data: dict):
     )
 
 
+def _make_reminder(path, data: dict) -> dict:
+    """A reminder from the panel, through the same code his own tool uses.
+
+    Imported here rather than at module scope because kith.tools imports this package: a
+    top-level import would close the loop and neither module would load.
+    """
+    from kith.tools.time import _set_reminder
+
+    return _set_reminder(path, data)
+
+
+def _make_schedule(path, data: dict) -> dict:
+    """A schedule from the panel, through the same code his own tool uses."""
+    from kith.tools.time import _schedule
+
+    return _schedule(path, data)
+
+
 def _milestone_add(path: Path, data: dict) -> dict:
     return repo.projects.add_milestone(
         path, int(data["project_id"]), data.get("title", ""), data.get("target_at")
@@ -155,6 +173,12 @@ KINDS: dict[str, Kind] = {
         Kind(
             "reminder",
             remove=repo.reminders.delete_reminder,
+            # The panel has had an Add form for this the whole time and it answered 400
+            # "cannot add a reminder" — a button that looks like a feature and is a dead end.
+            # The tool that he uses already resolves the same payload the form sends
+            # ({note, in_minutes} or {note, at}), so this reuses it rather than growing a
+            # second interpretation of "in 20 minutes" that could disagree with his.
+            add=lambda p, d: _make_reminder(p, d),
             edit=lambda p, k, d: repo.reminders.set_reminder_status(p, k, d.get("status", "done")),
         ),
         Kind(
@@ -180,6 +204,8 @@ KINDS: dict[str, Kind] = {
         Kind(
             "schedule",
             remove=repo.schedules.delete_schedule,
+            # Same as reminders: the form existed, the endpoint refused.
+            add=lambda p, d: _make_schedule(p, d),
             edit=lambda p, k, d: repo.schedules.set_schedule_status(p, k, d.get("status", "active")),
         ),
         # Keyed by name: he calls his self-made tools by name, so that is their identity.
