@@ -412,6 +412,128 @@ def write_file(path: str, content: str) -> str:
     return f"wrote {len(data)} bytes to {target}"
 
 
+def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
+    """Replace an exact string in a file. Returns a diff of what changed.
+
+    This exists because ``write_file`` was the only way to change anything, and rewriting a
+    whole file to alter one line has three costs that all showed up in his work.
+    It is expensive — a 12KB component is ~3,300 output tokens per edit. It is lossy: he
+    regenerates from what he remembers reading, so anything he did not re-emit is gone, and
+    while ``read_file`` was truncating without a way to continue, "anything he did not read"
+    was in that category too. And it degrades formatting, because a model paying by the token
+    to re-emit a file compresses it: his App.jsx ended up 55 lines averaging 220 characters,
+    with one JSX line of 3,262.
+
+    Exact string matching, no regex and no fuzzy fallback, and it refuses rather than guesses:
+
+    * **Not found** is an error, not a no-op. A silent no-op reads as success and he moves on
+      believing the change landed.
+    * **Ambiguous** is an error too. If the string appears four times, replacing the first is
+      a coin flip on which one he meant; the message says how many and what to do about it.
+
+    Both refusals name the fix, because the caller is a model that will otherwise retry the
+    identical call.
+    """
+    if not old:
+        raise WorkspaceError("old must be the exact text to replace — an empty string matches nothing")
+    if old == new:
+        raise WorkspaceError("old and new are identical, so there is nothing to change")
+
+    target = Path(resolve(path))
+    permissions.require_path("write", target, root())
+    if not target.is_file():
+        raise WorkspaceError(f"there's no {path} to edit")
+    try:
+        before = target.read_text()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise WorkspaceError(f"cannot read {path} to edit it: {exc}") from None
+
+    found = before.count(old)
+    if found == 0:
+        raise WorkspaceError(
+            f"that exact text is not in {path}. Whitespace and indentation count — read the "
+            "part you mean to change and copy it verbatim."
+        )
+    if found > 1 and not replace_all:
+        raise WorkspaceError(
+            f"that text appears {found} times in {path}, so which one is ambiguous. Include "
+            "more surrounding lines to pin down the one you mean, or pass replace_all to "
+            "change every occurrence."
+        )
+
+    after = before.replace(old, new) if replace_all else before.replace(old, new, 1)
+    data = after.encode()
+    if len(data) > _MAX_WRITE:
+        raise WorkspaceError(f"the result would be too large ({len(data)} bytes; max {_MAX_WRITE})")
+    try:
+        target.write_text(after)
+    except OSError as exc:
+        raise WorkspaceError(f"cannot write {path}: {exc}") from None
+
+    return _diff(path, before, after, old, found if replace_all else 1)
+
+
+#: A diff line longer than this is not readable as a line, so the change is shown as a
+#: character window instead. His App.jsx has a 3,262-character line of JSX; a one-word edit to
+#: it produced a 10,931-character unified diff in which the changed line was truncated *before*
+#: the change — a page of context that showed nothing.
+_DIFF_LINE = 220
+
+
+def _window(before: str, after: str, old: str, path: str, replacements: int) -> str:
+    """The change as a character window, for a file whose lines are too long to diff.
+
+    Exact rather than guessed: the offset of the replaced text is known, so the window is
+    centred on it and the line number is reported so the position is not lost.
+    """
+    at = before.find(old)
+    line_no = before.count("\n", 0, at) + 1
+    pad = 90
+    lo = max(0, at - pad)
+    was = before[lo : at + len(old) + pad].replace("\n", "⏎")
+    # The same span in the new text: everything before the change is identical, so the offset
+    # holds and only the replaced length differs.
+    now = after[lo : at + len(old) + pad + 200].replace("\n", "⏎")
+    lead = "…" if lo > 0 else ""
+    return (
+        f"{replacements} replacement{'' if replacements == 1 else 's'} in {path}, line {line_no}"
+        f" (lines here are too long to diff, so this is the changed region)\n"
+        f"- {lead}{was}…\n"
+        f"+ {lead}{now}…"
+    )
+
+
+def _diff(path: str, before: str, after: str, old: str, replacements: int) -> str:
+    """A unified diff of one edit, clipped.
+
+    Returned rather than "ok" on purpose: the diff is the only way he can see that what he
+    changed is what he meant to change, and it is the thing worth putting in front of a person
+    reviewing an unattended edit. Three lines of context — enough to place the change, not
+    enough to re-send the file he already has.
+    """
+    import difflib
+
+    return_window = max((len(line) for line in before.splitlines()), default=0) > _DIFF_LINE
+    if return_window and replacements == 1:
+        return _window(before, after, old, path, replacements)
+
+    lines = list(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"{path} (before)",
+            tofile=f"{path} (after)",
+            n=3,
+        )
+    )
+    made = f"{replacements} replacement{'' if replacements == 1 else 's'} in {path}"
+    if not lines:
+        # replace() found the text and the result is identical — a no-change edit that is not
+        # worth reporting as a success without saying so.
+        return f"{made}, but the file is unchanged"
+    return made + "\n" + _clip("".join(lines))
+
+
 def list_files(path: str = ".") -> str:
     target = Path(resolve(path))
     permissions.require_path("read", target, root())

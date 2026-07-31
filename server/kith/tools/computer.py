@@ -52,6 +52,36 @@ def write_file(path: Path, args: dict):
 
 
 @tool(
+    "edit_file",
+    "Change part of a file by replacing an exact piece of text. Use this instead of "
+    "write_file for any change to a file that already exists — write_file replaces the whole "
+    "thing, which costs you the entire file in output and loses anything you did not retype. "
+    "`old` must appear EXACTLY once, whitespace and indentation included: copy it verbatim "
+    "from a read. If it appears more than once you will be told how many times, and you "
+    "should either include more surrounding lines to pin down the one you mean or pass "
+    "replace_all. You get back a diff of what changed — read it, that is how you check you "
+    "changed what you intended.",
+    {
+        "path": STR,
+        "old": {**STR, "description": "The exact text to replace, copied verbatim."},
+        "new": {**STR, "description": "What to put in its place."},
+        "replace_all": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of failing on ambiguity.",
+        },
+    },
+    required=("path", "old", "new"),
+)
+def edit_file(path: Path, args: dict):
+    return sandbox.edit_file(
+        args["path"],
+        args.get("old") or "",
+        args.get("new") or "",
+        replace_all=bool(args.get("replace_all")),
+    )
+
+
+@tool(
     "delete_file",
     "Put a file or folder in the Trash. Use this rather than `rm` in the shell — it goes "
     "to the Trash, so your person can get it back if you were wrong about which one they "

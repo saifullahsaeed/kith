@@ -47,6 +47,7 @@ _WORK = {
     "read_file",
     "grep",
     "write_file",
+    "edit_file",
     # Without this he has `shell` and nothing else for "get rid of that file", which means
     # `rm` — the one delete on the machine with no way back — during a tick nobody is
     # watching. `delete_file` uses the Trash and goes through the permission check, and it

@@ -163,6 +163,7 @@ const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROU
   shell: { verb: "ran", of: "command", group: "shell" },
   read_file: { verb: "read", of: "path", group: "files" },
   write_file: { verb: "wrote", of: "path", group: "files" },
+  edit_file: { verb: "edited", of: "path", group: "files" },
   delete_file: { verb: "put in the Trash", of: "path", group: "files" },
   list_files: { verb: "looked through", of: "path", group: "files" },
   grep: { verb: "searched files for", of: "pattern", group: "search" },
