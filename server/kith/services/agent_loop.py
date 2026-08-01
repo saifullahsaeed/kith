@@ -23,6 +23,7 @@ from kith import tools
 from kith.config import Config
 from kith.domain.tool_markup import ToolMarkupFilter
 from kith.llm import ollama, openai_compat
+from kith.llm.budget import ContextBudget, conversation_chars
 from kith.services import tuning
 
 # Tools that may run concurrently with each other. The bar is deliberately high:
@@ -254,6 +255,51 @@ def _record(stats: dict | None) -> None:
 _BULKY_ARGS = ("content", "new", "old")
 
 
+#: What replaces an exchange dropped for room. Byte-stable on purpose — no count, no token
+#: figure. A note reading "4 earlier steps were dropped" becomes "5 earlier steps" next time
+#: and invalidates the whole prefix from that point on every single round, which is the exact
+#: bug the compaction code sits next to a comment about.
+_DROPPED_NOTE = (
+    "(Earlier steps of this turn were set aside to make room. Their results are gone from "
+    "this conversation — what you wrote down survives, so work from your notes and files.)"
+)
+
+
+def _drop_oldest_exchange(convo: list[dict[str, Any]]) -> bool:
+    """Make room by forgetting the turn's oldest complete exchange. True if one went.
+
+    An *exchange* is one assistant message that called tools plus the tool results that
+    answered it. They go together or not at all: a provider rejects a `tool` message whose
+    `tool_call_id` has no matching call, so dropping half would turn "running out of room"
+    into a 400 with no obvious cause.
+
+    The leading messages are never touched. Those are the persona and the request, and the
+    persona is the whole of what the prompt cache holds — dropping it would free a few
+    thousand tokens and cost the cached prefix on every remaining round.
+    """
+    first_exchange = next(
+        (i for i, m in enumerate(convo) if m.get("role") == "assistant" and m.get("tool_calls")),
+        None,
+    )
+    if first_exchange is None:
+        return False
+
+    end = first_exchange + 1
+    while end < len(convo) and convo[end].get("role") == "tool":
+        end += 1
+    # Leave at least one exchange in place: a turn with no evidence of what it just did is
+    # worse than one that is slightly over budget, and the next round would drop the round
+    # that was about to save the work.
+    if not any(m.get("role") == "assistant" and m.get("tool_calls") for m in convo[end:]):
+        return False
+
+    already_noted = any(m.get("_dropped") for m in convo[:first_exchange])
+    convo[first_exchange:end] = (
+        [] if already_noted else [{"role": "user", "content": _DROPPED_NOTE, "_dropped": True}]
+    )
+    return True
+
+
 def _compact_call_arguments(convo: list[dict[str, Any]]) -> None:
     """An old write keeps its filename and lets go of the file.
 
@@ -415,6 +461,14 @@ def stream_agent(
     from kith.services.mcp import manager as mcp_manager
 
     mcp_tools = mcp_manager.snapshot()
+    # How much room is left, learned from what the provider charges each round.
+    #
+    # `num_predict` is -1 on a default install — the sentinel for "no limit" — so it cannot
+    # be used as the answer reserve directly. Falling back to the tick cap gives a real
+    # number, and a real number is the whole point: the threshold is absolute, because a
+    # percentage of the window is wrong at both ends.
+    wanted_out = config.num_predict if config.num_predict > 0 else tuning.value("tick_max_tokens")
+    room = ContextBudget(window=config.context_window, reserve=int(wanted_out))
     # The tool list as the last round actually saw it, kept for the forced final answer.
     # That request used to build its own with `tool_schemas(agent_db_path)` and no `only`,
     # so a breakout tick offering six tools ended by sending all fifty-nine — a different
@@ -470,9 +524,24 @@ def stream_agent(
         # rounds — was a suggestion, and a model that named a search tool anyway got one.
         permitted = {s["function"]["name"] for s in schemas}
 
+        # Make room before asking, not after being refused. A conversation that outgrew the
+        # window used to come back as `Cloud model returned 400` and end the turn — no
+        # compaction, no retry, no chance to save what it had.
+        #
+        # The toolset is deliberately untouched here. Reusing the `landing` latch was the
+        # obvious move and is wrong: it is one-way, so context pressure at round 3 of a
+        # 40-round turn would remove shell and every file tool for the remaining 37 and leave
+        # him structurally unable to do the thing he was asked. Trim the history; leave the
+        # capability alone.
+        while room.is_tight(conversation_chars(convo, schemas)) and _drop_oldest_exchange(convo):
+            pass
+
         content = ""
         tool_calls: list[dict] = []
         stats: dict | None = None
+
+        # Measured now, before the request, so it describes what was actually sent.
+        sent = conversation_chars(convo, schemas)
 
         for event in _stream_once(convo, config, host, tools=schemas):
             kind = event["type"]
@@ -485,6 +554,13 @@ def stream_agent(
                 content = event["content"]
                 tool_calls = event["tool_calls"]
                 stats = event["stats"]
+
+        # What that request actually cost, against how big it was — the one measurement the
+        # budget is built on. Taken from `sent`, captured before the call, because `convo`
+        # has grown by the time we get here and dividing by the wrong size would calibrate
+        # the ratio against a prompt that was never sent.
+        if stats:
+            room.observe(int(stats.get("promptTokens") or 0), sent)
 
         # Count and surface every round's tokens — tool rounds are the bulk of the
         # cost, so counting only final answers hides almost all of it.

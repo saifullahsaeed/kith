@@ -24,7 +24,7 @@ from typing import Any
 import requests
 
 from kith.config import Config
-from kith.llm import caching
+from kith.llm import budget, caching
 
 # Optionally pin OpenRouter to one upstream host. Default routing spreads requests
 # across ~20 providers, so consecutive rounds land on different (cold) caches and
@@ -43,16 +43,25 @@ def is_openrouter(config: Config) -> bool:
     return "openrouter.ai" in (config.base_url or "")
 
 
+def _body(response) -> str:
+    """The response body, or "" if reading it fails.
+
+    A streamed response whose connection dropped raises on `.text`, and a classifier that
+    raises while deciding why a request failed turns one failure into two.
+    """
+    try:
+        return response.text
+    except requests.exceptions.RequestException:
+        return ""
+
+
 def _refuses_reasoning(response: requests.Response) -> bool:
     """Is this 400 specifically about the reasoning switch?
 
     Matched on the provider's words rather than retried blindly, so a genuine bad
     request still surfaces as one instead of being quietly sent twice.
     """
-    try:
-        return "reasoning" in response.text.lower()
-    except requests.exceptions.RequestException:
-        return False
+    return "reasoning" in _body(response).lower()
 
 
 def _session_id() -> str:
@@ -179,6 +188,20 @@ def stream_once(
     # endpoint and cannot be disabled", HTTP 400. Asking for it is still right, because
     # on every other model it saves real tokens; being refused just means dropping the
     # request to reason less, not failing the turn.
+    # Classified before the reasoning retry, and the order matters. That retry fires on any
+    # 400 whose body merely *contains* "reasoning" — and an overflow message often does, since
+    # providers list a reasoning-token breakdown in it. Left second, an over-budget request
+    # would be sent a whole second time before anything noticed the real cause.
+    if budget.looks_like_overflow(response.status_code, _body(response)):
+        detail = _body(response)[:200]
+        response.close()
+        yield {
+            "type": "error",
+            "kind": "context_overflow",
+            "message": (f"That conversation outgrew the model's context window. The provider said: {detail}"),
+        }
+        return
+
     if response.status_code == 400 and "reasoning" in payload and _refuses_reasoning(response):
         response.close()
         payload.pop("reasoning")
