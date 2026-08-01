@@ -4,19 +4,16 @@ import {
   BookOpenText,
   Brain,
   CircleDot,
-  Compass,
   FileCode2,
   FolderKanban,
   Globe,
   Heart,
   ListChecks,
-  Moon,
   NotebookPen,
   PanelRightClose,
   Puzzle,
   Search,
   Send,
-  Sparkles,
   Square,
   TerminalSquare,
   TriangleAlert,
@@ -48,10 +45,11 @@ const KIND: Record<
   // throughout. An icon also survives being small, which every one of these is.
   start: { icon: CircleDot, tone: "text-blue-400", head: true },
   reply: { icon: Undo2, tone: "text-pink-400", head: true },
-  reflect: { icon: Compass, tone: "text-kith", head: true },
-  curious: { icon: Sparkles, tone: "text-teal-400", head: true },
-  consolidate: { icon: Moon, tone: "text-indigo-400", head: true },
   breakout: { icon: Unlock, tone: "text-orange-400", head: true },
+  // `reflect`, `curious` and `consolidate` had entries here too. Nothing has emitted them
+  // since the scheduled inner life was removed, and an icon for a kind that never arrives is
+  // a promise the feed cannot keep. The server's live set is start / reply / breakout /
+  // tool / thought / reminder / done / error / status / tokens.
   tool: { icon: null, tone: "text-muted-foreground/70" }, // its own icon, by what it touched
   thought: { icon: null, tone: "text-muted-foreground/50" },
   reminder: { icon: AlarmClock, tone: "text-orange-400" },

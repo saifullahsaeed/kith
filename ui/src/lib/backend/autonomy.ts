@@ -21,11 +21,10 @@ export interface AutonomyStatus {
 }
 
 export interface ActivityItem {
+  /** Every kind the server emits, and no more. `reflect`, `curious` and `consolidate` were
+   *  here until the scheduled inner life was removed and nothing produced them again. */
   kind:
     | "start"
-    | "reflect"
-    | "curious"
-    | "consolidate"
     | "reply"
     | "breakout"
     | "tool"

@@ -183,15 +183,14 @@ class Person(Base):
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
-class Curiosity(Base):
-    __tablename__ = "curiosities"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    topic: Mapped[str] = mapped_column(Text, nullable=False)
-    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="open")
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
+# `Curiosity` was mapped here — the last piece of the scheduled inner life still standing.
+# The tools, the repository, the brain kind and the tick mode all went; the ORM class stayed,
+# referenced by nothing, still declaring `curiosities` to SQLAlchemy's metadata.
+#
+# The migration that creates the table stays where it is, and must: migrations are history,
+# and rewriting one breaks every database that already ran it. An existing install keeps an
+# empty table it no longer opens, which costs nothing. A mapped class is different — it is a
+# live claim about what the schema is for, and this one had not been true for a day.
 
 
 class SelfModel(Base):
