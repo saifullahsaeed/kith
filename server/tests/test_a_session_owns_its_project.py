@@ -165,7 +165,7 @@ class TestWhatASessionMayWorkOn:
         assert R._in_scope({"project_id": 7}, None, {1}) is True
 
     def test_with_nobody_working_the_whole_board_is_fair_game(self):
-        """"Run once" has always meant "take a step on anything", and still does."""
+        """ "Run once" has always meant "take a step on anything", and still does."""
         from kith.autonomy.runner import AutonomyRunner as R
 
         assert R._in_scope({"project_id": 3}, None, set()) is True

@@ -67,16 +67,10 @@ def test_the_subject_of_each_verb_is_a_real_argument() -> None:
     pairs = re.findall(r"^\s{2}([a-z_]+):\s*\{[^}]*\bof:\s*\"([a-z_]+)\"", tool_table(), re.M)
 
     schemas = {
-        schema["function"]["name"]: set(
-            (schema["function"].get("parameters") or {}).get("properties", {})
-        )
+        schema["function"]["name"]: set((schema["function"].get("parameters") or {}).get("properties", {}))
         for schema in registry.schemas()
     }
-    wrong = [
-        (tool, subject)
-        for tool, subject in pairs
-        if tool in schemas and subject not in schemas[tool]
-    ]
+    wrong = [(tool, subject) for tool, subject in pairs if tool in schemas and subject not in schemas[tool]]
     assert not wrong, f"these name an argument the tool does not take: {wrong}"
 
 

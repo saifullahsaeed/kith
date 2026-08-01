@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#
+# Everything that has to pass before a change is finished.
+#
+# This exists because of a specific mistake, made twice in one night. Running the checks by
+# hand as `pytest | tail -1 && ruff && tsc` reports the exit status of `tail`, not of pytest —
+# so a red suite scrolled past as one line of green and a commit went out on top of it. A
+# pipeline hides the failure it is summarising.
+#
+#   ./check         everything
+#   ./check server  python only (fast loop while working on the backend)
+#   ./check ui      typescript only
+#
+# Note `tsc -b`, not `tsc --noEmit`. They read different configs: --noEmit passed clean on a
+# tree where the real build failed with six errors, two of them genuine type mismatches.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+what="${1:-all}"
+failed=()
+
+step() {
+  local name="$1"; shift
+  printf '\n\033[1m▸ %s\033[0m\n' "$name"
+  if "$@"; then
+    printf '\033[32m  ✓ %s\033[0m\n' "$name"
+  else
+    printf '\033[31m  ✗ %s\033[0m\n' "$name"
+    failed+=("$name")
+  fi
+}
+
+if [[ "$what" == "all" || "$what" == "server" ]]; then
+  cd "${here}/server"
+  step "ruff"   .venv/bin/python -m ruff check kith/ tests/
+  step "format" .venv/bin/python -m ruff format --check kith/ tests/
+  step "pytest" .venv/bin/python -m pytest tests/ -q
+fi
+
+if [[ "$what" == "all" || "$what" == "ui" ]]; then
+  cd "${here}/ui"
+  # --force so a stale .tsbuildinfo cannot report success for code it never looked at.
+  step "tsc" npx tsc -b --force
+  step "vite build" npm run build
+fi
+
+printf '\n'
+if (( ${#failed[@]} )); then
+  printf '\033[31m%d check(s) failed: %s\033[0m\n' "${#failed[@]}" "${failed[*]}"
+  exit 1
+fi
+printf '\033[32mall checks passed\033[0m\n'

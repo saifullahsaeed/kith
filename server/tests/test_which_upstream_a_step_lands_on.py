@@ -77,7 +77,7 @@ class TestAStepNamesItsSession:
         assert captured == [one, two]
 
     def test_a_step_with_nobody_working_falls_back(self, db, monkeypatch, captured):
-        """"Run" with no session is work belonging to no conversation, and the install-wide
+        """ "Run" with no session is work belonging to no conversation, and the install-wide
         id is the honest answer for it rather than an arbitrary session's."""
         runner = runner_on(db, monkeypatch)
         monkeypatch.setattr(runner, "_new_pending", lambda: [])

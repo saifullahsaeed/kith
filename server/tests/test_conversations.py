@@ -213,7 +213,9 @@ class TestSearchingWhatWasSaid:
 
     def test_reasoning_and_tool_calls_are_not_searched(self, db):
         one = conversations.start(db, "hello")
-        conversations.record_event(one["id"], "tool_call", {"name": "shell", "arguments": {"command": "rg zebra"}})
+        conversations.record_event(
+            one["id"], "tool_call", {"name": "shell", "arguments": {"command": "rg zebra"}}
+        )
 
         # Matching these would answer "where did we talk about X" with a stack trace, and
         # the tool call is not something either of you said.

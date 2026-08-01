@@ -79,9 +79,7 @@ class TestTheRegistryAndThePanelHaveToAgree:
     from this registry. When the two drift, the symptom is a button that 400s.
     """
 
-    @pytest.mark.parametrize(
-        "kind", ["memory", "note", "person", "project", "task", "reminder", "schedule"]
-    )
+    @pytest.mark.parametrize("kind", ["memory", "note", "person", "project", "task", "reminder", "schedule"])
     def test_every_kind_with_a_form_is_creatable(self, kind):
         assert KINDS[kind].add is not None, f"the panel has an Add form for {kind}"
 

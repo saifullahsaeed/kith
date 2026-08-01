@@ -43,7 +43,9 @@ def get_persona():
 def create_fragment():
     payload = request.get_json(silent=True) or {}
     try:
-        return jsonify(persona.create_fragment(str(payload.get("name") or ""), str(payload.get("body") or "")))
+        return jsonify(
+            persona.create_fragment(str(payload.get("name") or ""), str(payload.get("body") or ""))
+        )
     except persona.PersonaError as exc:
         return _fail(exc)
 

@@ -98,9 +98,7 @@ class TestWhenTheModelCannotSee:
         from kith.tools import registry
 
         tiny_png(workspace_root / "shot.png")
-        monkeypatch.setattr(
-            "kith.config.model_capabilities", lambda: {"images": False, "known": True}
-        )
+        monkeypatch.setattr("kith.config.model_capabilities", lambda: {"images": False, "known": True})
         tool = registry.get("read_file")
         handler = tool.run if hasattr(tool, "run") else tool
 

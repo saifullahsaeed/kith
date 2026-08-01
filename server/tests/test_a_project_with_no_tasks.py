@@ -172,9 +172,7 @@ class TestTheDuplicateMilestone:
 
         first = tool.add_milestone(db, {"project_id": project, "title": "The contract is defined"})
         for _ in range(3):
-            tool.add_milestone(
-                db, {"project_id": project, "title": "Logging works", "after": [first["id"]]}
-            )
+            tool.add_milestone(db, {"project_id": project, "title": "Logging works", "after": [first["id"]]})
         # He does retry. Three identical calls must leave one milestone and one edge.
         assert len(repo.projects.list_milestones(db)) == 2
         assert len(repo.projects.dependencies(db)) == 1

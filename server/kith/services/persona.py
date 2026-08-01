@@ -168,7 +168,7 @@ def _describe(path: Path) -> dict:
 
 
 def _title(relative: str) -> str:
-    """"40-how-you-work.md" -> "how you work". The numeric prefix is ordering, not a name."""
+    """ "40-how-you-work.md" -> "how you work". The numeric prefix is ordering, not a name."""
     stem = Path(relative).stem.lstrip("_.")
     without_number = re.sub(r"^\d+[-_]?", "", stem)
     return (without_number or stem).replace("-", " ").replace("_", " ").strip()

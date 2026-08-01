@@ -436,4 +436,3 @@ def _now() -> str:
     from kith.infra.db.support import utc_now_iso
 
     return utc_now_iso()
-

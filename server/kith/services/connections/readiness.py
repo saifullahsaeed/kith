@@ -86,8 +86,7 @@ def _computer() -> Check:
         Health.OK if mode != "bypass" else Health.DEGRADED,
         f"He works in {root}. {described}",
         (
-            "Bypass means no gate at all. Switch to Ask or Auto in the title bar unless you "
-            "meant it."
+            "Bypass means no gate at all. Switch to Ask or Auto in the title bar unless you meant it."
             if mode == "bypass"
             else ""
         ),

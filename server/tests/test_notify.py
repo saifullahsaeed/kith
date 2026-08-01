@@ -75,7 +75,7 @@ class TestTheThreshold:
 
 class TestNothingIsDropped:
     def test_a_quiet_message_is_still_recorded(self, db):
-        """"Quieter" must never mean "you did not find out" — the channel is the history."""
+        """ "Quieter" must never mean "you did not find out" — the channel is the history."""
         notify.set_level("reachout")
         repo.messages.add_message(db, "a note while working", kind="note")
         assert len(repo.messages.list_messages(db)) == 1

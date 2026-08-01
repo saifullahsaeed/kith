@@ -171,7 +171,13 @@ class TestAnOldWriteLetsGoOfTheFile:
             "role": "assistant",
             "content": "",
             "tool_calls": [
-                {"id": "c1", "function": {"name": "write_file", "arguments": json.dumps({"path": path, "content": body})}}
+                {
+                    "id": "c1",
+                    "function": {
+                        "name": "write_file",
+                        "arguments": json.dumps({"path": path, "content": body}),
+                    },
+                }
             ],
         }
 
@@ -186,7 +192,7 @@ class TestAnOldWriteLetsGoOfTheFile:
         _compact_call_arguments(convo)
 
         old = self.args(convo[0])
-        assert old["path"] == "/big.py"          # still says what he wrote, and where
+        assert old["path"] == "/big.py"  # still says what he wrote, and where
         assert "40,000 characters" in old["content"]
         assert "xxxx" not in old["content"]
         # The most recent one is untouched — he may still be working on it.
@@ -220,8 +226,13 @@ class TestAnOldWriteLetsGoOfTheFile:
             "role": "assistant",
             "content": "",
             "tool_calls": [
-                {"id": "c1", "function": {"name": "edit_file", "arguments": json.dumps(
-                    {"path": "/a.py", "old": "o" * 9_000, "new": "n" * 9_000})}}
+                {
+                    "id": "c1",
+                    "function": {
+                        "name": "edit_file",
+                        "arguments": json.dumps({"path": "/a.py", "old": "o" * 9_000, "new": "n" * 9_000}),
+                    },
+                }
             ],
         }
         convo = [edit, self.call("/later.py", "x")]
@@ -235,8 +246,13 @@ class TestAnOldWriteLetsGoOfTheFile:
 
         tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 10})
         convo = [
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "c1", "function": {"name": "write_file", "arguments": "{not json at all"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "write_file", "arguments": "{not json at all"}}
+                ],
+            },
             self.call("/later.py", "x"),
         ]
         before = json.dumps(convo)
