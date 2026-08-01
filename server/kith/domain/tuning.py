@@ -338,6 +338,20 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="ticks",
     ),
     Tunable(
+        key="focus_grind_limit",
+        env="KITH_FOCUS_GRIND_LIMIT",
+        label="No-progress ticks before setting a task aside",
+        help="How many ticks the same task may be worked with nothing newly ticked off or "
+        "delivered before he stops and hands it back. The backstop for a loop that rewords "
+        "itself each tick so the prose and shape detectors miss it — measured on the task's "
+        "own progress, not its wording.",
+        default=6,
+        group="stalls",
+        minimum=2,
+        maximum=50,
+        unit="ticks",
+    ),
+    Tunable(
         key="prose_match",
         env="KITH_PROSE_MATCH",
         label="Similar wording threshold",

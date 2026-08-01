@@ -123,6 +123,12 @@ class AutonomyRunner:
         self._recent_sigs: deque[frozenset] = deque(maxlen=6)
         self._recent_shapes: deque[frozenset] = deque(maxlen=6)
         self._stall = 0
+        # Grind detection: the same task worked with no NET progress (items ticked or
+        # deliverables filed) for too many ticks — the loop the prose/shape detectors miss
+        # because it rewords itself while getting nowhere.
+        self._focus_id: int | None = None
+        self._focus_progress = 0
+        self._focus_grind = 0
         self._last_reply_attempt_id = 0
 
     # -- public control ----------------------------------------------------- #
@@ -478,6 +484,9 @@ class AutonomyRunner:
         # scheduled inner life, which is not a thing a clock should decide.
         resuming = not pending and bool(awaiting)
         breaking = self._stall >= tuning.value("stall_break")
+        # Which task this tick actually WORKS (the `active` branch below), for grind
+        # detection. Stays None on every other mode — reply, plan, breakout, idle.
+        working_task_id: int | None = None
         if pending:
             mode, self._current = "reply", f"replying: {pending[0]['body'][:40]}"
             directive, prompt = directives.REPLY, _reply_prompt(pending)
@@ -494,6 +503,7 @@ class AutonomyRunner:
             directive, prompt = directives.BREAKOUT, _breakout_prompt(active)
         elif active:
             focus = repo.tasks.task_detail(AGENT_DB_PATH, active[0]["id"]) or active[0]
+            working_task_id = active[0]["id"]
             mode, self._current = "start", f"working on: {focus['goal']}"
             directive, prompt = directives.WORK, _focus_prompt(focus, active)
         elif unplanned:
@@ -691,6 +701,7 @@ class AutonomyRunner:
                 pass
 
         self._detect_stall(active, breaking, tools_used)
+        self._detect_grind(working_task_id, active)
         self._emit("done", "step complete", conversation=conversation_id)
 
         # Durable flight recorder — one row per tick, so how he's doing is
@@ -819,6 +830,44 @@ class AutonomyRunner:
             self._stall = 0
             self._recent_sigs.clear()
             self._recent_shapes.clear()
+
+    @staticmethod
+    def _focus_progress_of(detail: dict | None) -> int:
+        """Countable forward motion on a task: checklist items ticked plus deliverables filed.
+
+        The same notion of "moved forward" the stall detector's ADVANCE_TOOLS encodes, but read
+        off the task's STATE rather than off which tools were named — so a tick that called
+        update_task and changed nothing counts as the standstill it was.
+        """
+        if not detail:
+            return 0
+        checked = sum(1 for c in (detail.get("checklist") or []) if c.get("done"))
+        return checked + len(detail.get("deliverables") or [])
+
+    def _detect_grind(self, working_task_id: int | None, active: list[dict]) -> None:
+        """Set aside a task worked for too many ticks with no net progress.
+
+        The third stall signal, and the one that would have caught the 23x Prisma loop: it
+        depends on neither wording (which the loop varied) nor tool shape (it "used update_task"
+        each time), only on whether an item got ticked or a deliverable filed. A tick that
+        genuinely advances resets the count; a run that doesn't crosses focus_grind_limit and
+        hands the task back through the same _give_up path stall-giveup uses.
+        """
+        if working_task_id is None:
+            return
+        progress = self._focus_progress_of(repo.tasks.task_detail(AGENT_DB_PATH, working_task_id))
+        if working_task_id != self._focus_id:
+            self._focus_id, self._focus_progress, self._focus_grind = working_task_id, progress, 0
+            return
+        if progress > self._focus_progress:
+            self._focus_progress, self._focus_grind = progress, 0
+            return
+        self._focus_grind += 1
+        if self._focus_grind >= tuning.value("focus_grind_limit"):
+            given_up = _give_up(active)
+            if given_up:
+                self._emit("breakout", f"set aside — {self._focus_grind} steps, no progress: {given_up}")
+            self._focus_id, self._focus_grind = None, 0
 
     def _project_memory(self, project: int | None) -> str:
         """`.kith/memory.md` for the project this session is on, or nothing."""
