@@ -164,3 +164,37 @@ def test_the_withheld_list_does_not_name_tools_that_are_gone():
     # omission hides among them.
     stale = sorted(WITHHELD_ON_PURPOSE - _registered())
     assert not stale, f"WITHHELD_ON_PURPOSE names tools that no longer exist: {stale}"
+
+
+def test_a_directive_never_asks_for_something_the_toolset_forbids():
+    """Naming a real tool is not enough — it has to be reachable when the instruction applies.
+
+    The chat directive says to file "a project and its first milestone's tasks". But
+    `create_project` is a delegation tool, and tripping that guardrail narrows the toolset to
+    `_LANDING_TOOLS | _PLANNING_TOOLS` for the rest of the turn — which did not include
+    `add_task`. So the one instruction the directive gives about setting work up was
+    impossible to carry out from the moment he followed the first half of it.
+
+    It went unseen because the allow-lists were advisory: he called `add_task` anyway and it
+    ran. Enforcing them turned a latent contradiction into a wall, and a real run found it
+    within seven rounds — he created the project, added the milestone, then said "the
+    task-creation operation wasn't available in this session, so I couldn't honestly file the
+    milestone's tasks", after retrying `add_milestone` three times looking for a way through.
+    """
+    from kith.api.routes.chat import CHAT_DIRECTIVE
+    from kith.services.agent_loop import _DELEGATION_TOOLS, _LANDING_TOOLS, _PLANNING_TOOLS
+
+    after_delegating = _LANDING_TOOLS | _PLANNING_TOOLS
+    # Everything the guardrail can be tripped by, plus what the directive then asks for.
+    for tool in _DELEGATION_TOOLS:
+        assert tool in after_delegating or tool == "create_project", (
+            f"{tool} trips the guardrail and cannot be repeated, which is intended"
+        )
+    assert "add_task" in after_delegating, (
+        "the directive asks for a project AND its tasks; filing them must survive the "
+        "guardrail that creating the project trips"
+    )
+    assert "add_milestone" in after_delegating
+    # And the directive really is the thing making that promise, so this fails loudly if the
+    # wording changes rather than passing on a rule nobody states any more.
+    assert "milestone's tasks" in CHAT_DIRECTIVE

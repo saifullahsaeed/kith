@@ -81,6 +81,20 @@ _DELEGATION_TOOLS = frozenset({"add_task", "create_project"})
 # about it. Gathering is over — that is the point.
 _PLANNING_TOOLS = frozenset(
     {
+        # Filing the tasks IS finishing the plan, so it has to survive the guardrail that
+        # `create_project` trips. It did not, and the gap only became visible once the
+        # allow-lists were actually enforced: asked to set up a project, he created it, added
+        # the milestone, then said "the task-creation operation wasn't available in this
+        # session, so I couldn't honestly file the milestone's tasks" — and retried
+        # `add_milestone` three times looking for a way through.
+        #
+        # The chat directive tells him, in as many words, to file "a project and its first
+        # milestone's tasks". A directive commanding what the toolset forbids is worse than
+        # either alone: he cannot comply and cannot tell you why without guessing.
+        #
+        # What the guardrail is actually for is the *doing* — searching, fetching, shell —
+        # after he has decided the work happens later. That is untouched.
+        "add_task",
         "add_milestone",
         "add_checklist_item",
         "update_project",
