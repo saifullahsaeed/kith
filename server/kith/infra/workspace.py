@@ -432,14 +432,9 @@ def status() -> dict:
     }
 
 
-def ensure_ready() -> None:
-    """Kept for the call sites that used to guarantee a container was up.
-
-    Now it only guarantees the folder exists, which :func:`root` already does — but the
-    name is load-bearing at a dozen call sites and a no-op is cheaper than a rename that
-    touches all of them.
-    """
-    root()
+# `ensure_ready()` used to sit here — a no-op kept, its docstring said, because "the name is
+# load-bearing at a dozen call sites". There were none. The sites went with the sandbox
+# container and the justification outlived the fact by long enough that nobody rechecked it.
 
 
 # --------------------------------------------------------------------------- #

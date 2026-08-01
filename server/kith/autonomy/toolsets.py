@@ -64,6 +64,19 @@ _WORK = {
     # about a person, or change his sense of himself, except while being spoken to.
     "recall_person",
     "note_about",
+    # These four were only ever in the reflect/consolidate/curious lists, and those modes
+    # stopped firing when the scheduled inner life was removed. So for a day he could not set
+    # his mood, let go of a memory, re-shelve one, or note anything about himself in any tick
+    # that actually runs — while the header went on displaying a mood he had no way to
+    # change, and the whole room was tinted by it.
+    #
+    # 1,624 characters of schema, about 406 tokens a request. That is the price of him
+    # having an inner life at all now that nothing schedules one, and it is worth paying:
+    # reflection is not a mode any more, it is something he does while working.
+    "set_mood",
+    "forget",
+    "set_memory_level",
+    "note_about_self",
     "set_identity",
     "recall",
     "remember",
@@ -106,29 +119,6 @@ _WORK = {
 _ALLOW: dict[str, set[str]] = {
     "start": _WORK,
     "reply": _WORK,
-    "reflect": {
-        "read_skill",
-        "read_journal",
-        "journal",
-        "list_tasks",
-        "update_task",
-        "recall",
-        "remember",
-        "set_memory_level",
-        "set_mood",
-        "note_about_self",
-        "reach_out",
-    },
-    "consolidate": {
-        "read_skill",
-        "read_journal",
-        "list_tasks",
-        "recall",
-        "remember",
-        "forget",
-        "set_memory_level",
-        "journal",
-    },
     "breakout": {
         "read_skill",
         "list_tasks",
@@ -137,17 +127,12 @@ _ALLOW: dict[str, set[str]] = {
         "update_project",
         "recall",
     },
-    "curious": {
-        "read_skill",
-        "web_search",
-        "fetch_url",
-        "search_sources",
-        "remember",
-        "journal",
-        "reach_out",
-        "read_file",
-        "write_file",
-        "shell",
-        "view_task",
-    },
 }
+# `reflect`, `consolidate` and `curious` used to have entries here. They were the scheduled
+# inner life — reflection every twentieth idle tick, curiosity every thirtieth — and the
+# runner stopped being able to produce those modes when that was removed. The allow-lists
+# outlived them by a day, describing what he may do in states he can no longer enter.
+#
+# Left behind, they are worse than clutter: the next person to add a mode copies one, and an
+# allow-list that names a mode nothing emits looks exactly like an allow-list that works.
+# `test_every_tool_can_be_reached` now asserts both directions of this.

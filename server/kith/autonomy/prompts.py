@@ -15,30 +15,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from kith.config import AGENT_DB_PATH
-from kith.domain import clock
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 
-
-def _tick_prompt(active_tasks: list[dict], due_reminders: list[dict] | None = None) -> str:
-    if due_reminders:
-        notes = "\n".join(f"- {r['note']}" for r in due_reminders)
-        return (
-            f"A reminder you set has come due:\n{notes}\n\n"
-            "Act on it now — that's why you set it. Journal what you did."
-        )
-    if active_tasks:
-        lines = "\n".join(_task_line(t) for t in active_tasks[:8])
-        return (
-            f"Your tasks, most important first:\n{lines}\n\n"
-            "Take one concrete step toward the most important one now — move it to 'doing' if you're "
-            "starting it, and to 'done' when it's finished."
-        )
-    return (
-        "You have no active tasks right now — and that's fine; being caught up is a good state. "
-        "Don't invent busywork or re-poke things you've already finished. Rest, or just note "
-        "that you're clear. Only set a new task if something truly matters."
-    )
+# `_tick_prompt` used to live here: one prompt covering "a reminder is due", "here are your
+# tasks" and "you are caught up". Every branch of it has a dedicated builder now —
+# `_due_prompt`, `_focus_prompt`, and an idle path that calls no model at all — and it had no
+# caller left. Deleted rather than kept for reference: two prompts for one situation is how
+# you end up editing the one that is not running.
 
 
 def _focus_prompt(detail: dict, active: list[dict]) -> str:
@@ -133,11 +117,7 @@ def _read_working_file(path: str) -> str | None:
         return None
 
 
-def _task_line(task: dict) -> str:
-    bits = [f"#{task['id']}", f"[{task['status']}]", f"({task.get('priority', 'normal')})"]
-    if task.get("due_at"):
-        bits.append(f"due {clock.humanize_until(task['due_at'])}")
-    return f"- {' '.join(bits)} {task['goal']}"
+# `_task_line` went with `_tick_prompt`, its only caller.
 
 
 def _due_prompt(reminders: list[dict], schedules: list[dict]) -> str:

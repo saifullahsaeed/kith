@@ -20,12 +20,6 @@ def add_note(path: Path, title: str, body: str = "") -> dict:
         return as_dict(row)
 
 
-def get_note(path: Path, note_id: int) -> dict | None:
-    with session(path) as db:
-        row = db.get(Note, note_id)
-        return as_dict(row) if row else None
-
-
 def list_notes(path: Path, limit: int = 50) -> list[dict]:
     with session(path) as db:
         rows = db.scalars(select(Note).order_by(Note.updated_at.desc()).limit(limit)).all()

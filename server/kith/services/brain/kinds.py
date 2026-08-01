@@ -105,6 +105,30 @@ def _memory_add(path: Path, data: dict) -> dict:
     )
 
 
+def _memory_edit(path: Path, memory_id: int, data: dict) -> dict | None:
+    """Change a memory, and change the vector that finds it.
+
+    These were two halves of one operation and only the first was wired up. `update_memory`
+    rewrites `content` and leaves `embedding` alone; `embeddings.reembed` exists precisely to
+    close that, with the docstring "refresh a memory's vector after its content changed" —
+    and nothing called it. Both facts were invisible because each half works.
+
+    The result was silent and permanent: edit a memory and recall keeps matching it on the
+    words you deleted, then hands back the words you wrote. Worse than a stale answer,
+    because the text on screen looks right.
+
+    Best effort, deliberately. A memory that saves but does not re-embed is stale in search;
+    a memory that refuses to save because the embedder is down is lost.
+    """
+    from kith.services import embeddings
+
+    content = data.get("content")
+    updated = repo.memories.update_memory(path, memory_id, content, data.get("importance"))
+    if updated is not None and content:
+        embeddings.reembed(path, memory_id, content)
+    return updated
+
+
 KINDS: dict[str, Kind] = {
     kind.name: kind
     for kind in (
@@ -112,7 +136,7 @@ KINDS: dict[str, Kind] = {
             "memory",
             remove=repo.memories.delete_memory,
             add=_memory_add,
-            edit=lambda p, k, d: repo.memories.update_memory(p, k, d.get("content"), d.get("importance")),
+            edit=_memory_edit,
         ),
         Kind(
             "note",

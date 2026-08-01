@@ -108,10 +108,6 @@ def fragments() -> list[dict]:
     return out
 
 
-def read_fragment(name: str) -> str:
-    return _resolve(name).read_text(encoding="utf-8", errors="replace")
-
-
 def write_fragment(name: str, body: str) -> dict:
     """Save a fragment. Creates it if it isn't there yet."""
     target = _resolve(name, must_exist=False)

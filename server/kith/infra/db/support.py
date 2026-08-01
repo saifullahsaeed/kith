@@ -78,10 +78,10 @@ def keyword_search(path: Path, table: str, columns: tuple[str, ...], query: str,
     return sorted(rows, key=score, reverse=True)[:limit]
 
 
-def fetch_row(conn, table: str, row_id: int | None):
-    if row_id is None:
-        return None
-    return conn.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone()
+# `fetch_row(conn, table, row_id)` used to be here and had no callers. It also interpolated
+# the table name straight into the SQL, which is the shape of an injection even when every
+# caller today passes a literal — and a dead helper is exactly the one someone reaches for
+# later without reading it. Everything goes through the ORM now.
 
 
 def row_to_dict(row) -> dict[str, Any]:
