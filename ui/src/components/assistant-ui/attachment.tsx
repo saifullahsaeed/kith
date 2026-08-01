@@ -1,10 +1,9 @@
 "use client";
 
 import { type PropsWithChildren, useEffect, useState, type FC } from "react";
-import { XIcon, PlusIcon, FileText, Loader2Icon, AlertCircleIcon } from "lucide-react";
+import { XIcon, FileText, Loader2Icon, AlertCircleIcon } from "lucide-react";
 import {
   AttachmentPrimitive,
-  ComposerPrimitive,
   MessagePrimitive,
   useAuiState,
   useAui,
@@ -228,27 +227,8 @@ export const UserMessageAttachments: FC = () => {
   );
 };
 
-export const ComposerAttachments: FC = () => {
-  return (
-    <div className="aui-composer-attachments flex w-full flex-row items-center gap-2 overflow-x-auto empty:hidden">
-      <ComposerPrimitive.Attachments>{() => <AttachmentUI />}</ComposerPrimitive.Attachments>
-    </div>
-  );
-};
-
-export const ComposerAddAttachment: FC = () => {
-  return (
-    <ComposerPrimitive.AddAttachment asChild>
-      <TooltipIconButton
-        tooltip="Add Attachment"
-        side="bottom"
-        variant="ghost"
-        size="icon"
-        className="aui-composer-add-attachment hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full p-1 text-xs font-semibold active:scale-[0.96] motion-reduce:transition-none"
-        aria-label="Add Attachment"
-      >
-        <PlusIcon className="aui-attachment-add-icon size-4.5 stroke-[1.5px]" />
-      </TooltipIconButton>
-    </ComposerPrimitive.AddAttachment>
-  );
-};
+// `ComposerAttachments` and `ComposerAddAttachment` were here, both unreferenced. Each had a
+// live counterpart in thread.tsx that had quietly replaced it — `ComposerAttachmentStrip`,
+// which adds the empty-state guard and the wrapping, and the paperclip in the composer bar.
+// Two versions of one component with only one of them rendered is how you spend an evening
+// styling the wrong file.

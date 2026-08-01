@@ -270,10 +270,15 @@ const Composer: FC = () => {
 /**
  * What is attached to the message you are writing.
  *
- * Rendered above the input rather than below it, so adding an image does not push the
- * caret you are typing in. Nothing shows when nothing is attached, and the whole strip is
- * absent for a model that cannot take images — the adapter is what creates the capability,
- * and the workspace only installs it when the provider says the model accepts one.
+ * Rendered above the input rather than below it, so adding an image does not push the caret
+ * you are typing in. Nothing shows when nothing is attached.
+ *
+ * It used to say the strip was "absent for a model that cannot take images, because the
+ * workspace only installs the adapter when the provider says the model accepts one". That
+ * stopped being true when the adapter became unconditional and started accepting any file:
+ * a spreadsheet could not be attached at all, and on a model without vision the paperclip
+ * simply vanished. Whether to inline a picture or hand him a path is decided on the server,
+ * next to the model config — not here by hiding a button.
  */
 const ComposerAttachmentStrip: FC = () => (
   <AuiIf condition={(s) => s.composer.attachments.length > 0}>

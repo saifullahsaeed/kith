@@ -67,6 +67,13 @@ def read_conversation(conversation_id: str):
     return jsonify(
         {
             **meta,
+            # `meta["messages"]` is a *count*, and this used to overwrite it with a *list* —
+            # the same key meaning two different types depending on which endpoint you
+            # asked. The count was silently lost here, and a client that read it off the
+            # detail got an array where the listing gives a number. The turns keep the name
+            # (every caller already reads it) and the count keeps its meaning under one that
+            # says what it is.
+            "messageCount": meta.get("messages", 0),
             "messages": conversations.messages(conversation_id),
             # What the interface renders: the turn's actual shape, not a paragraph of it.
             "timeline": conversations.timeline(conversation_id),

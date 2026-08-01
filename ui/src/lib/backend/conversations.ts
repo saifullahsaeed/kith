@@ -17,9 +17,19 @@ export interface ConversationSummary {
   working: boolean;
 }
 
-export interface ConversationDetail extends ConversationSummary {
+/** One conversation, opened. Its metadata plus everything needed to render it back.
+ *
+ * `messages` is omitted from the summary and redeclared, because the two endpoints mean
+ * different things by it: the listing gives a count, the detail gives the turns. That
+ * collision was invisible while this type was written out inline — nothing extended the
+ * summary, so nothing compared the two — and typing it honestly is what surfaced it. */
+export interface ConversationDetail extends Omit<ConversationSummary, "messages"> {
   /** User and assistant text, in the shape /api/chat wants back. */
-  messages_: { role: string; content: string }[];
+  messages: { role: string; content: string }[];
+  /** How many messages it holds — the number the listing calls `messages`. */
+  messageCount: number;
+  /** The turn's actual shape — reasoning, prose, calls with results — for rendering back. */
+  timeline: StoredTurn[];
 }
 
 export async function fetchConversations(limit = 50): Promise<{
@@ -43,13 +53,7 @@ export interface StoredTurn {
   parts: StoredPart[];
 }
 
-export async function fetchConversation(id: string): Promise<
-  ConversationSummary & {
-    messages: { role: string; content: string }[];
-    /** The turn's actual shape — reasoning, prose, calls with results — for rendering back. */
-    timeline: StoredTurn[];
-  }
-> {
+export async function fetchConversation(id: string): Promise<ConversationDetail> {
   const response = await fetch(`/api/conversations/${id}`);
   if (!response.ok) throw new Error(`could not open that conversation (${response.status})`);
   return await response.json();
