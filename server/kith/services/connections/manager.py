@@ -12,11 +12,12 @@ cannot save a connection that has since stopped working.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from kith.config import ollama_host
+from kith.config import CONTEXT_KEY, ollama_host
 from kith.domain.connection import Connection, ModelInfo, Pick, ProviderKind, Tier
 from kith.infra.db import config_store
 from kith.services.connections import providers
@@ -485,6 +486,12 @@ class ConnectionManager:
                     "modalities": list(chosen_info.input_modalities),
                 }
             )
+            # The window, which was already read off the catalogue for the picker's
+            # "usable context" concern and then discarded. Nothing knew it at runtime, so
+            # the only way to discover the limit was to exceed it and take a 400.
+            updates[CONTEXT_KEY] = json.dumps(
+                {"model": candidate.model, "context": int(chosen_info.context or 0)}
+            )
         config_store.update_settings(self.config_db, {**updates, ONBOARDED_KEY: True})
         return self.current(), self.concerns(candidate, result.models)
 
@@ -509,3 +516,57 @@ def _configured_before_onboarding(stored: dict) -> bool:
     if stored.get("api_key"):
         return True
     return str(stored.get("model") or "") != config_store.DEFAULT_SETTINGS["model"]
+
+
+def backfill_context_window_async(config_db: Path) -> None:
+    """Learn the current model's window in the background, if it is not already known.
+
+    The window is captured at adoption, so anyone who chose their model before that code
+    existed has no window stored and gets 0 — an honest answer, but one that leaves the
+    context guard permanently disarmed until they happen to re-pick the same model. Asking
+    them to click through a settings page to fix a number they never knew about is not a
+    fix.
+
+    Off the request path and never blocking startup, exactly like the embedding backfill
+    beside it: a catalogue fetch is a network call, and it must not be the thing standing
+    between the app launching and answering.
+
+    Silent when there is nothing to do, which is the common case after the first run. It
+    writes the same paired {model, context} shape adoption does, so a later model switch
+    still invalidates it.
+    """
+
+    def _run() -> None:
+        try:
+            manager = ConnectionManager(config_db)
+            connection = manager.current()
+            if connection.kind is not ProviderKind.OPENROUTER or not connection.model:
+                return  # local sends its own num_ctx; nothing to look up
+            stored = config_store.load_settings(config_db)
+            try:
+                noted = json.loads(str(stored.get(CONTEXT_KEY) or "{}"))
+            except ValueError:
+                noted = {}
+            if noted.get("model") == connection.model and noted.get("context"):
+                return
+            found = next(
+                (
+                    m
+                    for m in providers.for_kind(connection.kind).list_models(connection)
+                    if m.id == connection.model
+                ),
+                None,
+            )
+            if found is None or not found.context:
+                return
+            config_store.update_settings(
+                config_db,
+                {CONTEXT_KEY: json.dumps({"model": connection.model, "context": int(found.context)})},
+            )
+            print(f"[kith] context window: learned {found.context:,} tokens for {connection.model}")
+        except Exception as exc:
+            # A window we could not look up is the same as one we never had: 0, and the
+            # guard stays off. Never a reason to make a noise at startup.
+            print(f"[kith] context window: not looked up ({exc})")
+
+    threading.Thread(target=_run, name="kith-context-backfill", daemon=True).start()

@@ -53,6 +53,13 @@ class Config:
     session_id: str = ""
     base_url: str = ""  # OpenAI-compatible cloud endpoint; blank = local Ollama
     api_key: str = ""  # cloud API key; when set (with base_url), chat runs in the cloud
+    #: How many tokens this model can hold, or 0 when nobody knows.
+    #:
+    #: A fact about the model rather than a setting, which is why it is resolved here and is
+    #: not in the tuning registry. 0 is load-bearing and must never be replaced by a guess: a
+    #: window guessed too high never fires and every turn 400s; guessed too low, it truncates
+    #: work that would have fitted. "I don't know" has to stay expressible.
+    context_window: int = 0
 
 
 def default_config() -> Config:
@@ -77,7 +84,51 @@ def default_config() -> Config:
         effort=_str_setting("KITH_EFFORT", stored, "effort", ""),
         base_url=_str_setting("KITH_BASE_URL", stored, "base_url", "").rstrip("/"),
         api_key=_str_setting("KITH_API_KEY", stored, "api_key", ""),
+        context_window=_context_window(stored),
     )
+
+
+#: Where the chosen model's window is kept, **paired with the model id it describes**.
+#:
+#: Declared here rather than beside the other connection keys because this is the module that
+#: reads it on every request, and the reader is the one that cannot be allowed to drift.
+#: `ConnectionManager.adopt` imports it to write.
+#:
+#: The pairing is the point. `PATCH /api/config` writes `model` without going through
+#: adoption, so a bare number would outlive the model it was measured for — and a stale
+#: window is worse than none in both directions: too high and the guard never fires while
+#: every turn 400s, too low and it truncates work that would have fitted.
+CONTEXT_KEY = "model_context"
+
+
+def _context_window(stored: dict) -> int:
+    """How much room this model has, or 0 when we cannot say honestly.
+
+    Local first, and it is not a fallback: for Ollama we *send* `num_ctx`, so that number is
+    the window by construction — more authoritative than any catalogue.
+
+    For a cloud model it comes from the catalogue, captured when the model was adopted, and
+    it is stored **with the model id it describes**. That pairing is the whole point.
+    `PATCH /api/config` can change `model` without going through adoption, so a bare number
+    would silently outlive the model it was measured for — and a stale window is worse than
+    no window in both directions. Left at 200,000 after a switch to a 32k model the guard
+    never fires and every turn 400s; left at 32,000 after a switch upward it truncates work
+    that would have fitted. Mismatched, this collapses into the already-honest 0.
+    """
+    if not _str_setting("KITH_BASE_URL", stored, "base_url", "").strip():
+        return _int_setting("KITH_NUM_CTX", stored, "num_ctx", 40960)
+    raw = stored.get(CONTEXT_KEY)
+    try:
+        noted = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+    except (TypeError, ValueError):
+        return 0
+    model = _str_setting("KITH_MODEL", stored, "model", "qwen3:4b")
+    if str(noted.get("model") or "") != model:
+        return 0
+    try:
+        return max(0, int(noted.get("context") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def to_wire(config: Config) -> dict:
@@ -138,9 +189,11 @@ def merge_overrides(base: Config, overrides: dict) -> Config:
     think = overrides.get("think")
     effort = overrides.get("effort")
 
+    merged_ctx = num_ctx if isinstance(num_ctx, int) and num_ctx > 0 else base.num_ctx
+
     return Config(
         model=model.strip() if isinstance(model, str) and model.strip() else base.model,
-        num_ctx=num_ctx if isinstance(num_ctx, int) and num_ctx > 0 else base.num_ctx,
+        num_ctx=merged_ctx,
         num_predict=(
             num_predict
             if isinstance(num_predict, int) and (num_predict > 0 or num_predict == -1)
@@ -152,6 +205,15 @@ def merge_overrides(base: Config, overrides: dict) -> Config:
         # The cloud endpoint/key are server settings, never per-request overrides.
         base_url=base.base_url,
         api_key=base.api_key,
+        # Carried deliberately. This function rebuilds the object field by field, so a field
+        # left out here is not inherited — it silently resets to the dataclass default on
+        # every chat request. The window would then be right for a tick and zero for chat,
+        # which is the harder of the two to notice.
+        #
+        # On the local path it tracks the *merged* num_ctx rather than the base one, because
+        # that is the number actually sent to Ollama: a caller who overrides numCtx for one
+        # request has changed the window for that request.
+        context_window=merged_ctx if not base.base_url else base.context_window,
     )
 
 
