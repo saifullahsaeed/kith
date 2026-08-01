@@ -393,6 +393,14 @@ def stream_agent(
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
     budget = max_rounds or tuning.value("max_rounds")
     reserve = min(tuning.value("landing_reserve"), max(2, budget // 3))
+    # Every MCP tool, frozen for this turn. Taken once rather than per round on purpose: the
+    # tools block is part of the cached prompt prefix, so a server dying — or being switched
+    # off in another tab — would shrink it mid-turn and discard the whole cache on the next
+    # round. Held even when the server has gone; the *call* then fails with something
+    # readable, which costs one tool result instead of the entire prefix.
+    from kith.services.mcp import manager as mcp_manager
+
+    mcp_tools = mcp_manager.snapshot()
     # The tool list as the last round actually saw it, kept for the forced final answer.
     # That request used to build its own with `tool_schemas(agent_db_path)` and no `only`,
     # so a breakout tick offering six tools ended by sending all fifty-nine — a different
@@ -420,7 +428,7 @@ def stream_agent(
         _compact_call_arguments(convo)
         # Re-read tools each round so a tool Kith just built is usable right away.
         # `allow` scopes the toolset to the current mode (fewer tokens, sharper focus).
-        schemas = tools.tool_schemas(agent_db_path, only=allow)
+        schemas = tools.tool_schemas(agent_db_path, only=allow, mcp=mcp_tools)
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:

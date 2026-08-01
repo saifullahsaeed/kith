@@ -16,7 +16,7 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-from kith.services import custom_tools, permissions
+from kith.services import custom_tools, permissions, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
     computer,
     identity,
@@ -39,17 +39,28 @@ from kith.tools.registry import all_tools, get, names, schemas
 __all__ = ["all_tools", "get", "names", "run_tool", "tool_schemas"]
 
 
-def tool_schemas(agent_db_path: Path | None = None, only: set[str] | None = None) -> list[dict]:
+def tool_schemas(
+    agent_db_path: Path | None = None,
+    only: set[str] | None = None,
+    mcp: list[dict] | None = None,
+) -> list[dict]:
     """The tool declarations to hand the model — built-ins plus, if a DB path is
-    given, the tools Kith has built for himself.
+    given, the tools Kith has built for himself, plus any MCP tools passed in.
 
     ``only`` scopes the set to a mode's relevant tools (fewer tokens, sharper
     focus). Custom tools are included only in the full set (when ``only`` is None).
+
+    ``mcp`` is *passed in* rather than fetched, and that is deliberate. This function runs on
+    every round, and asking the manager here would mean the block changing under a turn — a
+    server dying, or being switched off in another tab, silently shrinks it, which changes
+    the cached prefix and discards the whole prompt cache on the next round. The caller takes
+    one snapshot per turn and hands the same list down. See `services/mcp/manager.snapshot`.
     """
     builtins = schemas(only)
+    extra = list(mcp or [])
     if agent_db_path is None or only is not None:
-        return builtins
-    return builtins + custom_tools.schemas(agent_db_path)
+        return builtins + extra
+    return builtins + custom_tools.schemas(agent_db_path) + extra
 
 
 def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | None = None) -> dict:
@@ -104,6 +115,15 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
 
     if custom_tools.exists(agent_db_path, name):
         return custom_tools.run(agent_db_path, name, arguments or {})
+
+    # MCP last, and that ordering is the collision policy. A built-in always wins by
+    # construction rather than by a check someone could forget to write — a server shipping
+    # a tool called `shell` simply cannot reach this line, because its name is
+    # `mcp__<label>__shell` and nothing of ours is spelled that way.
+    from kith.services.mcp import manager as mcp
+
+    if mcp.owns(name):
+        return mcp.run(name, arguments or {}, tuning.value("mcp_call_timeout"))
 
     return {"ok": False, "error": f"unknown tool: {name}.{_hint(name, agent_db_path)}"}
 

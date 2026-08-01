@@ -121,6 +121,12 @@ GROUPS: tuple[Group, ...] = (
         "Addresses and models",
         "Where the pieces around him live.",
     ),
+    Group(
+        "mcp",
+        "Other programs' tools",
+        "MCP servers are separate programs he talks to over a pipe. These are how long he "
+        "waits on one before deciding it is not coming back.",
+    ),
 )
 
 
@@ -189,6 +195,32 @@ TUNABLES: tuple[Tunable, ...] = (
         minimum=4_000,
         maximum=4_000_000,
         unit="characters",
+    ),
+    Tunable(
+        key="mcp_connect_timeout",
+        env="KITH_MCP_CONNECT_TIMEOUT",
+        label="Waiting for an MCP server to start",
+        help="How long a server gets to answer its first handshake. Servers installed by "
+        "npx or uvx download on first run, so a short wait here reads as a broken server "
+        "the first time and a working one after.",
+        default=20.0,
+        group="mcp",
+        minimum=1.0,
+        maximum=120.0,
+        unit="seconds",
+    ),
+    Tunable(
+        key="mcp_call_timeout",
+        env="KITH_MCP_CALL_TIMEOUT",
+        label="Waiting for an MCP tool",
+        help="How long one call to another program's tool may take before he gives up on it "
+        "and carries on. Too long and a hung server holds a whole turn; too short and a "
+        "genuinely slow query looks like a failure.",
+        default=30.0,
+        group="mcp",
+        minimum=1.0,
+        maximum=300.0,
+        unit="seconds",
     ),
     Tunable(
         key="keep_images",

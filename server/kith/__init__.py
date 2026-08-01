@@ -19,10 +19,11 @@ from kith.config import AGENT_DB_PATH, CONFIG_DB_PATH
 from kith.infra.db import config_store, migrations
 from kith.services import embeddings, tuning
 
-# The function, not the module:  re-exports a
-# ConnectionManager *instance* under the name , so importing the module by that
-# name gets the object and the call fails with AttributeError at startup.
+# The functions, not the modules. `kith.services.connections` re-exports a ConnectionManager
+# *instance* under the name `manager`, so `from kith.services.connections import manager`
+# gets the object and the call fails with AttributeError at startup — which it did.
 from kith.services.connections.manager import backfill_context_window_async
+from kith.services.mcp.manager import connect_async as connect_mcp_async
 from kith.services.persona import fragment_paths
 
 __all__ = ["create_app"]
@@ -85,6 +86,10 @@ def create_app() -> APIFlask:
     # request path for the same reason as the line above: it is a network call, and it must
     # not stand between launching and answering.
     backfill_context_window_async(CONFIG_DB_PATH)
+    # Bring up any MCP servers that are switched on. In a thread for the same reason as the
+    # two lines above: a server installed by npx or uvx downloads on first run, and that must
+    # not be what stands between launching and answering.
+    connect_mcp_async(CONFIG_DB_PATH)
     runner.ensure_loop()  # keep the checker alive so reminders/schedules fire on time
     print(f"[kith] config db: {CONFIG_DB_PATH}")
     print(f"[kith] agent db:  {AGENT_DB_PATH}")
