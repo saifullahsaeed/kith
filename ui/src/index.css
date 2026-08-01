@@ -273,6 +273,24 @@
   animation: kith-drift 16s ease-in-out infinite;
 }
 
+/* A scrolling region whose content dissolves at the top edge instead of being cut through.
+   The thread scrolls under the session bar, and a hard clip put a guillotine through whatever
+   line of the reply happened to be up there — a row of tool icons sliced in half reads as a
+   rendering fault rather than as more content above. Bottom-anchored children (the sticky
+   composer) are untouched: the gradient is opaque everywhere but the first few pixels. */
+.kith-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem);
+}
+
+/* The same, at the other end: a list that ends against a footer rather than under one. The
+   conversation list was cut mid-row by the "on disk" line, so the last thing on screen was
+   always half a title. */
+.kith-fade-bottom {
+  -webkit-mask-image: linear-gradient(to top, transparent 0, #000 1.25rem);
+  mask-image: linear-gradient(to top, transparent 0, #000 1.25rem);
+}
+
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

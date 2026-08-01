@@ -25,7 +25,9 @@ export function TurnTokens({ usage }: { usage: TurnUsage }) {
   return (
     <div
       data-slot="kith_turn-usage"
-      className="text-muted-foreground/45 mt-1.5 font-mono text-[10px] tabular-nums select-none"
+      // No top margin: it sits on the message's footer row now, beside the action bar,
+      // rather than as a line of its own at the end of the body.
+      className="text-muted-foreground/45 me-1 font-mono text-[10px] tabular-nums select-none"
       title={`${rounds.length} request${rounds.length === 1 ? "" : "s"} · ${usageTitle(sumUsage(rounds))}\n${each}`}
     >
       {formatTokens(total)} tokens

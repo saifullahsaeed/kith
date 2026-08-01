@@ -64,10 +64,15 @@ export function HeaderControls({
   }, []);
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-0.5">
       {supportsEffort ? (
         <Picker
           icon={<Gauge className="size-3.5" />}
+          // The noun, because the value alone named nothing. A title bar reading "High" next
+          // to "Auto" is two words that could be about anything — refresh rate, verbosity,
+          // volume — and the one thing they are actually about is what you would have to open
+          // the menu to find out.
+          noun="Thinking"
           label={EFFORTS.find((one) => one.value === effort)?.label ?? "Default"}
           title="How hard he thinks before answering"
           options={EFFORTS.map((one) => ({ ...one }))}
@@ -86,6 +91,7 @@ export function HeaderControls({
             )}
           />
         }
+        noun="Access"
         label={MODE_LABELS[mode].label}
         badge={pending.length > 0 ? pending.length : undefined}
         title="What he may do on this computer without asking"
@@ -106,6 +112,7 @@ export function HeaderControls({
 
 function Picker({
   icon,
+  noun,
   label,
   badge,
   title,
@@ -114,6 +121,9 @@ function Picker({
   onSelect,
 }: {
   icon: React.ReactNode;
+  /** What the value is *about* — "Thinking", "Access". Dropped below `lg`, where the icon has
+   *  to carry it and the bar has no room for prose. */
+  noun?: string;
   label: string;
   badge?: number;
   title: string;
@@ -147,6 +157,7 @@ function Picker({
         className="text-muted-foreground hover:text-foreground hover:bg-accent/60 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors"
       >
         {icon}
+        {noun ? <span className="text-muted-foreground/55 hidden lg:inline">{noun}</span> : null}
         <span className="font-mono">{label}</span>
         {badge ? (
           <span className="bg-destructive/90 text-destructive-foreground rounded-full px-1.5 text-[10px] leading-4">

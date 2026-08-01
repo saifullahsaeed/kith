@@ -21,6 +21,7 @@ import { useAutonomy } from "@/hooks/use-autonomy";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
+import { cn } from "@/lib/utils";
 import { moodHue } from "@/lib/backend/mood";
 import { parseLocation, pathForHome, pathForSettings, pathForTab, pathForTask } from "@/lib/router";
 import {
@@ -35,6 +36,18 @@ import {
 const MIND_MIN = 320;
 const MIND_MAX = 720;
 const MIND_DEFAULT = 400;
+
+/** The room the chat needs before anything else may have any.
+ *
+ * With Conversations and Mind both pinned open at fixed widths, a 1024px window left the
+ * thread 370px and prose wrapped to three words a line — a paragraph became a column. Neither
+ * panel yielded, because neither knew the other existed. So the two thresholds below are the
+ * order in which they give way: Mind first, since it is the ancillary one, then Conversations,
+ * which stops taking a column of its own and covers instead. */
+const CHAT_FLOOR = 560;
+const HISTORY_WIDTH = 256;
+const MIND_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + MIND_MIN; // 1136
+const HISTORY_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + 96; // 912
 
 /** Where the open conversation is remembered across a reload.
  *
@@ -161,6 +174,48 @@ export function Workspace({
   const panelOpen = route.panelOpen;
   const [inboxOpen, setInboxOpen] = useState(false);
 
+  /* Which panels the window can currently afford.
+   *
+   * `squeezed` is kept apart from `mindOpen` on purpose: one is the window's opinion and the
+   * other is yours. Collapsing Mind by writing to `mindOpen` would overwrite your choice, so
+   * widening the window again would leave it shut and look like the app had forgotten. Held
+   * this way, narrowing hides it and widening brings back exactly what you had.
+   *
+   * Opening Mind by hand while narrow wins — you asked for it — until the window crosses the
+   * threshold again, which is the point at which the question is genuinely being re-asked. */
+  const [viewport, setViewport] = useState(() => window.innerWidth);
+  const [squeezed, setSqueezed] = useState(() => window.innerWidth < MIND_YIELDS_BELOW);
+  useEffect(() => {
+    let wasNarrow = window.innerWidth < MIND_YIELDS_BELOW;
+    const measure = () => {
+      setViewport(window.innerWidth);
+      const narrow = window.innerWidth < MIND_YIELDS_BELOW;
+      // Only on the crossing, so a hand-opened Mind is not slammed shut by every resize event
+      // of a drag that never leaves the narrow range.
+      if (narrow !== wasNarrow) {
+        wasNarrow = narrow;
+        setSqueezed(narrow);
+      }
+    };
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  const covering = viewport < HISTORY_YIELDS_BELOW;
+  const mindVisible = mindOpen && !squeezed;
+  const toggleMind = useCallback(() => {
+    if (squeezed) {
+      setSqueezed(false);
+      setMindOpen(true);
+    } else setMindOpen((open) => !open);
+  }, [squeezed]);
+  // Clamped to what is actually there rather than to what you dragged it to once on a wider
+  // window. A remembered 720 on a 1100px window is a chat column of nothing.
+  const mindRoom = Math.max(
+    MIND_MIN,
+    Math.min(mindWidth, viewport - CHAT_FLOOR - (historyOpen && !covering ? HISTORY_WIDTH : 0)),
+  );
+
   const startResize = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     const onMove = (ev: PointerEvent) => {
@@ -244,30 +299,56 @@ export function Workspace({
               onOpenHistory={() => setHistoryOpen((open) => !open)}
               onNewConversation={newConversation}
               unread={inbox.unread}
-              mindOpen={mindOpen}
+              mindOpen={mindVisible}
               onOpenInbox={() => {
                 inbox.enableNotifications();
                 setInboxOpen(true);
               }}
-              onOpenMind={() => setMindOpen((o) => !o)}
+              onOpenMind={toggleMind}
               onOpenPanel={() => navigate(pathForTab("overview"))}
               onOpenSettings={() => navigate(pathForSettings())}
             />
-            <div className="flex min-h-0 flex-1">
+            <div className="relative flex min-h-0 flex-1">
               {historyOpen ? (
-                <div className="w-64 shrink-0 border-e border-border/60">
-                  {/* One boundary per panel, so a panel that throws takes only itself down.
-                      The chat surviving a broken roadmap graph is the difference between
-                      "one thing is wrong" and "Kith is down". */}
-                  <ErrorBoundary where="Conversations" compact>
-                    <HistoryPanel
-                      activeId={conversationId}
-                      onOpen={(id) => void openConversation(id)}
-                      onNew={newConversation}
-                      onClose={() => setHistoryOpen(false)}
+                <>
+                  {/* Covering rather than taking a column, once there is not enough window for
+                      both. A fixed 256px out of 900 is a quarter of the screen spent on a list
+                      you are done with the moment you have picked from it. */}
+                  {covering ? (
+                    <button
+                      type="button"
+                      aria-label="Close the conversation list"
+                      onClick={() => setHistoryOpen(false)}
+                      className="absolute inset-0 z-20 bg-background/50 backdrop-blur-[2px]"
                     />
-                  </ErrorBoundary>
-                </div>
+                  ) : null}
+                  <div
+                    className={cn(
+                      "border-border/60 w-64 shrink-0 border-e",
+                      covering && "absolute inset-y-0 start-0 z-30 bg-background shadow-2xl",
+                    )}
+                  >
+                    {/* One boundary per panel, so a panel that throws takes only itself down.
+                        The chat surviving a broken roadmap graph is the difference between
+                        "one thing is wrong" and "Kith is down". */}
+                    <ErrorBoundary where="Conversations" compact>
+                      <HistoryPanel
+                        activeId={conversationId}
+                        onOpen={(id) => {
+                          void openConversation(id);
+                          // Picking from a drawer closes the drawer. Leaving it over the
+                          // conversation you just opened is the one thing it must not do.
+                          if (covering) setHistoryOpen(false);
+                        }}
+                        onNew={() => {
+                          newConversation();
+                          if (covering) setHistoryOpen(false);
+                        }}
+                        onClose={() => setHistoryOpen(false)}
+                      />
+                    </ErrorBoundary>
+                  </div>
+                </>
               ) : null}
               {/* Chat window */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -279,12 +360,21 @@ export function Workspace({
                   onKeepWorking={() => void autonomy.start(conversationId)}
                   onStop={() => void autonomy.stop(conversationId)}
                 />
-                <ErrorBoundary where="The conversation">
-                  <Thread />
-                </ErrorBoundary>
+                {/* The thread gets its own box with a definite height rather than sitting
+                    straight in the column. Without one, the thread root's `h-full` resolved
+                    against the whole column — session bar included — so the moment a
+                    conversation existed the composer's bottom edge sat 37px past the window
+                    and the send button was clipped clean off it. An empty chat looked fine
+                    because the session bar draws nothing, which is what made it read as
+                    random rather than as a layout bug. */}
+                <div className="relative min-h-0 flex-1">
+                  <ErrorBoundary where="The conversation">
+                    <Thread />
+                  </ErrorBoundary>
+                </div>
               </div>
               {/* draggable divider */}
-              {mindOpen ? (
+              {mindVisible ? (
                 <div
                   onPointerDown={startResize}
                   className="group relative z-10 w-1.5 shrink-0 cursor-col-resize"
@@ -296,13 +386,13 @@ export function Workspace({
                 </div>
               ) : null}
               {/* Mind window */}
-              {mindOpen ? (
-                <div style={{ width: mindWidth }} className="shrink-0">
+              {mindVisible ? (
+                <div style={{ width: mindRoom }} className="shrink-0">
                   <ErrorBoundary where="Mind" compact>
                     <MindPanel
                       autonomy={autonomy}
                       conversationId={conversationId}
-                      width={mindWidth}
+                      width={mindRoom}
                       onClose={() => setMindOpen(false)}
                     />
                   </ErrorBoundary>
@@ -365,6 +455,16 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
   const out: unknown[] = [];
   for (const turn of timeline) {
     const content: unknown[] = [];
+    // Collected rather than pushed as they arrive. One of these is recorded per model request,
+    // and pushing each as its own data part is what made a reopened conversation a column of
+    // six-figure token counts — "328,422 tokens", "165,292 tokens", a dozen deep — threaded
+    // through the reply. The live stream has always accumulated them into one; a resumed turn
+    // has to read the same, or reopening a conversation does not show you the one you had.
+    //
+    // It also cost the tool grouping: a data part between two tool calls breaks the run, so
+    // eight consecutive calls rendered as eight separate "1 tool call" rows instead of one
+    // line saying what he touched.
+    const rounds: { uncached: number; cached: number; out: number }[] = [];
     for (const part of turn.parts) {
       if (part.kind === "text") content.push({ type: "text", text: part.text });
       else if (part.kind === "reasoning") content.push({ type: "reasoning", text: part.text });
@@ -378,15 +478,13 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
           result: part.result,
         });
       } else {
-        // Token counts ride back as the same data part the live stream uses, so the footer
-        // reads the same on a resumed turn as it did on a fresh one.
-        content.push({
-          type: "data",
-          name: USAGE_PART,
-          data: { rounds: [{ uncached: part.uncached, cached: part.cached, out: part.out }] },
-        });
+        rounds.push({ uncached: part.uncached, cached: part.cached, out: part.out });
       }
     }
+    // Last, so the figure lands at the foot of the turn and nothing is split around it.
+    // Token counts ride back as the same data part the live stream uses, so the footer reads
+    // the same on a resumed turn as it did on a fresh one.
+    if (rounds.length) content.push({ type: "data", name: USAGE_PART, data: { rounds } });
     if (content.length) out.push({ role: turn.role, content });
   }
   // One cast, at the boundary: the shapes above are the library's own, and its content

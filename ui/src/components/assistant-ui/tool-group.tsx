@@ -95,32 +95,48 @@ function ToolGroupRoot({
 function ToolGroupTrigger({
   count,
   active = false,
+  summary,
+  icons,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   count: number;
   active?: boolean;
+  /** What he touched — "3 files · 2 commands" — in place of a count of calls. A count is a
+   *  number about the machine; this is a sentence about the work, and it is the difference
+   *  between a heading you can skim past and one you have to open to learn anything. */
+  summary?: string;
+  /** One icon per kind of work in the run, so the row can be read without reading it. */
+  icons?: { icon: React.ElementType; tone: string }[];
 }) {
-  const label = `${count} tool ${count === 1 ? "call" : "calls"}`;
+  const label = summary || `${count} tool ${count === 1 ? "call" : "calls"}`;
 
   return (
     <CollapsibleTrigger
       data-slot="tool-group-trigger"
       className={cn(
         "aui-tool-group-trigger group/trigger flex origin-left items-center gap-2 text-sm transition-[color,scale] active:scale-[0.98]",
-        "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground group-data-[variant=ghost]/tool-group-root:py-1.5",
+        "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground group-data-[variant=ghost]/tool-group-root:py-1",
         "group-data-[variant=outline]/tool-group-root:w-full group-data-[variant=outline]/tool-group-root:px-4",
         "group-data-[variant=muted]/tool-group-root:w-full group-data-[variant=muted]/tool-group-root:px-4",
         className,
       )}
       {...props}
     >
-      {active && (
+      {active ? (
         <LoaderIcon
           data-slot="tool-group-trigger-loader"
-          className="aui-tool-group-trigger-loader size-3 shrink-0 animate-spin [animation-duration:0.6s]"
+          className="aui-tool-group-trigger-loader size-3.5 shrink-0 animate-spin [animation-duration:0.6s]"
         />
-      )}
+      ) : icons?.length ? (
+        // Capped at three: past that the row is a sticker collection rather than a summary,
+        // and the counts in the label already say how much of each there was.
+        <span data-slot="tool-group-trigger-kinds" className="flex shrink-0 items-center gap-1">
+          {icons.slice(0, 3).map(({ icon: Mark, tone }, i) => (
+            <Mark key={i} strokeWidth={2} className={cn("size-3.5", tone)} />
+          ))}
+        </span>
+      ) : null}
       <span
         data-slot="tool-group-trigger-label"
         className={cn(

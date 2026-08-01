@@ -13,6 +13,7 @@ import {
 } from "@assistant-ui/react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { callText, describeCall } from "@/lib/tool-language";
 import {
   summarise,
   ToolArgs,
@@ -114,63 +115,105 @@ function ToolFallbackDuration({ className, ...props }: React.ComponentProps<"spa
   );
 }
 
+/**
+ * The row for one tool call: what he did, the thing he did it to, and an icon for the kind of
+ * work it was.
+ *
+ * It used to read `Used tool: read_skill`, which is the function he called rather than the
+ * thing he did — while the Mind panel, one pane over and describing the very same call, said
+ * "opened the skill pdf" with an icon coloured by the kind of work. Both halves of that were
+ * worth having here: the phrase, because a turn of eight calls should be readable without
+ * opening any of them, and the icon, because a column where six rows carry a terminal and two
+ * carry a globe says "he built for a while and looked one thing up" before you read a word.
+ *
+ * The status tick is gone from the resting state with it. Nearly every call completes, so a
+ * check mark on every row carried no information and was occupying the one position on the row
+ * that can be read at a glance. Running, cancelled and failed still take the slot, because
+ * those are the states worth interrupting a scan for.
+ */
 function ToolFallbackTrigger({
   toolName,
+  args,
   status,
   summary,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   toolName: string;
+  /** The call's parsed arguments, for naming what it acted on. */
+  args?: Record<string, unknown>;
   status?: ToolCallMessagePartStatus;
-  /** One line of what happened, so the collapsed row is worth reading on its own. */
+  /** One line of what came back, so the collapsed row is worth reading on its own. */
   summary?: string;
 }) {
   const statusType = status?.type ?? "complete";
   const isRunning = statusType === "running";
   const isCancelled = status?.type === "incomplete" && status.reason === "cancelled";
+  const isFailed = statusType === "incomplete" && !isCancelled;
+  const needsAction = statusType === "requires-action";
 
-  const Icon = statusIconMap[statusType];
-  const label = isCancelled ? "Cancelled tool" : "Used tool";
+  const call = describeCall(toolName, args);
+  // The kind icon is the resting state; a status that is worth noticing takes the slot.
+  const Icon = isRunning || isFailed || needsAction ? statusIconMap[statusType] : call.icon;
+  const tone = isFailed
+    ? "text-destructive"
+    : needsAction
+      ? "text-kith"
+      : isCancelled || isRunning
+        ? "text-muted-foreground"
+        : call.tone;
 
   return (
     <CollapsibleTrigger
       data-slot="tool-fallback-trigger"
+      title={callText(call)}
       className={cn(
-        "aui-tool-fallback-trigger group/trigger text-muted-foreground hover:text-foreground flex w-fit origin-left items-center gap-2 py-1.5 text-sm transition-[color,scale] active:scale-[0.98]",
+        "aui-tool-fallback-trigger group/trigger text-muted-foreground hover:text-foreground flex w-full min-w-0 origin-left items-center gap-2 py-1 text-start text-xs transition-[color,scale] active:scale-[0.98]",
         className,
       )}
       {...props}
     >
       <Icon
         data-slot="tool-fallback-trigger-icon"
+        strokeWidth={2}
         className={cn(
-          "aui-tool-fallback-trigger-icon size-4 shrink-0",
-          isCancelled && "text-muted-foreground",
+          "aui-tool-fallback-trigger-icon size-3.5 shrink-0",
+          tone,
           isRunning && "animate-spin [animation-duration:0.6s]",
         )}
       />
       <span
         data-slot="tool-fallback-trigger-label"
         className={cn(
-          "aui-tool-fallback-trigger-label-wrapper relative inline-block text-start leading-none",
-          isCancelled && "text-muted-foreground line-through",
+          // One line, ellipsised. A path or a command that wraps turns a run of eight calls
+          // into a wall you have to read rather than a list you can scan; the whole value is
+          // on the row's title and inside the disclosure.
+          "aui-tool-fallback-trigger-label-wrapper relative min-w-0 flex-1 truncate leading-normal",
+          isCancelled && "line-through",
         )}
       >
         <span>
-          {label}: <b>{toolName}</b>
+          {call.verb}
+          {call.subject ? (
+            <>
+              {" "}
+              {/* Mono for the subject: a path, a command or a query is scannable that way,
+                  and obviously a literal rather than part of the sentence. */}
+              <span className="text-foreground/80 font-mono">{call.subject}</span>
+            </>
+          ) : null}
           {/* The whole justification for collapsing by default. Without this the closed row
-              says "Used tool: shell" twenty times over and you have to open every one to find
+              says the same thing twenty times over and you have to open every one to find
               the failure. With it, a turn is skimmable. */}
-          {summary ? <span className="text-muted-foreground/80"> · {summary}</span> : null}
+          {summary ? <span className="text-muted-foreground/70"> · {summary}</span> : null}
         </span>
         {isRunning && (
           <span
             aria-hidden
             data-slot="tool-fallback-trigger-shimmer"
-            className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
+            className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 truncate motion-reduce:animate-none"
           >
-            {label}: <b>{toolName}</b>
+            {callText(call)}
           </span>
         )}
       </span>
@@ -178,7 +221,7 @@ function ToolFallbackTrigger({
       <ChevronDownIcon
         data-slot="tool-fallback-trigger-chevron"
         className={cn(
-          "aui-tool-fallback-trigger-chevron size-4 shrink-0",
+          "aui-tool-fallback-trigger-chevron size-3.5 shrink-0 opacity-60",
           "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
           "-rotate-90",
           "group-data-open/trigger:rotate-0",
@@ -511,15 +554,18 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
     if (isRequiresAction) setOpen(true);
   }
 
+  const args = parseArgs(argsText);
+
   return (
     <ToolFallbackRoot open={open} onOpenChange={setOpen}>
       <ToolFallbackTrigger
         toolName={toolName}
+        args={args}
         status={status}
         summary={
           result === undefined || isRequiresAction
             ? undefined
-            : summarise(toolName ?? "", parseArgs(argsText), result)
+            : summarise(toolName ?? "", args, result)
         }
       />
       <ToolFallbackContent>

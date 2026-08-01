@@ -117,32 +117,39 @@ export function AppHeader({
 
       <div className="flex-1" />
 
-      {/* Which model is answering. Nothing showed this, and that is how turns ran for
-          days on a model nobody had selected — the settings page said one thing and a
-          stale client override sent another. A name on screen makes that unmissable. */}
-      <HeaderControls
-        effort={effort}
-        supportsEffort={supportsEffort}
-        onEffort={(next) => onEffort?.(next)}
-      />
+      {/* How he is set to run, as one object.
+          These are three halves of a single question — how hard he thinks, what he may touch,
+          and which model is doing the thinking — and they were three unrelated shapes sitting
+          in a row with five other unrelated shapes: two mono pills with chevrons, then a
+          faint grey model name, then labelled buttons, then bare icons. Boxing them says
+          "these belong together, and they are settings rather than places".
 
-      {model ? (
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          title={`${model} — click to change`}
-          className="text-muted-foreground/60 hover:text-foreground hidden max-w-[14rem] truncate font-mono text-[11px] transition-colors sm:block"
-        >
-          {shortModel(model)}
-        </button>
-      ) : null}
+          Which model is answering is in here rather than trailing off the end. Nothing showed
+          it at all once, and that is how turns ran for days on a model nobody had selected —
+          the settings page said one thing and a stale client override sent another. */}
+      <div className="border-border/50 bg-muted/40 hidden items-center gap-0.5 rounded-lg border p-0.5 sm:flex">
+        <HeaderControls
+          effort={effort}
+          supportsEffort={supportsEffort}
+          onEffort={(next) => onEffort?.(next)}
+        />
+        {model ? (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title={`${model} — click to change`}
+            className="text-muted-foreground hover:text-foreground hover:bg-accent/60 max-w-[12rem] truncate rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
+          >
+            {shortModel(model)}
+          </button>
+        ) : null}
+      </div>
 
       <span className="bg-border/60 mx-1 hidden h-4 w-px sm:block" aria-hidden />
 
-      {/* An icon, because the word never told you anything the bell doesn't — and the count
-          is the only part that ever mattered. The label was costing space in a bar where the
-          things that need words (what he is doing, which model, which mode) were being
-          truncated to make room for it. */}
+      {/* Where to go. Labels for the two rooms you move between; the bell keeps its icon
+          because the count is the only part that ever mattered and a word next to it was
+          costing space to the things that need words. */}
       <TooltipIconButton
         tooltip={unread > 0 ? `${unread} unread` : "Alerts"}
         side="bottom"
@@ -182,6 +189,11 @@ export function AppHeader({
         <LayoutDashboard className="size-4" />
         Panel
       </Button>
+
+      {/* Utilities, behind their own rule: switches get icons. Without the divider these sat
+          in the same run as Mind and Panel, so a labelled destination and an unlabelled toggle
+          read as two members of one confused set. */}
+      <span className="bg-border/60 mx-1 h-4 w-px" aria-hidden />
       <Button
         variant="ghost"
         size="icon-sm"

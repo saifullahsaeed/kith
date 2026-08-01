@@ -22,6 +22,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { Button } from "@/components/ui/button";
 import { PresenceOrb } from "@/components/presence";
 import { USAGE_PART } from "@/lib/backend/adapter";
+import { summariseRun } from "@/lib/tool-language";
 import { cn } from "@/lib/utils";
 import {
   ActionBarMorePrimitive,
@@ -111,8 +112,11 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
       className="aui-root aui-thread-root bg-transparent @container flex h-full flex-col"
       style={{
         ["--thread-max-width" as string]: "44rem",
-        ["--composer-bg" as string]:
-          "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
+        // The card colour, which is lifted from the background in both themes — brighter than
+        // the warm paper, lighter than the warm night. It used to be muted at 30% over the
+        // background, which in the light room came out within a percent of the background
+        // itself: the one control the whole screen exists for was the faintest thing on it.
+        ["--composer-bg" as string]: "var(--color-card)",
         ["--composer-radius" as string]: "1.5rem",
         ["--composer-padding" as string]: "8px",
       }}
@@ -120,7 +124,12 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         data-slot="aui_thread-viewport"
-        className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth"
+        className={cn(
+          "relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth",
+          // Only once there is something to scroll: on a new chat the fade would eat the top
+          // of the greeting for no reason.
+          !isEmpty && "kith-fade-top",
+        )}
       >
         <div
           className={cn(
@@ -170,12 +179,15 @@ const ThreadMessage: FC = () => {
 const ThreadScrollToBottom: FC = () => {
   return (
     <ThreadPrimitive.ScrollToBottom asChild>
+      {/* End-aligned rather than centred, and smaller. Centred over a 44rem column it landed
+          squarely on the last line of the reply — so the one control for "take me back down"
+          was drawn through the sentence you were reading. */}
       <TooltipIconButton
         tooltip="Scroll to bottom"
         variant="outline"
-        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible"
+        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background/80 dark:hover:bg-accent absolute -top-11 end-1 z-10 self-end rounded-full p-2.5 shadow-sm backdrop-blur-sm disabled:invisible"
       >
-        <ArrowDownIcon />
+        <ArrowDownIcon className="size-4" />
       </TooltipIconButton>
     </ThreadPrimitive.ScrollToBottom>
   );
@@ -240,7 +252,10 @@ const Composer: FC = () => {
       <ComposerPrimitive.AttachmentDropzone asChild>
         <div
           data-slot="aui_composer-shell"
-          className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:shadow-none"
+          // A full-strength border and a real focus ring, rather than border/60 and a shadow.
+          // On warm paper a 60% border over a card that barely differs from the background was
+          // a suggestion of an input; you had to know it was there.
+          className="border-border data-[dragging=true]:border-ring dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:shadow-none"
         >
           <ComposerAttachmentStrip />
           <ComposerPrimitive.Input
@@ -263,9 +278,32 @@ const Composer: FC = () => {
           <ComposerAction />
         </div>
       </ComposerPrimitive.AttachmentDropzone>
+      <ComposerHint />
     </ComposerPrimitive.Root>
   );
 };
+
+/**
+ * How to send, while there is nothing to send.
+ *
+ * Enter-sends and shift-Enter-newlines is a convention, not a law, and the composer is a
+ * multi-line box with a send button — which is exactly the shape that makes someone type a
+ * paragraph, press Enter for the next line, and post half a thought. It costs one faint line,
+ * and only while the box is empty: once you are typing you already know.
+ */
+const ComposerHint: FC = () => (
+  <AuiIf condition={(s) => s.composer.isEmpty && s.composer.attachments.length === 0}>
+    <div className="text-muted-foreground/40 pointer-events-none mt-1.5 flex justify-center gap-3 text-[10px] select-none">
+      <span>
+        <kbd className="font-sans">⏎</kbd> send
+      </span>
+      <span aria-hidden>·</span>
+      <span>
+        <kbd className="font-sans">⇧⏎</kbd> new line
+      </span>
+    </div>
+  </AuiIf>
+);
 
 /**
  * What is attached to the message you are writing.
@@ -441,27 +479,42 @@ const AssistantMessage: FC = () => {
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
-                return <div data-slot="aui_chain-of-thought">{children}</div>;
+                // A rail, so the reply reads as prose and the machinery reads as a log beside
+                // it. Reasoning and tool rows used to sit at the same weight and indent as the
+                // writing, which left three kinds of thing competing for the same column and
+                // the least interesting of them — a collapsed disclosure — often winning.
+                return (
+                  <div
+                    data-slot="aui_chain-of-thought"
+                    // `border-foreground/10` rather than the token: `--border` is already only
+                    // 12% alpha, so the usual `border-border/50` computed to six percent and
+                    // the rail was there in the DOM and invisible on the screen. Neutral
+                    // rather than amber — the rail is a margin, and amber is the colour of
+                    // what he says.
+                    className="border-foreground/20 my-2 space-y-0.5 border-s ps-3.5"
+                  >
+                    {children}
+                  </div>
+                );
               case "group-tool":
                 if (ToolGroup) {
                   return <ToolGroup group={part}>{children}</ToolGroup>;
                 }
-                return (
-                  <ToolGroupRoot variant="ghost">
-                    <ToolGroupTrigger
-                      count={part.indices.length}
-                      active={part.status.type === "running"}
-                    />
-                    <ToolGroupContent>{children}</ToolGroupContent>
-                  </ToolGroupRoot>
-                );
+                // A run of one is not a run. Wrapping a single call in "1 tool call ›" put a
+                // row that says nothing in front of the row that says what he did.
+                if (part.indices.length <= 1) return children;
+                return <ToolRun group={part}>{children}</ToolRun>;
               case "group-reasoning": {
                 if (ReasoningGroup) {
                   return <ReasoningGroup group={part}>{children}</ReasoningGroup>;
                 }
                 const running = part.status.type === "running";
                 return (
-                  <ReasoningRoot streaming={running}>
+                  // Ghost, not the default bordered card. A collapsed "Reasoning" was the
+                  // heaviest object in a turn — a full-width box with its own margin — for
+                  // the part of the turn a reader is least often after. Disclosure triggers
+                  // are all one weight now: a row.
+                  <ReasoningRoot streaming={running} variant="ghost" className="mb-0">
                     <ReasoningTrigger active={running} />
                     <ReasoningContent aria-busy={running}>
                       <ReasoningText>{children}</ReasoningText>
@@ -476,11 +529,11 @@ const AssistantMessage: FC = () => {
               case "tool-call":
                 return part.toolUI ?? <ToolFallbackComponent {...part} />;
               case "data":
-                // The adapter turns each round's stats event into one of these; every
-                // other data part is somebody else's and keeps the library's renderer.
-                if (part.name === USAGE_PART) {
-                  return <TurnTokens usage={part.data as TurnUsage} />;
-                }
+                // The adapter turns the turn's stats into one of these. It is drawn in the
+                // message footer rather than here — it is metadata about the turn, and a
+                // number in the body reads as something he said. Every other data part is
+                // somebody else's and keeps the library's renderer.
+                if (part.name === USAGE_PART) return null;
                 return part.dataRendererUI;
               case "indicator":
                 return (
@@ -506,9 +559,74 @@ const AssistantMessage: FC = () => {
       >
         <BranchPicker />
         <AssistantActionBar />
+        <div className="flex-1" />
+        <TurnUsageFooter />
       </div>
     </MessagePrimitive.Root>
   );
+};
+
+/**
+ * A run of tool calls, collapsed to one line that says what he touched.
+ *
+ * The names are read off the message's own parts rather than passed in, because the group part
+ * carries only the indices it spans.
+ */
+const ToolRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, children }) => {
+  // Joined into one string rather than returned as an array: the state selector compares by
+  // identity, and a fresh array on every render is a render on every render.
+  const joined = useAuiState((s) =>
+    group.indices
+      .map((index) => {
+        const part = s.message.parts[index];
+        return part && part.type === "tool-call" ? part.toolName : "";
+      })
+      .join(RUN_SEPARATOR),
+  );
+  const run = summariseRun(joined.split(RUN_SEPARATOR).filter(Boolean));
+
+  return (
+    <ToolGroupRoot variant="ghost">
+      <ToolGroupTrigger
+        count={group.indices.length}
+        active={group.status.type === "running"}
+        summary={run.text}
+        icons={run.icons}
+      />
+      <ToolGroupContent>{children}</ToolGroupContent>
+    </ToolGroupRoot>
+  );
+};
+
+/** A unit separator: safe in a way a comma or a space is not, since tool names are joined and
+ *  split back apart. */
+const RUN_SEPARATOR = "\u001f";
+
+/**
+ * What the turn cost, on the footer row with the rest of the turn's metadata.
+ *
+ * It was a line in the message body, which put a number where a sentence goes — and on a
+ * reopened conversation there was one of them per model round, so a reply that took a dozen
+ * rounds arrived as a column of six-figure token counts with the writing somewhere inside it.
+ * The rounds are folded into one part on the way in now (see `toThreadMessages`); this is where
+ * the one figure lands.
+ */
+const TurnUsageFooter: FC = () => {
+  // Serialised for the same reason as the run above: the selector compares by identity.
+  const encoded = useAuiState((s) => {
+    const part = s.message.parts.find(
+      (one) => one.type === "data" && one.name === USAGE_PART,
+    ) as { data?: unknown } | undefined;
+    return part?.data ? JSON.stringify(part.data) : "";
+  });
+  if (!encoded) return null;
+  let usage: TurnUsage;
+  try {
+    usage = JSON.parse(encoded) as TurnUsage;
+  } catch {
+    return null;
+  }
+  return <TurnTokens usage={usage} />;
 };
 
 const AssistantActionBar: FC = () => {

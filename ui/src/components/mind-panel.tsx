@@ -1,25 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlarmClock,
-  BookOpenText,
   Brain,
   CircleDot,
-  FileCode2,
-  FolderKanban,
-  Globe,
-  Heart,
-  ListChecks,
-  NotebookPen,
   PanelRightClose,
-  Puzzle,
-  Search,
-  Send,
   Square,
-  TerminalSquare,
   TriangleAlert,
   Undo2,
   Unlock,
-  Wrench,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -27,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatTokens, realTokens, sumUsage, usageTitle, type Usage } from "@/lib/tokens";
+import { describeCall, type DescribedCall } from "@/lib/tool-language";
 import type { useAutonomy } from "@/hooks/use-autonomy";
 import type { ActivityItem } from "@/lib/backend/autonomy";
 
@@ -61,145 +50,22 @@ const KIND: Record<
   status: { icon: null, tone: "text-muted-foreground/60" },
 };
 
-/**
- * What kind of thing a tool touched, and the icon for it.
- *
- * The point is scanning rather than decoration. A column of identical arrows tells you
- * nothing; a column where six rows carry a terminal and two carry a globe tells you at a
- * glance that he spent this step building and briefly looked something up — which is the
- * question you actually have when you glance at the panel.
- */
-const GROUP: Record<string, { icon: LucideIcon; tone: string }> = {
-  memory: { icon: Brain, tone: "text-violet-400/80" },
-  writing: { icon: NotebookPen, tone: "text-kith/80" },
-  reading: { icon: BookOpenText, tone: "text-kith/70" },
-  tasks: { icon: ListChecks, tone: "text-blue-400/80" },
-  projects: { icon: FolderKanban, tone: "text-blue-400/70" },
-  self: { icon: Heart, tone: "text-pink-400/70" },
-  time: { icon: AlarmClock, tone: "text-orange-400/80" },
-  outreach: { icon: Send, tone: "text-pink-400/80" },
-  web: { icon: Globe, tone: "text-sky-400/80" },
-  shell: { icon: TerminalSquare, tone: "text-emerald-400/80" },
-  files: { icon: FileCode2, tone: "text-amber-400/80" },
-  search: { icon: Search, tone: "text-sky-400/70" },
-  tools: { icon: Wrench, tone: "text-muted-foreground/70" },
-  skills: { icon: Puzzle, tone: "text-kith/80" },
-};
-
-/**
- * What each tool did, and to what.
- *
- * `verb` is the phrase; `of` names the argument that is the subject of it. Both halves matter
- * and only the first existed: every call was rendered by splitting the raw text on "(" and
- * looking up the bare name, so a whole afternoon of work read as "read a file / wrote a file /
- * ran a command" over and over, with the one useful piece of information — *which* file,
- * *which* command — discarded on the way in.
- *
- * The table is exhaustive on purpose, and a test asserts it stays that way. Seventeen of the
- * fifty-five tools had no entry and fell through to the raw `name(arg=value)` string, so the
- * feed was half plain English and half code, and which half you got depended on which tool he
- * happened to reach for. A missing entry should fail the suite, not quietly print a function
- * call at someone.
- */
-const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROUP }> = {
-  // memory and notes
-  recall: { verb: "searched his memory for", of: "query", group: "memory" },
-  remember: { verb: "remembered", of: "content", group: "memory" },
-  forget: { verb: "let go of a memory", group: "memory" },
-  set_memory_level: { verb: "re-shelved a memory", group: "memory" },
-  take_note: { verb: "noted", of: "title", group: "writing" },
-  read_notes: { verb: "read his notes", group: "reading" },
-  update_note: { verb: "edited a note", group: "writing" },
-  journal: { verb: "wrote in his journal", group: "writing" },
-  read_journal: { verb: "re-read his journal", group: "reading" },
-  // tasks and projects
-  add_task: { verb: "set himself", of: "goal", group: "tasks" },
-  list_tasks: { verb: "looked over his tasks", group: "tasks" },
-  update_task: { verb: "updated a task", group: "tasks" },
-  view_task: { verb: "opened task", of: "id", group: "tasks" },
-  comment_on_task: { verb: "noted on a task", of: "comment", group: "writing" },
-  ask_on_task: { verb: "asked you", of: "question", group: "outreach" },
-  add_checklist_item: { verb: "added a step", of: "text", group: "tasks" },
-  check_item: { verb: "ticked off a step", group: "tasks" },
-  add_deliverable: { verb: "handed over", of: "title", group: "tasks" },
-  create_project: { verb: "started the project", of: "name", group: "projects" },
-  list_projects: { verb: "looked over his projects", group: "projects" },
-  update_project: { verb: "updated a project", group: "projects" },
-  add_milestone: { verb: "added the milestone", of: "title", group: "projects" },
-  update_milestone: { verb: "updated a milestone", group: "projects" },
-  order_milestones: { verb: "put the milestones in order", group: "projects" },
-  unlink_milestones: { verb: "unlinked two milestones", group: "projects" },
-  link_folder: { verb: "linked a folder", of: "folder", group: "projects" },
-  // mood, identity, people
-  set_mood: { verb: "felt", of: "mood", group: "self" },
-  set_identity: { verb: "reshaped who he is", group: "self" },
-  note_about_self: { verb: "noted about himself", of: "note", group: "self" },
-  note_about: { verb: "noted about you", of: "note", group: "self" },
-  recall_person: { verb: "recalled who you are", group: "self" },
-  // time
-  set_reminder: { verb: "set a reminder", of: "note", group: "time" },
-  list_reminders: { verb: "checked his reminders", group: "time" },
-  cancel_reminder: { verb: "cleared a reminder", group: "time" },
-  schedule: { verb: "set a standing job", of: "note", group: "time" },
-  list_schedules: { verb: "checked his schedules", group: "time" },
-  cancel_schedule: { verb: "cleared a schedule", group: "time" },
-  // reaching out
-  reach_out: { verb: "reached out to you", group: "outreach" },
-  // knowledge and the web
-  search_sources: { verb: "searched your sources for", of: "query", group: "search" },
-  read_source: { verb: "read a source you gave him", group: "reading" },
-  web_search: { verb: "searched the web for", of: "query", group: "search" },
-  fetch_url: { verb: "read", of: "url", group: "web" },
-  browse_page: { verb: "opened", of: "url", group: "web" },
-  // the machine
-  shell: { verb: "ran", of: "command", group: "shell" },
-  read_file: { verb: "read", of: "path", group: "files" },
-  write_file: { verb: "wrote", of: "path", group: "files" },
-  edit_file: { verb: "edited", of: "path", group: "files" },
-  changes: { verb: "checked what he had changed", group: "files" },
-  commit: { verb: "saved a point in history", of: "message", group: "files" },
-  check_code: { verb: "checked the code", of: "path", group: "shell" },
-  glob: { verb: "looked for files matching", of: "pattern", group: "search" },
-  history: { verb: "looked back through his history", group: "reading" },
-  delete_file: { verb: "put in the Trash", of: "path", group: "files" },
-  list_files: { verb: "looked through", of: "path", group: "files" },
-  grep: { verb: "searched files for", of: "pattern", group: "search" },
-  // his own tools and skills
-  create_tool: { verb: "built himself a tool", of: "name", group: "tools" },
-  list_tools: { verb: "checked his own tools", group: "tools" },
-  delete_tool: { verb: "removed one of his tools", group: "tools" },
-  read_skill: { verb: "opened the skill", of: "name", group: "skills" },
-};
+/* The phrase-and-icon tables that used to sit here now live in `@/lib/tool-language`, because
+   the chat thread describes the same calls and was describing them as "1 tool call" and
+   "Used tool: read_skill" while this panel said "read ~/Kith/cv.pdf". One table, one
+   vocabulary, both surfaces. `server/tests/test_mind_feed.py` reads that file now. */
 
 /** One feed icon, at the single size this panel uses everywhere. */
 function Glyph({ icon: Mark }: { icon: LucideIcon }) {
   return <Mark className="size-3.5" strokeWidth={2} />;
 }
 
-/** A tool nobody has written a phrase for: its name, made readable, never raw code. */
-function fallbackVerb(name: string): string {
-  return name.replace(/_/g, " ");
-}
-
 /** The line for one tool call: what he did, the thing he did it to, and an icon for the kind
  *  of work it was. */
-function describeTool(item: ActivityItem): {
-  verb: string;
-  subject: string;
-  icon: LucideIcon;
-  tone: string;
-} {
+function describeTool(item: ActivityItem): DescribedCall {
   // `tool` and `args` are the current shape. `text` is parsed only for events recorded before
   // they existed, so scrolling back through history still reads properly.
-  const name = item.tool ?? item.text.split("(")[0];
-  const entry = TOOL[name];
-  const group = entry ? GROUP[entry.group] : undefined;
-  return {
-    verb: entry?.verb ?? fallbackVerb(name),
-    subject: entry?.of ? (item.args?.[entry.of] ?? "") : "",
-    icon: group?.icon ?? Wrench,
-    tone: group?.tone ?? "text-muted-foreground/60",
-  };
+  return describeCall(item.tool ?? item.text.split("(")[0], item.args);
 }
 
 type Tick = {
@@ -428,13 +294,22 @@ export function MindPanel({
             lifetime ? `${formatTokens(lifetime)} tokens` : "",
           ]
             .filter(Boolean)
-            .join(" · ")}
+            .join(" · ") ||
+            // Rather than nothing: with both figures empty this row was one button and a
+            // stretch of void, which reads as a bar that failed to load.
+            "no steps yet"}
         </span>
       </div>
 
       {/* feed */}
       <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {ticks.length === 0 ? (
+          /* Everything in the middle, together.
+             This panel is four hundred pixels wide and it is open by default, so an idle Mind
+             was most of a column of nothing with one sentence adrift in it. The way out of the
+             empty state belongs inside the empty state — and when the reason this conversation
+             is quiet is that the work is happening in another one, saying so beats saying
+             nothing at all. */
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <span className="flex size-11 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
               <Brain className="size-5" />
@@ -448,11 +323,25 @@ export function MindPanel({
                 </>
               ) : (
                 <>
-                  His mind is quiet. Hit <span className="text-foreground font-medium">Run</span>{" "}
-                  to watch him take a self-directed step.
+                  His mind is quiet. Take a self-directed step and watch what he does with it.
                 </>
               )}
             </p>
+            {!ticking ? (
+              <Button size="sm" variant="outline" onClick={() => void tick()}>
+                <Zap className="size-3.5" />
+                Run a step
+              </Button>
+            ) : null}
+            {hidden > 0 && !everything ? (
+              <button
+                type="button"
+                onClick={() => setEverything(true)}
+                className="text-muted-foreground/70 hover:text-foreground text-[11px] underline-offset-2 transition-colors hover:underline"
+              >
+                He is busy elsewhere — {hidden} line{hidden === 1 ? "" : "s"} from other sessions
+              </button>
+            ) : null}
           </div>
         ) : (
           <div className="space-y-3">
