@@ -393,6 +393,13 @@ def stream_agent(
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
     budget = max_rounds or tuning.value("max_rounds")
     reserve = min(tuning.value("landing_reserve"), max(2, budget // 3))
+    # The tool list as the last round actually saw it, kept for the forced final answer.
+    # That request used to build its own with `tool_schemas(agent_db_path)` and no `only`,
+    # so a breakout tick offering six tools ended by sending all fifty-nine — a different
+    # tools block from every other round in the turn, which on the providers that need an
+    # explicit breakpoint sits ahead of the system prompt and rewrites the whole cached
+    # prefix for the one request the turn cannot skip.
+    schemas: list[dict] = []
     landing = False
     delegated = False  # did he hand this to a future tick?
     persisted = False  # did anything this turn leave a trace?
@@ -573,7 +580,7 @@ def stream_agent(
                 convo.append({"role": "tool", "tool_name": step["name"], "content": json.dumps(result)})
 
     # Out of tool budget — force a final answer so there's always a reply.
-    yield from _final_answer(convo, config, host, tools.tool_schemas(agent_db_path))
+    yield from _final_answer(convo, config, host, schemas)
 
 
 def _image_from(result: Any) -> str:

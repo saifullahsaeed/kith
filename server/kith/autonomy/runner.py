@@ -529,7 +529,14 @@ class AutonomyRunner:
             nxt = clock.next_fire_after(sched.get("every_minutes"), sched.get("daily_at"))
             repo.schedules.reschedule(AGENT_DB_PATH, sched["id"], nxt)
             self._emit("reminder", f"(standing) {sched['note']}", conversation=conversation_id)
-        tick_config = replace(config, num_predict=min(config.num_predict, tuning.value("tick_max_tokens")))
+        # A tick is a step, not an essay, and bounding its output is what keeps running all
+        # day affordable. This was `min(config.num_predict, tick_max_tokens)` and did nothing:
+        # `num_predict` is -1 on this install — the sentinel for "no limit" — so the min is
+        # -1 and every tick has been running uncapped since the knob was added. A sentinel
+        # that sorts below every real value silently wins any comparison meant to bound it.
+        tick_cap = tuning.value("tick_max_tokens")
+        wanted = config.num_predict
+        tick_config = replace(config, num_predict=tick_cap if wanted <= 0 else min(wanted, tick_cap))
 
         final_text = ""
         tick_in = tick_out = tick_uncached = 0
