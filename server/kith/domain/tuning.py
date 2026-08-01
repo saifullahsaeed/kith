@@ -190,7 +190,7 @@ TUNABLES: tuple[Tunable, ...] = (
         help="Total characters of tool results carried forward intact. Should match the "
         "model's context: a 1M-token model can hold a whole turn's research, and "
         "trimming it makes him fetch the same pages again.",
-        default=240_000,
+        default=80_000,
         group="memory",
         minimum=4_000,
         maximum=4_000_000,
