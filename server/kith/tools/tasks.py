@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kith.domain import stall
 from kith.domain.enums import TASK_PRIORITIES, TASK_STATUSES
 from kith.infra.db import repositories as repo
 from kith.tools import paging
@@ -154,16 +155,32 @@ def _update_task(path: Path, a: dict) -> dict | None:
 
 _VERIFY_MIN_BRIEF = 80
 
+#: Shortest description that counts as a real "definition of done" on a task that belongs to a
+#: project or milestone. Trivial standalone errands need none, the same way _verify_done only
+#: gates a task that carries a written brief.
+_MIN_DONE_CHARS = 24
+
+#: Statuses that mean a task is off the board — it neither blocks a duplicate nor counts against
+#: a milestone's task cap.
+_SETTLED = ("done", "dropped")
+
 
 @tool(
     "add_task",
-    "Record a task to pursue — a real unit of work. Give it a clear goal; add a "
-    "'description' (what done looks like), a 'priority' (high for what matters most, "
-    "so you work it first), and a 'due_at' if it's time-bound. New tasks start in "
-    "'todo'; put it in 'backlog' if it's not to start yet.",
+    "Record a task to pursue — a real unit of work, and an OUTCOME, not an activity. A task is "
+    "the thing produced (\"the seed script runs and loads fixtures\"), with a 'description' saying "
+    "how you'll KNOW it's done — ideally something runnable (a command that exits 0, a test that "
+    'passes, a file that exists). "Verify/inspect/consolidate X" is a done-condition, not a task '
+    "of its own. A task under a project or milestone MUST carry such a description. 'priority' is "
+    "high for what matters most; 'due_at' if it's time-bound. New tasks start in 'todo'; use "
+    "'backlog' if it's not to start yet.",
     {
-        "goal": {**STR, "description": "Short title of the task."},
-        "description": {**STR, "description": "Optional: detail and what 'done' means."},
+        "goal": {**STR, "description": "Short title — the outcome, not a verb like 'verify X'."},
+        "description": {
+            **STR,
+            "description": "How you'll know it's done — required for a task under a project or "
+            "milestone; a runnable check beats prose.",
+        },
         "priority": {**STR, "enum": list(TASK_PRIORITIES), "description": "low | normal | high."},
         "due_at": {**STR, "description": "Optional due time, ISO 8601 (your local zone)."},
         "status": {**STR, "enum": list(TASK_STATUSES), "description": "Defaults to 'todo'."},
@@ -176,23 +193,78 @@ _VERIFY_MIN_BRIEF = 80
     required=("goal",),
 )
 def add_task(path: Path, args: dict):
-    from kith.services import session_context
+    from kith.services import session_context, tuning
+
+    goal = (args.get("goal") or "").strip()
+    description = (args.get("description") or "").strip()
+    project_id = args.get("project_id")
+    milestone_id = args.get("milestone_id")
+    scoped = bool(project_id or milestone_id)
+
+    # A task that belongs to real work needs a checkable finish line. Without one, "Verify the
+    # Prisma foundation" can never be objectively done, so it grinds forever. Trivial standalone
+    # errands are left alone — the same proportionality _verify_done uses on the closing side.
+    if scoped and len(description) < _MIN_DONE_CHARS:
+        return {
+            "ok": False,
+            "error": (
+                "This task belongs to real work but has no checkable finish line. Add a "
+                "'description' saying how you'll KNOW it's done — ideally something runnable (a "
+                "command that exits 0, a test that passes, a file that exists), not a bare verb "
+                "like 'verify' or 'inspect'. Then file it again."
+            ),
+        }
+
+    # Don't file a second copy of work already open. The 106≈110 / 107≈111 duplicates were the
+    # loop re-decomposing the same stuck milestone; merge into the existing task rather than grow
+    # the pile. Scoped to the same project so unrelated look-alikes aren't collapsed.
+    new_sig = stall.signature(f"{goal} {description}")
+    for existing in repo.tasks.list_tasks(path):
+        if existing.get("status") in _SETTLED or existing.get("project_id") != project_id:
+            continue
+        prior = stall.signature(f"{existing['goal']} {existing.get('description') or ''}")
+        if stall.similar(new_sig, prior):
+            return {
+                "ok": True,
+                "id": existing["id"],
+                "duplicate": True,
+                "note": f"Merged into existing open task #{existing['id']} — near-identical goal.",
+            }
+
+    # One milestone, a handful of concrete tasks — not the whole roadmap at once. The breakdown
+    # prompt says "one sitting each", but a prompt limit is advisory, so enforce it here: nine
+    # overlapping tasks under one milestone is exactly what this stops.
+    if milestone_id:
+        cap = int(tuning.value("milestone_task_cap"))
+        open_here = sum(
+            1
+            for t in repo.tasks.list_tasks(path)
+            if t.get("milestone_id") == milestone_id and t.get("status") not in _SETTLED
+        )
+        if open_here >= cap:
+            return {
+                "ok": False,
+                "error": (
+                    f"This milestone already has {open_here} open task(s) — finish or drop some "
+                    "before adding more. Plan one milestone shallowly, not all of it at once."
+                ),
+            }
 
     made = repo.tasks.add_task(
         path,
-        args["goal"],
+        goal,
         args.get("priority") or "normal",
         args.get("due_at"),
-        args.get("description") or "",
+        description,
         args.get("status") or "todo",
         "kith",
-        args.get("project_id"),
-        args.get("milestone_id"),
+        project_id,
+        milestone_id,
     )
-    # Filing work under a project is working on that project. Read back off the row rather
-    # than off the arguments, because a task given only a milestone still lands in a project
-    # — the repository resolves it — and a session that laid out a roadmap this way would
-    # otherwise be bound to nothing.
+    # Filing work under a project is working on that project. Read back off the row rather than
+    # off the arguments, because a task given only a milestone still lands in a project — the
+    # repository resolves it — and a session that laid out a roadmap this way would otherwise be
+    # bound to nothing.
     session_context.adopt(path, made.get("project_id"))
     return made
 

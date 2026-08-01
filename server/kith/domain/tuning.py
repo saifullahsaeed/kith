@@ -182,6 +182,20 @@ TUNABLES: tuple[Tunable, ...] = (
         group="turn",
         kind="bool",
     ),
+    Tunable(
+        key="milestone_task_cap",
+        env="KITH_MILESTONE_TASK_CAP",
+        label="Tasks one milestone may hold at once",
+        help="The most open tasks he may file under a single milestone before he has to finish "
+        "or drop some. Keeps a breakdown shallow — one milestone's next handful of steps, not "
+        "the whole roadmap at once — which is how nine overlapping tasks piled under one "
+        "milestone in the run this fixes.",
+        default=6,
+        group="turn",
+        minimum=2,
+        maximum=20,
+        unit="tasks",
+    ),
     # -- memory ------------------------------------------------------------- #
     Tunable(
         key="live_tool_chars",

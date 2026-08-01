@@ -56,7 +56,14 @@ class TestAdoptingAProject:
     def test_filing_a_task_under_a_project_claims_it(self, db, session_id):
         project = repo.projects.add_project(db, "Circulars", "")
         with session_context.working_in(session_id):
-            task_tools.add_task(db, {"goal": "read the archive", "project_id": project["id"]})
+            task_tools.add_task(
+                db,
+                {
+                    "goal": "read the archive",
+                    "description": "done when the archive text is saved to a file",
+                    "project_id": project["id"],
+                },
+            )
         assert repo.conversations.project_of(db, session_id) == project["id"]
 
     def test_a_task_filed_under_only_a_milestone_still_claims_the_project(self, db, session_id):
@@ -65,7 +72,14 @@ class TestAdoptingAProject:
         project = repo.projects.add_project(db, "Circulars", "")
         milestone = repo.projects.add_milestone(db, project["id"], "Scrape it")
         with session_context.working_in(session_id):
-            task_tools.add_task(db, {"goal": "write the scraper", "milestone_id": milestone["id"]})
+            task_tools.add_task(
+                db,
+                {
+                    "goal": "write the scraper",
+                    "description": "done when scraper.py fetches the page",
+                    "milestone_id": milestone["id"],
+                },
+            )
         assert repo.conversations.project_of(db, session_id) == project["id"]
 
     def test_picking_up_someone_elses_task_claims_its_project(self, db, session_id):
