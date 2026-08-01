@@ -79,15 +79,32 @@ def save(config_db: Path, servers: list[MCPServer]) -> list[MCPServer]:
             raise ValueError(f"there is already a server called {server.label!r}")
         seen.add(server.label)
     config_store.update_settings(config_db, {SERVERS_KEY: json.dumps([s.stored() for s in servers])})
-    # Anything removed or renamed should stop running now rather than at the next restart.
-    _retire(seen)
+    # Anything that should no longer be running stops now rather than at the next restart —
+    # and "should no longer be running" includes *switched off*, not just removed.
+    _retire({s.label for s in servers if s.enabled})
     return servers
 
 
 def _retire(keep: set[str]) -> None:
+    """Stop every live server whose label is not in `keep`.
+
+    `keep` is the set that should still be *running*, which is not the same as the set that
+    is still configured. Passing every configured label — including the disabled ones — is
+    the bug this comment exists for: switching a server off set a flag and did nothing else,
+    so the process stayed up, its tools stayed in the snapshot, and it went on costing tokens
+    on every round. Measured: `enabled: false`, `connected: true`, five tools still offered,
+    child process still alive.
+
+    Which made the switch a lie in the one direction that matters. Its whole purpose is to
+    stop paying for a server without losing its configuration, and the settings page says so
+    in as many words.
+    """
     with _lock:
-        for label in [name for name in _live if name not in keep]:
-            _live.pop(label).process.stop()
+        going = [name for name in _live if name not in keep]
+        stopping = [_live.pop(name) for name in going]
+    # Outside the lock: terminate() waits, and a shutdown must not block calls in flight.
+    for entry in stopping:
+        entry.process.stop()
 
 
 def forget(config_db: Path, label: str) -> list[MCPServer]:
@@ -138,12 +155,20 @@ def _public_tool(tool: dict) -> dict:
 def connect(config_db: Path, connect_timeout: float, call_timeout: float) -> dict[str, str]:
     """Bring every enabled server up. Returns label -> what went wrong, for the ones that did.
 
+    Reconciles rather than only starts: anything running that should not be — removed,
+    renamed, or switched off — is stopped first. One function that always converges on the
+    configuration, so no caller has to remember to tidy up, and a config changed by any route
+    ends in the same state.
+
     Idempotent, and safe to call on a server already running: an existing live entry whose
     process is still alive is left exactly as it is, tool list included, because replacing it
     would change the tools block mid-turn.
     """
+    servers = configured(config_db)
+    _retire({s.label for s in servers if s.enabled})
+
     trouble: dict[str, str] = {}
-    for server in configured(config_db):
+    for server in servers:
         if not server.enabled:
             continue
         with _lock:

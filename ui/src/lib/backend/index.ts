@@ -45,3 +45,4 @@ export { USAGE_PART } from "./adapter";
 export * from "./persona";
 export * from "./roadmap";
 export * from "./notify";
+export * from "./mcp";

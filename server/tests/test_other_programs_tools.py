@@ -286,3 +286,51 @@ class TestSecretsStayIn:
 
     def test_but_storage_keeps_them_or_the_server_cannot_start(self):
         assert MCPServer(label="f", command="x", env={"K": "v"}).stored()["env"] == {"K": "v"}
+
+
+class TestSwitchingOneOffActuallyStopsIt:
+    """The switch exists so you can stop paying for a server without losing its setup, and
+    the settings page says exactly that. It was a flag and nothing else.
+
+    Measured before the fix: `enabled: false`, `connected: true`, five tools still in the
+    snapshot, and the child process still alive. So switching off cost the same as leaving it
+    on, which is the one thing the control must never do.
+    """
+
+    def disabled(self) -> MCPServer:
+        return MCPServer(label="probe", command=sys.executable, args=(PROBE,), enabled=False)
+
+    def test_the_process_stops(self, connected):
+        assert manager.running(), "the fixture should have it running"
+        manager.save(connected, [self.disabled()])
+        assert manager.running() == {}, "switching off left the server running"
+
+    def test_and_its_tools_leave_the_snapshot(self, connected):
+        assert manager.snapshot(), "the fixture should have offered tools"
+        manager.save(connected, [self.disabled()])
+        assert manager.snapshot() == [], "a switched-off server was still costing tokens"
+
+    def test_but_the_configuration_survives(self, connected):
+        """Off is not removed — that is the entire difference between the switch and Remove."""
+        manager.save(connected, [self.disabled()])
+        remaining = manager.configured(connected)
+        assert [s.label for s in remaining] == ["probe"]
+        assert remaining[0].enabled is False
+
+    def test_and_switching_it_back_on_brings_it_up(self, connected):
+        manager.save(connected, [self.disabled()])
+        manager.save(connected, [a_server()])
+        assert manager.connect(connected, 10, 10) == {}
+        assert "probe" in manager.running()
+
+    def test_connect_reconciles_rather_than_only_starting(self, connected):
+        """A config changed by any route must converge, so no caller has to remember to tidy
+        up. Written directly to storage here, bypassing `save` entirely."""
+        from kith.infra.db import config_store
+
+        config_store.update_settings(connected, {manager.SERVERS_KEY: json.dumps([self.disabled().stored()])})
+        assert manager.running(), "still running, since nothing has reconciled yet"
+
+        manager.connect(connected, 10, 10)
+
+        assert manager.running() == {}

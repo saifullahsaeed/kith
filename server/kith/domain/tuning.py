@@ -277,12 +277,26 @@ TUNABLES: tuple[Tunable, ...] = (
         key="tick_max_tokens",
         env="KITH_TICK_MAX_TOKENS",
         label="Longest self-directed step",
-        help="Output tokens one unattended step may produce. This is the main lever on "
-        "what he costs while you're not watching.",
+        help="Output tokens one unattended step may produce. It bounds a step's written "
+        "output only; the real ceiling on what a session costs is 'session_token_cap'.",
         default=2_000,
         group="rhythm",
         minimum=200,
         maximum=32_000,
+        unit="tokens",
+    ),
+    Tunable(
+        key="session_token_cap",
+        env="KITH_SESSION_TOKEN_CAP",
+        label="Tokens one working session may spend",
+        help="Total prompt tokens a single 'keep working' session may run through before it "
+        "stops itself and tells you. This is the ceiling that turns a stuck all-nighter into a "
+        "message in the morning; set it too low and long honest jobs stop early, too high and a "
+        "loop can still cost real money before anyone looks.",
+        default=5_000_000,
+        group="rhythm",
+        minimum=100_000,
+        maximum=200_000_000,
         unit="tokens",
     ),
     # -- stalls ------------------------------------------------------------- #

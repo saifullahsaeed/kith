@@ -112,6 +112,13 @@ class AutonomyRunner:
         self._cost_usd = 0.0
         self._last_tick_tokens = 0
         self._last_tick_uncached = 0
+        # Per-session prompt-token meter, keyed by conversation_id. The tallies above are
+        # process-wide and keyed to nothing, so they cannot bound one runaway session; this
+        # can. In-memory and reset when a session (re)enters keep_working — a restart mid-run
+        # forgets it, a bounded gap, not the 11-hour all-nighter this exists to stop.
+        self._session_tokens: dict[str, int] = {}
+        # Sessions already stopped for budget, so a late charge can't post the note twice.
+        self._session_capped: set[str] = set()
         # Loop detection + reply bookkeeping.
         self._recent_sigs: deque[frozenset] = deque(maxlen=6)
         self._recent_shapes: deque[frozenset] = deque(maxlen=6)
@@ -139,6 +146,10 @@ class AutonomyRunner:
         one". A session is the thing you actually want to start and stop.
         """
         repo.conversations.set_working(AGENT_DB_PATH, conversation_id, True)
+        # Fresh session, fresh meter — starting (or restarting) work zeroes the budget so a
+        # previous run's spend can't carry over and trip the cap the moment it resumes.
+        self._session_tokens[conversation_id] = 0
+        self._session_capped.discard(conversation_id)
         self.ensure_loop()
         self._emit("status", "working")
         return self.status()
@@ -226,6 +237,41 @@ class AutonomyRunner:
             )
         except Exception:
             # Bookkeeping must never turn one failure into two.
+            pass
+
+    def _charge_session(self, conversation_id: str, tokens_in: int) -> None:
+        """Add this tick's prompt volume to the session's meter; rest it once past the cap.
+
+        ``tokens_in`` (the whole prompt, cached re-reads included) rather than the uncached
+        slice, on purpose: it is the volume the dashboard shows and the number a person reacts
+        to — it is what "37 million tokens" meant. Resting reuses the exact set_working(False)
+        baton that rest() and the idle branch already use, so the loop simply stops selecting
+        this session on the next pass, with no second stop-path to keep in step. It fires once:
+        the session is remembered as capped so a later charge in the same run posts no second note.
+        """
+        if not conversation_id or conversation_id in self._session_capped:
+            return
+        total = self._session_tokens.get(conversation_id, 0) + int(tokens_in)
+        self._session_tokens[conversation_id] = total
+        cap = int(tuning.value("session_token_cap"))
+        if total < cap:
+            return
+        self._session_capped.add(conversation_id)
+        try:
+            repo.conversations.set_working(AGENT_DB_PATH, conversation_id, False)
+            repo.messages.add_message(
+                AGENT_DB_PATH,
+                f"I stopped this session — it ran through {total:,} tokens, past its budget of "
+                f"{cap:,}. I've rested it so it can't keep spending while you're away. Tell me to "
+                "keep going if you want more, or raise the session budget in settings.",
+                kind="stuck",
+            )
+            self._emit(
+                "done",
+                f"budget reached: {total:,} tokens this session — resting",
+                conversation=conversation_id,
+            )
+        except Exception:
             pass
 
     # -- subscriptions (for the SSE feed) ----------------------------------- #
@@ -622,6 +668,9 @@ class AutonomyRunner:
         self._cost_usd += tick_cost
         self._last_tick_tokens = tick_in + tick_out
         self._last_tick_uncached = tick_uncached + tick_out
+        # Bound the whole session, not just this tick: add this step's prompt volume to the
+        # session meter and rest the session if it has now crossed its budget.
+        self._charge_session(conversation_id, tick_in)
 
         if final_text.strip():
             self._emit("thought", final_text.strip()[:600], conversation=conversation_id)

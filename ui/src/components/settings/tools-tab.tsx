@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, Check, CircleDashed, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { MCPServers } from "@/components/settings/mcp-servers";
 import { SearchStep } from "@/components/onboarding/search-step";
 import {
   saveSearch,
@@ -103,6 +104,8 @@ export function ToolsTab({
           </Button>
         </div>
       </section>
+
+      <MCPServers />
 
       <section>
         <div className="mb-3">
