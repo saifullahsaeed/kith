@@ -266,6 +266,39 @@ def root() -> Path:
     return chosen
 
 
+def base_dir() -> Path:
+    """Where the current work should happen: the active session's linked project folder, or root().
+
+    Both a tick and a chat run inside ``session_context.working_in(...)``, so a tool called deep in
+    the loop can find out which project it is on without every caller threading a directory down. A
+    project with a linked folder makes that folder the working base — his relative paths and a
+    command's cwd land in your project rather than in his own scratch space, which is what "work in
+    ~/Desktop/my-app" is supposed to mean. Everything else — a project with no folder, a chat with
+    no project, a tick that claimed nothing, a test, a script — falls back to ``root()``.
+
+    The permission model is unchanged by this: a linked folder was already a free zone
+    (``permissions._inside_linked_project``), so this only decides *where paths land*, never *what
+    he may touch*. Defensive to a fault — any failure in the lookup returns ``root()`` rather than
+    breaking the file operation that asked.
+    """
+    try:
+        from kith.config import AGENT_DB_PATH
+        from kith.infra.db import repositories as repo
+        from kith.services import session_context
+
+        conversation = session_context.current()
+        if conversation:
+            project_id = repo.conversations.project_of(AGENT_DB_PATH, conversation)
+            if project_id:
+                row = repo.projects.get_project(AGENT_DB_PATH, project_id)
+                directory = str((row or {}).get("directory") or "").strip()
+                if directory and Path(directory).is_dir():
+                    return Path(directory)
+    except Exception:
+        pass
+    return root()
+
+
 def set_root(raw: str) -> Path:
     """Move him to a different folder, and say what that does and does not do.
 
@@ -395,15 +428,17 @@ HOME = str(DEFAULT_ROOT)
 
 
 def resolve(path: str) -> str:
-    """Anchor a relative path in the workspace; keep an absolute one as given.
+    """Anchor a relative path in the working base; keep an absolute one as given.
 
-    Absolute paths are deliberately not rejected here. Refusing them would make "look at
-    ~/Downloads/report.pdf" impossible rather than merely gated, and the gate is the
-    permission check — which can be answered — not this function.
+    The base is the active project's linked folder when there is one (see :func:`base_dir`), so his
+    relative paths land in your project rather than in his own folder — otherwise the workspace
+    root. Absolute paths are deliberately not rejected here. Refusing them would make "look at
+    ~/Downloads/report.pdf" impossible rather than merely gated, and the gate is the permission
+    check — which can be answered — not this function.
     """
     text = (path or "").strip()
     if not text:
-        return str(root())
+        return str(base_dir())
 
     # The container's home, rewritten. On macOS /home is an autofs mount, so creating
     # /home/kith fails with "Operation not supported" — which is exactly how this showed
@@ -417,7 +452,7 @@ def resolve(path: str) -> str:
     expanded = Path(text).expanduser()
     if expanded.is_absolute():
         return str(expanded)
-    return str(root() / expanded)
+    return str(base_dir() / expanded)
 
 
 def status() -> dict:
@@ -463,7 +498,10 @@ def _capture(command: str, timeout: int) -> tuple[int, str]:
     broke `fetch_url` for every real page — see there.
     """
     permissions.require_command(command, root())
-    here = root()
+    # Where the command runs. The permission check above still measures against root(), so his own
+    # folder AND the linked project both count as inside; but the command's cwd is the working base,
+    # so relative paths in a shell line land in your project, not his scratch space.
+    here = base_dir()
     try:
         proc = subprocess.run(
             ["bash", "-lc", command],
