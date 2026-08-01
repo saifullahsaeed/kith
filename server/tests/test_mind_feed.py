@@ -21,11 +21,14 @@ import re
 from kith import settings
 from kith.tools import registry
 
-PANEL = settings.SERVER_ROOT.parent / "ui" / "src" / "components" / "mind-panel.tsx"
+# The tables moved out of mind-panel.tsx into a module both surfaces import: the chat thread
+# describes the same calls, and while the phrases lived inside the panel the thread rendered
+# them as "1 tool call" and "Used tool: read_skill". One vocabulary, one file to guard.
+PANEL = settings.SERVER_ROOT.parent / "ui" / "src" / "lib" / "tool-language.ts"
 
 
 def tool_table() -> str:
-    """The body of the TOOL table in mind-panel.tsx.
+    """The body of the TOOL table in tool-language.ts.
 
     Anchored on `const TOOL` and the first `};` rather than on the full type annotation. The
     first version matched the whole signature and broke the moment a field was added to it —

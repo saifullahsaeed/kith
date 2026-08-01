@@ -52,9 +52,39 @@ def tool_schemas(agent_db_path: Path | None = None, only: set[str] | None = None
     return builtins + custom_tools.schemas(agent_db_path)
 
 
-def run_tool(name: str, arguments: dict, agent_db_path: Path) -> dict:
+def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | None = None) -> dict:
     """Execute a tool call. Always returns a dict, never raises — a failed tool
-    should inform the model, not crash the stream."""
+    should inform the model, not crash the stream.
+
+    ``allow`` is the set of tools permitted in this context, and it is enforced *here*
+    because here is where execution happens. It used to be enforced nowhere.
+
+    Every allow-list in the codebase — the per-mode sets in `autonomy/toolsets.py`, the
+    landing reserve that takes work tools away for the last rounds, the narrower set after a
+    delegation — was only ever passed to `tool_schemas(only=...)`, which decides what the
+    model is *shown*. This function resolved any name against the whole registry and ran it.
+    Measured: in `breakout` mode, which offers six tools, calling `remember` and `add_task`
+    both succeeded.
+
+    So the lists were advisory, and a model that named a tool anyway — because the persona
+    mentions it, because a skill it just read names it, because it saw the tool earlier in
+    the same conversation — got it. The landing reserve exists to stop a turn gathering
+    forever, and it could be ignored by simply calling `web_search` again.
+
+    ``None`` means no restriction, which is the ordinary case and what every caller that
+    does not scope its tools passes.
+    """
+    if allow is not None and name not in allow:
+        # Named rather than vague: he can act on "not in this mode" and cannot act on
+        # "something went wrong". The list itself is not spelled out — on a 55-tool set that
+        # is most of a round's budget spent telling him what he already had schemas for.
+        return {
+            "ok": False,
+            "error": (
+                f"`{name}` is not available in this part of the turn. Use one of the tools "
+                "you were given, or finish with what you have."
+            ),
+        }
     entry = get(name)
     if entry is not None:
         try:

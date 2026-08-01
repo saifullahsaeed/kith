@@ -428,6 +428,19 @@ def stream_agent(
             allowed = _LANDING_TOOLS | _PLANNING_TOOLS
             schemas = [s for s in schemas if s["function"]["name"] in allowed]
 
+        # What he was actually offered this round, and — from here on — what he may actually
+        # run. Derived from the finished list rather than from `allow`, so all three
+        # narrowings above are enforced by the same line and a fourth one added later cannot
+        # forget to be.
+        #
+        # Until now none of them were enforced at all. Every one only ever reached
+        # `tool_schemas(only=...)`, which decides what the model is *shown*; `run_tool`
+        # resolved any name against the whole registry and ran it. Measured: `breakout` mode
+        # offers six tools, and calling `remember` or `add_task` from it both succeeded. So
+        # the landing reserve — the thing that stops a turn gathering until it runs out of
+        # rounds — was a suggestion, and a model that named a search tool anyway got one.
+        permitted = {s["function"]["name"] for s in schemas}
+
         content = ""
         tool_calls: list[dict] = []
         stats: dict | None = None
@@ -507,13 +520,19 @@ def stream_agent(
                 }
 
             if len(batch) == 1:
-                results = [_run(batch[0], agent_db_path)]
+                results = [_run(batch[0], agent_db_path, permitted)]
             else:
                 # He asks for six searches at once and each takes seconds; run them
                 # together. Order of the *results* is still the order he asked in, so
                 # the transcript he reads back is unchanged.
                 with ThreadPoolExecutor(max_workers=len(batch)) as pool:
-                    results = list(pool.map(lambda step: _run(step, agent_db_path), batch))
+                    # `permitted` bound as a default rather than closed over: the lambda is
+                    # consumed inside this iteration so a late read would be safe today, but
+                    # the gate is the one value in here that must never be read from the
+                    # wrong round.
+                    results = list(
+                        pool.map(lambda step, allow=permitted: _run(step, agent_db_path, allow), batch)
+                    )
 
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
             for step, result in zip(batch, results, strict=True):
@@ -609,13 +628,13 @@ def _without_image(result: Any) -> Any:
 _SHOWN = "(shown to you as a picture below)"
 
 
-def _run(step: dict, agent_db_path: Path) -> Any:
+def _run(step: dict, agent_db_path: Path, allow: set[str] | None = None) -> Any:
     if step["repeat"]:
         return {
             "note": "You've already made this exact call twice and it didn't move things "
             "forward. Stop repeating it — take a different approach, or give your final answer."
         }
-    return tools.run_tool(step["name"], step["arguments"], agent_db_path)
+    return tools.run_tool(step["name"], step["arguments"], agent_db_path, allow=allow)
 
 
 def _batches(planned: list[dict]) -> Iterator[list[dict]]:
