@@ -18,7 +18,6 @@ const TABS = [
   "notes",
   "journal",
   "projects",
-  "curiosities",
   "reminders",
   "schedules",
   "people",

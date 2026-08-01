@@ -96,7 +96,6 @@ type Tab =
   | "notes"
   | "journal"
   | "projects"
-  | "curiosities"
   | "reminders"
   | "schedules"
   | "people"
@@ -137,12 +136,10 @@ const KIND_ICON: Record<TimelineKind, ReactNode> = {
   task: <ListChecks className="size-3.5 text-emerald-500" />,
   reminder: <BellRing className="size-3.5 text-orange-500" />,
   message: <MessageCircle className="size-3.5 text-pink-500" />,
-  curiosity: <Sparkles className="size-3.5 text-teal-400" />,
   tool: <Wrench className="size-3.5 text-rose-500" />,
 };
 const TASK_STATUSES = ["backlog", "todo", "doing", "waiting", "done", "dropped"];
 const PROJECT_STATUSES = ["active", "done", "paused", "archived"];
-const CURIOSITY_STATUSES = ["open", "exploring", "explored", "dropped"];
 /** How each kind reads in a "Delete this …?" question. */
 const KIND_LABEL: Record<string, string> = {
   memory: "memory",
@@ -151,7 +148,6 @@ const KIND_LABEL: Record<string, string> = {
   task: "task",
   project: "project",
   milestone: "milestone",
-  curiosity: "curiosity",
   reminder: "reminder",
   schedule: "schedule",
   message: "message",
@@ -171,7 +167,6 @@ const TAB_FOR: Record<string, Tab> = {
   Journal: "journal",
   Projects: "projects",
   Tasks: "projects",
-  Curiosities: "curiosities",
   Reminders: "reminders",
   Schedules: "schedules",
   People: "people",
@@ -476,14 +471,6 @@ export function ControlPanel({
             >
               Journal
             </TabButton>
-            <TabButton
-              icon={<Sparkles className="size-4" />}
-              active={tab === "curiosities"}
-              count={counts.curiosities}
-              onClick={() => openTab("curiosities")}
-            >
-              Curiosities
-            </TabButton>
             {/* What he knows about the people in his life — which is memory, and reads as odd
                 anywhere else. It had a section of its own with one entry in it. */}
             <TabButton
@@ -605,8 +592,6 @@ export function ControlPanel({
                 <Journal snap={snap} query={query} remove={remove} />
               ) : tab === "projects" ? (
                 <Projects {...props} snap={snap} onOpenProject={setOpenProject} />
-              ) : tab === "curiosities" ? (
-                <Curiosities {...props} snap={snap} />
               ) : tab === "reminders" ? (
                 <Reminders {...props} snap={snap} />
               ) : tab === "schedules" ? (
@@ -794,7 +779,6 @@ function Overview({
         ["Memories", c.memories, <Brain className="size-4" />, "violet"],
         ["Notes", c.notes, <StickyNote className="size-4" />, "amber"],
         ["Journal", c.journal, <NotebookPen className="size-4" />, "sky"],
-        ["Curiosities", c.curiosities, <Sparkles className="size-4" />, "teal"],
       ],
     ],
     [
@@ -1261,99 +1245,6 @@ function Journal({
                 ))}
               </div>
             </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-/* ── Curiosities (card grid) ────────────────────────────────────────────── */
-
-function Curiosities({
-  snap,
-  query,
-  remove,
-  create,
-  update,
-}: { snap: BrainSnapshot } & { query: string } & Handlers) {
-  const [topic, setTopic] = useState("");
-  const items = snap.curiosities.filter((c) => matches(query, c.topic, c.note, c.status));
-  const add = () => {
-    if (!topic.trim()) return;
-    create("curiosity", { topic });
-    setTopic("");
-  };
-  return (
-    <>
-      <PageHeader
-        icon={<Sparkles className="size-5" />}
-        color="teal"
-        title="Curiosities"
-        count={items.length}
-        subtitle="Rabbit holes he wants to go down."
-      />
-      <Composer onSubmit={add}>
-        <input
-          value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-          placeholder="Something to be curious about…"
-          className={`${FIELD} flex-1`}
-        />
-        <Button size="sm" onClick={add}>
-          <Plus className="size-4" />
-          Add
-        </Button>
-      </Composer>
-      {items.length === 0 ? (
-        <EmptyState icon={<Sparkles className="size-5" />}>Nothing sparks him yet.</EmptyState>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {items.map((c) => (
-            <ItemMenu
-              key={c.id}
-              title={c.topic}
-              copy={`${c.topic}\n\n${c.note}`}
-              onDelete={() => remove("curiosity", c.id, c.topic)}
-            >
-              <div className="group flex flex-col rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-teal-500/30 hover:shadow-md">
-                <div className="flex items-start gap-2.5">
-                  <span
-                    className={cn(
-                      "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                      CHIP.teal,
-                    )}
-                  >
-                    <Sparkles className="size-4" />
-                  </span>
-                  <span className="min-w-0 flex-1 pt-1 text-sm font-semibold leading-snug">
-                    {c.topic}
-                  </span>
-                  <DeleteButton onClick={() => remove("curiosity", c.id, c.topic)} />
-                </div>
-                <div className="mt-2 pl-[42px] text-sm leading-relaxed text-muted-foreground">
-                  <EditableText
-                    value={c.note}
-                    render={(v) => <Markdown>{v}</Markdown>}
-                    onSave={(v) => update("curiosity", c.id, { note: v })}
-                    multiline
-                    placeholder="(no notes yet)"
-                  />
-                </div>
-                <div className="mt-3 flex items-center gap-2 pl-[42px]">
-                  <Dropdown
-                    value={c.status}
-                    onChange={(v) => update("curiosity", c.id, { status: v })}
-                    options={CURIOSITY_STATUSES}
-                    className="w-32"
-                    ariaLabel="Curiosity status"
-                  />
-                  <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
-                    {when(c.updated_at)}
-                  </span>
-                </div>
-              </div>
-            </ItemMenu>
           ))}
         </div>
       )}

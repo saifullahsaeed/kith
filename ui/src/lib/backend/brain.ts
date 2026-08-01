@@ -137,14 +137,6 @@ export interface Person {
   created_at: string;
   updated_at: string;
 }
-export interface Curiosity {
-  id: number;
-  topic: string;
-  note: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
 export interface Source {
   id: number;
   title: string;
@@ -174,7 +166,6 @@ export interface BrainSnapshot {
   reminders: Reminder[];
   messages: Message[];
   people: Person[];
-  curiosities: Curiosity[];
   sources: Source[];
   schedules: Schedule[];
   projects: Project[];
@@ -183,7 +174,7 @@ export interface BrainSnapshot {
 }
 
 export type TimelineKind =
-  "memory" | "note" | "journal" | "task" | "tool" | "reminder" | "message" | "curiosity";
+  "memory" | "note" | "journal" | "task" | "tool" | "reminder" | "message";
 export interface TimelineEvent {
   kind: TimelineKind;
   at: string;
