@@ -129,6 +129,9 @@ class AutonomyRunner:
         self._focus_id: int | None = None
         self._focus_progress = 0
         self._focus_grind = 0
+        # After a provider error, don't tick again until this monotonic time — a brief backoff
+        # so a flapping upstream (a 502, a rate-limit) isn't hammered every second.
+        self._error_backoff_until = 0.0
         self._last_reply_attempt_id = 0
 
     # -- public control ----------------------------------------------------- #
@@ -325,7 +328,13 @@ class AutonomyRunner:
                 gap_ok = self._last_tick_mono is None or (now - self._last_tick_mono) >= tuning.value(
                     "min_gap"
                 )
-                if gap_ok and (self._has_due() or self._sessions_working()):
+                # Hold off if a provider error just backed us off, so a flapping upstream is
+                # retried in a few seconds rather than every second.
+                if (
+                    gap_ok
+                    and now >= self._error_backoff_until
+                    and (self._has_due() or self._sessions_working())
+                ):
                     self._safe_tick(forced=False)
             except Exception:
                 pass
@@ -701,7 +710,13 @@ class AutonomyRunner:
                 pass
 
         self._detect_stall(active, breaking, tools_used)
-        self._detect_grind(working_task_id, active)
+        if error_msg:
+            # A provider error is not evidence the work is stuck, so it must not count toward
+            # the grind limit; and back the loop off briefly so a flapping upstream isn't hit
+            # again next second.
+            self._error_backoff_until = time.monotonic() + self._ERROR_BACKOFF_SECONDS
+        else:
+            self._detect_grind(working_task_id, active)
         self._emit("done", "step complete", conversation=conversation_id)
 
         # Durable flight recorder — one row per tick, so how he's doing is
@@ -778,6 +793,9 @@ class AutonomyRunner:
     #: per tick: a tick can fire every thirty seconds, and the same true sentence repeated
     #: twenty times is indistinguishable from a fault.
     _BLOCKER_QUIET_SECONDS = 6 * 60 * 60
+
+    #: How long to hold off after a provider error before the loop takes another step.
+    _ERROR_BACKOFF_SECONDS = 15.0
 
     def _say_youre_the_blocker(self, note: str) -> None:
         """Tell you once that he is stuck behind you, then stay quiet about it."""
