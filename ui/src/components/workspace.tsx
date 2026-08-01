@@ -16,6 +16,7 @@ import { InboxPanel } from "@/components/inbox-panel";
 import { MindPanel } from "@/components/mind-panel";
 import { HistoryPanel } from "@/components/history-panel";
 import { SessionBar } from "@/components/session-bar";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { useAutonomy } from "@/hooks/use-autonomy";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
@@ -255,12 +256,17 @@ export function Workspace({
             <div className="flex min-h-0 flex-1">
               {historyOpen ? (
                 <div className="w-64 shrink-0 border-e border-border/60">
-                  <HistoryPanel
-                    activeId={conversationId}
-                    onOpen={(id) => void openConversation(id)}
-                    onNew={newConversation}
-                    onClose={() => setHistoryOpen(false)}
-                  />
+                  {/* One boundary per panel, so a panel that throws takes only itself down.
+                      The chat surviving a broken roadmap graph is the difference between
+                      "one thing is wrong" and "Kith is down". */}
+                  <ErrorBoundary where="Conversations" compact>
+                    <HistoryPanel
+                      activeId={conversationId}
+                      onOpen={(id) => void openConversation(id)}
+                      onNew={newConversation}
+                      onClose={() => setHistoryOpen(false)}
+                    />
+                  </ErrorBoundary>
                 </div>
               ) : null}
               {/* Chat window */}
@@ -273,7 +279,9 @@ export function Workspace({
                   onKeepWorking={() => void autonomy.start(conversationId)}
                   onStop={() => void autonomy.stop(conversationId)}
                 />
-                <Thread />
+                <ErrorBoundary where="The conversation">
+                  <Thread />
+                </ErrorBoundary>
               </div>
               {/* draggable divider */}
               {mindOpen ? (
@@ -289,12 +297,16 @@ export function Workspace({
               ) : null}
               {/* Mind window */}
               {mindOpen ? (
-                <MindPanel
-                  autonomy={autonomy}
-                  conversationId={conversationId}
-                  width={mindWidth}
-                  onClose={() => setMindOpen(false)}
-                />
+                <div style={{ width: mindWidth }} className="shrink-0">
+                  <ErrorBoundary where="Mind" compact>
+                    <MindPanel
+                      autonomy={autonomy}
+                      conversationId={conversationId}
+                      width={mindWidth}
+                      onClose={() => setMindOpen(false)}
+                    />
+                  </ErrorBoundary>
+                </div>
               ) : null}
             </div>
           </div>
@@ -304,23 +316,27 @@ export function Workspace({
         <WorkspaceFileViewer />
         {inboxOpen ? <InboxPanel inbox={inbox} onClose={() => setInboxOpen(false)} /> : null}
         {route.settingsTab ? (
-          <SettingsPage
-            tab={route.settingsTab}
-            config={config}
-            onSelectTab={(t) => navigate(pathForSettings(t))}
-            onSaveConfig={onSaveConfig}
-            onConnectionSaved={onConnectionSaved}
-            onClose={() => navigate(pathForHome())}
-          />
+          <ErrorBoundary where="Settings">
+            <SettingsPage
+              tab={route.settingsTab}
+              config={config}
+              onSelectTab={(t) => navigate(pathForSettings(t))}
+              onSaveConfig={onSaveConfig}
+              onConnectionSaved={onConnectionSaved}
+              onClose={() => navigate(pathForHome())}
+            />
+          </ErrorBoundary>
         ) : null}
         {panelOpen ? (
-          <ControlPanel
-            tab={route.tab}
-            openTask={route.taskId}
-            onSelectTab={(t) => navigate(pathForTab(t))}
-            onOpenTask={(id) => navigate(pathForTask(id))}
-            onClose={() => navigate(pathForHome())}
-          />
+          <ErrorBoundary where="The Control Panel">
+            <ControlPanel
+              tab={route.tab}
+              openTask={route.taskId}
+              onSelectTab={(t) => navigate(pathForTab(t))}
+              onOpenTask={(id) => navigate(pathForTask(id))}
+              onClose={() => navigate(pathForHome())}
+            />
+          </ErrorBoundary>
         ) : null}
       </AssistantRuntimeProvider>
     </TooltipProvider>
