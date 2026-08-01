@@ -1,4 +1,4 @@
-"""Every tool he can call reads as English in the Mind feed.
+"""Every tool he can call reads as English in the Work feed.
 
 Seventeen of the fifty-five did not. Those fell through to the raw `name(arg=value)` string,
 so the feed was half plain prose and half source code, and which you got depended on which
@@ -21,7 +21,7 @@ import re
 from kith import settings
 from kith.tools import registry
 
-# The tables moved out of mind-panel.tsx into a module both surfaces import: the chat thread
+# The tables moved out of tool-language.ts into a module both surfaces import: the chat thread
 # describes the same calls, and while the phrases lived inside the panel the thread rendered
 # them as "1 tool call" and "Used tool: read_skill". One vocabulary, one file to guard.
 PANEL = settings.SERVER_ROOT.parent / "ui" / "src" / "lib" / "tool-language.ts"
@@ -40,7 +40,7 @@ def tool_table() -> str:
 
 
 def phrased_tools() -> set[str]:
-    """The tool names the Mind panel has a phrase for."""
+    """The tool names the Work panel has a phrase for."""
     return set(re.findall(r"^\s{2}([a-z_]+):\s*\{", tool_table(), re.M))
 
 
@@ -48,7 +48,7 @@ def test_every_tool_reads_as_english() -> None:
     registered = {schema["function"]["name"] for schema in registry.schemas()}
     missing = sorted(registered - phrased_tools())
     assert not missing, (
-        "these tools have no phrase in mind-panel.tsx and will print as raw "
+        "these tools have no phrase in tool-language.ts and will print as raw "
         f"name(arg=value) in the live feed: {missing}"
     )
 
@@ -58,7 +58,7 @@ def test_the_table_has_no_entries_for_tools_that_do_not_exist() -> None:
     # A stale entry is harmless at runtime but it is a lie about what he can do, and it hides
     # a rename: the old name keeps its phrase while the new one silently has none.
     stale = sorted(phrased_tools() - registered)
-    assert not stale, f"mind-panel.tsx describes tools that no longer exist: {stale}"
+    assert not stale, f"tool-language.ts describes tools that no longer exist: {stale}"
 
 
 def test_the_subject_of_each_verb_is_a_real_argument() -> None:

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   AlarmClock,
-  Brain,
   CircleDot,
   PanelRightClose,
   Square,
@@ -118,8 +118,9 @@ function groupTicks(activity: ActivityItem[]): Tick[] {
   return ticks;
 }
 
-/** The Mind window: watch Kith think and act, in the session you are looking at. */
-export function MindPanel({
+/** The Work panel: what he is doing when nobody is talking to him, in the session you
+ *  are looking at. Named for what it shows — his memory lives in the control panel. */
+export function WorkPanel({
   autonomy,
   conversationId = "",
   width,
@@ -175,11 +176,15 @@ export function MindPanel({
       {/* header */}
       <div className="flex items-center gap-2.5 border-b border-border/60 px-4 py-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-kith">
-          <Brain className="size-4" />
+          <Activity className="size-4" />
         </span>
         <div className="min-w-0 flex-1 leading-tight">
+          {/* "Work", not "Mind". This panel is ticks, tool calls and token spend — what he
+              does when nobody is talking to him. His actual mind (memories, notes, journal)
+              is the group of that name in the control panel, and having both called Mind
+              meant the word told you nothing about which one you were looking at. */}
           <div className="flex items-center gap-2 text-sm font-semibold">
-            Mind
+            Work
             {working ? (
               <span className="text-roam inline-flex items-center gap-1 text-[11px] font-normal">
                 <span className="bg-roam size-1.5 animate-pulse rounded-full" />
@@ -199,7 +204,7 @@ export function MindPanel({
           size="icon"
           className="size-7 text-muted-foreground hover:text-foreground"
           onClick={onClose}
-          aria-label="Collapse Mind"
+          aria-label="Collapse the work panel"
         >
           <PanelRightClose className="size-4" />
         </Button>
@@ -305,34 +310,36 @@ export function MindPanel({
       <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {ticks.length === 0 ? (
           /* Everything in the middle, together.
-             This panel is four hundred pixels wide and it is open by default, so an idle Mind
+             This panel is four hundred pixels wide and it is open by default, so an idle feed
              was most of a column of nothing with one sentence adrift in it. The way out of the
              empty state belongs inside the empty state — and when the reason this conversation
              is quiet is that the work is happening in another one, saying so beats saying
              nothing at all. */
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <span className="flex size-11 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
-              <Brain className="size-5" />
+              <Activity className="size-5" />
             </span>
-            <p className="max-w-[16rem] text-sm text-muted-foreground">
+            {/* No button here, and that is the fix rather than an omission. This one said
+                "Run a step", the one in the bar a few pixels above says "Run", and both
+                called the same function — so the first thing anyone saw on an empty feed was
+                two differently-named buttons that did the same thing, which is worse than one
+                unexplained button. The empty state says where the controls are; the controls
+                stay in one place. */}
+            <p className="max-w-[17rem] text-sm text-muted-foreground">
               {conversationId ? (
                 <>
                   Nothing here yet in this conversation. Talk to him, or hit{" "}
                   <span className="text-foreground font-medium">Keep working</span> above the
-                  thread to let him carry on by himself.
+                  thread and he carries on by himself until it is done or you stop him.
                 </>
               ) : (
                 <>
-                  His mind is quiet. Take a self-directed step and watch what he does with it.
+                  Quiet for now. <span className="text-foreground font-medium">Run</span> takes
+                  one step; <span className="text-foreground font-medium">Keep working</span> on
+                  a conversation lets him carry on by himself.
                 </>
               )}
             </p>
-            {!ticking ? (
-              <Button size="sm" variant="outline" onClick={() => void tick()}>
-                <Zap className="size-3.5" />
-                Run a step
-              </Button>
-            ) : null}
             {hidden > 0 && !everything ? (
               <button
                 type="button"

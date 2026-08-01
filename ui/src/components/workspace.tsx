@@ -13,7 +13,7 @@ import { ControlPanel } from "@/components/control-panel";
 import { SettingsPage } from "@/components/settings/settings-page";
 import { WorkspaceFileViewer } from "@/components/workspace-file-viewer";
 import { InboxPanel } from "@/components/inbox-panel";
-import { MindPanel } from "@/components/mind-panel";
+import { WorkPanel } from "@/components/work-panel";
 import { HistoryPanel } from "@/components/history-panel";
 import { SessionBar } from "@/components/session-bar";
 import { DropZone } from "@/components/drop-zone";
@@ -57,7 +57,7 @@ const HISTORY_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + 96; // 912
  * reloaded, which is the one thing a window is supposed to be good at. */
 const LAST_CONVERSATION = "kith-conversation";
 
-/** The ready-state app: chat runtime, header, and the autonomy ("Mind") panel.
+/** The ready-state app: chat runtime, header, and the autonomy ("Work") panel.
  * Split out so its hooks only run once the backend is reachable. */
 export function Workspace({
   config,
@@ -161,7 +161,7 @@ export function Workspace({
   const [mindOpen, setMindOpen] = useState(true);
   const [mindWidth, setMindWidth] = useState(() => {
     try {
-      const v = Number(localStorage.getItem("kith-mind-width"));
+      const v = Number(localStorage.getItem("kith-work-width"));
       return v >= MIND_MIN && v <= MIND_MAX ? v : MIND_DEFAULT;
     } catch {
       return MIND_DEFAULT;
@@ -230,7 +230,7 @@ export function Workspace({
       document.body.style.cursor = "";
       setMindWidth((w) => {
         try {
-          localStorage.setItem("kith-mind-width", String(w));
+          localStorage.setItem("kith-work-width", String(w));
         } catch {
           /* ignore */
         }
@@ -381,7 +381,7 @@ export function Workspace({
                   className="group relative z-10 w-1.5 shrink-0 cursor-col-resize"
                   role="separator"
                   aria-orientation="vertical"
-                  aria-label="Resize Mind window"
+                  aria-label="Resize the work panel"
                 >
                   <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/60 transition-colors group-hover:bg-kith/60 group-active:bg-kith" />
                 </div>
@@ -389,8 +389,8 @@ export function Workspace({
               {/* Mind window */}
               {mindVisible ? (
                 <div style={{ width: mindRoom }} className="shrink-0">
-                  <ErrorBoundary where="Mind" compact>
-                    <MindPanel
+                  <ErrorBoundary where="Work" compact>
+                    <WorkPanel
                       autonomy={autonomy}
                       conversationId={conversationId}
                       width={mindRoom}

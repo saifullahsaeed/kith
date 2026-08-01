@@ -1,7 +1,7 @@
 /**
  * What each of Kith's tools did, in English, with an icon for the kind of work it was.
  *
- * This lived inside mind-panel.tsx, which meant the Mind feed said "read ~/Kith/cv.pdf" while
+ * This lived inside what is now work-panel.tsx, which meant the Work feed said "read ~/Kith/cv.pdf" while
  * the chat thread — the bigger, louder surface, describing the very same call — said "1 tool
  * call", and said "Used tool: read_skill" when you opened it. The good vocabulary was in the
  * quiet panel and the raw one was in the prominent panel. They are the same events, so they
