@@ -281,7 +281,7 @@ class _Recorder:
         # Anything else ends whatever block was open, so ordering survives.
         self._flush()
         if kind in ("tool_call", "tool_result", "stats"):
-            conversations.record_event(self.conversation_id, kind, event)
+            conversations.record_event(self.conversation_id, kind, _readable(event))
 
     def finish(self, error: str | None = None, stopped: bool = False) -> None:
         self._flush()
@@ -308,6 +308,30 @@ class _Recorder:
             conversations.record_event(self.conversation_id, "said", {"text": text})
             self.said.append(text)
         self.channel = ""
+
+
+def _readable(event: dict) -> dict:
+    """One transcript line, with a picture's bytes left out of it.
+
+    The conversation stopped carrying base64 when the image leak was fixed, and the
+    transcript went on storing every byte: a six-round turn that looked at one page came to
+    360KB, of which 344,943 was a single string.
+
+    That is not a context cost — nothing re-reads it — but it is against the whole point of
+    the file. The reason transcripts are plain-text JSONL rather than rows in a table is that
+    you can grep them, open them in an editor, and still read them in ten years. One `grep`
+    hit that prints 345,000 characters of base64 is none of those things, and it is bytes on
+    disk forever for every image he ever looks at.
+
+    Nothing is lost. The path is in the same record, the file is in his folder, and the
+    interface only ever tested this field for truthiness to say "looked at it" — it never
+    rendered the data URI. So the trail still says which image, when, and that he saw it.
+    """
+    if event.get("type") != "tool_result":
+        return event
+    from kith.services.agent_loop import _without_image
+
+    return {**event, "result": _without_image(event.get("result"))}
 
 
 class _MindFeed:

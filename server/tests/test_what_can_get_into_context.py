@@ -13,6 +13,7 @@ was in the wrong place and cost everything while saving nothing.
 from __future__ import annotations
 
 import inspect
+import json
 import re
 from typing import ClassVar
 
@@ -160,3 +161,58 @@ class TestReadingASkill:
         whole value and this must never be trimming a real one."""
         body = skills.read(skill)["instructions"]
         assert "more characters of this skill" not in body
+
+
+class TestTheTranscriptStaysReadable:
+    """The transcript is plain-text JSONL so you can grep it, open it, and read it in ten
+    years. One grep hit that prints 345,000 characters of base64 is none of those.
+
+    Not a context cost — nothing re-reads the transcript into a prompt — but a six-round turn
+    that looked at one page came to 360KB, of which 344,943 was a single string, and that is
+    bytes on disk forever for every image he ever opens.
+    """
+
+    def event(self) -> dict:
+        return {
+            "type": "tool_result",
+            "id": "c1",
+            "name": "read_file",
+            "result": {
+                "ok": True,
+                "result": {
+                    "path": "/w/rendered/page-1.png",
+                    "bytes": 258_000,
+                    "image": "data:image/png;base64," + "Q" * 344_000,
+                },
+            },
+        }
+
+    def test_the_bytes_do_not_reach_the_file(self):
+        from kith.api.routes.chat import _readable
+
+        line = json.dumps(_readable(self.event()))
+        assert "QQQQ" not in line
+        assert len(line) < 1_000
+
+    def test_but_the_trail_still_says_which_image_and_that_he_saw_it(self):
+        from kith.api.routes.chat import _readable
+
+        kept = _readable(self.event())["result"]["result"]
+        assert kept["path"] == "/w/rendered/page-1.png"
+        assert kept["bytes"] == 258_000
+        # The interface tests this field for truthiness to render "looked at it". Emptying it
+        # would silently turn every past image read into an ordinary file read.
+        assert kept["image"]
+
+    def test_a_result_with_no_picture_is_recorded_exactly_as_it_came(self):
+        from kith.api.routes.chat import _readable
+
+        plain = {"type": "tool_result", "name": "shell", "result": {"ok": True, "result": "hello"}}
+        assert _readable(plain) == plain
+
+    def test_other_kinds_of_event_are_untouched(self):
+        from kith.api.routes.chat import _readable
+
+        for kind in ("tool_call", "stats"):
+            event = {"type": kind, "name": "x", "arguments": {"a": 1}}
+            assert _readable(event) == event
