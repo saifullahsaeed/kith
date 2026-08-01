@@ -101,6 +101,15 @@ _WORK = {
     "changes",
     "commit",
     "check_code",
+    # Whether it *works*, as opposed to whether it compiles. Without this he could typecheck,
+    # lint and build, and never run a test — so "finished" rested on the code being
+    # well-formed, which is the weakest evidence available and the one that looks strongest.
+    "run_tests",
+    # Long-running things, and being able to see them. `nohup … &` starts a dev server and
+    # then leaves him blind to whether it is serving or died on a port collision.
+    "start_process",
+    "check_process",
+    "stop_process",
     # Reading code as structure rather than as text. `outline` before `read_file` is the
     # single biggest thing he can do for his own attention: a 2,000-line module costs the
     # module on every remaining round, and its shape costs a paragraph.

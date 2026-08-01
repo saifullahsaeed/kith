@@ -149,6 +149,13 @@
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: translateY(0); }
   }
+  /* The pad under the paperclip while a file is over the window: a ring that swells outward
+     and fades, so the target reads as live rather than as a static dashed box. */
+  @keyframes kith-drop-pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--kith) 34%, transparent); }
+    70% { box-shadow: 0 0 0 18px color-mix(in oklab, var(--kith) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--kith) 0%, transparent); }
+  }
 }
 
 @layer base {
@@ -212,6 +219,18 @@
 }
 .kith-orb[data-idle="true"]::after {
   animation-duration: 6.5s;
+}
+
+/* The drop target's pad. Dashed to say "put it here", in his amber, breathing. */
+.kith-drop-ring {
+  border: 2px dashed color-mix(in oklab, var(--kith) 55%, transparent);
+  background: color-mix(in oklab, var(--kith) 12%, transparent);
+  animation: kith-drop-pulse 1.7s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kith-drop-ring {
+    animation: none;
+  }
 }
 
 /* Ambient wash behind the whole room — leans amber when awake, green while

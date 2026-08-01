@@ -16,6 +16,7 @@ import { InboxPanel } from "@/components/inbox-panel";
 import { MindPanel } from "@/components/mind-panel";
 import { HistoryPanel } from "@/components/history-panel";
 import { SessionBar } from "@/components/session-bar";
+import { DropZone } from "@/components/drop-zone";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { useAutonomy } from "@/hooks/use-autonomy";
 import { useMessages } from "@/hooks/use-messages";
@@ -401,6 +402,10 @@ export function Workspace({
             </div>
           </div>
         </div>
+        {/* Drop a file anywhere in the window and it lands on the composer. Disabled — but
+            still swallowing the drop — while something is covering the thread, since attaching
+            to a composer nobody can see is a file that has vanished. */}
+        <DropZone enabled={!route.settingsTab && !panelOpen && !inboxOpen} />
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. */}
         <WorkspaceFileViewer />

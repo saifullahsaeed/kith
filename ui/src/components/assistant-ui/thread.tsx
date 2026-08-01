@@ -249,35 +249,37 @@ const Composer: FC = () => {
   const composer = useComposerRuntime();
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <ComposerPrimitive.AttachmentDropzone asChild>
-        <div
-          data-slot="aui_composer-shell"
-          // A full-strength border and a real focus ring, rather than border/60 and a shadow.
-          // On warm paper a 60% border over a card that barely differs from the background was
-          // a suggestion of an input; you had to know it was there.
-          className="border-border data-[dragging=true]:border-ring dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:shadow-none"
-        >
-          <ComposerAttachmentStrip />
-          <ComposerPrimitive.Input
-            placeholder="say something to Kith…"
-            className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
-            rows={1}
-            autoFocus
-            enterKeyHint="send"
-            aria-label="Message input"
-            // A screenshot on the clipboard is the other thing people try after dragging, and
-            // Cmd-V into a textarea otherwise does nothing at all for an image — no error, no
-            // attachment, which reads as the app ignoring you.
-            onPaste={(event) => {
-              const files = Array.from(event.clipboardData?.files ?? []);
-              if (!files.length) return;
-              event.preventDefault();
-              for (const file of files) void composer.addAttachment(file);
-            }}
-          />
-          <ComposerAction />
-        </div>
-      </ComposerPrimitive.AttachmentDropzone>
+      {/* No `AttachmentDropzone` around this. It made this box the only place in the window
+          that would take a file, which is the smallest and least obvious target on screen —
+          and keeping it alongside the window-wide handler in `DropZone` would mean a file let
+          go on the composer landed twice. One listener, one path, the whole window. */}
+      <div
+        data-slot="aui_composer-shell"
+        // A full-strength border and a real focus ring, rather than border/60 and a shadow.
+        // On warm paper a 60% border over a card that barely differs from the background was
+        // a suggestion of an input; you had to know it was there.
+        className="border-border dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] dark:shadow-none"
+      >
+        <ComposerAttachmentStrip />
+        <ComposerPrimitive.Input
+          placeholder="say something to Kith…"
+          className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
+          rows={1}
+          autoFocus
+          enterKeyHint="send"
+          aria-label="Message input"
+          // A screenshot on the clipboard is the other thing people try after dragging, and
+          // Cmd-V into a textarea otherwise does nothing at all for an image — no error, no
+          // attachment, which reads as the app ignoring you.
+          onPaste={(event) => {
+            const files = Array.from(event.clipboardData?.files ?? []);
+            if (!files.length) return;
+            event.preventDefault();
+            for (const file of files) void composer.addAttachment(file);
+          }}
+        />
+        <ComposerAction />
+      </div>
       <ComposerHint />
     </ComposerPrimitive.Root>
   );
