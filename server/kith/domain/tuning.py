@@ -191,6 +191,19 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="characters",
     ),
     Tunable(
+        key="keep_images",
+        env="KITH_KEEP_IMAGES",
+        label="Pictures kept in view",
+        help="How many of the most recent images stay in the conversation. A picture costs "
+        "far more than the sentence he writes about it, and once he has looked and said what "
+        "he saw the pixels are dead weight that re-sends on every round.",
+        default=2,
+        group="memory",
+        minimum=0,
+        maximum=20,
+        unit="images",
+    ),
+    Tunable(
         key="keep_full_tool_results",
         env="KITH_KEEP_FULL_TOOL_RESULTS",
         label="Recent results always kept whole",

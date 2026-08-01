@@ -235,6 +235,45 @@ def _record(stats: dict | None) -> None:
     _usage["calls"] += 1
 
 
+def _compact_images(convo: list[dict[str, Any]]) -> None:
+    """Let go of pictures he has already looked at.
+
+    An image rides as its own user message, and `_compact_tool_history` only ever walked
+    messages with ``role == "tool"`` — so a picture, once in, re-sent in full on every
+    remaining round of the turn and nothing could take it out. Fifteen rounds of that is
+    fifteen times the cost of looking once.
+
+    Dropping it is safe in a way dropping a tool result is not: he has already seen it, and
+    the round he saw it in is where he says what it showed. That sentence stays. If he needs
+    another look the file is still on disk and reading it again costs one image, not fifteen.
+
+    The label is kept — "Here is work/page-1.jpg:" — so he can tell the difference between a
+    picture he looked at and one he never opened.
+    """
+    keep = tuning.value("keep_images")
+    seen = [i for i, m in enumerate(convo) if _carries_image(m)]
+    stale = seen[:-keep] if keep > 0 else seen
+    for i in stale:
+        parts = convo[i].get("content")
+        if not isinstance(parts, list):
+            continue
+        label = next(
+            (p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") == "text"),
+            "An image was here.",
+        )
+        convo[i]["content"] = (
+            f"{label} [you looked at this picture earlier; it has been set down to save room. "
+            "Read the file again if you need another look.]"
+        )
+
+
+def _carries_image(message: dict[str, Any]) -> bool:
+    parts = message.get("content")
+    return isinstance(parts, list) and any(
+        isinstance(part, dict) and part.get("type") == "image_url" for part in parts
+    )
+
+
 def _compact_tool_history(convo: list[dict[str, Any]]) -> None:
     """Stub the oldest tool outputs once the live set outgrows its char budget.
 
@@ -323,6 +362,8 @@ def stream_agent(
         # dozens of pages in context, and keeps the loop affordable enough to reach
         # the "compile & deliver" phase.
         _compact_tool_history(convo)
+        # Pictures are their own channel and were never pruned by anything. See above.
+        _compact_images(convo)
         # Re-read tools each round so a tool Kith just built is usable right away.
         # `allow` scopes the toolset to the current mode (fewer tokens, sharper focus).
         schemas = tools.tool_schemas(agent_db_path, only=allow)
@@ -444,13 +485,13 @@ def stream_agent(
                     # A tool result is a JSON string and cannot carry an image part, so the
                     # picture arrives as the next message instead. Without this he could take a
                     # screenshot and never see it — which is exactly what he was doing while
-                    # redesigning a UI. The data URI is stripped from the tool result so the
-                    # same 600KB is not also sitting in the transcript as base64 text.
+                    # redesigning a UI. The data URI is taken out of the tool result so the
+                    # same 600KB is not also sitting there as base64 text.
                     convo.append(
                         {
                             "role": "tool",
                             "tool_name": step["name"],
-                            "content": json.dumps({**result, "image": "(shown below)"}),
+                            "content": json.dumps(_without_image(result)),
                         }
                     )
                     convo.append(
@@ -481,6 +522,44 @@ def _image_from(result: Any) -> str:
     inner = result.get("result") if isinstance(result.get("result"), dict) else result
     value = inner.get("image") if isinstance(inner, dict) else None
     return value if isinstance(value, str) and value.startswith("data:image/") else ""
+
+
+def _is_data_uri(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("data:image/")
+
+
+def _without_image(result: Any) -> Any:
+    """The tool result with the base64 taken out, at whichever level it sits.
+
+    This existed as ``{**result, "image": "(shown below)"}`` and did nothing, which cost a
+    real afternoon and is worth writing down. A tool result arrives wrapped — ``{"ok": true,
+    "result": {...}}`` — and the data URI is on the *inner* dict. Spreading the outer one and
+    setting ``image`` there added a decorative key beside the envelope and left all 228,000
+    characters of base64 exactly where they were.
+
+    So every picture went into the conversation twice: once as a real image part, which a
+    provider counts as a few hundred tokens, and once as raw base64 text, which it counts at
+    roughly one token per character. Measured on the turn that found this: the prompt went
+    from 61,844 tokens to 616,415 in a single round and stayed there for fifteen more —
+    2.8 million tokens to look at three pages of a CV, with the comment directly above the
+    line claiming the opposite.
+
+    Both levels are cleared, because being right about only the shape we happen to send today
+    is what produced the bug in the first place.
+    """
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+    inner = out.get("result")
+    if isinstance(inner, dict) and _is_data_uri(inner.get("image")):
+        out["result"] = {**inner, "image": _SHOWN}
+    if _is_data_uri(out.get("image")):
+        out["image"] = _SHOWN
+    return out
+
+
+#: What replaces a data URI once the picture is travelling as a real image part.
+_SHOWN = "(shown to you as a picture below)"
 
 
 def _run(step: dict, agent_db_path: Path) -> Any:
