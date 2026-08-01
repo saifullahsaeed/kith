@@ -133,6 +133,8 @@ class AutonomyRunner:
         # so a flapping upstream (a 502, a rate-limit) isn't hammered every second.
         self._error_backoff_until = 0.0
         self._last_reply_attempt_id = 0
+        # When the focused task's status was last checked mid-step. See `_task_moved_on`.
+        self._last_freshness_check = 0.0
 
     # -- public control ----------------------------------------------------- #
 
@@ -162,6 +164,31 @@ class AutonomyRunner:
         self.ensure_loop()
         self._emit("status", "working")
         return self.status()
+
+    def nudge(self, conversation_id: str = "", why: str = "") -> None:
+        """Something happened that this session should get on with.
+
+        The loop only wakes for a session that is *working*, and that used to be settable
+        only by a button. So filing a task in a conversation did nothing until someone found
+        and pressed a control whose two copies both called the same function — you asked for
+        a thing, he wrote it down, and then both of you waited.
+
+        Distinct from `keep_working`, deliberately, and the difference is the token meter.
+        Starting work zeroes the budget on purpose so a resumed session is not instantly
+        capped by an earlier run; doing that on every task filed would mean the cap could
+        never be reached at all. A nudge starts the loop and leaves the meter alone.
+
+        A session stopped for budget stays stopped. That cap exists to be hit, and an event
+        arriving afterwards is not a reason to spend past it.
+        """
+        if not conversation_id or conversation_id in self._session_capped:
+            return
+        try:
+            repo.conversations.set_working(AGENT_DB_PATH, conversation_id, True)
+        except Exception:
+            return  # bookkeeping; never take down the thing that triggered it
+        self.ensure_loop()
+        self._emit("status", why or "working", conversation=conversation_id)
 
     def rest(self, conversation_id: str = "") -> dict:
         """Stop taking steps. One session, or all of them when none is named.
@@ -496,6 +523,13 @@ class AutonomyRunner:
         # Which task this tick actually WORKS (the `active` branch below), for grind
         # detection. Stays None on every other mode — reply, plan, breakout, idle.
         working_task_id: int | None = None
+        # Which project this tick is *on*, which is not the same as which project its session
+        # is bound to. An unbound session picks up a task in someone's folder-linked project
+        # and `project` above is None — so before this, the tick got neither that project's
+        # folder (`base_dir` fell back to ~/Kith, and every relative path he wrote went there)
+        # nor its `.kith/memory.md` (nothing to look it up by). Both failures came from asking
+        # the conversation a question only the task could answer.
+        working_project: int | None = project
         if pending:
             mode, self._current = "reply", f"replying: {pending[0]['body'][:40]}"
             directive, prompt = directives.REPLY, _reply_prompt(pending)
@@ -503,6 +537,7 @@ class AutonomyRunner:
         elif resuming:
             mode, self._current = "reply", f"picking up: {awaiting[0]['goal'][:40]}"
             directive, prompt = directives.RESUME, _resume_prompt(awaiting)
+            working_project = working_project or self._project_of(awaiting[0])
         elif due:
             label = schedules_due[0]["note"] if schedules_due else reminders_due[0]["note"]
             mode, self._current = "start", f"due: {label}"
@@ -513,6 +548,7 @@ class AutonomyRunner:
         elif active:
             focus = repo.tasks.task_detail(AGENT_DB_PATH, active[0]["id"]) or active[0]
             working_task_id = active[0]["id"]
+            working_project = working_project or self._project_of(focus) or self._project_of(active[0])
             mode, self._current = "start", f"working on: {focus['goal']}"
             directive, prompt = directives.WORK, _focus_prompt(focus, active)
         elif unplanned:
@@ -520,6 +556,7 @@ class AutonomyRunner:
             # next thing — and above every kind of inner life, because a project nobody can
             # act on is not a reason to go and reflect.
             next_up = unplanned[0]
+            working_project = working_project or self._project_of(next_up)
             mode, self._current = "start", f"planning: {next_up['title'][:40]}"
             directive, prompt = directives.WORK, _breakdown_prompt(next_up)
         else:
@@ -579,7 +616,7 @@ class AutonomyRunner:
         # was visible while you were watching and invisible the moment he was on his own,
         # which is precisely backwards. The unattended step is the one with nobody to remind
         # him how the thing is built.
-        blocks.append(self._project_memory(project))
+        blocks.append(self._project_memory(working_project))
         state = "\n\n".join(block for block in blocks if block).strip()
         messages = [{"role": "system", "content": f"{config.system}\n\n{directive}"}]
         if state:
@@ -612,75 +649,92 @@ class AutonomyRunner:
         cancelled = False
         started = time.monotonic()
         journal_before = _latest_journal_id()
-        for event in stream_agent(
-            messages,
-            tick_config,
-            ollama_host(),
-            AGENT_DB_PATH,
-            max_rounds=16,
-            allow=_ALLOW.get(mode),
-            # A tick that leaves nothing behind is a tick that will be repeated.
-            expect_durable=True,
-            # Which OpenRouter stickiness id this step lands on. Chat has always passed
-            # its conversation and a tick passed nothing, falling through to the one
-            # install-wide id — so a session's chat turns and that same session's ticks
-            # were guaranteed to be on different upstream hosts, each keeping its own copy
-            # of the persona. The cacheable region is the persona and nothing else (see
-            # caching.stable_head), and it is byte-identical between the two, so they were
-            # paying to warm the same bytes twice. Empty for a step run from "Run" with
-            # nobody working, which falls back to the install-wide id exactly as before.
-            conversation_id=conversation_id,
-        ):
-            # Cancellation happens here rather than inside the agent loop, because here it
-            # is safe by construction: stream_agent is a generator, so abandoning it stops
-            # it between events. A tool call that has already run has already finished —
-            # nothing is left half-applied, and no file is half-written.
-            if self._cancel.is_set():
-                cancelled = True
-                self._emit("status", "stopped", conversation=conversation_id)
-                break
-            kind = event["type"]
-            if kind == "tool_call":
-                tools_used.append(event["name"])
-                # The name and arguments go along as fields, not only squashed into the
-                # sentence. The interface used to recover the name by splitting the string on
-                # "(" and throwing away everything after it — so every file he read showed as
-                # "read a file" and every command as "ran a command", with the one piece of
-                # information worth having discarded on arrival. Parsing prose back into data
-                # is also unreliable: a value containing ", " breaks the split.
-                self._emit(
-                    "tool",
-                    _describe_call(event["name"], event["arguments"]),
-                    tool=event["name"],
-                    args=_short_args(event["arguments"]),
-                    conversation=conversation_id,
-                )
-            elif kind == "delta" and event["role"] == "text":
-                final_text += event["text"]
-            elif kind == "stats":
-                # One of these per model request, so this is where a tick's rounds
-                # become visible individually rather than as a single lump at the end.
-                stats = event.get("stats") or {}
-                fresh = int(stats.get("uncachedTokens") or 0)
-                tick_in += int(stats.get("promptTokens") or 0)
-                tick_out += int(stats.get("responseTokens") or 0)
-                tick_uncached += fresh
-                tick_cost += float(stats.get("costUsd") or 0.0)
-                rounds += 1
-                self._emit(
-                    "tokens",
-                    f"{fresh + int(stats.get('responseTokens') or 0):,} tokens",
-                    tokens={
-                        "round": rounds,
-                        "uncached": fresh,
-                        "cached": int(stats.get("cachedTokens") or 0),
-                        "out": int(stats.get("responseTokens") or 0),
-                    },
-                    conversation=conversation_id,
-                )
-            elif kind == "error":
-                error_msg = event["message"]
-                self._emit("error", event["message"], conversation=conversation_id)
+        # Tools run inside this loop, and `base_dir()` reads the project from here — this
+        # is what makes a relative path he writes land in the project rather than in his
+        # own folder. Bound for the duration of the step only; see `working_on`.
+        with session_context.working_on(working_project):
+            for event in stream_agent(
+                messages,
+                tick_config,
+                ollama_host(),
+                AGENT_DB_PATH,
+                max_rounds=16,
+                allow=_ALLOW.get(mode),
+                # A tick that leaves nothing behind is a tick that will be repeated.
+                expect_durable=True,
+                # Which OpenRouter stickiness id this step lands on. Chat has always passed
+                # its conversation and a tick passed nothing, falling through to the one
+                # install-wide id — so a session's chat turns and that same session's ticks
+                # were guaranteed to be on different upstream hosts, each keeping its own copy
+                # of the persona. The cacheable region is the persona and nothing else (see
+                # caching.stable_head), and it is byte-identical between the two, so they were
+                # paying to warm the same bytes twice. Empty for a step run from "Run" with
+                # nobody working, which falls back to the install-wide id exactly as before.
+                conversation_id=conversation_id,
+            ):
+                # Cancellation happens here rather than inside the agent loop, because here it
+                # is safe by construction: stream_agent is a generator, so abandoning it stops
+                # it between events. A tool call that has already run has already finished —
+                # nothing is left half-applied, and no file is half-written.
+                if self._cancel.is_set():
+                    cancelled = True
+                    self._emit("status", "stopped", conversation=conversation_id)
+                    break
+                # The task can change under him while he works it. A tick reads the board once
+                # and then runs for a couple of minutes, so blocking a task, sending it back to
+                # the backlog or closing it yourself all used to be invisible — he carried on
+                # against a picture that was true when he started and was not any more. Pulling
+                # a task out from under him is a clear instruction to stop touching it, and it
+                # should not have to wait for him to finish first.
+                if working_task_id and self._task_moved_on(working_task_id):
+                    self._emit(
+                        "status",
+                        "stopping — that task changed while I was on it",
+                        conversation=conversation_id,
+                    )
+                    break
+                kind = event["type"]
+                if kind == "tool_call":
+                    tools_used.append(event["name"])
+                    # The name and arguments go along as fields, not only squashed into the
+                    # sentence. The interface used to recover the name by splitting the string on
+                    # "(" and throwing away everything after it — so every file he read showed as
+                    # "read a file" and every command as "ran a command", with the one piece of
+                    # information worth having discarded on arrival. Parsing prose back into data
+                    # is also unreliable: a value containing ", " breaks the split.
+                    self._emit(
+                        "tool",
+                        _describe_call(event["name"], event["arguments"]),
+                        tool=event["name"],
+                        args=_short_args(event["arguments"]),
+                        conversation=conversation_id,
+                    )
+                elif kind == "delta" and event["role"] == "text":
+                    final_text += event["text"]
+                elif kind == "stats":
+                    # One of these per model request, so this is where a tick's rounds
+                    # become visible individually rather than as a single lump at the end.
+                    stats = event.get("stats") or {}
+                    fresh = int(stats.get("uncachedTokens") or 0)
+                    tick_in += int(stats.get("promptTokens") or 0)
+                    tick_out += int(stats.get("responseTokens") or 0)
+                    tick_uncached += fresh
+                    tick_cost += float(stats.get("costUsd") or 0.0)
+                    rounds += 1
+                    self._emit(
+                        "tokens",
+                        f"{fresh + int(stats.get('responseTokens') or 0):,} tokens",
+                        tokens={
+                            "round": rounds,
+                            "uncached": fresh,
+                            "cached": int(stats.get("cachedTokens") or 0),
+                            "out": int(stats.get("responseTokens") or 0),
+                        },
+                        conversation=conversation_id,
+                    )
+                elif kind == "error":
+                    error_msg = event["message"]
+                    self._emit("error", event["message"], conversation=conversation_id)
         self._tokens_in += tick_in
         self._tokens_out += tick_out
         self._tokens_uncached += tick_uncached
@@ -887,8 +941,39 @@ class AutonomyRunner:
                 self._emit("breakout", f"set aside — {self._focus_grind} steps, no progress: {given_up}")
             self._focus_id, self._focus_grind = None, 0
 
+    def _task_moved_on(self, task_id: int) -> bool:
+        """Has the task he is working stopped being his to work?
+
+        Throttled rather than checked on every event: it is one indexed read, but a tick fires
+        events continuously and there is no reason to ask twice in the same second. A person
+        blocking a task will wait two seconds for him to notice; nobody will notice the delay.
+
+        Answers False on any failure. Interrupting real work because a status lookup hiccupped
+        is a far worse outcome than finishing a step that should have stopped.
+        """
+        now = time.monotonic()
+        if now - self._last_freshness_check < 2.0:
+            return False
+        self._last_freshness_check = now
+        try:
+            row = repo.tasks.task_detail(AGENT_DB_PATH, task_id)
+        except Exception:
+            return False
+        if not row:
+            return True  # deleted under him
+        return str(row.get("status") or "") not in ("todo", "doing")
+
+    @staticmethod
+    def _project_of(row: dict | None) -> int | None:
+        """The project a task or milestone belongs to, if it says."""
+        try:
+            value = (row or {}).get("project_id")
+            return int(value) if value else None
+        except (TypeError, ValueError):
+            return None
+
     def _project_memory(self, project: int | None) -> str:
-        """`.kith/memory.md` for the project this session is on, or nothing."""
+        """`.kith/memory.md` for the project this tick is working on, or nothing."""
         if not project:
             return ""
         try:

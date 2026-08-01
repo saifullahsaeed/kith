@@ -99,6 +99,32 @@ def project_of(path: Path, conversation_id: str) -> int | None:
         return int(row.project_id) if row is not None and row.project_id else None
 
 
+def session_for_project(path: Path, project_id: int | None) -> str:
+    """The session driving this project, or the most recent session if none is bound.
+
+    Used to decide who should hear about something that happened to a task. With two projects
+    going, "wake a session" is not good enough — the one that should answer is the one working
+    that project, and waking the other means the answer arrives in the wrong conversation
+    against the wrong folder.
+
+    Falls back to the newest conversation, because a task with no project still belongs to
+    whoever is here, and answering in the last place someone was talking beats answering
+    nowhere.
+    """
+    with session(path) as db:
+        if project_id:
+            row = db.scalars(
+                select(Conversation)
+                .where(Conversation.project_id == int(project_id))
+                .order_by(Conversation.updated_at.desc())
+                .limit(1)
+            ).first()
+            if row is not None:
+                return str(row.id)
+        newest = db.scalars(select(Conversation).order_by(Conversation.updated_at.desc()).limit(1)).first()
+        return str(newest.id) if newest is not None else ""
+
+
 def set_working(path: Path, conversation_id: str, working: bool) -> None:
     """Whether he takes the next step here without being asked again.
 

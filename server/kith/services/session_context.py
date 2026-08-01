@@ -22,11 +22,25 @@ from contextvars import ContextVar
 from pathlib import Path
 
 _current: ContextVar[str] = ContextVar("kith_conversation", default="")
+_project: ContextVar[int | None] = ContextVar("kith_project", default=None)
 
 
 def current() -> str:
     """The conversation this work belongs to, or "" when nothing claims it."""
     return _current.get()
+
+
+def current_project() -> int | None:
+    """The project this work is on, when it is narrower than the conversation's.
+
+    A tick picks a task, and that task belongs to a project — which is not necessarily the
+    project its *session* is bound to, and for an unbound session is not any project at all.
+    Everything downstream that asks "where am I working" used to resolve it through the
+    conversation, so a tick working a task in a folder-linked project got the folder of
+    whatever the conversation happened to be bound to, which was usually nothing. See
+    :func:`working_on`.
+    """
+    return _project.get()
 
 
 @contextmanager
@@ -37,6 +51,23 @@ def working_in(conversation_id: str) -> Iterator[None]:
         yield
     finally:
         _current.reset(token)
+
+
+@contextmanager
+def working_on(project_id: int | None) -> Iterator[None]:
+    """Run a block as work on one project, whatever the conversation says.
+
+    Nests inside ``working_in``: the conversation is decided when the tick starts, the
+    project only once it has looked at the board and picked something. Deliberately *not*
+    written to the database — binding a session to a project is a lasting decision with
+    real consequences for what it may pick up next (see ``_in_scope``), and picking up one
+    task should not silently make that decision on the person's behalf.
+    """
+    token = _project.set(int(project_id) if project_id else None)
+    try:
+        yield
+    finally:
+        _project.reset(token)
 
 
 def adopt(path: Path, project_id: int | None) -> None:

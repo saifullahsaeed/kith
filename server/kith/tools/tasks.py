@@ -150,6 +150,12 @@ def _update_task(path: Path, a: dict) -> dict | None:
     from kith.services import session_context
 
     session_context.adopt(path, (out or {}).get("project_id"))
+    # Promoting something out of the backlog is the moment it becomes work, and therefore the
+    # moment worth waking for. This is the other half of scaffolding into `backlog`: you lay
+    # the roadmap out with nothing running, and moving the first task to `todo` is what says
+    # go — rather than a button somewhere else that means the same thing.
+    if (a.get("status") or "") in _ACTIONABLE:
+        _get_on_with_it(f"task ready: {str((out or {}).get('goal') or '')[:40]}")
     return out
 
 
@@ -163,6 +169,28 @@ _MIN_DONE_CHARS = 24
 #: Statuses that mean a task is off the board — it neither blocks a duplicate nor counts against
 #: a milestone's task cap.
 _SETTLED = ("done", "dropped")
+
+#: Statuses the tick can actually pick up — see `repo.tasks.active_tasks`. A task arriving in
+#: one of these is a reason to wake; a task arriving in `backlog` deliberately is not.
+_ACTIONABLE = ("todo", "doing")
+
+
+def _get_on_with_it(why: str) -> None:
+    """Wake the session this is happening in, if there is one.
+
+    Imported here rather than at module scope: `kith.autonomy.runner` imports the tool
+    registry, so a top-level import would be a cycle. Silent on failure — waking the loop is
+    a courtesy, and a task must still be filed on a machine where it does not work.
+    """
+    try:
+        from kith.autonomy import runner as loop
+        from kith.services import session_context
+
+        conversation = session_context.current()
+        if conversation:
+            loop.nudge(conversation, why)
+    except Exception:
+        pass
 
 
 @tool(
@@ -250,13 +278,19 @@ def add_task(path: Path, args: dict):
                 ),
             }
 
+    # A task attached to a milestone is a roadmap being laid out, and a roadmap is not started
+    # halfway through writing it. Defaulting those to `backlog` is what stops him picking up
+    # task one while the third is still being typed — which is what happened, and what made
+    # scaffolding a project feel like a race. A standalone errand still lands in `todo`,
+    # because filing one of those *is* asking for it to happen.
+    status = args.get("status") or ("backlog" if milestone_id else "todo")
     made = repo.tasks.add_task(
         path,
         goal,
         args.get("priority") or "normal",
         args.get("due_at"),
         description,
-        args.get("status") or "todo",
+        status,
         "kith",
         project_id,
         milestone_id,
@@ -266,6 +300,11 @@ def add_task(path: Path, args: dict):
     # repository resolves it — and a session that laid out a roadmap this way would otherwise be
     # bound to nothing.
     session_context.adopt(path, made.get("project_id"))
+    # And something actionable is a reason to get on with it. The loop only wakes for a session
+    # that is working, so before this a task filed in a conversation sat there until someone
+    # found the button — you asked for a thing, he wrote it down, and you both waited.
+    if status in _ACTIONABLE:
+        _get_on_with_it(f"new task: {goal[:40]}")
     return made
 
 

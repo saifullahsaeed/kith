@@ -286,14 +286,22 @@ def base_dir() -> Path:
         from kith.infra.db import repositories as repo
         from kith.services import session_context
 
-        conversation = session_context.current()
-        if conversation:
-            project_id = repo.conversations.project_of(AGENT_DB_PATH, conversation)
-            if project_id:
-                row = repo.projects.get_project(AGENT_DB_PATH, project_id)
-                directory = str((row or {}).get("directory") or "").strip()
-                if directory and Path(directory).is_dir():
-                    return Path(directory)
+        # The task in hand first, the conversation second. Only the conversation was
+        # consulted for a long time, and that made linking a folder work in chat and do
+        # nothing at all in a tick: an unbound session picks up a task in a folder-linked
+        # project, the *session* is bound to no project, so this returned `root()` and every
+        # relative path he wrote landed in ~/Kith instead of the project he was working on.
+        # The unattended case — the whole point — was the one that did not work.
+        project_id = session_context.current_project()
+        if not project_id:
+            conversation = session_context.current()
+            if conversation:
+                project_id = repo.conversations.project_of(AGENT_DB_PATH, conversation)
+        if project_id:
+            row = repo.projects.get_project(AGENT_DB_PATH, project_id)
+            directory = str((row or {}).get("directory") or "").strip()
+            if directory and Path(directory).is_dir():
+                return Path(directory)
     except Exception:
         pass
     return root()
