@@ -155,3 +155,108 @@ class TestTheKnob:
         from kith.domain.tuning import for_key
 
         assert for_key("keep_images").coerce(raw) == expected
+
+
+class TestAnOldWriteLetsGoOfTheFile:
+    """The third channel, and the last one nothing was watching.
+
+    `read_file` and `shell` cap their output at 8,000 characters and the compactor trims
+    those results as they age. But `write_file`'s `content` argument *is* the file, and it
+    travels on the assistant message — past every limit in the system, because none of them
+    were looking at the calls.
+    """
+
+    def call(self, path: str, body: str) -> dict:
+        return {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "write_file", "arguments": json.dumps({"path": path, "content": body})}}
+            ],
+        }
+
+    def args(self, message: dict) -> dict:
+        return json.loads(message["tool_calls"][0]["function"]["arguments"])
+
+    def test_an_old_write_keeps_its_path_and_drops_its_content(self):
+        from kith.services.agent_loop import _compact_call_arguments
+
+        tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
+        convo = [self.call("/big.py", "x" * 40_000), self.call("/small.py", "y" * 40_000)]
+        _compact_call_arguments(convo)
+
+        old = self.args(convo[0])
+        assert old["path"] == "/big.py"          # still says what he wrote, and where
+        assert "40,000 characters" in old["content"]
+        assert "xxxx" not in old["content"]
+        # The most recent one is untouched — he may still be working on it.
+        assert self.args(convo[1])["content"] == "y" * 40_000
+
+    def test_the_arguments_stay_valid_json(self):
+        """A provider rejects the whole request otherwise, which would turn a saving into
+        an outage."""
+        from kith.services.agent_loop import _compact_call_arguments
+
+        tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
+        convo = [self.call("/x.py", "z" * 5_000), self.call("/y.py", "z" * 5_000)]
+        _compact_call_arguments(convo)
+        assert isinstance(self.args(convo[0]), dict)
+        assert "5,000 characters" in self.args(convo[0])["content"]
+
+    def test_a_small_write_is_left_alone(self):
+        from kith.services.agent_loop import _compact_call_arguments
+
+        tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 1_200})
+        convo = [self.call("/tiny.py", "print('hi')"), self.call("/other.py", "pass")]
+        before = json.dumps(convo)
+        _compact_call_arguments(convo)
+        assert json.dumps(convo) == before
+
+    def test_an_edit_drops_both_halves_of_the_replacement(self):
+        from kith.services.agent_loop import _compact_call_arguments
+
+        tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
+        edit = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "edit_file", "arguments": json.dumps(
+                    {"path": "/a.py", "old": "o" * 9_000, "new": "n" * 9_000})}}
+            ],
+        }
+        convo = [edit, self.call("/later.py", "x")]
+        _compact_call_arguments(convo)
+        args = self.args(convo[0])
+        assert "9,000 characters" in args["old"] and "9,000 characters" in args["new"]
+        assert args["path"] == "/a.py"
+
+    def test_unparseable_arguments_are_left_alone_rather_than_corrupted(self):
+        from kith.services.agent_loop import _compact_call_arguments
+
+        tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 10})
+        convo = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "function": {"name": "write_file", "arguments": "{not json at all"}}]},
+            self.call("/later.py", "x"),
+        ]
+        before = json.dumps(convo)
+        _compact_call_arguments(convo)
+        assert json.dumps(convo) == before
+
+    def test_running_it_twice_changes_nothing(self):
+        from kith.services.agent_loop import _compact_call_arguments
+
+        tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
+        convo = [self.call("/x.py", "q" * 20_000), self.call("/later.py", "x")]
+        _compact_call_arguments(convo)
+        once = json.dumps(convo)
+        _compact_call_arguments(convo)
+        assert json.dumps(convo) == once
+
+    def test_the_floor_cannot_be_set_to_zero_so_a_lone_write_survives(self):
+        """`keep_full_tool_results` has a minimum of 1, which three earlier versions of these
+        tests did not know — they set it to 0, got 1, and asserted against a conversation
+        where nothing was old enough to trim. All three passed without exercising a line."""
+        from kith.domain.tuning import for_key
+
+        assert for_key("keep_full_tool_results").coerce(0) == 1

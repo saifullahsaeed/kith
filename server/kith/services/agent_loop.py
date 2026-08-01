@@ -235,6 +235,50 @@ def _record(stats: dict | None) -> None:
     _usage["calls"] += 1
 
 
+#: Arguments that can be an entire file. Worth everything while the call is being made and
+#: nothing once it has run — the result already says whether it worked.
+_BULKY_ARGS = ("content", "new", "old")
+
+
+def _compact_call_arguments(convo: list[dict[str, Any]]) -> None:
+    """An old write keeps its filename and lets go of the file.
+
+    The third channel into the conversation, and the last one nothing pruned. `read_file` and
+    `shell` cap their *output* at 8,000 characters, and the compactor trims those results as
+    they age — but `write_file`'s `content` argument IS the file, and it travels on the
+    assistant message rather than the tool result. So writing a 40KB file put 40KB in the
+    conversation for every remaining round of the turn, past every limit in the system,
+    because none of them are looking at the calls.
+
+    Safe to drop for the same reason a seen picture is: by the time it ages out, the call has
+    run and its result is right there saying so. The arguments stay valid JSON with the path
+    intact, so he can still see what he wrote and where.
+    """
+    keep_whole = tuning.value("keep_full_tool_results")
+    stub_chars = tuning.value("tool_stub_chars")
+    calls = [i for i, m in enumerate(convo) if m.get("role") == "assistant" and m.get("tool_calls")]
+    for i in calls[:-keep_whole] if keep_whole > 0 else calls:
+        for call in convo[i].get("tool_calls") or []:
+            function = call.get("function") or {}
+            raw = function.get("arguments")
+            if not isinstance(raw, str) or len(raw) <= stub_chars:
+                continue
+            try:
+                args = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(args, dict):
+                continue
+            trimmed = False
+            for key in _BULKY_ARGS:
+                value = args.get(key)
+                if isinstance(value, str) and len(value) > stub_chars:
+                    args[key] = f"…[{len(value):,} characters, sent earlier in this turn]"
+                    trimmed = True
+            if trimmed:
+                function["arguments"] = json.dumps(args)
+
+
 def _compact_images(convo: list[dict[str, Any]]) -> None:
     """Let go of pictures he has already looked at.
 
@@ -361,9 +405,12 @@ def stream_agent(
         # ACT on what he just read (write it to his working file) instead of hoarding
         # dozens of pages in context, and keeps the loop affordable enough to reach
         # the "compile & deliver" phase.
+        # Three channels carry bulk into a conversation, and for a long time only the first
+        # was watched: tool results, pictures, and the arguments of a write. Every one of
+        # them re-sends in full on every round until something trims it.
         _compact_tool_history(convo)
-        # Pictures are their own channel and were never pruned by anything. See above.
         _compact_images(convo)
+        _compact_call_arguments(convo)
         # Re-read tools each round so a tool Kith just built is usable right away.
         # `allow` scopes the toolset to the current mode (fewer tokens, sharper focus).
         schemas = tools.tool_schemas(agent_db_path, only=allow)
