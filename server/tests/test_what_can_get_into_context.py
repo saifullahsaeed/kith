@@ -34,7 +34,10 @@ class TestNothingReturnsWithoutABound:
     SELF_LIMITING: ClassVar[set[str]] = {"create_project"}
 
     BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|glob|grep|requests\.")
-    GUARD = re.compile(r"paging\.page|_clip|_bounded|\[:\s*\d|_MAX_|_OUTPUT_LIMIT|\[:limit\]|hits\[:")
+    # `MAX_` rather than `_MAX_`: a bound is a bound whether the constant naming it is private
+    # to its module or exported. `outline.MAX_BYTES` and `repomap.MAX_BUDGET_TOKENS` are as
+    # real as `sandbox._MAX_WRITE`, and only the underscore told them apart.
+    GUARD = re.compile(r"paging\.page|_clip|_bounded|\[:\s*\d|MAX_|_OUTPUT_LIMIT|\[:limit\]|hits\[:")
 
     @staticmethod
     def _reachable_source(handler) -> str:
@@ -49,7 +52,17 @@ class TestNothingReturnsWithoutABound:
             source = inspect.getsource(handler)
         except (OSError, TypeError):
             return ""
+        # From `def` onwards — `getsource` on a decorated function includes the `@tool(...)`
+        # block, so the *description* was being scanned as if it were code. Three tools whose
+        # descriptions say "or grep it" were flagged for reading in bulk; none of them greps
+        # anything. A test that matches prose is a test that gets ignored.
+        body = re.search(r"^def \w+\(", source, re.M)
+        if body:
+            source = source[body.start() :]
+
         from kith.infra import websearch
+        from kith.services.code import outline as outline_service
+        from kith.services.code import repomap as repomap_service
 
         # `registry` is how kith/tools/skills.py spells the skills service — an alias, not a
         # different module. Getting that wrong made this test fail on an ImportError rather
@@ -59,8 +72,12 @@ class TestNothingReturnsWithoutABound:
             "websearch": websearch,
             "skills": skills,
             "registry": skills,
+            "outline_service": outline_service,
+            "repomap_service": repomap_service,
         }
-        for module_name, attribute in re.findall(r"\b(sandbox|websearch|skills|registry)\.(\w+)", source):
+        for module_name, attribute in re.findall(
+            r"\b(sandbox|websearch|skills|registry|outline_service|repomap_service)\.(\w+)", source
+        ):
             target = getattr(modules[module_name], attribute, None)
             if callable(target):
                 try:

@@ -712,6 +712,117 @@ def write_file(path: str, content: str) -> str:
     return f"wrote {len(data)} bytes to {target}"
 
 
+def _indent_of(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _reindent(text: str, base: str, strip: str) -> str:
+    """Re-base every line of ``text`` from the copy's indentation onto the file's.
+
+    Used only by the whitespace-tolerant path. When the model's copy of a block was indented
+    differently from the file, its replacement is indented to match its copy rather than the
+    file, so pasting it verbatim would land at the wrong depth.
+
+    Only the *base* indentation is exchanged. Indentation relative to that base is structure —
+    the body of the function inside the block being replaced — and flattening it produces
+    syntactically broken Python, which an earlier version of this did by reaching for
+    ``lstrip``.
+    """
+    out = []
+    for line in text.split("\n"):
+        if not line.strip():
+            out.append(line)
+            continue
+        if not strip:
+            body = line
+        elif line.startswith(strip):
+            body = line[len(strip) :]
+        else:
+            # Shallower than the copy's own base — nothing sensible to subtract.
+            body = line.lstrip()
+        out.append(base + body)
+    return "\n".join(out)
+
+
+def _tolerant_span(before: str, old: str) -> tuple[int, int, str] | None:
+    """Find ``old`` in ``before`` ignoring each line's leading and trailing whitespace.
+
+    The exact matcher refuses rather than guesses, and that is right — but it also refuses on
+    a class of near-miss that is never actually ambiguous: the model copied the block
+    correctly and got the indentation wrong, or the file uses tabs where the copy used
+    spaces. Every one of those costs a whole round to rediscover, and the model's usual
+    recovery is to re-read the file and try again with the same mistake.
+
+    So: match line by line on stripped content, and accept **only** when exactly one window
+    matches. Two candidates is genuine ambiguity and still refuses. The caller is told the
+    match was tolerant rather than exact, because an edit that landed somewhere slightly
+    different from where it was aimed is something a person reviewing the diff should see.
+
+    Returns the character span to replace and the file's own indentation at that point.
+    """
+    old_lines = old.split("\n")
+    # A single-line `old` with no exact match is not worth guessing at: one stripped line
+    # matches far too easily, and the failure mode is an edit landing on the wrong line.
+    if len(old_lines) < 2:
+        return None
+    wanted = [line.strip() for line in old_lines]
+
+    lines = before.split("\n")
+    # Offsets of each line's start, so a line window converts back to a character span.
+    starts, at = [], 0
+    for line in lines:
+        starts.append(at)
+        at += len(line) + 1
+
+    hits = []
+    for i in range(len(lines) - len(wanted) + 1):
+        if all(lines[i + j].strip() == wanted[j] for j in range(len(wanted))):
+            hits.append(i)
+            if len(hits) > 1:
+                return None  # ambiguous — fall through to the honest refusal
+    if len(hits) != 1:
+        return None
+
+    i = hits[0]
+    start = starts[i]
+    end = starts[i + len(wanted) - 1] + len(lines[i + len(wanted) - 1])
+    return start, end, _indent_of(lines[i])
+
+
+def _apply_edit(before: str, old: str, new: str, path: str, replace_all: bool) -> tuple[str, int, bool]:
+    """One edit against text already in hand. Returns the result, how many, and whether
+    the match had to fall back to whitespace-tolerant matching.
+
+    Split out of ``edit_file`` so a batch can apply several edits to one file in memory
+    before anything is written — which is what makes the batch atomic.
+    """
+    if not old:
+        raise WorkspaceError("old must be the exact text to replace — an empty string matches nothing")
+    if old == new:
+        raise WorkspaceError("old and new are identical, so there is nothing to change")
+
+    found = before.count(old)
+    if found > 1 and not replace_all:
+        raise WorkspaceError(
+            f"that text appears {found} times in {path}, so which one is ambiguous. Include "
+            "more surrounding lines to pin down the one you mean, or pass replace_all to "
+            "change every occurrence."
+        )
+    if found:
+        after = before.replace(old, new) if replace_all else before.replace(old, new, 1)
+        return after, (found if replace_all else 1), False
+
+    span = _tolerant_span(before, old)
+    if span is None:
+        raise WorkspaceError(
+            f"that exact text is not in {path}. Whitespace and indentation count — read the "
+            "part you mean to change and copy it verbatim."
+        )
+    start, end, indent = span
+    shifted = _reindent(new, indent, _indent_of(old.split("\n")[0]))
+    return before[:start] + shifted + before[end:], 1, True
+
+
 def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
     """Replace an exact string in a file. Returns a diff of what changed.
 
@@ -733,12 +844,12 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
 
     Both refusals name the fix, because the caller is a model that will otherwise retry the
     identical call.
-    """
-    if not old:
-        raise WorkspaceError("old must be the exact text to replace — an empty string matches nothing")
-    if old == new:
-        raise WorkspaceError("old and new are identical, so there is nothing to change")
 
+    One concession to reality, added later and deliberately narrow: if the text is not there
+    verbatim but exactly one block matches it line-for-line ignoring indentation, that block
+    is edited and the result says the match was tolerant. See ``_tolerant_span`` — two
+    candidates still refuse, and a one-line ``old`` never takes this path.
+    """
     target = Path(resolve(path))
     permissions.require_path("write", target, root())
     if not target.is_file():
@@ -748,20 +859,7 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
     except (OSError, UnicodeDecodeError) as exc:
         raise WorkspaceError(f"cannot read {path} to edit it: {exc}") from None
 
-    found = before.count(old)
-    if found == 0:
-        raise WorkspaceError(
-            f"that exact text is not in {path}. Whitespace and indentation count — read the "
-            "part you mean to change and copy it verbatim."
-        )
-    if found > 1 and not replace_all:
-        raise WorkspaceError(
-            f"that text appears {found} times in {path}, so which one is ambiguous. Include "
-            "more surrounding lines to pin down the one you mean, or pass replace_all to "
-            "change every occurrence."
-        )
-
-    after = before.replace(old, new) if replace_all else before.replace(old, new, 1)
+    after, replacements, tolerant = _apply_edit(before, old, new, path, replace_all)
     data = after.encode()
     if len(data) > _MAX_WRITE:
         raise WorkspaceError(f"the result would be too large ({len(data)} bytes; max {_MAX_WRITE})")
@@ -770,7 +868,117 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
     except OSError as exc:
         raise WorkspaceError(f"cannot write {path}: {exc}") from None
 
-    return _diff(path, before, after, old, found if replace_all else 1)
+    report = _diff(path, before, after, old, replacements)
+    return _NOTE_TOLERANT + report if tolerant else report
+
+
+#: Prefixed to a diff whose match was whitespace-tolerant rather than exact. Worth saying out
+#: loud: the edit landed where it was aimed, but not at the indentation it was aimed with.
+_NOTE_TOLERANT = (
+    "(matched ignoring indentation — your copy's whitespace did not match the file's, so the "
+    "replacement was re-indented to fit. Check the diff.)\n"
+)
+
+
+def edit_files(edits: list[dict]) -> dict:
+    """Apply several edits as one all-or-nothing change. Returns a combined diff.
+
+    One edit per model round is the wrong unit for the work that actually happens. Renaming a
+    helper used in eight places is eight rounds, and a round is not cheap: the whole prompt
+    goes back over the wire each time, against a tick that gets sixteen of them. Batching a
+    refactor into one call is the difference between finishing it and running out of room
+    halfway through, which is a failure mode this project has watched happen.
+
+    **Atomic, and that is the point.** Every edit is resolved, permission-checked and applied
+    in memory first; nothing touches the disk until all of them have succeeded. A batch that
+    fails on its sixth edit leaves the first five unwritten, because the alternative — a
+    half-applied refactor across five files, reported as an error — is a worse place to be
+    than not having started. It is also the state a model is least able to reason its way out
+    of, since the error says what went wrong with edit six and nothing about the five that
+    landed.
+
+    **Edits to the same file compose in order.** They are applied to the running text, so an
+    edit may legitimately depend on one before it, and an edit whose target a previous edit
+    destroyed fails at that point rather than silently matching something else.
+    """
+    if not edits:
+        raise WorkspaceError("no edits given — pass at least one {path, old, new}")
+
+    # Resolve and permission-check everything before reading anything, so a batch that is
+    # going to be refused is refused before it has half-read the disk.
+    prepared = []
+    for i, edit in enumerate(edits, start=1):
+        raw = str(edit.get("path") or "").strip()
+        if not raw:
+            raise WorkspaceError(f"edit {i} has no path")
+        target = Path(resolve(raw))
+        permissions.require_path("write", target, root())
+        prepared.append((i, raw, target, edit))
+
+    texts: dict[Path, str] = {}
+    originals: dict[Path, str] = {}
+    counts: dict[Path, int] = {}
+    tolerant_at: list[int] = []
+
+    for i, raw, target, edit in prepared:
+        if target not in texts:
+            if not target.is_file():
+                raise WorkspaceError(f"edit {i}: there's no {raw} to edit")
+            try:
+                texts[target] = target.read_text()
+            except (OSError, UnicodeDecodeError) as exc:
+                raise WorkspaceError(f"edit {i}: cannot read {raw} to edit it: {exc}") from None
+            originals[target] = texts[target]
+            counts[target] = 0
+        try:
+            after, made, tolerant = _apply_edit(
+                texts[target],
+                str(edit.get("old") or ""),
+                str(edit.get("new") or ""),
+                raw,
+                bool(edit.get("replace_all")),
+            )
+        except WorkspaceError as exc:
+            # Which edit, out of how many — a bare message about text not being found is
+            # unactionable when six edits went out together.
+            raise WorkspaceError(f"edit {i} of {len(prepared)} failed, so none were applied: {exc}") from None
+        texts[target] = after
+        counts[target] += made
+        if tolerant:
+            tolerant_at.append(i)
+
+    for target, after in texts.items():
+        data = after.encode()
+        if len(data) > _MAX_WRITE:
+            raise WorkspaceError(f"{target} would be too large ({len(data)} bytes; max {_MAX_WRITE})")
+
+    written = []
+    for target, after in texts.items():
+        try:
+            target.write_text(after)
+        except OSError as exc:
+            # Half-written is the one state the all-or-nothing promise cannot cover: the
+            # earlier files are already on disk. Say so plainly rather than reporting a
+            # clean failure the caller would take to mean nothing changed.
+            done = ", ".join(str(p) for p in written) or "none"
+            raise WorkspaceError(
+                f"cannot write {target}: {exc}. Already written: {done}. The change is "
+                "partly applied — check `changes` before doing anything else."
+            ) from None
+        written.append(target)
+
+    diffs = [_diff(str(target), originals[target], texts[target], "", counts[target]) for target in texts]
+    result = {
+        "files": len(texts),
+        "replacements": sum(counts.values()),
+        "diff": _clip("\n".join(diffs)),
+    }
+    if tolerant_at:
+        result["note"] = (
+            f"edit{'' if len(tolerant_at) == 1 else 's'} {', '.join(map(str, tolerant_at))} "
+            "matched ignoring indentation and were re-indented to fit — check the diff."
+        )
+    return result
 
 
 #: A diff line longer than this is not readable as a line, so the change is shown as a

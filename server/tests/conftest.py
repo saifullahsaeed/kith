@@ -7,12 +7,14 @@ transaction behaviour, and a mocked database cannot fail the way those did.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
-import kith.autonomy.runner  # noqa: F401  — imported for the side effect of registering the module
+import kith.autonomy.runner  # imported for the side effect of registering the module
+import kith.settings
 from kith.infra.db import config_store
 from kith.infra.db.migrations import init
 
@@ -71,6 +73,59 @@ def never_the_real_database(tmp_path_factory, monkeypatch):
         if name.startswith("kith.") and hasattr(module, "AGENT_DB_PATH"):
             monkeypatch.setattr(module, "AGENT_DB_PATH", safe, raising=False)
     yield safe
+
+
+#: The real data folder, captured before any fixture redirects it. Tests that are *about*
+#: where data lives need the true answer, and by the time they run the attribute is a
+#: temp directory.
+REAL_DATA_DIR = Path(kith.settings.DATA_DIR)
+
+
+@pytest.fixture(scope="session")
+def _safe_data_dir(tmp_path_factory) -> Path:
+    """One temp data folder for the whole session, with the skills copied into it.
+
+    Session-scoped for the copy: the installed skills are a few megabytes, and doing that
+    per test would cost more than the rest of the suite. Sharing one folder across tests is
+    not a regression — they already shared one, it was just the real one.
+
+    Copied rather than symlinked, and that distinction is load-bearing. A symlink resolves to
+    its target, so the permission layer saw the real `server/data/skills`, decided it was
+    outside the workspace, and refused to describe writing a skill at all. The copy keeps
+    every resolved path inside the temp tree, which is the property the redirect is for.
+    """
+    safe = tmp_path_factory.mktemp("never-real-data")
+    real_skills = REAL_DATA_DIR / "skills"
+    if real_skills.is_dir():
+        shutil.copytree(real_skills, safe / "skills")
+    return safe
+
+
+@pytest.fixture(autouse=True)
+def never_the_real_data_folder(_safe_data_dir, monkeypatch):
+    """No test can write into `server/data`, which is the user's data, not the suite's.
+
+    The sibling fixture above isolates the database and stops there, and that turned out to
+    be half the problem: `workspace.internal()` does not derive from `AGENT_DB_PATH` at all.
+    It reads `settings.DATA_DIR`, so a redirected database and a real transcript folder are
+    entirely consistent states. Every test that opened a conversation therefore wrote a real
+    `.jsonl` beside the real databases.
+
+    It is not theoretical and it is not small. Emptying the folder and running `./check` once
+    put 54 transcripts straight back into it, all stamped within the same second. On a
+    machine that had been running the suite for weeks there were 4,491. They are invisible
+    while they accumulate — nothing fails, the folder is just quietly not the user's any more.
+
+    Redirected wholesale rather than per-subfolder. `DATA_DIR` is also where `api.token` and
+    the config database live, and picking off `conversations/` would leave the next writer to
+    be discovered the same way this one was — by noticing litter.
+    """
+    monkeypatch.setattr(kith.settings, "DATA_DIR", _safe_data_dir)
+    # `kith.config` copies the value at import, as it does with the database path.
+    for name, module in list(sys.modules.items()):
+        if name.startswith("kith.") and hasattr(module, "DATA_DIR"):
+            monkeypatch.setattr(module, "DATA_DIR", _safe_data_dir, raising=False)
+    yield _safe_data_dir
 
 
 @pytest.fixture(autouse=True)

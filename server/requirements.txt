@@ -14,5 +14,28 @@ pyyaml>=6
 # instead of by price. Generated from their OpenAPI spec, so it tracks the API.
 openrouter>=1.1,<2
 
+# Reading code as structure rather than as text — what `outline` and `repo_map` are built on.
+# A parser rather than a language server, which is the whole point: no per-project setup, no
+# server process, no network, and it works on a lone file in a folder of nothing. The grammar
+# pack is 4.3MB for about a hundred languages, which is a fair price for the alternative being
+# regular expressions over source code.
+tree-sitter>=0.23
+tree-sitter-language-pack>=1.13
+
 # Freezing the server for a packaged release (npm run freeze in desktop/).
 pyinstaller>=6.10
+
+# --- optional, discovered if present -----------------------------------------------------
+#
+# Language servers power `diagnostics`, `references`, `definition` and `rename_symbol`. None
+# of them is required: `services/lsp/manager.py` looks in the project's own node_modules and
+# virtualenv, then beside this interpreter, then on PATH, and when it finds nothing those four
+# tools are left out of the prompt entirely rather than offered and failing.
+#
+# Deliberately not listed as dependencies. pyright alone is 34MB and fetches its own copy of
+# node on first run, which is a lot to impose on someone who only wanted the app to open.
+#
+#   pip install pyright                              Python
+#   npm i -g typescript-language-server typescript   TypeScript / JavaScript / TSX
+#   go install golang.org/x/tools/gopls@latest       Go
+#   rustup component add rust-analyzer               Rust

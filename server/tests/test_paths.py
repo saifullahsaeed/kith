@@ -12,6 +12,7 @@ failure mode is silence, not an exception.
 
 from __future__ import annotations
 
+import conftest
 import pytest
 
 from kith import settings
@@ -58,8 +59,14 @@ def test_an_absolute_path_is_kept_not_rewritten() -> None:
 
 
 def test_data_dir_resolves_under_the_server() -> None:
-    assert settings.DATA_DIR.name == "data"
-    assert settings.DATA_DIR.parent == settings.SERVER_ROOT
+    """The real one, not the temp folder the suite is redirected into.
+
+    `settings.DATA_DIR` is a temp directory by the time any test runs — that is what keeps
+    the suite out of the user's data. This test is about where the app puts things on a real
+    machine, so it asserts on the value captured before the redirect.
+    """
+    assert conftest.REAL_DATA_DIR.name == "data"
+    assert conftest.REAL_DATA_DIR.parent == settings.SERVER_ROOT
 
 
 def test_directives_are_all_present() -> None:

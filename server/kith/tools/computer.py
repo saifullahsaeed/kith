@@ -98,6 +98,45 @@ def edit_file(path: Path, args: dict):
 
 
 @tool(
+    "edit_files",
+    "Make several edits at once, as one all-or-nothing change. Use this the moment a change "
+    "touches more than one place — renaming something used in eight files, updating every "
+    "call site, applying the same fix across a folder. One edit per call costs you a whole "
+    "round each time, and you only get so many before a job has to stop; this costs one. "
+    "Each edit is {path, old, new} with the same rules as edit_file: `old` copied verbatim, "
+    "unique in its file unless you pass replace_all. Either every edit applies or none does, "
+    "so a batch that fails leaves the files untouched and tells you which edit was wrong. "
+    "Edits to the same file are applied in the order you give them, so a later one can build "
+    "on an earlier one. You get back one combined diff — read it.",
+    {
+        "edits": {
+            "type": "array",
+            "description": "The edits to apply, in order.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": STR,
+                    "old": {**STR, "description": "The exact text to replace, copied verbatim."},
+                    "new": {**STR, "description": "What to put in its place."},
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence in that file instead of failing on ambiguity.",
+                    },
+                },
+                "required": ["path", "old", "new"],
+            },
+        }
+    },
+    required=("edits",),
+)
+def edit_files(path: Path, args: dict):
+    raw = args.get("edits")
+    if not isinstance(raw, list):
+        return {"error": "edits must be a list of {path, old, new}"}
+    return sandbox.edit_files([one for one in raw if isinstance(one, dict)])
+
+
+@tool(
     "delete_file",
     "Put a file or folder in the Trash. Use this rather than `rm` in the shell — it goes "
     "to the Trash, so your person can get it back if you were wrong about which one they "

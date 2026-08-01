@@ -95,9 +95,23 @@ _WORK = {
     "grep",
     "write_file",
     "edit_file",
+    # The same edit, several places, one round. A tick gets sixteen rounds; a rename across
+    # eight call sites spent half of them on the mechanics of the rename.
+    "edit_files",
     "changes",
     "commit",
     "check_code",
+    # Reading code as structure rather than as text. `outline` before `read_file` is the
+    # single biggest thing he can do for his own attention: a 2,000-line module costs the
+    # module on every remaining round, and its shape costs a paragraph.
+    "outline",
+    "repo_map",
+    # What the code *means*, when a language server is installed to say. These four are
+    # dropped from the prompt entirely when none is — see `NEEDS_A_LANGUAGE_SERVER`.
+    "diagnostics",
+    "references",
+    "definition",
+    "rename_symbol",
     "glob",
     "history",
     # Without this he has `shell` and nothing else for "get rid of that file", which means

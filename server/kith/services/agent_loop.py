@@ -461,6 +461,12 @@ def stream_agent(
     from kith.services.mcp import manager as mcp_manager
 
     mcp_tools = mcp_manager.snapshot()
+    # Whether the four semantic tools are worth their schema, resolved once for the same
+    # reason and with the same consequence if it changed mid-turn. A handful of `stat` calls,
+    # not a server start — see `manager.any_available`.
+    from kith.tools.semantics import available as language_server_available
+
+    has_language_server = language_server_available()
     # How much room is left, learned from what the provider charges each round.
     #
     # `num_predict` is -1 on a default install — the sentinel for "no limit" — so it cannot
@@ -496,7 +502,9 @@ def stream_agent(
         _compact_call_arguments(convo)
         # Re-read tools each round so a tool Kith just built is usable right away.
         # `allow` scopes the toolset to the current mode (fewer tokens, sharper focus).
-        schemas = tools.tool_schemas(agent_db_path, only=allow, mcp=mcp_tools)
+        schemas = tools.tool_schemas(
+            agent_db_path, only=allow, mcp=mcp_tools, language_server=has_language_server
+        )
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:

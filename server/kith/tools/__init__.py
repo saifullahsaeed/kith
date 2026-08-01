@@ -18,6 +18,7 @@ from pathlib import Path
 
 from kith.services import custom_tools, permissions, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
+    code,
     computer,
     identity,
     journal,
@@ -27,6 +28,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     outreach,
     people,
     projects,
+    semantics,
     skills,
     sources,
     tasks,
@@ -35,6 +37,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
 )
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas
+from kith.tools.semantics import NEEDS_A_LANGUAGE_SERVER
 
 __all__ = ["all_tools", "get", "names", "run_tool", "tool_schemas"]
 
@@ -43,6 +46,7 @@ def tool_schemas(
     agent_db_path: Path | None = None,
     only: set[str] | None = None,
     mcp: list[dict] | None = None,
+    language_server: bool | None = None,
 ) -> list[dict]:
     """The tool declarations to hand the model — built-ins plus, if a DB path is
     given, the tools Kith has built for himself, plus any MCP tools passed in.
@@ -55,8 +59,17 @@ def tool_schemas(
     server dying, or being switched off in another tab, silently shrinks it, which changes
     the cached prefix and discards the whole prompt cache on the next round. The caller takes
     one snapshot per turn and hands the same list down. See `services/mcp/manager.snapshot`.
+
+    ``language_server`` says whether the four semantic tools are worth their schema. They are
+    the one group here that can be *categorically* unusable: on a machine with nothing
+    installed every call answers "not installed", and about 700 characters of schema is
+    carried on every round of every turn to make that possible. Resolved once per turn by the
+    caller for the same cache reason as ``mcp`` — `None` means "do not filter", which is what
+    every caller that has no opinion passes.
     """
-    builtins = schemas(only)
+    hide = set() if language_server is not False else set(NEEDS_A_LANGUAGE_SERVER)
+    wanted = None if only is None else set(only) - hide
+    builtins = [one for one in schemas(wanted) if one.get("function", {}).get("name") not in hide]
     extra = list(mcp or [])
     if agent_db_path is None or only is not None:
         return builtins + extra
