@@ -450,6 +450,18 @@ def run_command(command: str, timeout: int = _EXEC_TIMEOUT) -> ExecResult:
     the difference between "he can use the tools on this machine" being true and being a
     claim in a docstring.
     """
+    code, combined = _capture(command, timeout)
+    return ExecResult(exit_code=code, output=_clip(combined))
+
+
+def _capture(command: str, timeout: int) -> tuple[int, str]:
+    """Run a command and return its exit code and output, *unclipped*.
+
+    Split out from `run_command` because the two callers want the clip in different places.
+    A command's output goes to the model as it is, so it is clipped on the way out. A fetched
+    web page is HTML that gets converted to prose first, and clipping the HTML instead is what
+    broke `fetch_url` for every real page — see there.
+    """
     permissions.require_command(command, root())
     here = root()
     try:
@@ -468,8 +480,7 @@ def run_command(command: str, timeout: int = _EXEC_TIMEOUT) -> ExecResult:
             "(a server, a watcher, a big build) should be started in the background with "
             "`nohup … &`, which returns straight away."
         ) from None
-    combined = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
-    return ExecResult(exit_code=proc.returncode, output=_clip(combined))
+    return proc.returncode, proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
 
 
 #: Image types worth handing to a vision model. Anything else is bytes as far as this is
@@ -995,14 +1006,41 @@ def kind_of(path: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+#: How much of a page to download before converting it to prose. A bound on bandwidth and
+#: parsing time, *not* on what reaches the model — the conversion throws away the
+#: overwhelming majority, and the text it produces is clipped separately.
+_MAX_FETCH_BYTES = 5_000_000
+
+
 def fetch_url(url: str) -> str:
+    """A page, as the prose a reader would see.
+
+    The download is bounded and the conversion is bounded, and getting those the wrong way
+    round made this useless on anything real. It used to go through ``run_command``, which
+    clips output to 8,000 characters — so the *HTML* was cut at 8,000 bytes and only then
+    turned into text. On a modern page that is the middle of ``<head>``.
+
+    Measured before the fix: the Wikipedia article on prompt engineering, 470,144 characters
+    of markup, came back as 114 characters — its title and half a stray ``<link>`` tag.
+    Hacker News gave 805. Only example.com worked, because example.com is smaller than the
+    limit. The `<head>` strip below cannot help either, since with the closing tag cut off
+    the pattern never matches.
+
+    Downloading the whole thing costs nothing that matters: curl's output is not context.
+    What reaches him is the same 8,000 characters it always was — of prose now instead of
+    markup.
+    """
     target = url.strip()
     if not re.match(r"^https?://", target):
         raise WorkspaceError("url must start with http:// or https://")
-    result = run_command(f"curl -sL --max-time 25 -A 'Mozilla/5.0 (Kith)' {shlex.quote(target)}", timeout=30)
-    if result.exit_code != 0 and not result.output:
+    command = (
+        f"curl -sL --max-time 25 --max-filesize {_MAX_FETCH_BYTES} "
+        f"-A 'Mozilla/5.0 (Kith)' {shlex.quote(target)}"
+    )
+    code, markup = _capture(command, timeout=30)
+    if code != 0 and not markup:
         raise WorkspaceError("fetch failed (is this machine online?)")
-    return _html_to_text(result.output)
+    return _html_to_text(markup)
 
 
 def browse_page(url: str) -> str:

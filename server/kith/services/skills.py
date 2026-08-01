@@ -72,6 +72,18 @@ CONVENTIONAL_DIRS = ("scripts", "references", "assets")
 #: count for the rest and a directory to list properly if he needs to.
 MAX_LISTED_RESOURCES = 40
 
+#: Ceiling on a skill's instructions, in characters.
+#:
+#: Set well above every skill actually installed — the largest is pptx at 20,796 — because
+#: the instructions *are* the skill, and trimming them is a direct quality cost rather than
+#: a saving. This is a bound on damage from a badly-formed one, not a diet.
+#:
+#: The open standard's whole shape supports the ceiling: SKILL.md is level 2 and meant to be
+#: brief, with detail living in `resources/` at level 3, fetched only when needed. A skill
+#: that puts 200KB in its manifest has misread that, and nothing should let it quietly spend
+#: 50,000 tokens of a turn to say so.
+MAX_INSTRUCTION_CHARS = 32_000
+
 #: How much of a skill body is reasonable to pull into context in one go. The standard
 #: recommends under 5k tokens; this is the character equivalent, and going over is a warning
 #: rather than a refusal because it is the author's call, not ours.
@@ -308,6 +320,25 @@ def index() -> str:
     return "\n\n" + _PREAMBLE + "\n" + "\n".join(lines) + "\n"
 
 
+def _bounded(body: str, manifest: Path) -> str:
+    """A skill's instructions, with a ceiling and a way to reach the rest.
+
+    Cut at a paragraph rather than mid-sentence where one is near enough, because half an
+    instruction is worse than a clearly missing one — he would follow it.
+    """
+    if len(body) <= MAX_INSTRUCTION_CHARS:
+        return body
+    head = body[:MAX_INSTRUCTION_CHARS]
+    break_at = head.rfind("\n\n")
+    if break_at > MAX_INSTRUCTION_CHARS - 2_000:
+        head = head[:break_at]
+    return (
+        f"{head}\n\n…[{len(body) - len(head):,} more characters of this skill are in "
+        f"{manifest}. It is unusually long for a SKILL.md — read the file directly if what "
+        f"you need is not above.]"
+    )
+
+
 def read(name: str) -> dict:
     """Level 2: one skill's instructions, plus the names of what else is in its folder."""
     wanted = str(name or "").strip()
@@ -317,7 +348,7 @@ def read(name: str) -> dict:
         _, body = split_frontmatter((skill.path / MANIFEST).read_text(errors="replace"))
         return {
             "name": skill.name,
-            "instructions": body,
+            "instructions": _bounded(body, skill.path / MANIFEST),
             # Absolute, so reading a reference file or running a script is one call with no
             # guessing at where the skill lives.
             "directory": str(skill.path),
