@@ -259,6 +259,19 @@ TUNABLES: tuple[Tunable, ...] = (
         maximum=20_000,
         unit="characters",
     ),
+    Tunable(
+        key="handoff_steps",
+        env="KITH_HANDOFF_STEPS",
+        label="Recent steps shown when resuming",
+        help="How many of his own last steps a working tick is shown, so it can tell it has "
+        "already tried this and change course instead of repeating. Too few and a long loop is "
+        "invisible to him; too many and the resume prompt gets expensive.",
+        default=8,
+        group="memory",
+        minimum=1,
+        maximum=30,
+        unit="steps",
+    ),
     # -- rhythm ------------------------------------------------------------- #
     Tunable(
         key="min_gap",

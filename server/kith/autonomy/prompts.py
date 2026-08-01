@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from kith.config import AGENT_DB_PATH
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
+from kith.services import tuning
 
 # `_tick_prompt` used to live here: one prompt covering "a reminder is due", "here are your
 # tasks" and "you are caught up". Every branch of it has a dedicated builder now —
@@ -55,12 +56,17 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
             f"You have no working file for this task yet. Create {work_path} and keep your findings "
             "there as you go, so you never lose progress or start over."
         )
-    # Your own recent train of thought, so you pick up where you left off after a
-    # gap or a disruption instead of re-deciding from scratch.
-    recent = repo.journal.list_journal(AGENT_DB_PATH, 3)
+    # Your own recent steps, framed as a loop check — deep enough to reveal a long loop
+    # (three was too shallow to see a twenty-tick one) and worded so a repeat prompts a
+    # change of course rather than another neutral "last steps" list he reads straight past.
+    recent = repo.journal.list_journal(AGENT_DB_PATH, tuning.value("handoff_steps"))
     if recent:
-        lines.append("Your last steps (most recent first):")
-        lines += [f"  · {e['entry'][:160]}" for e in recent]
+        lines.append(
+            "Your recent steps (most recent first) — if these look like the same attempt again, "
+            "STOP repeating it: change approach decisively, or say what's blocking you and hand "
+            "it back. Doing the same thing again costs money and moves nothing:"
+        )
+        lines += [f"  · {e['entry'][:200]}" for e in recent]
     if len(active) > 1:
         lines.append(f"(You have {len(active) - 1} other task(s) queued; this is the top one.)")
 
