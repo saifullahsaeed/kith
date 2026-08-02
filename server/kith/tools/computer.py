@@ -16,7 +16,17 @@ def _shell(command: str) -> dict:
 
 @tool(
     "shell",
-    "Run a shell command on your person's computer, from your own folder. Returns combined stdout/stderr and the exit code. Their shell, their PATH, their installed programs — so build and run things, use the tools already there, poke around. You are NOT root and this is not a private box: anything destructive, and anything outside your folder, needs their yes and will be refused until they give it. To delete something use delete_file, not `rm` — it goes to the Trash and `rm` cannot be undone by anyone. For long-lived processes (servers, watchers, long builds), start them detached with `nohup … &`.",
+    "Run a shell command on your person's computer, from your own folder. Returns combined "
+    "stdout/stderr and the exit code. Their shell, their PATH, their installed programs — so "
+    "build and run things, use the tools already there, poke around. You are NOT root and "
+    "this is not a private box: anything destructive, and anything outside your folder, needs "
+    "their yes and will be refused until they give it. To delete something use delete_file, "
+    "not `rm` — it goes to the Trash and `rm` cannot be undone by anyone. "
+    "This WAITS for the command to finish, so only use it for things that finish: a server or "
+    "a watcher goes to start_process, and a test suite to run_tests. Don't reach for "
+    "`nohup … &` — it is refused here, because it would hand you a pid and nothing else. "
+    "Nothing can answer a prompt either, so pass the flag that avoids the question "
+    "(`-y`, `--yes`, `--no-input`) rather than hoping.",
     {"command": {**STR, "description": "The shell command to run."}},
     required=("command",),
 )

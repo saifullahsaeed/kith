@@ -52,7 +52,19 @@ DEFAULT_ROOT = Path.home() / "Kith"
 #: it stays out of the way in Finder and out of the file browser's default view.
 INTERNAL_DIR = ".kith"
 
-_EXEC_TIMEOUT = 900
+#: How long one shell command may take before it is stopped.
+#:
+#: This was 900 — fifteen minutes — from when the shell was the only way to run anything, so
+#: it had to cover a full build. The effect was that a command which stuck waiting for
+#: something took the turn with it: nothing came back, nothing could be read, and by the time
+#: it gave up the conversation had been abandoned. A person watching that does not see a
+#: timeout, they see him frozen.
+#:
+#: Three minutes covers an npm install on a cold cache, which is the honest upper bound for
+#: something you wait for. Genuinely long-lived work has `start_process` now, and genuinely
+#: long test suites have `run_tests` with its own limit — so the shell no longer has to be
+#: the tool that can do everything, and can be the tool that comes back.
+_EXEC_TIMEOUT = 180
 _OUTPUT_LIMIT = 8_000
 _MAX_WRITE = 5_000_000
 _READ_DEFAULT_LINES = 400
@@ -506,6 +518,9 @@ def _capture(command: str, timeout: int) -> tuple[int, str]:
     broke `fetch_url` for every real page — see there.
     """
     permissions.require_command(command, root())
+    backgrounding = _looks_backgrounded(command)
+    if backgrounding:
+        raise WorkspaceError(backgrounding)
     # Where the command runs. The permission check above still measures against root(), so his own
     # folder AND the linked project both count as inside; but the command's cwd is the working base,
     # so relative paths in a shell line land in your project, not his scratch space.
@@ -516,17 +531,73 @@ def _capture(command: str, timeout: int) -> tuple[int, str]:
             capture_output=True,
             timeout=timeout,
             cwd=str(here),
-            env={**os.environ, "KITH_WORKSPACE": str(here)},
+            # Nothing is going to type an answer. Without this the command inherits whatever
+            # stdin the server was started with, and anything that asks a question — `python`
+            # with no script, `manage.py shell`, `git commit` opening an editor, an npm
+            # prompt — waits for a person who is not there. `./run` already redirects the
+            # server's stdin, which makes this belt-and-braces; it is worth having anyway,
+            # because it makes the behaviour a property of *this call* rather than of how
+            # somebody happened to launch the app.
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "KITH_WORKSPACE": str(here), **_NON_INTERACTIVE},
         )
     except FileNotFoundError:
         raise WorkspaceError("No bash on this machine — can't run commands.") from None
     except subprocess.TimeoutExpired:
         raise WorkspaceError(
-            f"That took longer than {timeout}s and was stopped. Anything long-running "
-            "(a server, a watcher, a big build) should be started in the background with "
-            "`nohup … &`, which returns straight away."
+            f"That took longer than {timeout}s and was stopped. If it was meant to keep "
+            "running — a server, a watcher — start it with `start_process` instead, which "
+            "returns straight away and lets you read its output with `check_process`. If it "
+            "was meant to finish, it is stuck: something is waiting for an answer, or it is "
+            "genuinely slower than that."
         ) from None
     return proc.returncode, proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
+
+
+#: Told to every command, so nothing stops to ask a question nobody is there to answer.
+#:
+#: A pager is the classic: `git log` with no `PAGER` set pipes into `less`, which waits for a
+#: keypress forever. `GIT_TERMINAL_PROMPT=0` is the other one that matters — without it a git
+#: operation needing credentials blocks instead of failing, and blocking is much worse: a
+#: failure he can read and work around, a block just eats the turn.
+_NON_INTERACTIVE = {
+    "PAGER": "cat",
+    "GIT_PAGER": "cat",
+    "GIT_TERMINAL_PROMPT": "0",
+    "TERM": "dumb",
+    "DEBIAN_FRONTEND": "noninteractive",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "PYTHONUNBUFFERED": "1",
+    # Colour is escape codes he pays for and cannot see. Most tools already detect a pipe;
+    # the ones that do not respect this.
+    "NO_COLOR": "1",
+}
+
+
+def _looks_backgrounded(command: str) -> str:
+    """Is this an attempt to start something long-lived from the shell? Then say so.
+
+    `start_process` exists now, and this tool's description used to recommend `nohup … &`
+    because for a long time nothing better existed. That advice outlived its reason and kept
+    being taken: a dev server started this way returns a pid and nothing else — no output, no
+    exit code, no way to tell serving from crashed-on-a-port-collision, and no way to stop it.
+
+    Refused rather than warned. A warning arrives with the result, by which point the thing is
+    already running unsupervised and the round is spent; a refusal costs one round and he
+    reaches for the tool that works.
+    """
+    text = (command or "").strip()
+    if not text:
+        return ""
+    trailing_amp = text.endswith("&") and not text.endswith("&&")
+    if "nohup " not in text and not trailing_amp:
+        return ""
+    return (
+        "That starts something in the background, and `shell` cannot watch it — you would "
+        "get a pid and nothing else. Use `start_process` with a name instead: it returns "
+        "straight away, `check_process` reads what it has printed since you last looked, and "
+        "`stop_process` stops it and everything it started."
+    )
 
 
 #: Image types worth handing to a vision model. Anything else is bytes as far as this is
