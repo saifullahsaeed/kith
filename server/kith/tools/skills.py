@@ -22,6 +22,11 @@ from kith.services import skills as registry
 from kith.tools.params import STR
 from kith.tools.registry import tool
 
+#: Distinct skills one turn may open before it is told what that is costing. Three is not a
+#: refusal — a job can legitimately need a few — it is the point at which "which skills might
+#: apply" has stopped being reconnaissance and started being the work.
+_SKILLS_BEFORE_SAYING_SO = 3
+
 
 @tool(
     "read_skill",
@@ -35,4 +40,48 @@ from kith.tools.registry import tool
     required=("name",),
 )
 def read_skill(path: Path, args: dict):
-    return registry.read(str(args.get("name") or ""))
+    """Load a skill, unless this turn already has it.
+
+    Measured over one project: 78 opens of 11 distinct skills. `frontend-design` eight times,
+    `webapp-testing` eight times, `verification-before-completion` seven — and four separate
+    turns that opened **eight skills each** before doing any work. At a median 2,171 tokens a
+    skill that is about seventeen thousand tokens of instructions loaded speculatively, then
+    carried on every remaining round of the turn.
+
+    His own persona already says not to: "reading one speculatively wastes the context you
+    would need to do the job." It was advice, and advice loses to the pull of wanting to be
+    thorough. This makes it structural — the second read of the same skill in one turn returns
+    a sentence instead of the file, because the file is already above and re-reading it buys
+    a duplicate.
+    """
+    from kith.services import session_context
+
+    name = str(args.get("name") or "").strip()
+    notes = session_context.turn_notes()
+    already = notes.setdefault("skills_read", set())
+
+    if name in already:
+        return {
+            "name": name,
+            "note": (
+                f"You already opened `{name}` in this turn — its instructions are above, "
+                "unchanged. Re-reading it would only add a second copy."
+            ),
+        }
+
+    found = registry.read(name)
+    if not isinstance(found, dict) or found.get("error"):
+        return found
+
+    already.add(name)
+    if len(already) > _SKILLS_BEFORE_SAYING_SO:
+        return {
+            **found,
+            "note": (
+                f"That is {len(already)} skills opened in this one turn ({', '.join(sorted(already))}). "
+                "Each one's instructions stay with you for every remaining step, so this is a "
+                "large part of the room you have left to actually do the work in. Work from "
+                "what you have rather than opening more."
+            ),
+        }
+    return found

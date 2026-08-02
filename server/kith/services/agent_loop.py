@@ -431,6 +431,42 @@ def stream_agent(
     expect_durable: bool = False,
     conversation_id: str = "",
 ) -> Iterator[dict]:
+    """Run the tool loop for one turn.
+
+    A thin wrapper so the turn has a boundary a tool can see. `_run_turn` below is the loop
+    itself; this exists only to open and close `session_context.a_turn()` around it, which is
+    what lets `read_skill` know it has already been called — measured at 78 opens of 11
+    skills on one project, eight of them in a single turn.
+
+    Wrapped rather than indented: `_run_turn` is a generator several hundred lines long, and
+    setting a context variable inside a generator sets it in whoever called `next()`, which
+    is not the same thing and leaks.
+    """
+    from kith.services import session_context
+
+    with session_context.a_turn():
+        yield from _run_turn(
+            messages,
+            config,
+            host,
+            agent_db_path,
+            max_rounds=max_rounds,
+            allow=allow,
+            expect_durable=expect_durable,
+            conversation_id=conversation_id,
+        )
+
+
+def _run_turn(
+    messages: list[dict[str, Any]],
+    config: Config,
+    host: str,
+    agent_db_path: Path,
+    max_rounds: int | None = None,
+    allow: set[str] | None = None,
+    expect_durable: bool = False,
+    conversation_id: str = "",
+) -> Iterator[dict]:
     """Run the tool loop.
 
     ``expect_durable`` says whether a turn that records nothing is a failure. For an

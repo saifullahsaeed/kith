@@ -46,7 +46,9 @@ class TestTheShapeOnTheWire:
 
         from kith.services import agent_loop
 
-        source = inspect.getsource(agent_loop.stream_agent)
+        # `_run_turn` is the loop; `stream_agent` is now a thin wrapper that opens the
+        # turn boundary around it. The invariant below lives in the loop.
+        source = inspect.getsource(agent_loop._run_turn)
         assert '{"role": "assistant", "content": content, "tool_calls": tool_calls}' not in source
         assert 'turn["content"] = content' in source
 

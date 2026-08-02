@@ -53,6 +53,36 @@ def working_in(conversation_id: str) -> Iterator[None]:
         _current.reset(token)
 
 
+#: Scratch space that lives exactly as long as one turn. Empty outside one, which is the
+#: honest answer for a tool called from a test or a script.
+_scratch: ContextVar[dict | None] = ContextVar("kith_turn_scratch", default=None)
+
+
+def turn_notes() -> dict:
+    """What this turn has already done, for tools that should not do it twice.
+
+    A turn is one `stream_agent` call, and nothing before this could see that boundary: a
+    handler is called as `run(path, args)` and has no idea whether it has already run. Which
+    is fine for most of them — reading a file twice is cheap and sometimes right — and not
+    fine for the one that pulls two thousand tokens of instructions in and leaves them there.
+
+    Returns a throwaway dict outside a turn rather than raising, so a tool that uses this
+    still works in a test with nothing set up.
+    """
+    notes = _scratch.get()
+    return notes if notes is not None else {}
+
+
+@contextmanager
+def a_turn() -> Iterator[None]:
+    """One turn's scratch space, cleared at the end of it."""
+    token = _scratch.set({})
+    try:
+        yield
+    finally:
+        _scratch.reset(token)
+
+
 @contextmanager
 def working_on(project_id: int | None) -> Iterator[None]:
     """Run a block as work on one project, whatever the conversation says.

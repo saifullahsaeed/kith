@@ -71,7 +71,9 @@ class TestTheForcedFinalAnswer:
     """
 
     def test_the_final_request_reuses_the_round_s_own_list(self):
-        source = inspect.getsource(agent_loop.stream_agent)
+        # `_run_turn` is the loop; `stream_agent` is now a thin wrapper that opens the
+        # turn boundary around it. The invariant below lives in the loop.
+        source = inspect.getsource(agent_loop._run_turn)
         assert "_final_answer(convo, config, host, schemas)" in source, (
             "the forced final answer is building its own tool list again"
         )
@@ -83,7 +85,9 @@ class TestTheForcedFinalAnswer:
     def test_the_list_is_defined_even_if_no_round_ran(self):
         """`schemas` is the last round's; a turn that somehow reaches the end without one
         must not raise NameError on the way to answering."""
-        source = inspect.getsource(agent_loop.stream_agent)
+        # `_run_turn` is the loop; `stream_agent` is now a thin wrapper that opens the
+        # turn boundary around it. The invariant below lives in the loop.
+        source = inspect.getsource(agent_loop._run_turn)
         assert "schemas: list[dict] = []" in source
 
     def test_it_still_sends_them_rather_than_none(self, db: Path):
