@@ -124,13 +124,16 @@ class TestReadingIsWindowedAndAlwaysContinuable:
         from kith.infra import workspace
 
         monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
-        # 60 lines of 300 characters: far inside the line window, far outside the byte budget.
-        (tmp_path / "big.css").write_text("\n".join(f".rule-{n} {{ {'x' * 290} }}" for n in range(60)))
+        # 200 lines of 300 characters: far inside the line window, far outside the byte
+        # budget. It was 60, which stopped being outside the byte budget when `read_file`
+        # got its own limit — sixty lines of CSS is the size of file that should arrive in
+        # one call, so the test was passing on a case that is no longer the case it names.
+        (tmp_path / "big.css").write_text("\n".join(f".rule-{n} {{ {'x' * 290} }}" for n in range(200)))
 
         first = workspace.read_file("big.css")
 
         assert "offset=" in first, "the only way out of a byte-clipped read is an offset"
-        assert "of 60" in first
+        assert "of 200" in first
 
     def test_the_offset_it_gives_actually_reaches_the_rest(self, tmp_path, monkeypatch):
         import re
@@ -138,7 +141,7 @@ class TestReadingIsWindowedAndAlwaysContinuable:
         from kith.infra import workspace
 
         monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
-        (tmp_path / "big.css").write_text("\n".join(f"line-{n} {'x' * 290}" for n in range(60)))
+        (tmp_path / "big.css").write_text("\n".join(f"line-{n} {'x' * 290}" for n in range(200)))
 
         seen: set[int] = set()
         offset = 1
@@ -152,7 +155,7 @@ class TestReadingIsWindowedAndAlwaysContinuable:
 
         # Following the offsets has to reach every line. If it does not, "the rest" is a lie
         # and the loop he was stuck in is still available.
-        assert seen == set(range(1, 61))
+        assert seen == set(range(1, 201))
 
     def test_it_stops_on_a_line_boundary(self, tmp_path, monkeypatch):
         from kith.infra import workspace

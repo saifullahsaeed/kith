@@ -66,6 +66,24 @@ INTERNAL_DIR = ".kith"
 #: the tool that can do everything, and can be the tool that comes back.
 _EXEC_TIMEOUT = 180
 _OUTPUT_LIMIT = 8_000
+
+#: What one `read_file` may return, separately from what a *command* may print.
+#:
+#: They shared the 8,000 and should not: clipping arbitrary command output there is sensible,
+#: because the interesting part of a build log is at the end and the rest is noise. A source
+#: file is not noise, and 8,000 characters is about 160 lines — under a typical React
+#: component. Measured on a real project: a 271-line page returned 160 lines, and a 172-line
+#: page returned 158, so reading it whole cost *two* calls where the second fetched fourteen
+#: lines. A second call is a second round, and a round re-sends the ~20,000-token prompt
+#: floor — twenty thousand tokens to collect fourteen lines of TSX.
+_READ_LIMIT = 16_000
+
+#: How far past the limit to go rather than force another call.
+#:
+#: The cost of stopping is not the characters saved, it is the round the caller must spend to
+#: ask again. Overshooting by half a limit is always cheaper than that, so a file that is
+#: nearly finished gets finished.
+_READ_OVERSHOOT = 8_000
 _MAX_WRITE = 5_000_000
 _READ_DEFAULT_LINES = 400
 _MAX_UI_READ = 2_000_000
@@ -675,11 +693,16 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None) ->
     # exactly that — a 79-line stylesheet, asked for whole, half returned, no way to ask for
     # the rest — so he read the same two files five times in one step and got the same first
     # half every time.
+    # How much this read may return. The whole rest of the file, when finishing it costs less
+    # than the round the caller would otherwise spend coming back for the remainder.
+    numbered_window = [f"{start + i:6d}\t{line}" for i, line in enumerate(window)]
+    whole = sum(len(one) + 1 for one in numbered_window)
+    budget = _READ_LIMIT + _READ_OVERSHOOT if whole <= _READ_LIMIT + _READ_OVERSHOOT else _READ_LIMIT
+
     rendered: list[str] = []
     used = 0
-    for index, line in enumerate(window):
-        numbered = f"{start + index:6d}\t{line}"
-        if rendered and used + len(numbered) + 1 > _OUTPUT_LIMIT:
+    for numbered in numbered_window:
+        if rendered and used + len(numbered) + 1 > budget:
             break
         rendered.append(numbered)
         used += len(numbered) + 1
