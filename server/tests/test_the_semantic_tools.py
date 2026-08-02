@@ -242,10 +242,39 @@ class TestWhenTheServerWillNotStart:
 
         assert len(attempts) == 1, f"it tried to start the broken server {len(attempts)} times"
 
-    def test_the_failure_can_be_cleared_after_an_install(self, tmp_path, fresh_manager):
-        fresh_manager._broken[("x", "python")] = "nope"
-        fresh_manager.forget_failures()
-        assert fresh_manager._broken == {}
+    def test_the_failure_is_forgotten_after_a_while(self, tmp_path, fresh_manager, monkeypatch):
+        """It has to expire on its own. The usual reason a server will not start is that it
+        was not really installed, and the usual fix is to install it — so remembering the
+        failure forever means that fix needs an app restart, which nobody would guess.
+
+        There is deliberately no "clear the failures" tool or button. He has a shell, the
+        message names the command, and three minutes later it simply works.
+        """
+        import sys
+        import time
+
+        # The module, not the singleton that shares its name — the same trap conftest
+        # documents for `kith.autonomy.runner`, and the third time it has bitten here.
+        module = sys.modules["kith.services.lsp.manager"]
+
+        binary = tmp_path / "node_modules" / ".bin" / "typescript-language-server"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\nexit 1\n")
+        binary.chmod(0o755)
+        (tmp_path / "a.ts").write_text("export const x = 1;\n")
+
+        with pytest.raises(Unavailable):
+            fresh_manager.for_file(tmp_path / "a.ts", start_timeout=4)
+        assert fresh_manager._broken, "it should remember, briefly"
+
+        # Wind the clock past the window rather than sleeping through it.
+        later = time.monotonic() + module.BROKEN_FOR + 1
+        monkeypatch.setattr(module.time, "monotonic", lambda: later)
+
+        with pytest.raises(Unavailable):
+            fresh_manager.for_file(tmp_path / "a.ts", start_timeout=4)
+        # It tried again rather than replaying the remembered refusal.
+        assert fresh_manager._broken
 
 
 @pytest.mark.skipif(not HAVE_PYRIGHT, reason="pyright is not installed here")

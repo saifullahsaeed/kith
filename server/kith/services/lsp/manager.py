@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,6 +123,11 @@ _PROJECT_BINS = (
     "venv/Scripts",
 )
 
+#: How long a server that would not start is left alone before it is tried again. Short
+#: enough that installing the thing and asking again just works; long enough that a
+#: genuinely broken server is not re-launched on every tool call.
+BROKEN_FOR = 180.0
+
 #: Most servers to keep running at once. Each is real memory; past a handful, a session has
 #: wandered and the oldest is not coming back.
 MAX_LIVE = 4
@@ -141,7 +147,11 @@ class Manager:
         #: (root, family) that failed to start, and why. Retried on a later call only if the
         #: binary changes — a server that crashes on startup crashes every time, and trying
         #: again on each tool call turns one slow failure into a slow failure per call.
-        self._broken: dict[tuple[str, str], str] = {}
+        #: (root, family) that failed to start, with when and why. Time-boxed rather than
+        #: permanent — the usual reason a server would not start is that it was not really
+        #: installed, and the usual fix is to install it. Remembering the failure forever
+        #: would mean that fix needs a restart to take effect, which nobody would guess.
+        self._broken: dict[tuple[str, str], tuple[float, str]] = {}
 
     # -- discovery ---------------------------------------------------------- #
 
@@ -236,10 +246,21 @@ class Manager:
         options = CANDIDATES.get(family, ())
         if not options:
             return f"No language server configured for {family}."
+        # Phrased as something to do, not something to work around. The previous wording
+        # explained the limitation, mentioned the install in passing, and then finished by
+        # naming two alternatives — so the sentence that landed was "use grep instead", and
+        # over a whole project the install never happened once.
+        #
+        # There is deliberately no install *tool*. He has a shell and this is a shell command;
+        # a tool would be another schema on every round of every turn — and 37 of the 70
+        # already offered were never called in 47 ticks — to wrap one line he can already run.
         return (
-            f"No {family} language server installed, so I can't answer this one semantically. "
-            f"Installing one would fix it: `{options[0].install}`. Meanwhile `outline` gives "
-            "the file's shape and `grep` finds text."
+            f"There's no {family} language server here yet, so I can't answer this one "
+            f"semantically. One command fixes it for every {family} project from now on:\n\n"
+            f"    {options[0].install}\n\n"
+            "Run it with `shell` if that's a reasonable thing to install on this machine, "
+            "then ask me again — I'll pick it up. If you'd rather not, `outline` gives the "
+            "file's shape and `grep` finds text."
         )
 
     # -- lifecycle ---------------------------------------------------------- #
@@ -264,9 +285,13 @@ class Manager:
                 with contextlib_suppress():
                     existing.stop()
 
-            broken = self._broken.get(key)
-            if broken:
-                raise Unavailable(broken)
+            remembered = self._broken.get(key)
+            if remembered:
+                when, why = remembered
+                if time.monotonic() - when < BROKEN_FOR:
+                    raise Unavailable(why)
+                # Long enough ago to be worth another try — it may have been installed since.
+                self._broken.pop(key, None)
 
             found = self.find_binary(family, root)
             if found is None:
@@ -281,7 +306,7 @@ class Manager:
                     f"{candidate.binary} is installed but would not start: {exc}. "
                     f"Try running it yourself to see why."
                 )
-                self._broken[key] = reason
+                self._broken[key] = (time.monotonic(), reason)
                 with contextlib_suppress():
                     server.stop()
                 raise Unavailable(reason) from None
@@ -319,11 +344,6 @@ class Manager:
         for server in servers:
             with contextlib_suppress():
                 server.stop()
-
-    def forget_failures(self) -> None:
-        """Let a previously-broken server be tried again — after an install, say."""
-        with self._lock:
-            self._broken.clear()
 
 
 class contextlib_suppress:
