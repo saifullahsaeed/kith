@@ -100,6 +100,14 @@ def _build_messages(messages, config, conversation_id: str = ""):
     for message in messages:
         if message.get("role") not in ("user", "assistant"):
             continue
+        # An assistant turn with nothing in it carries no information and is refused by some
+        # providers outright — "the message at position N with role 'assistant' must not be
+        # empty". Nothing writes one today (`record` skips empty text), but a conversation
+        # that acquired one from any source would be *permanently* unusable: every later
+        # message rebuilds the same history and fails the same way, with nothing on screen
+        # to say why. Skipping it costs nothing and cannot be the wrong call.
+        if message.get("role") == "assistant" and not str(message.get("content") or "").strip():
+            continue
         out.append(_with_attachments(message))
     now = _present_state(conversation_id)
     if now:

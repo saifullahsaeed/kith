@@ -602,7 +602,23 @@ def stream_agent(
             continue
 
         # Record the assistant's tool-calling turn so the model has context.
-        convo.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+        #
+        # `content` is omitted rather than sent empty when he called tools without saying
+        # anything first. Most rounds have a preamble — "let me look at the config" — and the
+        # ones that do not were sending `"content": ""`, which a provider is entitled to
+        # reject and one did: two turns died thirty seconds apart on
+        #
+        #     400 — the message at position 54 with role 'assistant' must not be empty
+        #
+        # Both at zero prompt tokens, so the request never ran; and because the offending
+        # message was already in the turn's history, retrying rebuilt the same conversation
+        # and hit the same wall. A turn that cannot be retried is a turn that is simply lost.
+        # The tool-calling schema has always allowed content to be absent — that is what a
+        # message which *is* the tool call looks like.
+        turn: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
+        if content:
+            turn["content"] = content
+        convo.append(turn)
 
         # Resolve every call in the round up front (ids, thrash-guard) so the only
         # thing left is running them — which lets a run of network-bound calls go
