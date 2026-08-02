@@ -155,7 +155,10 @@ def _update_task(path: Path, a: dict) -> dict | None:
     # the roadmap out with nothing running, and moving the first task to `todo` is what says
     # go — rather than a button somewhere else that means the same thing.
     if (a.get("status") or "") in _ACTIONABLE:
+        reopened = _reopen_if_finished(path, (out or {}).get("project_id"))
         _get_on_with_it(f"task ready: {str((out or {}).get('goal') or '')[:40]}")
+        if reopened and out:
+            return {**out, "note": reopened}
     return out
 
 
@@ -173,6 +176,35 @@ _SETTLED = ("done", "dropped")
 #: Statuses the tick can actually pick up — see `repo.tasks.active_tasks`. A task arriving in
 #: one of these is a reason to wake; a task arriving in `backlog` deliberately is not.
 _ACTIONABLE = ("todo", "doing")
+
+
+def _reopen_if_finished(path: Path, project_id: int | None) -> str:
+    """Filing work into a finished project means it is not finished. Say so, and reopen it.
+
+    A project completes itself when its roadmap clears, which is right — and then nothing
+    stopped an actionable task being added underneath afterwards, where it was **invisible**:
+    `active_tasks` excludes everything under a done or paused project, so the board showed two
+    `todo` tasks and every tick reported "caught up — resting".
+
+    Three symptoms, one cause, and none of them pointed here. The work never started. The
+    project picker showed a bare `1` instead of a name, because the interface lists only
+    active projects and had nothing to match the id against. And the loop woke on the new
+    task, found nothing it was allowed to touch, and went back to sleep — over and over.
+
+    Reopening rather than refusing: the task is the evidence. Someone deciding there is more
+    to do is a fact about the project, not a mistake to correct.
+    """
+    if not project_id:
+        return ""
+    try:
+        row = repo.projects.get_project(path, int(project_id))
+        if not row or row.get("status") not in ("done", "paused"):
+            return ""
+        was = row["status"]
+        repo.projects.update_project(path, int(project_id), status="active")
+        return f"{row.get('name') or 'That project'} was {was}; there is work in it again, so it is active."
+    except Exception:
+        return ""
 
 
 def _get_on_with_it(why: str) -> None:
@@ -304,7 +336,10 @@ def add_task(path: Path, args: dict):
     # that is working, so before this a task filed in a conversation sat there until someone
     # found the button — you asked for a thing, he wrote it down, and you both waited.
     if status in _ACTIONABLE:
+        reopened = _reopen_if_finished(path, made.get("project_id"))
         _get_on_with_it(f"new task: {goal[:40]}")
+        if reopened:
+            return {**made, "note": reopened}
     return made
 
 

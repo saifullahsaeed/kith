@@ -45,9 +45,19 @@ export function SessionBar({
 
   const load = useCallback(() => {
     fetchBrain()
-      .then((brain) => setProjects(brain.projects.filter((p) => p.status === "active")))
+      .then((brain) =>
+        // Active ones, plus whichever this session is actually bound to whatever its state.
+        // Filtering to active alone meant a project that completed itself vanished from the
+        // list while the session was still on it — and with nothing matching the id, the
+        // picker fell back to rendering the raw value, so the bar read "1". Which is both
+        // useless and actively misleading: it looks like a count, and the one thing you
+        // needed to know was that the project had closed under you.
+        setProjects(
+          brain.projects.filter((p) => p.status === "active" || p.id === projectId),
+        ),
+      )
       .catch(() => {});
-  }, []);
+  }, [projectId]);
 
   // Reloaded when the session changes as well as on mount: he starts projects himself
   // mid-conversation, so the list a picker was opened with goes stale within a turn.
@@ -84,7 +94,17 @@ export function SessionBar({
           { value: NONE, label: <span className="text-muted-foreground">No project</span> },
           ...projects.map((project) => ({
             value: String(project.id),
-            label: project.name,
+            // A closed project says so, because being bound to one is why nothing is
+            // happening: he is not allowed to pick up its tasks, however many are ready.
+            label:
+              project.status === "active" ? (
+                project.name
+              ) : (
+                <span>
+                  {project.name}{" "}
+                  <span className="text-muted-foreground/70">· {project.status}</span>
+                </span>
+              ),
           })),
         ]}
       />

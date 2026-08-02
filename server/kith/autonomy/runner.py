@@ -841,7 +841,47 @@ class AutonomyRunner:
                 f"{'' if len(held) == 1 else 's'} sit behind milestones that aren't finished — "
                 "if the order is wrong, the roadmap is the place to change it.",
             )
+        # Ready to work, and shut out by a closed project. `active_tasks` drops everything
+        # under a done or paused project, so a project that completed itself and then gained
+        # a task showed two `todo` items on the board while every tick said "caught up —
+        # resting". Nothing in this function had a branch for it, so the most confusing state
+        # available produced the most reassuring sentence available.
+        shut = self._shut_out(project, held_by)
+        if shut:
+            names = ", ".join(sorted({one["project"] for one in shut}))
+            return (
+                f"nothing I can pick up — {len(shut)} task"
+                f"{'' if len(shut) == 1 else 's'} in a closed project",
+                f"I have {len(shut)} task{'' if len(shut) == 1 else 's'} ready to work, but "
+                f"{names} is not active, so I am not allowed to touch them: "
+                + "; ".join(f"“{one['goal']}” (#{one['id']})" for one in shut[:3])
+                + ("…" if len(shut) > 3 else "")
+                + ". Reopen the project and I will start.",
+            )
         return "caught up — resting", ""
+
+    def _shut_out(self, project: int | None, held_by: set[int]) -> list[dict]:
+        """Tasks that are ready to work and whose project will not let them run."""
+        try:
+            closed = {
+                int(row["id"]): (row.get("name") or f"project #{row['id']}")
+                for row in repo.projects.list_projects(AGENT_DB_PATH)
+                if (row.get("status") or "") in ("done", "paused")
+            }
+            if not closed:
+                return []
+            return [
+                {"id": task["id"], "goal": task["goal"], "project": closed[int(task["project_id"])]}
+                for task in repo.tasks.list_tasks(AGENT_DB_PATH)
+                if task.get("status") in ("todo", "doing")
+                and task.get("project_id")
+                and int(task["project_id"]) in closed
+                and self._in_scope(task, project, held_by)
+            ]
+        except Exception:
+            # Explaining why he is idle must never be the thing that stops him being idle
+            # gracefully. No explanation is worse than a wrong one but better than a crash.
+            return []
 
     #: How long to leave between saying "you are the blocker". Said once per stretch, not once
     #: per tick: a tick can fire every thirty seconds, and the same true sentence repeated
