@@ -117,6 +117,9 @@ class AutonomyRunner:
         # can. In-memory and reset when a session (re)enters keep_working — a restart mid-run
         # forgets it, a bounded gap, not the 11-hour all-nighter this exists to stop.
         self._session_tokens: dict[str, int] = {}
+        # And what it has actually cost, as the provider billed it. The cap is enforced on
+        # this; tokens are only the fallback for a provider that reports no price.
+        self._session_cost: dict[str, float] = {}
         # Sessions already stopped for budget, so a late charge can't post the note twice.
         self._session_capped: set[str] = set()
         # Loop detection + reply bookkeeping.
@@ -160,6 +163,7 @@ class AutonomyRunner:
         # Fresh session, fresh meter — starting (or restarting) work zeroes the budget so a
         # previous run's spend can't carry over and trip the cap the moment it resumes.
         self._session_tokens[conversation_id] = 0
+        self._session_cost[conversation_id] = 0.0
         self._session_capped.discard(conversation_id)
         self.ensure_loop()
         self._emit("status", "working")
@@ -275,38 +279,61 @@ class AutonomyRunner:
             # Bookkeeping must never turn one failure into two.
             pass
 
-    def _charge_session(self, conversation_id: str, tokens_in: int) -> None:
-        """Add this tick's prompt volume to the session's meter; rest it once past the cap.
+    def _charge_session(self, conversation_id: str, uncached_in: int, cost_usd: float) -> None:
+        """Add this tick's spend to the session's meter; rest it once past the cap.
 
-        ``tokens_in`` (the whole prompt, cached re-reads included) rather than the uncached
-        slice, on purpose: it is the volume the dashboard shows and the number a person reacts
-        to — it is what "37 million tokens" meant. Resting reuses the exact set_working(False)
-        baton that rest() and the idle branch already use, so the loop simply stops selecting
-        this session on the next pass, with no second stop-path to keep in step. It fires once:
-        the session is remembered as capped so a later charge in the same run posts no second note.
+        **Money, not tokens.** This charged `tokens_in` — the whole prompt, cached re-reads
+        included — on the reasoning that it was the number a person reacts to. It is, and that
+        turned out to be the problem: at a 78% cache hit it is more than four times the volume
+        actually read, so the meter runs four times too fast against a ceiling set in the same
+        units. A real session was stopped for "running through 6,544,155 tokens, past its
+        budget of 5,000,000" having spent, at the blended rate the provider was charging that
+        day, about twenty-six cents.
+
+        A cap whose job is "turn a stuck all-nighter into a message in the morning" has to be
+        denominated in the thing that hurts. The provider reports cost on every call and it
+        was already being summed for the dashboard; it just was not the thing being enforced.
+
+        The token cap survives as a fallback for providers that report nothing — a local model
+        costs nothing, so there is no money to measure and a runaway is bounded by time
+        instead. Even there it now counts the *uncached* slice, which is the honest measure of
+        work done rather than of prompt re-sent.
         """
         if not conversation_id or conversation_id in self._session_capped:
             return
-        total = self._session_tokens.get(conversation_id, 0) + int(tokens_in)
-        self._session_tokens[conversation_id] = total
-        cap = int(tuning.value("session_token_cap"))
-        if total < cap:
-            return
+
+        spent = self._session_cost.get(conversation_id, 0.0) + max(0.0, float(cost_usd))
+        self._session_cost[conversation_id] = spent
+        read = self._session_tokens.get(conversation_id, 0) + max(0, int(uncached_in))
+        self._session_tokens[conversation_id] = read
+
+        cap_cents = float(tuning.value("session_cost_cents"))
+        token_cap = int(tuning.value("session_token_cap"))
+        # Cost is authoritative whenever the provider gives us any. Only a provider that has
+        # reported nothing at all falls through to tokens — otherwise a cheap model would be
+        # held to a token ceiling it can never sensibly reach, which is the bug inverted.
+        if spent > 0:
+            if spent * 100 < cap_cents:
+                return
+            reached = f"${spent:,.2f}, past its budget of ${cap_cents / 100:,.2f}"
+            short = f"budget reached: ${spent:,.2f} this session — resting"
+        else:
+            if read < token_cap:
+                return
+            reached = f"{read:,} tokens read, past its budget of {token_cap:,}"
+            short = f"budget reached: {read:,} tokens this session — resting"
+
         self._session_capped.add(conversation_id)
         try:
             repo.conversations.set_working(AGENT_DB_PATH, conversation_id, False)
             repo.messages.add_message(
                 AGENT_DB_PATH,
-                f"I stopped this session — it ran through {total:,} tokens, past its budget of "
-                f"{cap:,}. I've rested it so it can't keep spending while you're away. Tell me to "
-                "keep going if you want more, or raise the session budget in settings.",
+                f"I stopped this session — it ran through {reached}. I've rested it so it "
+                "can't keep spending while you're away. Tell me to keep going if you want "
+                "more, or raise the session budget in settings.",
                 kind="stuck",
             )
-            self._emit(
-                "done",
-                f"budget reached: {total:,} tokens this session — resting",
-                conversation=conversation_id,
-            )
+            self._emit("done", short, conversation=conversation_id)
         except Exception:
             pass
 
@@ -743,7 +770,7 @@ class AutonomyRunner:
         self._last_tick_uncached = tick_uncached + tick_out
         # Bound the whole session, not just this tick: add this step's prompt volume to the
         # session meter and rest the session if it has now crossed its budget.
-        self._charge_session(conversation_id, tick_in)
+        self._charge_session(conversation_id, tick_uncached, tick_cost)
 
         if final_text.strip():
             self._emit("thought", final_text.strip()[:600], conversation=conversation_id)

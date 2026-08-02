@@ -313,17 +313,31 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="tokens",
     ),
     Tunable(
+        key="session_cost_cents",
+        env="KITH_SESSION_COST_CENTS",
+        label="What one working session may spend",
+        help="Money a single 'keep working' session may run through before it stops itself "
+        "and tells you — in cents, as the provider bills it. This is the real ceiling. The "
+        "token cap below is only a fallback for providers that report no cost (a local model "
+        "costs nothing, so there is nothing for this to measure).",
+        default=300,
+        group="rhythm",
+        minimum=10,
+        maximum=100_000,
+        unit="cents",
+    ),
+    Tunable(
         key="session_token_cap",
         env="KITH_SESSION_TOKEN_CAP",
-        label="Tokens one working session may spend",
-        help="Total prompt tokens a single 'keep working' session may run through before it "
-        "stops itself and tells you. This is the ceiling that turns a stuck all-nighter into a "
-        "message in the morning; set it too low and long honest jobs stop early, too high and a "
-        "loop can still cost real money before anyone looks.",
-        default=5_000_000,
+        label="Tokens one session may spend (fallback)",
+        help="Only used when the provider reports no cost. Counts tokens actually read — the "
+        "uncached slice — not the whole prompt: at a 78% cache hit the two differ by more "
+        "than fourfold, which is how a session that had spent 26 cents was stopped for "
+        "running through 6.5 million 'tokens'.",
+        default=20_000_000,
         group="rhythm",
         minimum=100_000,
-        maximum=200_000_000,
+        maximum=500_000_000,
         unit="tokens",
     ),
     # -- stalls ------------------------------------------------------------- #
