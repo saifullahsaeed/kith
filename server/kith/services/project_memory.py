@@ -107,9 +107,31 @@ def block(project_dir: str | Path, name: str = "") -> str:
     Names the file as well as showing it, because reading it is only half of what he needs
     to do with it — the other half is adding to it, and he cannot do that without the path.
     """
-    body = read(project_dir)
     where = f"{MEMORY_DIR}/{MEMORY_FILE}"
     label = f" for {name}" if name else ""
+
+    # A folder that is not there is a different problem from a folder with nothing written in
+    # it yet, and telling them apart is the whole point of this branch. Conflated, they read
+    # as "no memory yet" — which is what actually happened: a project stayed linked to a
+    # folder that had been deleted, so 3,068 characters of hard-won project memory sat unread
+    # on disk while every tick was told there was none and invited to start a fresh one. That
+    # invitation is the dangerous part. He would have written the new file into a folder that
+    # does not exist, or into his own, and the real one would have gone on being invisible.
+    #
+    # Nothing else notices, either: `base_dir()` falls back to his own folder without
+    # complaint, so the work simply happens in the wrong place. This message is the only
+    # place a broken link is ever said out loud, which is why it names the path and the fix.
+    here = Path(project_dir)
+    if not here.is_dir():
+        return (
+            f"⚠ This project{label} is linked to `{here}`, and that folder is not there. "
+            "Anything you write with a relative path will land in your own folder instead, "
+            "and whatever the project already knew about itself cannot be read. Do not start "
+            "a new memory file — find where the work actually lives and re-link it with "
+            "`link_folder`, or tell your person the link is broken."
+        )
+
+    body = read(project_dir)
     if not body:
         return (
             f"This project{label} has no `{where}` yet. When you learn something a later "

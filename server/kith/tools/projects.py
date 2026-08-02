@@ -304,6 +304,22 @@ def link_folder(path: Path, args: dict):
     if resolved.exists() and not resolved.is_dir():
         raise ValueError(f"{folder} is a file, not a folder")
     existed = resolved.is_dir()
+    # A relative path that does not exist is the one shape worth refusing, and it is how this
+    # went wrong: `job/the-app` resolves against *his* folder, so pointing at a codebase on
+    # the Desktop quietly created an empty `~/Kith/job/the-app` and linked that instead. The
+    # note said "created the folder", truthfully, and it still looked like success — the
+    # project was linked, it just was not linked to the code. Everything after that happened
+    # in the wrong place.
+    #
+    # Creating is still allowed, because "a folder you are about to fill" is a real use. It
+    # just has to be asked for unambiguously, with a path that says where.
+    if not existed and not Path(folder).expanduser().is_absolute():
+        raise ValueError(
+            f"`{folder}` is a relative path and there is no folder there — it would resolve "
+            f"to {resolved}, inside your own folder, and I would create an empty one. If you "
+            "meant an existing codebase, give the full path. If you really do want a new "
+            "folder there, pass the full path and I will make it."
+        )
     resolved.mkdir(parents=True, exist_ok=True)
 
     updated = repo.projects.set_directory(path, args["id"], str(resolved))

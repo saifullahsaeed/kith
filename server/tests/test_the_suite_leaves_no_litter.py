@@ -66,4 +66,13 @@ def test_skills_are_still_reachable_through_the_redirect():
     if not real.is_dir():
         return  # A checkout with no skills installed; nothing to link.
     assert linked.is_dir()
-    assert {p.name for p in linked.iterdir()} == {p.name for p in real.iterdir()}
+
+    copied = {p.name for p in linked.iterdir()}
+    installed = {p.name for p in real.iterdir()}
+
+    # A subset, not an exact match. The copy is made once per session and the real folder is
+    # live — installing a skill while the suite runs made this fail on set equality, which is
+    # a true statement about the copy and nothing at all about whether skills are reachable.
+    # What matters is that the copy is populated and is genuinely of the installed set.
+    assert copied, "the skills were not copied through, so skill tests will fail obscurely"
+    assert copied <= installed

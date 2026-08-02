@@ -529,7 +529,18 @@ def _turn(recorder: _Recorder, messages: list, config, conversation_id: str, ope
     ):
         recorder.saw(event)
         watcher.saw(event)
-        yield json.dumps(event) + "\n"
+        # Scrubbed on the way out too, not only on the way into the transcript. The model has
+        # not been sent base64 since the image leak was fixed and the transcript stopped
+        # storing it shortly after — but this line went on streaming the whole data URI to the
+        # browser, where the generic result renderer printed it. So looking at the interface
+        # showed forty thousand characters of base64 sitting in a tool result, which is
+        # indistinguishable from the bug that is actually fixed, and reasonable grounds to
+        # think it was back.
+        #
+        # It is a real cost as well as a misleading one: 44KB per image over the wire and into
+        # the DOM, for a string nothing on the other side can use. The interface only ever
+        # tested the field for truthiness to say "looked at it".
+        yield json.dumps(_readable(event)) + "\n"
         if event.get("type") == "error":
             recorder.finish(error=event.get("message"))
             watcher.finish()

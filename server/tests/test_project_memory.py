@@ -92,10 +92,28 @@ class TestTheBlockThatReachesThePrompt:
         assert "wrong" in pm.block(project).lower()
 
     def test_an_empty_project_still_gets_told_to_start_one(self, project):
+        # The folder has to exist for this to be the "nothing written yet" case. It did not,
+        # and the assertion passed anyway — because a missing folder and an empty one gave
+        # the same answer, which is the bug this test now guards the other side of.
+        project.mkdir(parents=True, exist_ok=True)
+
         block = pm.block(project, "Gym Tracker")
+
         # Silence here would mean the file only ever exists if he invents the idea himself.
         assert ".kith/memory.md" in block
         assert "write" in block.lower()
+
+    def test_a_folder_that_has_gone_is_not_the_same_as_an_empty_one(self, project):
+        """They call for opposite actions, and telling them apart is the whole point.
+
+        A real project stayed linked to a deleted folder for a day: three thousand characters
+        of project memory sat unread while every tick was told there was none and invited to
+        write a fresh one — which would have buried the real file for good.
+        """
+        block = pm.block(project, "Gym Tracker")
+
+        assert "not there" in block
+        assert "link_folder" in block
 
     def test_a_missing_folder_does_not_raise(self, tmp_path):
         # He may be pointed at a directory that has been moved or deleted. A prompt builder

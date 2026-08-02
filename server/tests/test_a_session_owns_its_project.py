@@ -329,14 +329,29 @@ class TestTheTickSeesTheProjectMemory:
         assert runner._project_memory(project["id"]) == ""
 
     def test_a_folder_with_no_memory_yet_is_asked_for_one(self, db, monkeypatch, tmp_path):
-        """Not an empty block: a project with a folder and no memory gets told to start one.
+        """Not an empty block: a project with a folder and no memory gets told to start one."""
+        runner = runner_on(db, monkeypatch)
+        folder = tmp_path / "fresh"
+        folder.mkdir()
+        project = repo.projects.add_project(db, "Fresh", "", str(folder))
+        assert "no `.kith/memory.md` yet" in runner._project_memory(project["id"])
 
-        Which is also what happens if someone moves the repo out from under him — he is
-        nudged rather than crashed, and a tick that cannot read a file is still a tick.
+    def test_a_folder_moved_out_from_under_him_says_so_instead(self, db, monkeypatch, tmp_path):
+        """This case used to give the same answer as the one above, and the docstring here
+        used to call that "nudged rather than crashed".
+
+        The nudge was "write a memory file", which is the wrong move: the folder is gone, so
+        writing lands nowhere useful and whatever the project already knew stays unread. It
+        happened for real — a project pointed at a deleted folder while three thousand
+        characters of its memory sat on disk being reported as absent.
         """
         runner = runner_on(db, monkeypatch)
         project = repo.projects.add_project(db, "Moved", "", str(tmp_path / "gone"))
-        assert "no `.kith/memory.md` yet" in runner._project_memory(project["id"])
+
+        block = runner._project_memory(project["id"])
+
+        assert "not there" in block
+        assert "no `.kith/memory.md` yet" not in block
 
 
 class TestSayingItByHand:
