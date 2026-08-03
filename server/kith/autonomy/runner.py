@@ -885,7 +885,33 @@ class AutonomyRunner:
                 + ("…" if len(shut) > 3 else "")
                 + ". Reopen the project and I will start.",
             )
+        # A session hired for one project has finished it. Worth saying which, because the
+        # session staying put is now deliberate: it used to wander to whatever project it
+        # touched next, which read as him changing the subject on his own. Being told "caught
+        # up" by a session you pointed at one thing, while another project has work waiting,
+        # is confusing in a way naming the project fixes in one sentence.
+        if project:
+            elsewhere = sum(
+                1 for task in repo.tasks.active_tasks(AGENT_DB_PATH) if self._project_of(task) != project
+            )
+            here = self._project_name(project)
+            if elsewhere:
+                return (
+                    f"done with {here} — resting",
+                    f"Nothing left that I can do on {here}, and this session is on {here} — so "
+                    f"I am not picking up the {elsewhere} task{'' if elsewhere == 1 else 's'} "
+                    "waiting on other projects. Point this session somewhere else, or start a "
+                    "new one for them.",
+                )
+            return f"done with {here} — resting", ""
         return "caught up — resting", ""
+
+    def _project_name(self, project_id: int) -> str:
+        try:
+            row = repo.projects.get_project(AGENT_DB_PATH, int(project_id))
+            return str((row or {}).get("name") or f"project #{project_id}")
+        except Exception:
+            return f"project #{project_id}"
 
     def _shut_out(self, project: int | None, held_by: set[int]) -> list[dict]:
         """Tasks that are ready to work and whose project will not let them run."""

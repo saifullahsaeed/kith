@@ -54,14 +54,14 @@ def create_project(path: Path, args: dict):
         project_memory.ensure(resolved)
         project_files.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
-        session_context.adopt(path, made.get("id"))
+        session_context.adopt(path, made.get("id"), deliberate=True)
         return {**made, "memory": f"{directory}/.kith/memory.md"}
     made = repo.projects.add_project(path, args["name"], args.get("description") or "")
     # The conversation that started it is the one working on it. Nothing used to write this
     # down, so `conversations.project_id` existed in the schema, was read on every chat turn
     # to decide which project memory to show, and was never once set — which is why two
     # sessions saw the same everything.
-    session_context.adopt(path, made.get("id"))
+    session_context.adopt(path, made.get("id"), deliberate=True)
     return made
 
 
@@ -332,7 +332,7 @@ def link_folder(path: Path, args: dict):
     permissions.forget_linked_projects()
     project_memory.ensure(resolved)
     project_files.ensure(resolved)
-    session_context.adopt(path, args["id"])
+    session_context.adopt(path, args["id"], deliberate=True)
     return {
         **updated,
         "memory": str(project_memory.path_for(resolved)),

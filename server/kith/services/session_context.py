@@ -100,15 +100,30 @@ def working_on(project_id: int | None) -> Iterator[None]:
         _project.reset(token)
 
 
-def adopt(path: Path, project_id: int | None) -> None:
-    """This session is working on that project now.
+def adopt(path: Path, project_id: int | None, deliberate: bool = False) -> None:
+    """This session is working on that project now — unless it already has one.
 
     Derived from what he does rather than declared, deliberately. The alternative was a
     `work_on(project)` tool, and a tool he has to remember to call is a tool that will be
-    missed — which is the failure mode written up half a dozen times in this codebase. So
-    every write against a project binds the session that made it: create one, link a folder,
-    add a milestone, move a task. The session is working on the last project it touched,
-    which is both true and impossible to forget to say.
+    missed — which is the failure mode written up half a dozen times in this codebase. So a
+    write against a project binds the session that made it: the session is working on the
+    project it touched, which is both true and impossible to forget to say.
+
+    **A binding that already exists is not moved.** "The last project it touched" was too
+    loose, and the way it failed was specific: a session finished the last task on the project
+    it was hired for, went looking, updated a task on a *different* project, and was silently
+    reassigned there. Nothing was refused and nothing was said, so from outside it looked like
+    he had decided to change the subject — which is the one thing a session bound to a project
+    is supposed to make impossible. `_in_scope` confines what a bound session may pick up, and
+    that confinement is worth nothing if any tool call can move the binding.
+
+    ``deliberate`` is the exception, for the two acts that *are* a statement about this
+    session: starting a project here, and pointing one at its folder. Touching another
+    project's task is bookkeeping and should leave the session where it is.
+
+    The person's own choice in the interface does not come through here at all — it sets the
+    conversation's project directly — so they can always move a session, and nothing he does
+    can override them.
 
     Silent when nothing is bound: a tool called from a test, a script, or a tick with no
     session has no conversation to adopt anything, and that is not an error.
@@ -119,6 +134,10 @@ def adopt(path: Path, project_id: int | None) -> None:
     from kith.infra.db import repositories as repo
 
     try:
+        if not deliberate:
+            already = repo.conversations.project_of(path, conversation_id)
+            if already and int(already) != int(project_id):
+                return
         repo.conversations.set_project(path, conversation_id, int(project_id))
     except Exception:
         # Bookkeeping. A session that fails to record what it is working on must not take
