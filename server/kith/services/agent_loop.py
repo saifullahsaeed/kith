@@ -64,7 +64,29 @@ _LANDING_TOOLS = frozenset(
         "view_task",
         "list_tasks",
         "write_file",
+        # The two that were missing, and their absence was exactly backwards. This list had
+        # `write_file` — rewrite the whole file, lossy, the one `edit_file` exists to replace —
+        # and not `edit_file`. So a turn that reached its landing rounds mid-implementation was
+        # left holding only the dangerous tool, on existing source it had not fully read.
+        #
+        # He noticed, and stopped, and said so on the task: "the available file tool exposes
+        # read/write only, not an edit/patch operation, and rewriting these existing files
+        # wholesale would risk unrelated code loss. Please provide/enable an edit-capable
+        # tool." Which is `edit_file`'s own docstring read back to us, correctly, by something
+        # we had quietly disarmed — and it cost a whole turn plus a task parked on a question
+        # that had a one-line answer.
+        "edit_file",
+        "edit_files",
         "read_file",
+        # Finishing includes checking that what you just wrote works, and then saving the
+        # point. None of these is *gathering*, which is the only thing the reserve exists to
+        # stop — and `commit` being absent from the one phase whose whole job is "land it" is
+        # part of why five hours of work ended with no commits at all.
+        "check_code",
+        "diagnostics",
+        "run_tests",
+        "changes",
+        "commit",
         "take_note",
         "journal",
         "remember",
