@@ -43,7 +43,7 @@ def create_project(path: Path, args: dict):
     Not every project has code, though, and one that does not should not be handed a pretend
     directory: a shortlist or a piece of research is a project with rows and no folder.
     """
-    from kith.services import project_memory, session_context
+    from kith.services import project_files, project_memory, session_context
 
     directory = str(args.get("directory") or "").strip()
     if directory:
@@ -52,6 +52,7 @@ def create_project(path: Path, args: dict):
         # Created with its scaffold now rather than on first write, so the headings are there
         # to be filled in instead of the file being invented from scratch later.
         project_memory.ensure(resolved)
+        project_files.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
         session_context.adopt(path, made.get("id"))
         return {**made, "memory": f"{directory}/.kith/memory.md"}
@@ -290,7 +291,7 @@ def link_folder(path: Path, args: dict):
     anywhere outside the workspace with no record of why. This is one named folder, named by
     them, revoked when the work ends.
     """
-    from kith.services import permissions, project_memory, session_context
+    from kith.services import permissions, project_files, project_memory, session_context
 
     folder = str(args.get("folder") or "").strip()
     if not folder:
@@ -330,6 +331,7 @@ def link_folder(path: Path, args: dict):
     # given.
     permissions.forget_linked_projects()
     project_memory.ensure(resolved)
+    project_files.ensure(resolved)
     session_context.adopt(path, args["id"])
     return {
         **updated,

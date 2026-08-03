@@ -16,6 +16,7 @@ import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +118,26 @@ _DELEGATED_DIRECTIVE = (
     "what you'll do first.)"
 )
 
+#: Tools that change a file. Used to tell "he edited code" from "he wrote down what he
+#: learned" — the same tool does both, so the path is what separates them.
+_EDITING_TOOLS = frozenset({"write_file", "edit_file", "edit_files"})
+
+
+def _wrote_memory(arguments: Any) -> bool:
+    """Did this edit touch a project's `.kith/memory.md`?
+
+    Reads every path an edit mentions, because `edit_files` carries a list of them and a batch
+    that updates the memory alongside three source files has plainly not forgotten it.
+    """
+    if not isinstance(arguments, dict):
+        return False
+    paths = [arguments.get("path")]
+    for one in arguments.get("edits") or []:
+        if isinstance(one, dict):
+            paths.append(one.get("path"))
+    return any("memory.md" in str(p or "") for p in paths)
+
+
 # Anything that leaves a trace behind after the turn ends. Broader than the loop
 # detector's notion of progress in autonomy.py — that one deliberately excludes
 # write_file (he "wrote files" while looping, but they were raw page dumps). Here
@@ -137,6 +158,19 @@ _PERSISTED_TOOLS = frozenset(
         "update_project",
         "update_milestone",
     }
+)
+
+#: Spent when a tick changed code and recorded nothing about the project. Deliberately not
+#: the generic landing nudge: "leave something behind" reads as "file a comment", which he was
+#: already doing, and the comment is about the task rather than about the project. The thing
+#: missing is the sentence a session next week needs and cannot work out again cheaply.
+_MEMORY_DIRECTIVE = (
+    "(You changed files this step and did not write anything into this project's "
+    "`.kith/memory.md`. Before you finish: what did you learn just now that a session next "
+    "week would have to work out from scratch? The command that actually works, where the "
+    "real logic turned out to live, a decision worth not undoing, the thing that wasted "
+    "twenty minutes. Add it — a line or two, in the right section, not a summary of what you "
+    "did. If you genuinely learned nothing durable, say so in one sentence and stop.)"
 )
 
 _LANDING_DIRECTIVE = (
@@ -378,7 +412,7 @@ def _carries_image(message: dict[str, Any]) -> bool:
     )
 
 
-def _compact_tool_history(convo: list[dict[str, Any]]) -> None:
+def _compact_tool_history(convo: list[dict[str, Any]], offload=None) -> None:
     """Stub the oldest tool outputs once the live set outgrows its char budget.
 
     Tool output re-sends in full on every subsequent round, so a long research turn
@@ -390,6 +424,11 @@ def _compact_tool_history(convo: list[dict[str, Any]]) -> None:
     results whole until the budget is spent, and only then start stubbing. All three
     numbers are settings, read here rather than at import so raising them for a
     bigger model takes effect on the next turn instead of the next restart.
+
+    ``offload(name, content) -> path`` spills an evicted result to a file first, so the
+    stub can point him at the full text rather than truncating it away. Optional and
+    defaulted off: without it — a caller with no conversation to file under, or a test —
+    the stub is the older, lossy trim, unchanged.
     """
     keep_whole = tuning.value("keep_full_tool_results")
     char_budget = tuning.value("live_tool_chars")
@@ -414,10 +453,18 @@ def _compact_tool_history(convo: list[dict[str, Any]]) -> None:
         content = msg.get("content") or ""
         if len(content) > stub_chars and not msg.get("_stubbed"):
             name = msg.get("tool_name", "tool")
-            msg["content"] = (
-                content[:stub_chars] + f"\n…[earlier {name} output trimmed to save room — "
-                "if you still need it, save what matters to a file next time; re-run the tool to see it again]"
-            )
+            saved = offload(name, content) if offload else ""
+            if saved:
+                # The tail is kept on disk, one read_file away, instead of thrown out.
+                msg["content"] = (
+                    content[:stub_chars] + f"\n…[the full {len(content):,}-character {name} output was "
+                    f"moved to {saved} to save room — read_file it if you still need the rest]"
+                )
+            else:
+                msg["content"] = (
+                    content[:stub_chars] + f"\n…[earlier {name} output trimmed to save room — "
+                    "if you still need it, save what matters to a file next time; re-run the tool to see it again]"
+                )
             msg["_stubbed"] = True
 
 
@@ -479,12 +526,21 @@ def _run_turn(
     so keeping one conversation on one upstream is what keeps its cache warm.
     """
     convo = list(messages)
+    # Spills an aged-out tool result to a file this turn can read back, instead of trimming
+    # its tail away. None when there is no conversation to file it under (a bare tick), in
+    # which case the compactor falls back to the older in-place trim.
+    offload_result = None
     if conversation_id:
         from kith.services import conversations
+        from kith.services import offload as offload_svc
 
         session = conversations.session_id(agent_db_path, conversation_id)
         if session:
             config = replace(config, session_id=session)
+        # Per-turn: a past turn's tool output never re-enters the prompt, so last turn's
+        # spill can refer to nothing and is dead weight. Clear it, then this turn writes fresh.
+        offload_svc.clear(conversation_id)
+        offload_result = partial(offload_svc.save, conversation_id)
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
     budget = max_rounds or tuning.value("max_rounds")
@@ -521,6 +577,8 @@ def _run_turn(
     landing = False
     delegated = False  # did he hand this to a future tick?
     persisted = False  # did anything this turn leave a trace?
+    touched_code = False  # did it change a file that is not the memory file?
+    touched_memory = False  # did it write down what it learned?
     nudged = False  # the "don't walk away empty-handed" nudge fires at most once
 
     for round_index in range(budget):
@@ -533,7 +591,7 @@ def _run_turn(
         # Three channels carry bulk into a conversation, and for a long time only the first
         # was watched: tool results, pictures, and the arguments of a write. Every one of
         # them re-sends in full on every round until something trims it.
-        _compact_tool_history(convo)
+        _compact_tool_history(convo, offload_result)
         _compact_images(convo)
         _compact_call_arguments(convo)
         # Re-read tools each round so a tool Kith just built is usable right away.
@@ -628,13 +686,31 @@ def _run_turn(
             # carrying the full persona and 51 tool schemas, ~18,500 tokens to answer
             # one word — and the second reply was him puzzling at a directive that made
             # no sense: "I haven't been researching anything this turn."
-            if not expect_durable or persisted or landing or nudged or round_index >= budget - 1:
+            if landing or nudged or round_index >= budget - 1 or not expect_durable:
+                return
+            # Two reasons to spend the reserve, and they are different failures.
+            #
+            # Nothing recorded at all: the tick will be repeated, so land it.
+            #
+            # Or: code changed and the project's memory did not. That one passed silently for
+            # a long time, because filing a comment is enough to count as durable — so a tick
+            # could rewrite nine files, learn how the build actually works, note none of it,
+            # and be considered a success. The person's own words: "he is not updating memories
+            # consistently, I have to ask him." He was never asked.
+            #
+            # Only when something was genuinely edited. A tick that read around and answered a
+            # question has nothing to record, and prompting it to invent something is how you
+            # get a memory file full of restated obvious.
+            owes_memory = touched_code and not touched_memory
+            if persisted and not owes_memory:
                 return
             nudged = True
             landing = True
             if content:
                 convo.append({"role": "assistant", "content": content})
-            convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
+            convo.append(
+                {"role": "user", "content": _MEMORY_DIRECTIVE if owes_memory else _LANDING_DIRECTIVE}
+            )
             continue
 
         # Record the assistant's tool-calling turn so the model has context.
@@ -704,6 +780,11 @@ def _run_turn(
                 worked = isinstance(result, dict) and result.get("ok", True)
                 if step["name"] in _PERSISTED_TOOLS and worked:
                     persisted = True
+                if step["name"] in _EDITING_TOOLS and worked:
+                    if _wrote_memory(step["arguments"]):
+                        touched_memory = True
+                    else:
+                        touched_code = True
                 if step["name"] in _DELEGATION_TOOLS and worked and not delegated:
                     delegated = True
                     if tuning.value("stop_after_delegating"):

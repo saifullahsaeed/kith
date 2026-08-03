@@ -274,6 +274,32 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="characters",
     ),
     Tunable(
+        key="history_max_chars",
+        env="KITH_HISTORY_MAX_CHARS",
+        label="Conversation kept in full",
+        help="Characters of a conversation's replayed prose before its older turns are folded "
+        "into a short summary. High enough and nothing is ever summarised (the prompt just "
+        "grows); too low and he loses the detail of what was said earlier in the same chat.",
+        default=120_000,
+        group="memory",
+        minimum=8_000,
+        maximum=4_000_000,
+        unit="characters",
+    ),
+    Tunable(
+        key="history_keep_recent",
+        env="KITH_HISTORY_KEEP_RECENT",
+        label="Recent turns kept verbatim",
+        help="How many of the latest messages stay word-for-word when older ones are folded "
+        "into a summary. Too few and he forgets what was just said; too many and the fold "
+        "barely shrinks anything.",
+        default=8,
+        group="memory",
+        minimum=2,
+        maximum=50,
+        unit="messages",
+    ),
+    Tunable(
         key="handoff_steps",
         env="KITH_HANDOFF_STEPS",
         label="Recent steps shown when resuming",
@@ -457,6 +483,39 @@ TUNABLES: tuple[Tunable, ...] = (
         default="",
         group="infrastructure",
         kind="text",
+    ),
+    Tunable(
+        key="fallback_model",
+        env="KITH_FALLBACK_MODEL",
+        label="Fallback model",
+        help="A second model to try if the main one errors, rate-limits or goes down. Blank "
+        "means no fallback — then one provider outage stalls an unattended session mid-task. "
+        "Point it at a different-family model so an outage that takes one out doesn't take both.",
+        default="",
+        group="infrastructure",
+        kind="text",
+    ),
+    Tunable(
+        key="require_provider_parameters",
+        env="KITH_REQUIRE_PARAMS",
+        label="Only route to fully-capable providers",
+        help="Restrict OpenRouter to upstreams that support everything a request sends — tools, "
+        "reasoning, prompt caching. On, a round never silently lands on a host that drops "
+        "caching and pays full price; too strict and a model with one fussy provider goes dark.",
+        default=False,
+        group="infrastructure",
+        kind="bool",
+    ),
+    Tunable(
+        key="zero_data_retention",
+        env="KITH_ZERO_DATA_RETENTION",
+        label="Zero data retention",
+        help="Route only to providers that don't log or train on requests. On keeps the 'runs "
+        "on your machine' promise when he reaches the cloud; it also shrinks the provider pool, "
+        "so a model served only by logging hosts becomes unavailable rather than merely pricier.",
+        default=False,
+        group="infrastructure",
+        kind="bool",
     ),
     Tunable(
         key="search_engine",

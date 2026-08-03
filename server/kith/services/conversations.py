@@ -155,6 +155,29 @@ def record_event(conversation_id: str, kind: str, payload: dict) -> None:
     _append(conversation_id, {"type": kind, "at": _now(), **payload})
 
 
+def record_summary(conversation_id: str, through: int, text: str) -> None:
+    """Persist the running brief that folds the conversation's older turns.
+
+    An ordinary transcript event, so it rides the same append-only file everything else does
+    — a brief written mid-turn survives a crash the way a message does. ``through`` is how many
+    of the conversation's turns it covers, so the next turn knows how much is already folded.
+    """
+    record_event(conversation_id, "summary", {"through": int(through), "text": text})
+
+
+def latest_summary(conversation_id: str) -> dict:
+    """The most recent folded brief, or ``{}`` if the conversation has never been folded.
+
+    Last-write-wins by walking the append-only file: each fold appends a new summary event
+    covering more of the conversation, and only the last one is current.
+    """
+    found: dict = {}
+    for entry in read(conversation_id):
+        if entry.get("type") == "summary":
+            found = {"through": int(entry.get("through") or 0), "text": str(entry.get("text") or "")}
+    return found
+
+
 def messages(conversation_id: str) -> list[dict]:
     """The conversation, in the shape /api/chat wants back.
 

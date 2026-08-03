@@ -59,8 +59,28 @@ class TestReadingWhatTheProviderSent:
         assert out["costUsd"] == 0.0
         assert out["reasoningTokens"] == 0
 
+    def test_the_model_is_recorded_so_cost_is_attributable(self):
+        # A bill spanning a model switch cannot be split back apart after the fact
+        # unless each row says which model produced it — the token stats alone can't.
+        assert _stats(REAL, 1.0, "openai/gpt-5.6-luna")["model"] == "openai/gpt-5.6-luna"
+
+    def test_the_model_defaults_to_empty_when_unknown(self):
+        # Old callers pass no model; the field is present but blank rather than absent,
+        # so a reader never has to guess whether "no model" means unknown or unwritten.
+        assert _stats(REAL, 1.0)["model"] == ""
+
     def test_no_usage_at_all_is_survivable(self):
         assert _stats(None, 1.0)["costUsd"] == 0.0
+
+
+class TestTheLocalPathIsAttributableToo:
+    def test_ollama_rows_carry_the_model_name(self):
+        # The local transport records stats too; a row with no model is unattributable
+        # whichever transport made it, so both must name their model.
+        from kith.llm.ollama import _stats_from_done
+
+        done = {"model": "qwen3:4b", "prompt_eval_count": 100, "eval_count": 20}
+        assert _stats_from_done(done, "qwen3:4b")["model"] == "qwen3:4b"
 
 
 class TestTheCacheRatioThatWasNotARatio:

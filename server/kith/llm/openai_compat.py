@@ -76,6 +76,46 @@ def _session_id() -> str:
     )
 
 
+def _routing_options(config: Config) -> dict[str, Any]:
+    """The OpenRouter routing, fallback and privacy fields, resolved from settings.
+
+    Pure — settings in, payload fragment out — so the policy can be tested without opening a
+    socket. `session_id` and `reasoning` are assembled in `stream_once` instead: those are
+    per-request rather than policy, and the id touches storage.
+    """
+    from kith.services import tuning
+
+    out: dict[str, Any] = {}
+    provider: dict[str, Any] = {}
+
+    pinned = _pinned_provider()
+    if pinned:
+        # A strong preference, not a lock: fallbacks stay on so availability never breaks,
+        # while every round of a turn is steered at the same warm host.
+        provider["order"] = [pinned]
+        provider["allow_fallbacks"] = True
+    if tuning.value("require_provider_parameters"):
+        # Only route to upstreams that support everything this request sends — tools,
+        # reasoning, caching — so a cheaper host can't silently drop a feature we paid for.
+        provider["require_parameters"] = True
+    if tuning.value("zero_data_retention"):
+        # For a "runs on your machine" agent reaching the cloud: exclude any provider that
+        # may log or train on the request, and restrict routing to zero-data-retention hosts.
+        provider["data_collection"] = "deny"
+        provider["zdr"] = True
+    if provider:
+        out["provider"] = provider
+
+    fallback = str(tuning.value("fallback_model")).strip()
+    if fallback and fallback != config.model:
+        # If the primary errors, rate-limits or is down, OpenRouter tries the next model;
+        # billing is by whichever actually served. This is what keeps an unattended tick
+        # alive through an outage instead of stalling it mid-task.
+        out["models"] = [config.model, fallback]
+
+    return out
+
+
 def _pinned_provider() -> str:
     """The upstream to pin OpenRouter to, read per request because it is editable.
 
@@ -121,9 +161,11 @@ def stream_once(
     # unconditionally made this module OpenRouter-only in practice while claiming to
     # support any compatible endpoint.
     if is_openrouter(config):
-        # Usage accounting: returns cache-hit tokens and real cost, which is how we
-        # confirm prompt caching is actually working.
-        payload["usage"] = {"include": True}
+        # Usage accounting — cache-hit tokens and real cost — is how we confirm prompt
+        # caching is working. It used to be opted into with `usage: {include: true}`;
+        # OpenRouter now returns the full breakdown on every response automatically and
+        # that request field is deprecated with no effect, so it is no longer sent. The
+        # reader in `_stats` is unchanged: it takes whatever `usage` the response carries.
         # Keeps a turn's rounds landing on the same upstream host, so the cache one
         # round wrote is the cache the next one reads. A preference, not a pin —
         # availability still falls back.
@@ -135,11 +177,9 @@ def stream_once(
         # is still there and still right — a step run with nobody working belongs to no
         # session, so the install-wide id is the honest answer for it.
         payload["session_id"] = config.session_id or _session_id()
-        pinned = _pinned_provider()
-        if pinned:
-            # Fallbacks stay on so availability never breaks; the pin is a strong
-            # preference that keeps every round on the same warm cache.
-            payload["provider"] = {"order": [pinned], "allow_fallbacks": True}
+        # Provider routing (a pinned upstream), model fallback, and the privacy/capability
+        # preferences — all resolved from settings and assembled in one tested place.
+        payload.update(_routing_options(config))
         # Whether he reasons before answering, and how hard. Sent only to OpenRouter,
         # where it is a documented extension — a strict OpenAI-compatible host rejects
         # the whole request rather than ignoring an unknown key. Until now this setting
@@ -288,7 +328,7 @@ def stream_once(
         "type": "turn",
         "content": answer,
         "tool_calls": tool_calls,
-        "stats": _stats(usage, time.time() - started),
+        "stats": _stats(usage, time.time() - started, config.model),
     }
 
 
@@ -345,7 +385,7 @@ def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _stats(usage: dict | None, elapsed: float) -> dict[str, float]:
+def _stats(usage: dict | None, elapsed: float, model: str = "") -> dict[str, float]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
@@ -377,6 +417,9 @@ def _stats(usage: dict | None, elapsed: float) -> dict[str, float]:
 
     tps = completion / elapsed if elapsed > 0 and completion else 0.0
     return {
+        # Which model produced this row. Without it a bill spanning a model switch cannot
+        # be attributed after the fact — the token counts alone say nothing about price.
+        "model": model,
         "promptTokens": prompt,
         "responseTokens": completion,
         "reasoningTokens": reasoning,

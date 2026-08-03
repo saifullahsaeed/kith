@@ -26,7 +26,7 @@ from kith.infra.db import repositories as repo
 from kith.schemas import (
     ChatRequestSchema,
 )
-from kith.services import conversations, memory_context, session_context
+from kith.services import conversations, history, memory_context, session_context
 from kith.services.agent_loop import stream_agent
 
 #: What a conversation is for.
@@ -97,7 +97,19 @@ def _build_messages(messages, config, conversation_id: str = ""):
     if persona:
         # Byte-identical on every request Kith ever makes. Nothing else may join it.
         out.append({"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()})
-    for message in messages:
+    # Fold the older turns of a long conversation into a running brief before replaying them,
+    # so the prompt stops growing without bound. The brief sits here deliberately — after the
+    # cached persona, before the recent turns — so it never disturbs the stable prefix, and it
+    # is persisted so a fold is not re-run every turn. Below the size threshold this returns the
+    # history untouched, so a short conversation is byte-for-byte what it was.
+    folded, fresh = history.fold(messages, config, conversation_id, ollama_host())
+    if fresh is not None and conversation_id:
+        conversations.record_summary(conversation_id, fresh["through"], fresh["text"])
+    for message in folded:
+        if message.get("role") == "system":
+            # The folded brief. Passed straight through — it carries no attachments.
+            out.append({"role": "system", "content": str(message.get("content") or "")})
+            continue
         if message.get("role") not in ("user", "assistant"):
             continue
         # An assistant turn with nothing in it carries no information and is refused by some

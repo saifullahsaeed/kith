@@ -147,7 +147,7 @@ def stream_once(
                     "type": "turn",
                     "content": answer,
                     "tool_calls": tool_calls,
-                    "stats": _stats_from_done(chunk),
+                    "stats": _stats_from_done(chunk, config.model),
                 }
                 return
     except requests.exceptions.RequestException as exc:
@@ -158,12 +158,15 @@ def stream_once(
         response.close()
 
 
-def _stats_from_done(chunk: dict) -> dict[str, float]:
+def _stats_from_done(chunk: dict, model: str = "") -> dict[str, float]:
     """Convert Ollama's nanosecond durations and counts into friendly stats."""
     eval_count = chunk.get("eval_count") or 0
     eval_duration = chunk.get("eval_duration") or 0
     tokens_per_second = eval_count / (eval_duration / _NS_PER_SECOND) if eval_duration else 0.0
     return {
+        # Which model produced this row, so a transcript stays attributable across a
+        # model switch — the same reason the cloud transport records it.
+        "model": model or chunk.get("model") or "",
         "promptTokens": chunk.get("prompt_eval_count") or 0,
         "responseTokens": eval_count,
         "tokensPerSecond": round(tokens_per_second, 1),

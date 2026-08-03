@@ -29,6 +29,7 @@ def _ask_on_task(path: Path, a: dict) -> dict:
         link=f"/tasks/{task_id}",
         kind="asked",
     )
+    _mirror_brief(path, task_id)
     return {
         "asked": True,
         "task_id": task_id,
@@ -55,6 +56,7 @@ def _comment_on_task(path: Path, a: dict) -> dict:
         # Running commentary. The numerous kind, and the one that was burying the rest.
         kind="note",
     )
+    _mirror_brief(path, task_id)
     return {
         "commented": True,
         "task_id": task_id,
@@ -150,6 +152,7 @@ def _update_task(path: Path, a: dict) -> dict | None:
     from kith.services import session_context
 
     session_context.adopt(path, (out or {}).get("project_id"))
+    _mirror_brief(path, (out or {}).get("id"))
     # Promoting something out of the backlog is the moment it becomes work, and therefore the
     # moment worth waking for. This is the other half of scaffolding into `backlog`: you lay
     # the roadmap out with nothing running, and moving the first task to `todo` is what says
@@ -205,6 +208,36 @@ def _reopen_if_finished(path: Path, project_id: int | None) -> str:
         return f"{row.get('name') or 'That project'} was {was}; there is work in it again, so it is active."
     except Exception:
         return ""
+
+
+def _mirror_brief(path: Path, task_id: int | None) -> None:
+    """Write this task's readable brief into its project's `.kith/tasks/`.
+
+    So the work survives being handed over: someone clones the repository and the briefs are
+    there, rather than living only in a SQLite file on whichever machine happened to be
+    driving. A record, not a second board — status and ordering stay in the database, which
+    is the one writer.
+
+    Silent on every failure. The board is the thing that matters; this is the copy, and a
+    copy that cannot be written must not fail the change that prompted it.
+    """
+    if not task_id:
+        return
+    try:
+        from kith.services import project_files
+
+        detail = repo.tasks.task_detail(path, int(task_id))
+        if not detail:
+            return
+        project_id = detail.get("project_id")
+        if not project_id:
+            return  # a one-off errand belongs to nobody's repository
+        project = repo.projects.get_project(path, int(project_id))
+        directory = str((project or {}).get("directory") or "").strip()
+        if directory and Path(directory).is_dir():
+            project_files.write_brief(directory, detail)
+    except Exception:
+        pass
 
 
 def _get_on_with_it(why: str) -> None:
@@ -332,6 +365,7 @@ def add_task(path: Path, args: dict):
     # repository resolves it — and a session that laid out a roadmap this way would otherwise be
     # bound to nothing.
     session_context.adopt(path, made.get("project_id"))
+    _mirror_brief(path, made.get("id"))
     # And something actionable is a reason to get on with it. The loop only wakes for a session
     # that is working, so before this a task filed in a conversation sat there until someone
     # found the button — you asked for a thing, he wrote it down, and you both waited.
@@ -444,7 +478,9 @@ def ask_on_task(path: Path, args: dict):
     required=("id", "text"),
 )
 def add_checklist_item(path: Path, args: dict):
-    return repo.tasks.add_checklist_item(path, args["id"], args["text"])
+    made = repo.tasks.add_checklist_item(path, args["id"], args["text"])
+    _mirror_brief(path, args["id"])
+    return made
 
 
 @tool(
@@ -454,7 +490,9 @@ def add_checklist_item(path: Path, args: dict):
     required=("item_id",),
 )
 def check_item(path: Path, args: dict):
-    return repo.tasks.set_checklist_item(path, args["item_id"], args.get("done", True))
+    done = repo.tasks.set_checklist_item(path, args["item_id"], args.get("done", True))
+    _mirror_brief(path, (done or {}).get("task_id"))
+    return done
 
 
 @tool(
@@ -475,6 +513,7 @@ def add_deliverable(path: Path, args: dict):
     saved = repo.tasks.add_deliverable(
         path, args["id"], args.get("kind") or "text", args["title"], args["content"]
     )
+    _mirror_brief(path, args["id"])
     # Something finished and collectable is worth knowing about — it is the whole point of
     # having handed him the work. Notified separately from the task's own comments, which is
     # why this is here rather than left to whatever note he happens to write alongside it.
