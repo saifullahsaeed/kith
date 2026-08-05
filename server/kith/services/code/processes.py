@@ -172,7 +172,12 @@ class Processes:
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
                     cwd=str(here),
-                    env={**os.environ, "KITH_WORKSPACE": str(here)},
+                    # Same non-interactive env `shell` gets, and for the sharper version of
+                    # the same reason: `shell` blocking on a stray prompt at least times out
+                    # and says so. A background process blocked on one looks identical to a
+                    # healthy slow one — `alive: true`, nothing new to read — forever, with
+                    # nothing to tell them apart.
+                    env={**os.environ, "KITH_WORKSPACE": str(here), **sandbox._NON_INTERACTIVE},
                     # Its own process group, so stopping it takes the whole tree. A dev server
                     # started through `npm run dev` is a shell that spawns node: killing the
                     # shell alone leaves node holding the port, and the next start fails with
@@ -252,6 +257,24 @@ class Processes:
             elif not output:
                 result["note"] = "still running; nothing new since you last looked"
             return result
+
+    def full_output(self, name: str) -> str:
+        """The complete log for a named process, start to finish.
+
+        `check`'s `output` is deliberately partial — only what is new, or only the tail of
+        what finished — because that is what watching a running thing wants. Parsing a
+        finished one wants the opposite: a failure can be anywhere in the log, not only in
+        its newest chunk, so nothing here is capped.
+        """
+        with self._lock:
+            found = self._running.get(_clean_name(name))
+            if found is None:
+                known = ", ".join(sorted(self._running)) or "nothing"
+                raise ProcessError(f"no background process called `{name}` — running: {known}")
+            try:
+                return found.log.read_text(errors="replace")
+            except OSError:
+                return ""
 
     def stop(self, name: str) -> dict[str, Any]:
         with self._lock:

@@ -67,6 +67,37 @@ def work_block(path: Path) -> str:
     return "\n".join(lines)
 
 
+def review_block(path: Path) -> str:
+    """Work a tick finished and nobody has checked. Chat's job, and only chat's.
+
+    A tick used to verify its own work and close the task — it wrote the brief, chose the
+    requirements, supplied the evidence and graded itself, which is why a confident analysis
+    document asserting the wrong database passed with every box ticked. `review` is where that
+    submission lands instead, and this is what makes the column real: a queue nobody is shown is a
+    queue nobody works.
+
+    Chat is the right reviewer for the reason ticks are the wrong one — a conversation has the whole
+    context, forty rounds, and a person in it. The instruction is deliberately cheap to obey: look
+    at what is claimed, spot-check the thing most likely to be wrong, then close it or send it back.
+    A full re-audit of every task would cost more attention than the work saved.
+    """
+    tasks = [t for t in repo.tasks.list_tasks(path) if t.get("status") == "review"]
+    if not tasks:
+        return ""
+    lines = [
+        "[Finished, waiting for you to check it — this is yours to judge, no tick will touch it]"
+    ]
+    for task in tasks[:8]:
+        lines.append(f"- #{task['id']} ({task.get('priority', 'normal')}) {task['goal']}")
+    lines.append(
+        "Read what you claimed on the task and check the one thing most likely to be wrong — the "
+        "claim resting on the least evidence, not every claim. Then close it (update_task "
+        "status='done') or send it back (status='todo') saying what is missing. Do not re-do the "
+        "work to check the work. If they are talking to you about something else, this can wait."
+    )
+    return "\n".join(lines)
+
+
 def messages_block(path: Path) -> str:
     """The recent back-and-forth on his own channel with his person, and a nudge
     if they've said something he hasn't answered."""

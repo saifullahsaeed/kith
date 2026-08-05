@@ -1,4 +1,5 @@
 import { ConnectionSplash } from "@/components/connection-splash";
+import { ContextMenu } from "@/components/context-menu";
 import { Onboarding } from "@/components/onboarding/onboarding";
 import { Workspace } from "@/components/workspace";
 import { ConfirmProvider } from "@/components/ui/confirm";
@@ -24,18 +25,22 @@ export default function App() {
 
   if (setup.status === "onboarding" && setup.snapshot) {
     return (
-      <Onboarding
-        providers={setup.snapshot.providers}
-        searchOptions={setup.snapshot.search.options}
-        connection={setup.snapshot.connection}
-        onEnter={setup.enter}
-      />
+      <>
+        <ContextMenu />
+        <Onboarding
+          providers={setup.snapshot.providers}
+          searchOptions={setup.snapshot.search.options}
+          connection={setup.snapshot.connection}
+          onEnter={setup.enter}
+        />
+      </>
     );
   }
 
   return (
     // Every "are you sure?" in the app goes through this instead of window.confirm.
     <ConfirmProvider>
+      <ContextMenu />
       <Workspace config={config} onSaveConfig={updateConfig} onConnectionSaved={reload} />
     </ConfirmProvider>
   );

@@ -4,7 +4,7 @@ import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
 import { readEvents, toWireMessages } from "./stream";
-import type { JsonObject, JsonValue } from "./types";
+import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
 interface ToolPart {
   id: string;
@@ -77,6 +77,10 @@ export function createBackendAdapter(conversation?: {
       // One entry per model request. Kept out of `pieces` because the total belongs at
       // the foot of the message, not wherever its round happened to land.
       const rounds: Usage[] = [];
+      // The most recent reading of the context window, and whether this turn had to fold
+      // itself to keep going. Both belong on the same footer as the token count.
+      let context: ContextLedger | undefined;
+      let folded = false;
 
       /** Append to the piece being written, or start a new one when the channel
        *  changed — which is what keeps consecutive deltas from each becoming a part. */
@@ -106,8 +110,8 @@ export function createBackendAdapter(conversation?: {
           return [{ type: piece.kind === "reasoning" ? "reasoning" : "text", text: piece.text }];
         });
         // Last, so it reads as the message's footer and stays put as rounds arrive.
-        if (rounds.length > 0) {
-          const usage: TurnUsage = { rounds };
+        if (rounds.length > 0 || context) {
+          const usage: TurnUsage = { rounds, context, folded };
           parts.push({ type: "data", name: USAGE_PART, data: usage });
         }
         return parts;
@@ -139,6 +143,14 @@ export function createBackendAdapter(conversation?: {
               cached: event.stats.cachedTokens ?? 0,
               out: event.stats.responseTokens ?? 0,
             });
+          } else if (event.type === "context") {
+            // Replaced rather than accumulated: this is a reading of the window as it stands,
+            // not a thing that happened. The last one is the only one that is still true.
+            context = event.context;
+          } else if (event.type === "compacting") {
+            // He is about to fold the middle of this turn into notes. Worth showing because it
+            // costs a model call and takes a moment, so an unexplained pause looks like a hang.
+            folded = true;
           } else {
             continue; // done
           }

@@ -40,6 +40,22 @@ export interface WireAttachment {
   data: string;
 }
 
+/**
+ * The excerpt attached via "Reply" on a selection, if this message sent one.
+ *
+ * A quote only ever lives as `metadata.custom.quote` — the composer never folds it into
+ * `content` itself (see `SelectionQuoteToolbar` in `thread.tsx`). Server has no idea what a
+ * quote is, so this is where it has to become plain text or it silently never arrives:
+ * the UI would show it attached, sent, and gone, with nothing to say it never reached him.
+ */
+function quoteOf(message: ThreadMessage): string {
+  if (message.role !== "user") return "";
+  const quote = (message.metadata?.custom as { quote?: unknown } | undefined)?.quote;
+  if (!quote || typeof quote !== "object") return "";
+  const text = (quote as { text?: unknown }).text;
+  return typeof text === "string" ? text : "";
+}
+
 /** Convert assistant-ui messages into the server's wire format. */
 export function toWireMessages(
   messages: readonly ThreadMessage[],
@@ -48,9 +64,13 @@ export function toWireMessages(
   for (const message of messages) {
     if (message.role !== "user" && message.role !== "assistant") continue;
     const attachments = attachmentsOf(message);
+    const quote = quoteOf(message);
+    const body = textOf(message);
     out.push({
       role: message.role,
-      content: textOf(message),
+      // A real blockquote, one `>` per line — not a label ahead of a dump, since this is what
+      // he'll actually read as the reason the message exists.
+      content: quote ? `> ${quote.replace(/\n/g, "\n> ")}\n\n${body}` : body,
       ...(attachments.length ? { attachments } : {}),
     });
   }

@@ -134,6 +134,16 @@ function hardenNavigation(window: BrowserWindow): void {
   });
 }
 
+/**
+ * Right-click, for text, lives in the renderer (`ui/src/components/context-menu.tsx`), not
+ * here — tried a native `Menu.popup()` first, and it works, but a native menu is OS chrome:
+ * it cannot be styled, so it looks like a different, plainer app dropped on top of this one's
+ * own rounded-corner, warm-paper design for the one interaction that happens to route through
+ * the main process. The renderer's version calls `event.preventDefault()` on the DOM
+ * `contextmenu` event, which stops Electron from ever emitting `webContents`' `context-menu`
+ * here at all — so there is nothing left for the main process to do.
+ */
+
 /** Chromium's own PDF reader, which renders inside a sub-frame of its own.
  *
  * The file viewer shows a PDF by handing a blob to an `<embed>`; Chromium then navigates a

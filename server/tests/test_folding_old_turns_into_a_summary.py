@@ -12,6 +12,10 @@ before.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from kith.config import Config
 from kith.services import conversations, history
 from kith.services.history import compact
@@ -81,7 +85,7 @@ class TestReusingTheBriefWithoutAnotherCall:
         assert summary is None  # nothing new to persist
 
     def test_the_prior_brief_is_folded_in_when_it_regenerates(self):
-        history = _turns(16, 1000)  # 8 turns past a through=8 brief, well over keep_recent
+        history = _turns(24, 1000)  # 16 turns past a through=8 brief, well past the roll window
         prior = {"through": 8, "text": "OLD BRIEF"}
         seen = {}
 
@@ -90,6 +94,49 @@ class TestReusingTheBriefWithoutAnotherCall:
         )
 
         assert "OLD BRIEF" in seen["t"]  # the rolling summary carries the prior brief forward
+
+    def test_a_fold_does_not_immediately_retrigger_when_the_new_tail_still_fits(self):
+        """The bug this whole class guards against: once a brief exists, a real 2-day
+        conversation kept refolding every ~9 messages forever, no matter how large the real
+        budget actually was — because reuse was judged on a message count, not on whether the
+        new tail since the last fold had actually grown past the budget. A turn that fits
+        comfortably inside `max_chars` must be able to add several more turns before another
+        model call is worth paying for."""
+        history = _turns(12, 1000)  # 12,000 chars
+        calls = []
+
+        _, fresh = compact(history, lambda t: calls.append(t) or "BRIEF-1", max_chars=5000, keep_recent=8)
+        assert fresh is not None  # the first fold, as expected: 12,000 > 5,000
+
+        history = history + _turns(2, 1000)  # one more small turn: 2,000 more chars
+
+        # The real budget can (and normally does) come out the same on the next call — it is
+        # recomputed from the model's window, not from this history — but a bigger one here
+        # makes the point cleanly: the tail since the cut (10 turns, 10,000 chars) fits inside
+        # it, so it must reuse regardless of how many turns that took.
+        _, fresh2 = compact(
+            history, lambda t: calls.append(t) or "BRIEF-2", prior=fresh, max_chars=20_000, keep_recent=8
+        )
+
+        assert fresh2 is None, f"refolded again while the new tail still fit the budget: {fresh2}"
+        assert len(calls) == 1
+
+    def test_a_fold_does_retrigger_once_the_new_tail_outgrows_the_budget(self):
+        """The other half of the same fix: reuse is not unconditional — once real content
+        piles up past the budget, it still has to refold. Otherwise this would just be the old
+        bug's mirror image: never folding again regardless of size."""
+        history = _turns(12, 1000)
+        calls = []
+
+        _, fresh = compact(history, lambda t: calls.append(t) or "BRIEF-1", max_chars=5000, keep_recent=8)
+
+        history = history + _turns(10, 1000)  # 10,000 more chars since the cut — past the budget
+        _, fresh2 = compact(
+            history, lambda t: calls.append(t) or "BRIEF-2", prior=fresh, max_chars=5000, keep_recent=8
+        )
+
+        assert fresh2 is not None
+        assert len(calls) == 2
 
 
 class TestNeverBreakingATurn:
@@ -163,3 +210,53 @@ class TestFoldWiresSettingsPersistenceAndTheModel:
 
         assert messages == hist
         assert fresh is None
+
+
+class TestTheBudgetScalesToTheRealWindow:
+    """`history_max_chars` is a fixed guess. A model's real context window is not — a 1M-token
+    cloud model and a 40K local one need very different budgets, and no single number is right
+    for both. Once the window is known, the budget is a share of *that*, the same way
+    `agent_loop`'s in-turn fold already works, instead of the flat setting.
+    """
+
+    def _cfg(self, window: int) -> Config:
+        return Config(model="m", num_ctx=0, num_predict=0, system="", think=True, context_window=window)
+
+    def test_an_unknown_window_falls_back_to_the_flat_setting(self, db):
+        from kith.services import tuning
+
+        tuning.apply({"history_max_chars": 9000})
+
+        assert history._budget_chars(self._cfg(0), None) == 9000
+
+    def test_a_known_window_ignores_the_flat_setting(self, db):
+        from kith.services import tuning
+
+        tuning.apply({"history_max_chars": 5_000_000})  # would swamp a small window if it won
+
+        # ~1,000 tokens * 3.7 chars/token * 80% share.
+        assert history._budget_chars(self._cfg(1_000), None) == pytest.approx(2_960, abs=1)
+
+    def test_a_bigger_window_buys_a_bigger_budget(self, db):
+        small = history._budget_chars(self._cfg(1_000), None)
+        big = history._budget_chars(self._cfg(1_000_000), None)
+
+        assert big > small * 100
+
+    def test_the_persona_is_netted_out_of_the_budget(self, db):
+        bare = self._cfg(10_000)
+        with_persona = replace(bare, system="x" * 2_000)
+
+        assert history._budget_chars(with_persona, None) == history._budget_chars(bare, None) - 2_000
+
+    def test_a_tiny_window_folds_a_conversation_the_flat_default_would_have_left_alone(self, db, monkeypatch):
+        # A conversation well under the old 120,000-char default, on a model whose real window
+        # is small enough that this is most of it.
+        hist = _turns(12, 1000)  # 12,000 chars
+        cfg = self._cfg(2_000)  # ~5,920-char budget at 80% share
+        monkeypatch.setattr(history, "_summarize", lambda text, config, host: "BRIEF")
+
+        messages, fresh = history.fold(hist, cfg, "")
+
+        assert fresh is not None
+        assert messages != hist

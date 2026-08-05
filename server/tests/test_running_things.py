@@ -22,7 +22,7 @@ import time
 import pytest
 
 from kith.services.code import testing
-from kith.services.code.processes import ProcessError, Processes
+from kith.services.code.processes import ProcessError, Processes, processes
 
 
 @pytest.fixture
@@ -186,10 +186,103 @@ class TestActuallyRunningASuite:
         assert "shell" in str(caught.value)
 
 
+class TestASlowSuiteDoesNotBlockOrGetKilled:
+    """The whole reason `run` starts the suite in the background instead of just waiting.
+
+    The old version had one blocking call with a hard 300-second timeout: past it, the
+    process was killed and everything it had printed was gone. A suite slower than a quick
+    check now hands back `status: "running"` instead, and a later call re-attaches to the
+    same run rather than starting a second one.
+    """
+
+    @pytest.fixture
+    def project(self, workspace_root):
+        (workspace_root / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+        (workspace_root / "tests").mkdir()
+        subprocess.run([sys.executable, "-m", "venv", str(workspace_root / ".venv")], capture_output=True)
+        subprocess.run(
+            [str(workspace_root / ".venv/bin/pip"), "install", "-q", "pytest"], capture_output=True
+        )
+        return workspace_root
+
+    @pytest.fixture(autouse=True)
+    def drain_the_shared_slot(self):
+        """`run` shares one registry entry across every test in this class — the same one
+        `check_process`/`stop_process` would see. Left alive, a slow suite from one test
+        would still be running (or still occupying the name) when the next test starts."""
+        yield
+        with contextlib.suppress(ProcessError):
+            processes.stop(testing._PROCESS_NAME)
+
+    def test_a_slow_suite_reports_running_then_the_real_result_once_done(self, project):
+        marker = project / "ran.marker"
+        (project / "tests" / "test_a.py").write_text(
+            "import time, pathlib\n"
+            f"MARKER = pathlib.Path({str(marker)!r})\n"
+            "def test_slow():\n"
+            "    MARKER.open('a').write('ran\\n')\n"
+            "    time.sleep(1.5)\n"
+            "    assert True\n"
+        )
+
+        first = testing.run(".", wait=0.3)
+        assert first.get("status") == "running", f"expected still-running, got: {first}"
+
+        second = testing.run(".", wait=5)
+
+        assert second.get("ok") is True
+        assert second.get("passed") == 1
+        assert marker.read_text().count("ran") == 1, (
+            "the suite ran more than once — the second call restarted it instead of "
+            "re-attaching to the one already going"
+        )
+
+    def test_a_different_run_while_one_is_in_flight_is_refused(self, project):
+        (project / "tests" / "test_a.py").write_text(
+            "import time\n"
+            "def test_a():\n    time.sleep(1.5)\n"
+            "def test_b():\n    assert True\n"
+        )
+
+        first = testing.run(".", wait=0.3)
+        assert first.get("status") == "running"
+
+        with pytest.raises(testing.TestingError) as caught:
+            testing.run(".", filter_="test_b", wait=0.3)
+        assert "different test run" in str(caught.value)
+
+        # Let the original finish so teardown's stop() is tidying up something dead, not
+        # racing a live one.
+        testing.run(".", wait=5)
+
+
 class TestBackgroundProcesses:
     def test_it_starts_and_reports_what_was_printed(self, running):
         result = running.start("echo hello-there", "greeter")
         assert "hello-there" in result["output"]
+
+    def test_it_cannot_block_on_a_prompt_nobody_is_there_to_answer(self, running):
+        """The same env `shell` already gets, and for the sharper reason: a background
+        process stuck waiting for a keypress looks identical to a healthy slow one — nothing
+        in `check` tells them apart. Only one of the non-interactive vars is asserted; the
+        point is that the whole set arrived, not any one var in particular."""
+        result = running.start("echo \"terminal-prompt=$GIT_TERMINAL_PROMPT\"", "quiet-git")
+        assert "terminal-prompt=0" in result["output"]
+
+    def test_full_output_is_not_capped_like_check_is(self, running):
+        running.start("for i in $(seq 1 4000); do echo 'a line of output here'; done", "verbose")
+        time.sleep(1.2)
+
+        from kith.services.code import processes as module
+
+        whole = running.full_output("verbose")
+
+        assert len(whole) > module.MAX_CHUNK, "expected the uncapped log, got something clipped"
+
+    def test_full_output_of_an_unknown_name_explains_itself(self, running):
+        with pytest.raises(ProcessError) as caught:
+            running.full_output("ghost")
+        assert "no background process" in str(caught.value)
 
     def test_each_check_shows_only_what_is_new(self, running):
         """A dev server prints a banner once and a line per request. Re-reading the banner

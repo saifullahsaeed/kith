@@ -183,17 +183,27 @@ export interface DescribedCall {
   group?: keyof typeof GROUP;
 }
 
+/** Every command he runs is `cd <his folder> && ` first, so that prefix is on every single
+ *  shell row and says nothing — it's not a choice he made about this call, it's where he always
+ *  works. Stripped from what's shown; the real, full command a person typed is still there
+ *  untouched in the expanded arguments, this only shortens the collapsed line. */
+function shortenShellCommand(command: string): string {
+  return command.replace(/^cd\s+\S+\s*&&\s*/, "");
+}
+
 /** One tool call, in English: what he did, the thing he did it to, and an icon for the kind
  *  of work it was. */
 export function describeCall(name: string, args?: Record<string, unknown>): DescribedCall {
   const entry = TOOL[name];
   const group = entry ? GROUP[entry.group] : undefined;
   const raw = entry?.of ? args?.[entry.of] : undefined;
+  let subject = raw === undefined || raw === null ? "" : String(raw);
+  if (name === "shell" && subject) subject = shortenShellCommand(subject);
   return {
     verb: entry?.verb ?? fallbackVerb(name),
     // Coerced rather than asserted: `view_task` is about an id, and a number rendered as a
     // React child is fine but a number that has been typed as a string is not.
-    subject: raw === undefined || raw === null ? "" : String(raw),
+    subject,
     icon: group?.icon ?? Wrench,
     tone: group?.tone ?? "text-muted-foreground/60",
     ...(entry ? { group: entry.group } : {}),

@@ -28,6 +28,7 @@ import {
   type Roadmap,
   type RoadmapNode,
 } from "@/lib/backend";
+import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 /**
@@ -122,6 +123,7 @@ function Canvas({
   onChanged?: () => void;
   onRoadmap?: (roadmap: Roadmap) => void;
 }) {
+  const dark = useDarkMode();
   const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
   const [error, setError] = useState("");
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
@@ -309,14 +311,24 @@ function Canvas({
           fitView
           fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
-          colorMode="dark"
+          // Was the literal "dark". ReactFlow styles its canvas, controls, minimap and node
+          // chrome from this prop, so the whole graph stayed dark on a white page — the one part
+          // of the interface with no light mode at all.
+          colorMode={dark ? "dark" : "light"}
           className="bg-transparent"
         >
           <Background variant={BackgroundVariant.Dots} gap={18} size={1} className="opacity-40" />
           <Controls showInteractive={false} className="!bg-card/80 !border-border/60" />
           {/* Worth its space only once the graph outgrows the frame. */}
           {roadmap.milestones.length > 6 ? (
-            <MiniMap pannable className="!bg-card/70" maskColor="rgba(0,0,0,0.4)" />
+            // The mask is what dims the area you are *not* looking at, so it has to darken a dark
+            // canvas and lighten a light one. Hardcoded black put a heavy grey wash over the
+            // minimap in light mode.
+            <MiniMap
+              pannable
+              className="!bg-card/70"
+              maskColor={dark ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.6)"}
+            />
           ) : null}
         </ReactFlow>
       </div>

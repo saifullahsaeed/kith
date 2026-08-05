@@ -3,7 +3,7 @@
 Three separate mechanisms in this codebase narrow the toolset mid-turn, and until now not
 one of them was enforced:
 
-* the per-mode sets in `autonomy/toolsets.py` — `breakout` offers six tools;
+* the per-mode sets in `autonomy/toolsets.py`;
 * the landing reserve, which takes work tools away for the last rounds so a turn cannot
   spend all forty gathering and finish having produced nothing;
 * the narrower set after a delegation, which leaves planning but removes doing.
@@ -47,10 +47,13 @@ class TestRunToolRefusesWhatWasNotOffered:
         """He already has the schemas. On a 55-tool set, spelling them out is most of a
         round's budget spent repeating what he was just sent.
 
-        Scoped to `breakout` rather than `start`: `start` offers all 59, so nothing is
-        refused there and the assertion would pass against a missing key.
+        Against an explicit narrow set, not a mode's: this asserts something about the shape of
+        a refusal, and borrowing a mode to get one couples it to that mode's contents. It used
+        to read `_ALLOW["breakout"]`, which was the six-tool loadout — and broke the day
+        breakout was widened to the work set for reasons that had nothing to do with error
+        messages.
         """
-        out = run_tool("shell", {"command": "ls"}, db, allow=set(_ALLOW["breakout"]))
+        out = run_tool("shell", {"command": "ls"}, db, allow={"journal", "recall", "list_tasks"})
         assert out["ok"] is False
         assert len(out["error"]) < 200
 
@@ -92,9 +95,19 @@ class TestTheModesThemselves:
         out = run_tool(outside[0], {}, db, allow=offered)
         assert out["ok"] is False, f"{mode} ran {outside[0]!r}, which it does not offer"
 
-    def test_breakout_specifically_cannot_reach_the_tools_it_used_to(self, db: Path):
-        """The measured case. Both of these ran before the gate existed."""
-        offered = {s["function"]["name"] for s in tool_schemas(db, only=_ALLOW["breakout"])}
+    def test_the_measured_escapes_are_still_shut(self, db: Path):
+        """The two calls that actually ran before the gate existed, against the loadout they
+        ran under — `breakout`'s original six tools.
+
+        Kept as a literal set rather than read from `_ALLOW`. This is a regression test for the
+        gate, and the thing it regresses against is a measurement taken at a moment in time; if
+        a mode's contents change, that does not make the measurement untrue. Breakout has since
+        been widened to the work set, precisely so that `remember` and `add_task` ARE reachable
+        while breaking a loop — the six-tool version left him able to describe a different
+        approach and not to take one.
+        """
+        six = {"read_skill", "list_tasks", "update_task", "journal", "update_project", "recall"}
+        offered = {s["function"]["name"] for s in tool_schemas(db, only=six)}
         for name, args in (("remember", {"content": "x"}), ("add_task", {"goal": "x"})):
             assert name not in offered
             assert run_tool(name, args, db, allow=offered)["ok"] is False

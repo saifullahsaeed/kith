@@ -1,5 +1,7 @@
 /** Client for the conversation history. */
 
+import type { ContextLedger } from "./types";
+
 export interface ConversationSummary {
   id: string;
   title: string;
@@ -46,7 +48,8 @@ export type StoredPart =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
   | { kind: "tool"; id: string; name: string; arguments: Record<string, unknown>; result?: unknown }
-  | { kind: "usage"; uncached: number; cached: number; out: number };
+  | { kind: "usage"; uncached: number; cached: number; out: number }
+  | { kind: "context"; context: ContextLedger; folded: boolean };
 
 export interface StoredTurn {
   role: "user" | "assistant";

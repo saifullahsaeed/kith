@@ -138,7 +138,8 @@ const KIND_ICON: Record<TimelineKind, ReactNode> = {
   message: <MessageCircle className="size-3.5 text-pink-500" />,
   tool: <Wrench className="size-3.5 text-rose-500" />,
 };
-const TASK_STATUSES = ["backlog", "todo", "doing", "waiting", "done", "dropped"];
+// Mirrors TASK_STATUSES on the server — see the note in task-detail.tsx.
+const TASK_STATUSES = ["backlog", "todo", "doing", "review", "waiting", "done", "dropped"];
 const PROJECT_STATUSES = ["active", "done", "paused", "archived"];
 /** How each kind reads in a "Delete this …?" question. */
 const KIND_LABEL: Record<string, string> = {
@@ -1254,6 +1255,31 @@ function Journal({
 
 /* ── Projects (the one home for work — open one to get at its tasks) ─────── */
 
+/**
+ * A path at the width a card has, keeping the end that identifies it.
+ *
+ * The home prefix goes to `~`, and anything still too long loses its middle. Not the *start* —
+ * `/Users/saifullahsaeed/Desktop/personal/` is the part that never varies between projects, and
+ * `…/ai-play` is the part you are reading it for.
+ *
+ * The first attempt at this was `dir="rtl"` with CSS truncation, which is a neat trick and wrong:
+ * a leading `/` is directionally neutral, so the browser reordered it to the end and
+ * `/Users/…/ai-play` rendered as `Users/…/ai-play/` — an absolute path displayed as a relative one,
+ * on the card whose whole job is telling you which folder this is.
+ */
+function shortPath(path: string, keep = 34): string {
+  const tidy = path.replace(/^\/Users\/[^/]+/, "~");
+  if (tidy.length <= keep) return tidy;
+  const parts = tidy.split("/").filter(Boolean);
+  let tail = parts[parts.length - 1] ?? tidy;
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const wider = `${parts[i]}/${tail}`;
+    if (wider.length + 2 > keep) break;
+    tail = wider;
+  }
+  return `…/${tail}`;
+}
+
 /** How a project (or the loose tray) reads in a breadcrumb. */
 function projectLabel(snap: BrainSnapshot, ref: ProjectRef): string {
   if (ref === LOOSE) return "No project";
@@ -1267,6 +1293,10 @@ function taskTally(tasks: BrainSnapshot["tasks"]) {
     total: tasks.length,
     open: of("backlog", "todo"),
     doing: of("doing"),
+    // Counted apart from `done`, because that is the whole point of the column: work he believes
+    // is finished but nobody has checked. Rolling it into `done` would put the project's progress
+    // bar at 100% on his own say-so.
+    review: of("review"),
     waiting: of("waiting"),
     done: of("done"),
   };
@@ -1438,6 +1468,14 @@ function TaskTally({ tally }: { tally: ReturnType<typeof taskTally> }) {
       {tally.waiting ? (
         <span className="font-medium text-kith">{tally.waiting} waiting on you</span>
       ) : null}
+      {/* Ahead of "to do", because it is the shortest path to progress: these are finished and
+          need a glance, not work. Amber rather than the accent — it wants attention, but less
+          urgently than something actually blocked on an answer. */}
+      {tally.review ? (
+        <span className="font-medium text-amber-600 dark:text-amber-400">
+          {tally.review} to check
+        </span>
+      ) : null}
       {tally.open ? <span>{tally.open} to do</span> : null}
       {tally.done ? <span className="text-muted-foreground/70">{tally.done} done</span> : null}
     </span>
@@ -1510,6 +1548,28 @@ function ProjectCard({
               <MarkdownInline>{project.description}</MarkdownInline>
             </div>
           ) : null}
+
+          {/*
+            Where the work actually lands. The server has always sent this and the interface never
+            showed it, so the single fact that decides where every file he writes goes was
+            invisible — which is how a project ran against a folder that had been deleted, and how
+            a relative path quietly resolved into his own folder instead of the codebase.
+
+            Truncated from the *left*: the end of a path is the part that identifies it, and
+            `/Users/saifullahsaeed/Desktop/personal/…` is the part that never varies.
+          */}
+          {project.directory ? (
+            <p
+              title={project.directory}
+              className="text-muted-foreground/60 mt-1 truncate font-mono text-[11px]"
+            >
+              {shortPath(project.directory)}
+            </p>
+          ) : (
+            <p className="text-muted-foreground/50 mt-1 text-[11px] italic">
+              No folder — nothing here writes files
+            </p>
+          )}
 
           {/* What happens next, in words. The single most useful line on the card. */}
           {!closed && ordered.length > 0 ? (
@@ -2002,10 +2062,27 @@ function TaskLane({
   const rank = (task: BrainSnapshot["tasks"][number]) => {
     if (task.status === "doing") return 0;
     if (task.status === "waiting") return 1;
-    if (task.milestone_id && blocked.has(task.milestone_id)) return 3;
-    return 2;
+    // Just under "waiting on you", because both are the person's turn — this one just needs a look
+    // rather than an answer. Above "to do", so a task that is finished and only needs checking does
+    // not sit below work that has not started.
+    if (task.status === "review") return 2;
+    if (task.milestone_id && blocked.has(task.milestone_id)) return 4;
+    return 3;
   };
-  const ordered = [...tasks].sort((a, b) => rank(a) - rank(b));
+  /*
+    Stable, and that is the whole point of the second key.
+
+    The server returns tasks by priority then **most-recently-updated** (`_newest_first`), which is
+    right for picking what to work on next — it is how a tick stays on the task it just touched —
+    and wrong for a board you are trying to read. Every comment he posts and every checklist item
+    he ticks changes `updated_at`, so while he works, tasks leap up the list on each poll and the
+    board reshuffles under the cursor every few seconds.
+
+    Ranking alone did not fix it: `sort` is stable, so equal ranks kept whatever order the server
+    sent — which is the order that keeps changing. Falling back to the id pins them: a task's
+    position now only moves when its status does.
+  */
+  const ordered = [...tasks].sort((a, b) => rank(a) - rank(b) || a.id - b.id);
 
   const addRow =
     projectId === undefined ? null : (

@@ -29,6 +29,7 @@ import {
   createBackendAdapter,
   fetchConversation,
   USAGE_PART,
+  type ContextLedger,
   type StoredTurn,
   patchServerConfig,
   type ServerConfig,
@@ -106,6 +107,30 @@ export function Workspace({
     initialMessages: resumed,
     ...(attachments ? { adapters: { attachments } } : {}),
   });
+
+  /**
+   * Ask him — here, in the thread — to check work a tick handed over.
+   *
+   * A chat message rather than a step, and that is the whole design of the `review` column: a tick
+   * verifying its own output is marking its own homework, since it wrote the brief, chose the
+   * requirements and supplied the evidence. Chat has the conversation the work came out of, forty
+   * rounds, and a person in it.
+   *
+   * Appending to the thread rather than posting on the task, because the point is that you see the
+   * answer and can argue with it. A comment on a task is somewhere you have to go and look.
+   */
+  const reviewFinished = useCallback(
+    (taskIds: number[]) => {
+      if (!taskIds.length) return;
+      const list = taskIds.map((id) => `#${id}`).join(", ");
+      const text =
+        `Check the work you finished on ${list} before it counts as done. For each one: read what ` +
+        `you claimed on the task, then verify the single claim resting on the least evidence — ` +
+        `don't re-do the work. Then close it or send it back to yourself saying what's missing.`;
+      runtime.thread.append({ role: "user", content: [{ type: "text", text }] });
+    },
+    [runtime],
+  );
 
   const openConversation = useCallback(async (id: string) => {
     const detail = await fetchConversation(id).catch(() => null);
@@ -358,7 +383,6 @@ export function Workspace({
                   projectId={projectId}
                   working={sessionWorking}
                   onProject={setProjectId}
-                  onKeepWorking={() => void autonomy.start(conversationId)}
                   onStop={() => void autonomy.stop(conversationId)}
                 />
                 {/* The thread gets its own box with a definite height rather than sitting
@@ -395,6 +419,7 @@ export function Workspace({
                       conversationId={conversationId}
                       width={mindRoom}
                       onClose={() => setMindOpen(false)}
+                      onReview={reviewFinished}
                     />
                   </ErrorBoundary>
                 </div>
@@ -470,6 +495,11 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     // eight consecutive calls rendered as eight separate "1 tool call" rows instead of one
     // line saying what he touched.
     const rounds: { uncached: number; cached: number; out: number }[] = [];
+    // One per turn at most, recorded when it ended — see the `context` branch in
+    // `services/conversations`. Collected the same way the counts are, so it lands in the same
+    // footer instead of somewhere in the middle of the reply.
+    let context: ContextLedger | undefined;
+    let folded = false;
     for (const part of turn.parts) {
       if (part.kind === "text") content.push({ type: "text", text: part.text });
       else if (part.kind === "reasoning") content.push({ type: "reasoning", text: part.text });
@@ -482,6 +512,9 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
           argsText: JSON.stringify(part.arguments),
           result: part.result,
         });
+      } else if (part.kind === "context") {
+        context = part.context;
+        folded = part.folded;
       } else {
         rounds.push({ uncached: part.uncached, cached: part.cached, out: part.out });
       }
@@ -489,7 +522,9 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     // Last, so the figure lands at the foot of the turn and nothing is split around it.
     // Token counts ride back as the same data part the live stream uses, so the footer reads
     // the same on a resumed turn as it did on a fresh one.
-    if (rounds.length) content.push({ type: "data", name: USAGE_PART, data: { rounds } });
+    if (rounds.length || context) {
+      content.push({ type: "data", name: USAGE_PART, data: { rounds, context, folded } });
+    }
     if (content.length) out.push({ role: turn.role, content });
   }
   // One cast, at the boundary: the shapes above are the library's own, and its content

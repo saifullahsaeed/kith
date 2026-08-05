@@ -248,6 +248,18 @@ def timeline(conversation_id: str) -> list[dict]:
                     "out": int(stats.get("responseTokens") or 0),
                 }
             )
+        elif kind == "context":
+            # One per turn, written when it ends — a reading of how full the window was, not a
+            # thing that happened, so only the final one is still true. Recording all forty
+            # would put a categorised breakdown in the transcript on every round to say what the
+            # last one already says.
+            assistant()["parts"].append(
+                {
+                    "kind": "context",
+                    "context": entry.get("context") or {},
+                    "folded": bool(entry.get("folded")),
+                }
+            )
     # A turn with nothing in it is a turn that failed before it said anything.
     return [message for message in out if message["parts"]]
 

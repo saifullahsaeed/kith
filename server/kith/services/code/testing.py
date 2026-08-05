@@ -20,6 +20,17 @@ enough.
 tests, and the answer is written down in the project already — a `pytest.ini`, a `test`
 script in `package.json`, a `go.mod`. Guessing from the files is right nearly always, and
 when it is wrong the answer names what it tried so the shell is one step away.
+
+**A slow suite is not a broken one.** The first version ran the suite the same way `shell`
+runs anything — one blocked call with a hard timeout — at 300 seconds, past which it was
+killed and everything it had printed was thrown away. That is fine for the suite that runs in
+four seconds and wrong for the one that genuinely takes twelve minutes: it was never going to
+get a result, only a slower way of getting none. So this starts the suite the way
+`start_process` starts a server — a handle it can still see — waits a short while for the
+common case where it is done almost immediately, and if it is not, hands back "still running"
+instead of blocking the turn on it. Calling this again re-attaches to the same run rather than
+starting a second one, and once it finishes — whenever that is — the counts and failures come
+back exactly as if it had been fast, because the parsing runs on the whole log either way.
 """
 
 from __future__ import annotations
@@ -28,13 +39,22 @@ import json
 import re
 import shlex
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-#: How long to let a suite run. Longer than a build and shorter than the shell's own limit:
-#: a suite that takes more than five minutes wants `start_process`, not a blocked turn.
-TIMEOUT = 300
+from kith.services.code.processes import ProcessError, processes
+
+#: The name this claims in the background-process registry. Fixed, not derived from the
+#: command: there is only ever one suite worth watching at a time, and a fixed name is what
+#: makes calling `run` again find the same run instead of starting another.
+_PROCESS_NAME = "run-tests"
+
+#: How long to wait, once, before handing control back. Long enough that a normal suite
+#: finishes inside a single call and nothing about the caller's experience changes; short
+#: enough that a slow one does not block the turn it arrived on.
+WAIT = 20.0
 
 #: Most failures to name individually. Past this the list stops being a thing to act on and
 #: becomes the log again — and twelve failures are nearly always one cause.
@@ -235,8 +255,13 @@ def _not_installed(runner: Runner, output: str) -> str:
     return ""
 
 
-def run(path: str = ".", filter_: str = "", timeout: int = TIMEOUT) -> dict[str, Any]:
-    """Run the project's tests and report what failed."""
+def run(path: str = ".", filter_: str = "", wait: float = WAIT) -> dict[str, Any]:
+    """Run the project's tests and report what failed — or that it is still running.
+
+    A second call while the same run is still going re-attaches instead of starting another;
+    a call naming a different path or filter while one is in flight is refused, because
+    starting it would mean two suites racing over the same files with only one handle back.
+    """
     from kith.infra import workspace as sandbox
 
     root = Path(sandbox.resolve(path))
@@ -251,10 +276,42 @@ def run(path: str = ".", filter_: str = "", timeout: int = TIMEOUT) -> dict[str,
         )
 
     command = _narrowed(runner, filter_, root)
-    try:
-        code, output = sandbox._capture(f"cd {shlex.quote(str(root))} && {command}", timeout)
-    except sandbox.WorkspaceError as exc:
-        raise TestingError(str(exc)) from None
+    full_command = f"cd {shlex.quote(str(root))} && {command}"
+
+    # Checked before starting, rather than started-and-caught, so a *different* reason
+    # `start` might refuse (the whole registry is full, say) surfaces as itself instead of
+    # being misread as this same collision — both errors happen to say "already running".
+    existing = _peek(_PROCESS_NAME)
+    if existing is not None and existing.get("alive"):
+        if existing.get("command") != full_command:
+            raise TestingError(
+                f"Already running a different test run ({existing.get('command')!r}, "
+                f"started {existing.get('for')} ago). Wait for it to finish, or check it "
+                f"with check_process('{_PROCESS_NAME}'), before starting another."
+            ) from None
+    else:
+        try:
+            processes.start(full_command, _PROCESS_NAME)
+        except ProcessError as exc:
+            raise TestingError(str(exc)) from None
+
+    state = _await(_PROCESS_NAME, wait)
+    if state.get("alive"):
+        return {
+            "ran": command,
+            "runner": runner.name,
+            "status": "running",
+            "for": state.get("for"),
+            "note": (
+                "Still running — slower than a quick check. Call run_tests again with the "
+                "same path and filter to check on it; the counts and failures come back the "
+                "moment it finishes, however long that takes."
+            ),
+        }
+
+    output = processes.full_output(_PROCESS_NAME)
+    passed = state.get("exitCode") == 0
+    processes.stop(_PROCESS_NAME)  # done either way; free the name for the next run
 
     missing = _not_installed(runner, output)
     if missing:
@@ -265,7 +322,6 @@ def run(path: str = ".", filter_: str = "", timeout: int = TIMEOUT) -> dict[str,
 
     counts = _counts(output)
     failures = _failures(output)
-    passed = code == 0
     # `ok` for the verdict, `passed` for the count of passing tests. They were both called
     # `passed` at first and the count silently overwrote the verdict, so an all-green run
     # reported `passed: 1` and a narrowed failing run reported `passed: False` — the same
@@ -289,3 +345,26 @@ def run(path: str = ".", filter_: str = "", timeout: int = TIMEOUT) -> dict[str,
         # a suite that collected no tests also exits zero on some runners.
         result["log"] = output[-800:]
     return result
+
+
+def _await(name: str, wait: float) -> dict[str, Any]:
+    """Poll a background run until it finishes or the wait runs out, whichever first."""
+    deadline = time.monotonic() + wait
+    state = processes.check(name)
+    while state.get("alive") and time.monotonic() < deadline:
+        time.sleep(0.3)
+        state = processes.check(name)
+    return state
+
+
+def _peek(name: str) -> dict[str, Any] | None:
+    """The registry's view of a named process, or None if it has never existed here.
+
+    A read, not a claim — unlike `check`, this must not raise just because nothing by that
+    name is running, since "nothing to see" is the expected answer the first time `run` is
+    ever called.
+    """
+    try:
+        return processes.check(name)
+    except ProcessError:
+        return None

@@ -122,12 +122,66 @@ def _verify_done(path: Path, a: dict) -> dict | None:
         )
         return None
 
+    # Every requirement met — by his own account, in a tick, with nobody to check it. That is not
+    # a close, it is a submission. `_verify_done` is genuinely good at catching work he knows is
+    # incomplete, and structurally incapable of catching work he believes is complete and is not:
+    # he wrote the brief, he chose the requirements, he supplied the evidence, and then he graded
+    # it. On a real project that produced a finished, confident analysis document asserting the
+    # system used SQLite when it had moved to Postgres — every box ticked.
+    #
+    # So an unattended pass lands in `review`, where no tick can pick it up again and a chat turn
+    # is shown it. In a conversation there is a person present and the whole context to judge
+    # from, so `done` there stays `done`.
+    from kith.services import session_context
+
+    if session_context.unattended():
+        a["status"] = "review"
+        body += (
+            "\n\n**Finished as far as I can tell — leaving it in review rather than closing it, "
+            "since I am the one who wrote the brief I just checked against.**"
+        )
+        repo.tasks.add_task_comment(path, a["id"], "kith", body)
+        return None
+
     repo.tasks.add_task_comment(path, a["id"], "kith", body)
     return None
 
 
+def _status_of(path: Path, task_id: int) -> str:
+    """What column a task is in right now, or "" if it can't be read.
+
+    Read before an update so a status *change* can be told apart from a status being restated.
+    Silent on failure: this exists to decide whether to send a notification, and a task that
+    cannot be read is not a reason to fail the update itself.
+    """
+    try:
+        row = repo.tasks.task_detail(path, int(task_id))
+        return str((row or {}).get("status") or "")
+    except Exception:
+        return ""
+
+
 def _update_task(path: Path, a: dict) -> dict | None:
-    if (a.get("status") or "") == "done":
+    # Read before `_verify_done` gets to rewrite it. Parking work on his person is the one
+    # status change they have to hear about, and it was the one that said nothing: `ask_on_task`
+    # notifies, and the unmet-brief hand-back below notifies, but a bare
+    # `update_task(status='waiting')` moved the task into their column in total silence — no
+    # message, no link, nothing in the header.
+    #
+    # Which is how four tasks came to sit in "Waiting on you" that nobody knew were waiting, and
+    # how a task parked by the loop-breaker on a blocker that was not even real (see
+    # `_ALLOW["breakout"]`) stayed parked for three hours until someone read the tick log. A
+    # stall he cannot get past is exactly the moment his person is the only one who can help;
+    # not telling them makes it a stall that lasts until they happen to look.
+    #
+    # Taking it from what was *asked for* is also what keeps the two paths from both firing.
+    # `_verify_done` sets `a["status"] = "waiting"` and notifies, then falls through here; a
+    # marker saying "already told them" would work, but it would live in the argument dict the
+    # model fills in, and anything he can pass is something he can pass to go quiet. The
+    # request he actually made is not his to rewrite.
+    requested = (a.get("status") or "").strip()
+    was = _status_of(path, a["id"]) if requested == "waiting" else ""
+    if requested == "done":
         refusal = _verify_done(path, a)
         if refusal is not None:
             return refusal
@@ -153,6 +207,16 @@ def _update_task(path: Path, a: dict) -> dict | None:
 
     session_context.adopt(path, (out or {}).get("project_id"))
     _mirror_brief(path, (out or {}).get("id"))
+    # Only on the way in, and only if nobody has said it already: re-parking a task that is
+    # already waiting is a no-op, and pinging them for it turns the notification into noise.
+    if requested == "waiting" and was != "waiting":
+        goal = str((out or {}).get("goal") or f"task #{a['id']}")
+        repo.messages.add_message(
+            path,
+            f"I've left “{goal}” (task #{a['id']}) with you — I couldn't get past it on my own.",
+            link=f"/tasks/{a['id']}",
+            kind="stuck",
+        )
     # Promoting something out of the backlog is the moment it becomes work, and therefore the
     # moment worth waking for. This is the other half of scaffolding into `backlog`: you lay
     # the roadmap out with nothing running, and moving the first task to `todo` is what says

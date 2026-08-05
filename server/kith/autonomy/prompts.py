@@ -38,16 +38,31 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
     delivered = detail.get("deliverables") or []
     if delivered:
         lines.append("Delivered so far: " + ", ".join(d["title"] for d in delivered))
-    comments = detail.get("comments") or []
-    if comments:
-        last = comments[-1]
-        lines.append(f"Latest note ({last['author']}): {last['body'][:160]}")
+    notes = _task_notes(detail.get("comments") or [])
+    if notes:
+        lines.append(
+            "What you have already recorded on this task — read this before touching the "
+            "codebase, it is where you got to last time:"
+        )
+        lines += notes
     # Your working file — the memory of this task that survives between turns.
     # Surface it so you resume from it instead of re-gathering from scratch.
     # Relative, so it lands in whatever folder he is actually working in. It used to be
     # an absolute container path, which on this machine cannot be created at all.
-    work_path = f"work/task-{detail['id']}.md"
+    #
+    # `.kith/work/`, matching the persona and `project_files.ensure` — which both said so while
+    # this line said `work/`. The person moved their `work/` folder into `.kith/` and every tick
+    # went on instructing him to write outside it, so the notes ended up split down the middle:
+    # tasks 34–41 under `.kith/work/`, tasks 42–50 under `work/`, and the prompt could only ever
+    # see one of the two.
+    work_path = f".kith/work/task-{detail['id']}.md"
     saved = _read_working_file(work_path)
+    if saved is None:
+        # The old location, still read so the files already written there are not orphaned by
+        # moving the path. Only ever read from — anything new goes to `.kith/work/`.
+        legacy = _read_working_file(f"work/task-{detail['id']}.md")
+        if legacy is not None:
+            saved = legacy
     if saved is not None:
         lines.append(f"Your working file ({work_path}) — what you've saved so far:")
         lines.append(_handoff(saved, work_path) if saved.strip() else "  (empty)")
@@ -86,6 +101,64 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
 #: there was room to spare and nothing being bought with the frugality.
 _HANDOFF_CHARS = 4_000
 
+#: How much of his own commentary on a task rides in the prompt. Generous, because it is the
+#: single most valuable thing available to a tick and it was almost entirely absent.
+_NOTES_CHARS = 6_000
+
+
+def _task_notes(comments: list[dict]) -> list[str]:
+    """His own record of this task, most of it, in the order he wrote it.
+
+    This was `comments[-1]["body"][:160]` — one note, cut at a hundred and sixty characters.
+    Measured across the board: 170,736 characters of findings he had written on his own tasks,
+    of which a tick was ever shown **4.1%**.
+
+    It is the worst loss in the whole handoff, because commenting progress is what the persona
+    tells him to do and therefore where his best notes go. Task #43 — the one that took ten
+    ticks — had fourteen comments holding 5,689 characters he never saw again, against a working
+    file of 2,659 bytes. He wrote more than twice as much into the channel he could not read back
+    as into the one he could, then re-derived it by reading the codebase again: 54% of his file
+    reads in one session were of a file he had already read that turn.
+
+    Newest-biased but chronological. The budget is spent from the most recent note backwards, so
+    what survives is the recent work — then printed oldest-first, because these are a narrative
+    and reading a narrative backwards costs him a round working out the order.
+
+    A note from his person is never dropped. Theirs are rare, they are usually a correction, and
+    "sqlite is not being used any more, we moved to postgres" is precisely the sentence that must
+    not fall off the end of a budget.
+    """
+    if not comments:
+        return []
+    theirs = [c for c in comments if str(c.get("author") or "") == "user"]
+    mine = [c for c in comments if str(c.get("author") or "") != "user"]
+
+    kept: list[dict] = list(theirs)
+    spent = sum(len(str(c.get("body") or "")) for c in theirs)
+    for comment in reversed(mine):
+        body = str(comment.get("body") or "")
+        # The most recent note always goes in, however long it is. A budget that can return
+        # nothing is worse than the bug being fixed: it would put a tick back to knowing
+        # nothing about its own last attempt, which is the whole failure.
+        first = not any(c not in theirs for c in kept)
+        if not first and spent + len(body) > _NOTES_CHARS:
+            break
+        kept.append(comment)
+        spent += len(body)
+
+    order = {id(c): i for i, c in enumerate(comments)}
+    kept.sort(key=lambda c: order.get(id(c), 0))
+    dropped = len(comments) - len(kept)
+
+    out = []
+    if dropped > 0:
+        out.append(f"  […{dropped} earlier note(s) not shown — `view_task` has all of them.]")
+    for comment in kept:
+        who = "YOU ASKED" if str(comment.get("author") or "") == "user" else "you wrote"
+        body = " ".join(str(comment.get("body") or "").split())
+        out.append(f"  · [{who}] {body}")
+    return out
+
 
 def _handoff(saved: str, path: str) -> str:
     """His own notes, from the end.
@@ -113,7 +186,8 @@ def _handoff(saved: str, path: str) -> str:
 def _read_working_file(path: str) -> str | None:
     """The task's working file if it exists, else None. Best-effort — never let a
     missing file or a sleepy sandbox break the tick. (path is internal/controlled,
-    always work/task-<int>.md under his folder, so a plain cat is safe.)"""
+    always `.kith/work/task-<int>.md` — or the pre-move `work/task-<int>.md` — under
+    whatever folder he is working in, so a plain cat is safe.)"""
     try:
         result = sandbox.run_command(f'cat "{path}" 2>/dev/null')
         if result.exit_code != 0:

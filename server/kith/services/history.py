@@ -22,8 +22,10 @@ brief; see ``services.history_context`` / ``routes.chat``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 #: Marks the folded block so a reader — and the model — can tell a summary of the past from
@@ -47,8 +49,56 @@ _INSTRUCTION = (
 )
 
 
+#: Share of the window this may fill before folding — the same threshold `agent_loop`'s
+#: in-turn fold already uses (`_FOLD_ABOVE_SHARE`), so the two mechanisms agree on what "full"
+#: means instead of each guessing their own number. A fixed character count could not do this:
+#: it is either far too small next to a 1M-token cloud model (folding — and paying for a
+#: summary — on a conversation that is nowhere near full) or far too large next to a 40K local
+#: one (never folding until a request outright fails). Matching Claude Code's own compaction,
+#: which fires as a share of whatever window is actually in play, not a constant.
+_FOLD_ABOVE_SHARE = 0.8
+
+#: Rough chars-per-token, matching `llm/budget.SEED_CHARS_PER_TOKEN`. Only used to turn a token
+#: window into a character budget; real calibration happens per-round inside a turn, which this
+#: runs before.
+_CHARS_PER_TOKEN = 3.7
+
+
+def _budget_chars(config, agent_db_path: Path | None) -> float:
+    """How many characters of conversation prose may accumulate before folding.
+
+    Scaled to the model's real window when one is known. The persona and the tool schemas
+    share that same window and are roughly fixed per install, so they are netted out first —
+    counting only the conversation and ignoring everything else in the same request is the
+    exact mistake `llm/ledger`'s docstring calls out (schemas alone have run to ~11k tokens on
+    a full toolset). What is left over is the conversation's actual slice of the 80%.
+
+    Falls back to the flat `history_max_chars` knob when the window is unknown (a local model,
+    or one adopted before its window was recorded) — an unknown window means there is no share
+    to compute, and guessing one is worse in both directions: guess high and a small model
+    fails mid-turn, guess low and every turn folds for nothing.
+    """
+    window = int(getattr(config, "context_window", 0) or 0)
+    if window <= 0:
+        from kith.services import tuning
+
+        return float(tuning.value("history_max_chars"))
+
+    persona = (config.system or "").strip()
+    overhead = len(persona)
+    if agent_db_path is not None:
+        from kith import tools
+
+        overhead += sum(len(json.dumps(schema)) for schema in tools.tool_schemas(agent_db_path))
+    return max(0.0, window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE - overhead)
+
+
 def fold(
-    history: list[dict[str, Any]], config, conversation_id: str, host: str = ""
+    history: list[dict[str, Any]],
+    config,
+    conversation_id: str,
+    host: str = "",
+    agent_db_path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Compact ``history`` using the settings' thresholds and the conversation's stored brief.
 
@@ -58,7 +108,7 @@ def fold(
     """
     from kith.services import conversations, tuning
 
-    max_chars = int(tuning.value("history_max_chars"))
+    max_chars = _budget_chars(config, agent_db_path)
     keep_recent = int(tuning.value("history_keep_recent"))
     prior = conversations.latest_summary(conversation_id) if conversation_id else {}
     return compact(
@@ -120,8 +170,23 @@ def compact(
     if prose <= max_chars and not brief:
         return history, None
 
-    # A brief already covers all but the last few turns: reuse it, no model call.
-    if brief and 0 <= covered <= count and (count - covered) <= keep_recent:
+    # A brief already covers all but a recent stretch: reuse it, no model call, as long as
+    # that stretch hasn't grown past the same real budget the first-ever fold is judged
+    # against.
+    #
+    # Deliberately *not* a message count. The first version of this fix compared
+    # `count - covered` against a multiple of `keep_recent` — messages, not size — which
+    # brought back the module's own "rolling, not per-turn" claim but for the wrong reason:
+    # it folds on a made-up turn cadence with no idea whether the window it was actually sized
+    # against is anywhere near full. Two one-line replies and a 4,000-token tool dump both
+    # count as "one turn" to a message counter; they are nothing alike in the room they cost.
+    # And it is *permanent* once a brief exists: `prose <= max_chars and not brief` above only
+    # ever runs before the very first fold, so every fold after that was answering to a
+    # cadence, not a budget, for the rest of the conversation's life — measured against a real
+    # 2-day, 40-fold conversation: still folding every ~9 messages long after the actual
+    # accumulated text was nowhere near what the window could hold.
+    tail_chars = sum(len(m["content"]) for m in history[covered:] if isinstance(m.get("content"), str))
+    if brief and 0 <= covered <= count and tail_chars <= max_chars:
         return [_summary_message(brief), *history[covered:]], None
 
     # (Re)fold everything but the most recent `keep_recent` turns.

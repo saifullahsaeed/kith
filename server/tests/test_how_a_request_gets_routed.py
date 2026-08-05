@@ -36,19 +36,36 @@ class TestModelFallback:
         assert "models" not in _routing_options(_config())
 
 
-class TestRequiringACapableProvider:
-    def test_off_by_default(self):
-        assert "provider" not in _routing_options(_config())
+def _provider(config: Config | None = None) -> dict:
+    """The provider block, or an empty dict.
 
-    def test_on_requires_all_parameters(self):
-        # So a request never silently lands on a host that drops caching or tools.
-        tuning.apply({"require_provider_parameters": True})
-        assert _routing_options(_config())["provider"]["require_parameters"] is True
+    Every assertion below reads a *named field* rather than the presence of this block, which is
+    the mistake it used to make. `"provider" not in options` was a fine proxy for "my flag is
+    off" only while every flag defaulted off — and it broke the moment provider ordering was
+    given a default, reporting a failure in requiring-capable-providers and in zero-data-retention
+    for a change that touched neither.
+    """
+    return _routing_options(config or _config()).get("provider") or {}
+
+
+class TestRequiringACapableProvider:
+    def test_on_by_default_after_measuring_what_off_cost(self):
+        """Off, a round could be served by a host that does not do prompt caching — and four
+        recorded rounds on 2026-08-03 came back with `cachedTokens: 0` on prompts of 24k–56k,
+        every token billed fresh, at ~8x the usual unit price as well. Prompt caching is most of
+        the economics of a long turn, so a host that silently drops it is not a cheaper host."""
+        assert _provider()["require_parameters"] is True
+
+    def test_it_can_still_be_turned_off(self):
+        # The escape, for a model whose only upstream is fussy about declaring what it supports.
+        tuning.apply({"require_provider_parameters": False})
+        assert "require_parameters" not in _provider()
 
 
 class TestZeroDataRetention:
     def test_off_by_default_so_the_provider_pool_is_not_shrunk_unasked(self):
-        assert "provider" not in _routing_options(_config())
+        assert "data_collection" not in _provider()
+        assert "zdr" not in _provider()
 
     def test_on_denies_logging_and_restricts_to_zdr_hosts(self):
         # The "runs on your machine" promise, honoured when he reaches the cloud.

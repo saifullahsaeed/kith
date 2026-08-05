@@ -142,14 +142,27 @@ _WORK = {
 _ALLOW: dict[str, set[str]] = {
     "start": _WORK,
     "reply": _WORK,
-    "breakout": {
-        "read_skill",
-        "list_tasks",
-        "update_task",
-        "journal",
-        "update_project",
-        "recall",
-    },
+    # Breakout used to get six tools — journal, list_tasks, read_skill, recall, update_project,
+    # update_task — and that combination quietly turned the loop-breaker into a trap.
+    #
+    # The directive asks him to choose between (a) a genuinely different approach, (b) parking
+    # it because he lacks a tool or access, and (c) dropping it. With six bookkeeping tools,
+    # (a) is not something he can *do* — only describe — so the only executable options were
+    # park and drop. Worse, the directive asks him to assess whether he lacks access while
+    # holding a loadout with no filesystem, shell, editor or test access. He answered honestly:
+    #
+    #   "this session has no filesystem, shell, editor, test, or browser access, so I cannot
+    #    inspect or implement the frontend chooser"
+    #
+    # — on a day he had made 554 read_file and 148 shell calls. Then he used the one tool he
+    # did have to park the task on his person with a blocker that was not real. Every stall
+    # ended that way, which is the opposite of breaking a loop.
+    #
+    # So: the same tools as any other working tick. "Try a different approach" means using
+    # these tools differently, and he cannot do that without them. The prompt-leanness argument
+    # that justifies scoping elsewhere does not apply to a mode that fires once per stall —
+    # once in 126 steps, the day this was found.
+    "breakout": _WORK,
 }
 # `reflect`, `consolidate` and `curious` used to have entries here. They were the scheduled
 # inner life — reflection every twentieth idle tick, curiosity every thirtieth — and the

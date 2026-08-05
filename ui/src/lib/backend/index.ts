@@ -1,4 +1,4 @@
-export type { ServerConfig, BackendEvent } from "./types";
+export type { ServerConfig, BackendEvent, ContextLedger, ContextLine } from "./types";
 export { FALLBACK_CONFIG, fetchServerConfig, forgetLocalConfig, patchServerConfig } from "./config";
 export { createBackendAdapter } from "./adapter";
 export type {

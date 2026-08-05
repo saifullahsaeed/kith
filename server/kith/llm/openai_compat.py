@@ -26,6 +26,13 @@ import requests
 from kith.config import Config
 from kith.llm import budget, caching
 
+#: OpenRouter's full reasoning-effort scale, descending. Confirmed against their own
+#: SDK types (``ReasoningEffort``/``ChatRequestReasoningEffort``, both generated from
+#: their OpenAPI spec) rather than guessed — a value outside this set used to fall
+#: through to the plain enabled/disabled switch below, silently overriding whatever
+#: was actually asked for.
+REASONING_EFFORTS: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal", "none")
+
 # Optionally pin OpenRouter to one upstream host. Default routing spreads requests
 # across ~20 providers, so consecutive rounds land on different (cold) caches and
 # prefix caching rarely hits. Pinning a caching-capable host keeps every round on
@@ -80,8 +87,8 @@ def _routing_options(config: Config) -> dict[str, Any]:
     """The OpenRouter routing, fallback and privacy fields, resolved from settings.
 
     Pure — settings in, payload fragment out — so the policy can be tested without opening a
-    socket. `session_id` and `reasoning` are assembled in `stream_once` instead: those are
-    per-request rather than policy, and the id touches storage.
+    socket. `session_id` is assembled in `stream_once` instead: unlike this and `reasoning`,
+    it touches storage.
     """
     from kith.services import tuning
 
@@ -94,6 +101,32 @@ def _routing_options(config: Config) -> dict[str, Any]:
         # while every round of a turn is steered at the same warm host.
         provider["order"] = [pinned]
         provider["allow_fallbacks"] = True
+
+    # Which host to prefer when nothing is pinned, and this is the gap that cost real money.
+    #
+    # Pinning was dropped in favour of the session id, on the reasoning that stickiness asks for
+    # the same host without giving up fallbacks. The stickiness works — and that is the problem.
+    # It keeps a session *together*; nothing makes it land somewhere *cheap*. So a session that
+    # happens to open on an expensive upstream stays there for its whole life, which is exactly
+    # the shape in the data: 23:24, 23:25 and 23:30 all at $4.12–6.59 per million uncached
+    # prompt tokens, then 15:54 through 15:58 all at ~$1.01, against a usual $0.13. Contiguous
+    # blocks at one rate, not scattered outliers. One model, up to fifty times the price,
+    # decided by whichever door the session came in through.
+    #
+    # `sort` costs nothing to set and is not a lock: it orders the pool, and fallbacks still
+    # apply if the cheapest is down. Combined with the session id it means sticking to a cheap
+    # host rather than sticking to an arbitrary one.
+    order_by = str(tuning.value("prefer_provider_by")).strip()
+    if order_by and not pinned:
+        provider["sort"] = order_by
+
+    # And a ceiling, for the case `sort` cannot cover: every cheap host is busy and the fallback
+    # is the $6.59 one. Off by default because the right number is per-model and a figure set too
+    # low takes the model off the air entirely — the same "goes dark" trade as the flags below.
+    ceiling = float(tuning.value("max_prompt_price"))
+    if ceiling > 0:
+        provider["max_price"] = {"prompt": ceiling}
+
     if tuning.value("require_provider_parameters"):
         # Only route to upstreams that support everything this request sends — tools,
         # reasoning, caching — so a cheaper host can't silently drop a feature we paid for.
@@ -114,6 +147,25 @@ def _routing_options(config: Config) -> dict[str, Any]:
         out["models"] = [config.model, fallback]
 
     return out
+
+
+def _reasoning_options(config: Config) -> dict[str, Any]:
+    """Whether he reasons before answering, and how hard.
+
+    Pure, for the same reason `_routing_options` is: a payload fragment out of settings alone
+    can be tested without opening a socket. Sent only to OpenRouter — where it is a documented
+    extension, and a strict OpenAI-compatible host 400s the whole request rather than ignoring
+    an unknown key — never to Ollama, which reads `config.think` on its own instead.
+
+    `effort` beats `enabled` when it is set: they are alternative spellings of the same field,
+    and sending both makes the provider pick, which is not a decision to leave to it. Blank
+    effort means "you decide", which is the right default — the sensible amount of thinking
+    for a model is a thing its maker knows better.
+    """
+    effort = (config.effort or "").strip().lower()
+    if effort in REASONING_EFFORTS:
+        return {"reasoning": {"effort": effort}}
+    return {"reasoning": {"enabled": bool(config.think)}}
 
 
 def _pinned_provider() -> str:
@@ -177,23 +229,11 @@ def stream_once(
         # is still there and still right — a step run with nobody working belongs to no
         # session, so the install-wide id is the honest answer for it.
         payload["session_id"] = config.session_id or _session_id()
-        # Provider routing (a pinned upstream), model fallback, and the privacy/capability
-        # preferences — all resolved from settings and assembled in one tested place.
+        # Provider routing (a pinned upstream), model fallback, privacy/capability
+        # preferences, and whether/how hard he reasons — all resolved from settings and
+        # assembled in one tested place.
         payload.update(_routing_options(config))
-        # Whether he reasons before answering, and how hard. Sent only to OpenRouter,
-        # where it is a documented extension — a strict OpenAI-compatible host rejects
-        # the whole request rather than ignoring an unknown key. Until now this setting
-        # reached Ollama only, so on a cloud model the switch did nothing at all.
-        #
-        # `effort` beats `enabled` when it is set: they are alternative spellings of the
-        # same field and sending both makes the provider pick, which is not a decision to
-        # leave to it. Blank effort means "you decide", which is the right default — the
-        # sensible amount of thinking for a model is a thing its maker knows better.
-        effort = (config.effort or "").strip().lower()
-        if effort in ("low", "medium", "high"):
-            payload["reasoning"] = {"effort": effort}
-        else:
-            payload["reasoning"] = {"enabled": bool(config.think)}
+        payload.update(_reasoning_options(config))
     if tools:
         payload["tools"] = tools
         # "none" is how the API says "you may not call anything this turn". It matters
@@ -271,6 +311,13 @@ def stream_once(
     answer = ""
     calls: dict[int, dict] = {}
     usage: dict | None = None
+    # Who actually served this request. OpenRouter puts it on every chunk and nothing read it,
+    # so a bill could not be attributed to an upstream — which is the one fact you need to pin
+    # one. Measured across 1,071 recorded rounds of the same model: the usual rate is
+    # $0.13 per million uncached prompt tokens, with a clump at $1.01–1.10 and an hour on
+    # 2026-08-01 at $4.12–6.59. Same `openai/gpt-5.6-luna`, up to fifty times the price, and no
+    # record of which host did it.
+    served_by = ""
     try:
         for line in response.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data:"):
@@ -288,6 +335,10 @@ def stream_once(
                 return
             if chunk.get("usage"):
                 usage = chunk["usage"]
+            # Sent on each chunk; taken from the first that carries it. Not every
+            # OpenAI-compatible host sets it, so this stays blank rather than guessing.
+            if not served_by and chunk.get("provider"):
+                served_by = str(chunk["provider"])
 
             choices = chunk.get("choices") or []
             if not choices:
@@ -328,7 +379,7 @@ def stream_once(
         "type": "turn",
         "content": answer,
         "tool_calls": tool_calls,
-        "stats": _stats(usage, time.time() - started, config.model),
+        "stats": _stats(usage, time.time() - started, config.model, served_by),
     }
 
 
@@ -385,7 +436,9 @@ def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _stats(usage: dict | None, elapsed: float, model: str = "") -> dict[str, float]:
+def _stats(
+    usage: dict | None, elapsed: float, model: str = "", provider: str = ""
+) -> dict[str, float]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
@@ -420,6 +473,11 @@ def _stats(usage: dict | None, elapsed: float, model: str = "") -> dict[str, flo
         # Which model produced this row. Without it a bill spanning a model switch cannot
         # be attributed after the fact — the token counts alone say nothing about price.
         "model": model,
+        # And which upstream served it, which turns out to matter more than the model does.
+        # One model on OpenRouter is many hosts at many prices; the same `gpt-5.6-luna` round
+        # has billed anywhere from $0.13 to $6.59 per million uncached prompt tokens on this
+        # install. Blank for a plain OpenAI-compatible endpoint that does not say.
+        "provider": provider,
         "promptTokens": prompt,
         "responseTokens": completion,
         "reasoningTokens": reasoning,

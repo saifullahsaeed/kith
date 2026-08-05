@@ -158,6 +158,29 @@ def list_tick_log(path: Path, limit: int = 100) -> list[dict]:
         return out
 
 
+def times_worked(path: Path, goal: str) -> int:
+    """How many unattended ticks have actually *worked* this task.
+
+    Read from the recorder rather than counted in memory, so restarting the process cannot hand a
+    task a fresh budget — which would quietly make "restart the app" the way to keep grinding.
+
+    Matched on the focus line the runner writes, ``working on: <goal>``, and only for ``start``
+    mode, so planning ticks and replies do not spend a task's allowance. Matching on the goal text
+    rather than an id is what the recorder makes possible: it stores the focus line, not a foreign
+    key, and a log that survives the task being edited is worth more here than a tidy join.
+    """
+    wanted = f"working on: {str(goal).strip()}"
+    with session(path) as db:
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(TickLog)
+                .where(TickLog.mode == "start", TickLog.focus == wanted)
+            )
+            or 0
+        )
+
+
 def _tools(raw: object) -> list[str]:
     """Tool names are stored as a JSON string; a malformed row is not worth a crash."""
     try:

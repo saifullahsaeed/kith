@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderKanban, Play, Square } from "lucide-react";
+import { FolderKanban, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
@@ -30,14 +30,12 @@ export function SessionBar({
   projectId,
   working,
   onProject,
-  onKeepWorking,
   onStop,
 }: {
   conversationId: string;
   projectId: number | null;
   working: boolean;
   onProject: (projectId: number | null) => void;
-  onKeepWorking: () => void;
   onStop: () => void;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -118,7 +116,9 @@ export function SessionBar({
       <div className="flex-1" />
 
       {/* Per session, which is the thing roaming could never say. Stopping this one leaves
-          every other session exactly as it was. */}
+          every other session exactly as it was. No manual start here any more — a session
+          becomes `working` on its own (filing a task, a reminder coming due), and this is
+          only ever the way to turn that back off. */}
       {working ? (
         <Button
           size="sm"
@@ -130,18 +130,7 @@ export function SessionBar({
           <Square className="size-3" />
           Stop
         </Button>
-      ) : (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="text-muted-foreground hover:text-foreground h-6 gap-1 px-2 text-[11px]"
-          onClick={onKeepWorking}
-          title="Keep working here until the work is done or you stop him."
-        >
-          <Play className="size-3" />
-          Keep working
-        </Button>
-      )}
+      ) : null}
     </div>
   );
 }

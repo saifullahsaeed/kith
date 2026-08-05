@@ -751,7 +751,9 @@ function IconAction({
   copyIcon,
 }: {
   label: string;
-  onClick: () => void;
+  /** For `copyIcon`, a `false` return (or a rejected promise) means the copy didn't actually
+   *  happen — the checkmark only shows when this resolves to anything else. */
+  onClick: () => void | boolean | Promise<void | boolean>;
   icon?: ReactNode;
   copyIcon?: boolean;
 }) {
@@ -759,11 +761,15 @@ function IconAction({
   return (
     <button
       onClick={() => {
-        onClick();
-        if (copyIcon) {
-          setHit(true);
-          setTimeout(() => setHit(false), 1600);
-        }
+        const result = onClick();
+        if (!copyIcon) return;
+        Promise.resolve(result)
+          .then((ok) => {
+            if (ok === false) return;
+            setHit(true);
+            setTimeout(() => setHit(false), 1600);
+          })
+          .catch(() => {});
       }}
       title={label}
       aria-label={label}
@@ -774,9 +780,42 @@ function IconAction({
   );
 }
 
-function copyText(text: string) {
-  if (typeof navigator === "undefined" || !navigator.clipboard) return;
-  navigator.clipboard.writeText(text).catch(() => {});
+/** Copy to the clipboard and say whether it actually landed there.
+ *
+ * The async Clipboard API is not a given even when `navigator.clipboard` exists — the desktop
+ * app's webview can refuse it (unfocused window, a permission it never granted) the same way a
+ * browser does, and the old version had no idea: it fired the write and showed "Copied" a
+ * moment later regardless, so a silently-refused copy looked identical to a real one. The only
+ * way anyone found out was pasting and getting the wrong thing.
+ *
+ * Falling back to `execCommand("copy")` on a hidden textarea isn't nostalgia — it uses a
+ * different permission path, so it's a real second attempt rather than the same failure twice.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the legacy path below.
+    }
+  }
+  if (typeof document === "undefined") return false;
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  document.body.removeChild(area);
+  return ok;
 }
 
 /* ── Markdown renderer (react-markdown + gfm + highlighted code) ─────────── */
@@ -927,9 +966,11 @@ export function CodeBlock({
 }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    copyText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
+    void copyText(code).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    });
   };
   return (
     <div>

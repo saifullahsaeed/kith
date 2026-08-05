@@ -18,6 +18,13 @@ export interface AutonomyStatus {
   tokensUncached?: number;
   lastTickTokens?: number;
   lastTickUncached?: number;
+  /**
+   * Work a tick finished and handed over for checking — the `review` column.
+   *
+   * Optional because an older server does not send it, and the panel must not blank out over a
+   * missing field: that exact assumption crashed the settings page earlier today.
+   */
+  toReview?: { id: number; goal: string }[];
 }
 
 export interface ActivityItem {

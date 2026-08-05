@@ -102,7 +102,9 @@ def _build_messages(messages, config, conversation_id: str = ""):
     # cached persona, before the recent turns — so it never disturbs the stable prefix, and it
     # is persisted so a fold is not re-run every turn. Below the size threshold this returns the
     # history untouched, so a short conversation is byte-for-byte what it was.
-    folded, fresh = history.fold(messages, config, conversation_id, ollama_host())
+    folded, fresh = history.fold(
+        messages, config, conversation_id, ollama_host(), agent_db_path=AGENT_DB_PATH
+    )
     if fresh is not None and conversation_id:
         conversations.record_summary(conversation_id, fresh["through"], fresh["text"])
     for message in folded:
@@ -227,6 +229,9 @@ def _present_state(conversation_id: str = "") -> str:
         memory_context.messages_block(AGENT_DB_PATH),
         memory_context.projects_block(AGENT_DB_PATH),
         memory_context.work_block(AGENT_DB_PATH),
+        # Only ever in chat. A tick seeing this would be a tick reviewing its own work, which is
+        # the thing the review column exists to stop.
+        memory_context.review_block(AGENT_DB_PATH),
     ]
     present = memory_context.context_block(AGENT_DB_PATH)
     if present:
@@ -291,6 +296,9 @@ class _Recorder:
         self.channel = ""
         self.buffer: list[str] = []
         self.said: list[str] = []
+        #: The latest context reading, written once when the turn ends. See `saw`.
+        self.context: dict = {}
+        self.folded = False
 
     def saw(self, event: dict) -> None:
         kind = event.get("type")
@@ -303,11 +311,33 @@ class _Recorder:
             return
         # Anything else ends whatever block was open, so ordering survives.
         self._flush()
+        if kind == "context":
+            # Held, not written. One of these lands every round, and each is a *reading* of the
+            # window rather than something that happened — so the last one is the only one still
+            # true, and forty categorised breakdowns in the transcript would all say what it
+            # says. Written once in `finish`.
+            self.context = event.get("context") or {}
+            return
+        if kind == "compacting":
+            # This one IS an event, and a rare one worth keeping: it means the turn ran out of
+            # room and paid for a summary. A reopened conversation should show that its middle
+            # is notes rather than the original steps.
+            self.folded = True
+            return
         if kind in ("tool_call", "tool_result", "stats"):
             conversations.record_event(self.conversation_id, kind, _readable(event))
 
     def finish(self, error: str | None = None, stopped: bool = False) -> None:
         self._flush()
+        # The window as it stood when the turn ended, and whether it had to fold to get there.
+        # Written on the error and stopped paths too: a turn that died is exactly the one whose
+        # context reading you want to look at afterwards.
+        if self.context:
+            conversations.record_event(
+                self.conversation_id,
+                "context",
+                {"context": self.context, "folded": self.folded},
+            )
         if error:
             conversations.record_event(self.conversation_id, "error", {"message": error})
         if stopped:

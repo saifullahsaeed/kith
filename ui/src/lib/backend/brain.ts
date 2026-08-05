@@ -96,6 +96,16 @@ export interface Project {
   name: string;
   description: string;
   status: string; // active | done | paused | archived
+  /**
+   * The folder this project's work happens in, or null for a project with no files.
+   *
+   * The server has always sent it and nothing here declared it, so the one fact that decides
+   * where every file he writes lands was invisible in the interface. That is how a project
+   * spent a run pointed at a folder that had been deleted, and how `job/the-app` quietly
+   * resolved to an empty `~/Kith/job/the-app` instead of the codebase on the Desktop —
+   * both diagnosable in a second if the path had been on screen.
+   */
+  directory: string | null;
   created_at: string;
   updated_at: string;
   milestones: Milestone[];

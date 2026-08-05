@@ -83,6 +83,36 @@ def a_turn() -> Iterator[None]:
         _scratch.reset(token)
 
 
+#: Whether this work is happening with nobody watching. False in chat, in a test, in a script —
+#: the honest default, since the only thing that can truthfully claim otherwise is the tick loop.
+_unattended: ContextVar[bool] = ContextVar("kith_unattended", default=False)
+
+
+def unattended() -> bool:
+    """Is this a tick rather than a conversation?
+
+    Exists for one decision: who may declare a task finished. A tick verifying its own work and
+    then closing the task is marking its own homework — it wrote the brief, it wrote the evidence,
+    and it graded itself. In a chat turn there is a person on the other side and a full context to
+    judge from, so `done` there means what it says.
+
+    Read from a context variable rather than threaded through, for the same reason
+    :func:`current` is: a tool handler is called as ``run(path, args)`` and fifty-nine of them do
+    not care.
+    """
+    return _unattended.get()
+
+
+@contextmanager
+def nobody_watching() -> Iterator[None]:
+    """Run a block as unattended work. Opened by the tick loop, and nothing else."""
+    token = _unattended.set(True)
+    try:
+        yield
+    finally:
+        _unattended.reset(token)
+
+
 @contextmanager
 def working_on(project_id: int | None) -> Iterator[None]:
     """Run a block as work on one project, whatever the conversation says.

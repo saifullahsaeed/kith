@@ -43,10 +43,11 @@ class Config:
     num_predict: int
     system: str
     think: bool
-    #: How hard to think before answering: "", "low", "medium" or "high". Blank leaves it
-    #: to the provider. Only sent to models whose OpenRouter entry lists `reasoning` in
-    #: supported_parameters — sending it elsewhere is a 400 on the whole request, not a
-    #: field quietly ignored.
+    #: How hard to think before answering: "" (leave it to the provider), "none", "minimal",
+    #: "low", "medium", "high", "xhigh" or "max" — OpenRouter's full reasoning-effort scale
+    #: (`kith.llm.openai_compat.REASONING_EFFORTS`). Only sent to models whose OpenRouter
+    #: entry lists `reasoning` in supported_parameters — sending it elsewhere is a 400 on
+    #: the whole request, not a field quietly ignored.
     effort: str = ""
     #: OpenRouter stickiness for this conversation, so its rounds land on one warm cache.
     #: Blank falls back to the install-wide id.

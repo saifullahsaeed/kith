@@ -23,9 +23,9 @@ from typing import Any
 from kith import tools
 from kith.config import Config
 from kith.domain.tool_markup import ToolMarkupFilter
-from kith.llm import ollama, openai_compat
+from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
-from kith.services import tuning
+from kith.services import compaction, tuning
 
 # Tools that may run concurrently with each other. The bar is deliberately high:
 # each one must be network-bound (so overlapping actually saves wall-clock), free
@@ -434,6 +434,137 @@ def _carries_image(message: dict[str, Any]) -> bool:
     )
 
 
+#: Share of the model's context that may fill before the history is folded into a summary.
+#:
+#: Not near the brim, because `ContextBudget` is the overflow guard and this is not — and a
+#: valve that only opens at the last moment opens during the rounds that can least afford to
+#: spend one on a summary. Not near the middle either: every round below this threshold is a
+#: round where the whole history re-sends at cache-read price, which is the cheap outcome.
+_FOLD_ABOVE_SHARE = 0.8
+
+#: How many folds a single turn will pay for before it gives up and lets `_drop_oldest_exchange`
+#: take over. Each fold costs a model call and summarises the previous summary, so the third one
+#: is buying very little with real money.
+_MAX_FOLDS = 2
+
+#: Rough chars-per-token, matching `llm/caching.py`. Only used for the no-window fallback below,
+#: where being a little pessimistic is the safe direction.
+_CHARS_PER_TOKEN = 3.7
+
+#: What the old char-budget fallback compares against when the window is unknown. Same figure
+#: the shaving path has always used, so an install with no known window behaves exactly as
+#: before rather than inheriting a threshold derived from a window nobody can name.
+_UNKNOWN_WINDOW_CHARS = 80_000
+
+
+def _room_is_tight(convo: list[dict[str, Any]], window: int) -> bool:
+    """Should this conversation's history be reduced before the next request?
+
+    ``window`` is the model's context in tokens, or 0 when nobody knows — and 0 is
+    load-bearing here exactly as it is in `config.context_window`. An unknown window means we
+    cannot say what fraction of it we are using, so the honest answer is to fall back to an
+    absolute character budget and behave as this loop always did. Guessing a window would be
+    worse in both directions: guess high and a small model 400s mid-turn, guess low and every
+    turn is reduced for nothing.
+    """
+    held = sum(len(str(message.get("content") or "")) for message in convo)
+    if window <= 0:
+        return held > _UNKNOWN_WINDOW_CHARS
+    return held > window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE
+
+
+def _summarise(prompt: str, *, config: Config, host: str) -> str:
+    """One text-only model call, for folding a long turn into notes.
+
+    Deliberately not the turn's own conversation: the fold is a fresh, tool-less request whose
+    entire input is the stretch being summarised. Reusing the live `convo` would send the very
+    thing we are trying to shrink, and offering tools would invite it to go and do more work
+    instead of writing the note.
+
+    Cheap in the only sense that matters here — it is charged once and every round after it
+    reads a cached prefix again.
+    """
+    asked = [
+        {"role": "system", "content": "You write dense, specific handover notes to yourself."},
+        {"role": "user", "content": prompt},
+    ]
+    # Un-stick the reasoning effort and the session id: this is not part of the conversation's
+    # cache lineage and should not be pinned to it.
+    plain = replace(config, effort="", session_id="")
+    text = ""
+    for event in _stream_once(asked, plain, host, tools=None, tool_choice="none"):
+        # `delta`/`role: text` is what both providers emit for prose — reasoning arrives on the
+        # same event type under a different role and is not the note.
+        if event.get("type") == "delta" and event.get("role") == "text":
+            text += str(event.get("text") or "")
+        elif event.get("type") == "error":
+            return ""
+    return text.strip()
+
+
+#: Below this a duplicate is not worth replacing — the pointer is not free either, and a short
+#: result carries its own answer.
+_DEDUPE_MIN_CHARS = 400
+
+
+def _already_in(convo: list[dict[str, Any]], name: str, content: str) -> int | None:
+    """Where this exact result already sits in the turn, or None.
+
+    ``None`` rather than 0 for "not found", because 0 is a real index. In a live turn `convo[0]`
+    is always the system prompt so a tool result can never land there, which is precisely what
+    would have made the sentinel version an invisible bug: correct in production, wrong the
+    moment anything built a conversation that starts with a tool result — and silently disabling
+    the whole mechanism if the message order ever changed.
+
+    Deliberately an *insert-time* question rather than a sweep over the history, and that
+    distinction is the whole design. Sweeping is the obvious implementation — walk the turn,
+    collapse the older copies — and it reintroduces the bug this file was just fixed for: it
+    rewrites a message that has already been sent, so the prompt prefix changes and everything
+    after that point re-bills uncached. On a long turn, breaking the prefix at an early message
+    to save one duplicate costs far more than the duplicate did.
+
+    Asking before appending keeps the history **append-only**, which is the property the cache
+    needs. Nothing already sent is ever touched.
+    """
+    if len(content) < _DEDUPE_MIN_CHARS:
+        return None
+    for index, message in enumerate(convo):
+        if message.get("role") != "tool" or message.get("_deduped"):
+            continue
+        if str(message.get("tool_name") or "") == name and message.get("content") == content:
+            return index
+    return None
+
+
+def _tool_result_message(convo: list[dict[str, Any]], name: str, payload: str) -> dict[str, Any]:
+    """The message to append for a tool result — the content, or a pointer to an identical one.
+
+    Reading the same file twice puts two byte-identical copies in the window, and the second
+    carries nothing the first lacks. Worth real money: in one measured session Kith read
+    `ModelsSettings.tsx` fifteen times and `.kith/memory.md` thirteen, and 54% of every read he
+    made was of a file he had already read.
+
+    Unlike stubbing, this loses nothing — the content is still in the conversation, once, and
+    the pointer says where. And unlike stubbing it does not tempt him to read the file *again*
+    to recover it, which is how a 1,200-character stub turns into fifteen full reads.
+
+    Two reads of a file he edited in between are not identical, so both survive. That difference
+    is the record of his own change and is the last thing to collapse.
+    """
+    if _already_in(convo, name, payload) is None:
+        return {"role": "tool", "tool_name": name, "content": payload}
+    return {
+        "role": "tool",
+        "tool_name": name,
+        "content": (
+            f"[identical to what `{name}` returned earlier in this turn — that result is still "
+            "above, in full, and unchanged. Nothing has been withheld and there is no need to "
+            "read it again.]"
+        ),
+        "_deduped": True,
+    }
+
+
 def _compact_tool_history(convo: list[dict[str, Any]], offload=None) -> None:
     """Stub the oldest tool outputs once the live set outgrows its char budget.
 
@@ -575,6 +706,24 @@ def _run_turn(
     from kith.services.mcp import manager as mcp_manager
 
     mcp_tools = mcp_manager.snapshot()
+    # Which schemas came from where, so the ledger can tell three costs apart that look
+    # identical once they are all in the tools block. Resolved once per turn for the same reason
+    # the snapshot is: these are inputs to a per-round accounting and must not touch a database
+    # inside the request path.
+    mcp_names = frozenset(
+        str(((schema.get("function") or {}).get("name")) or "") for schema in mcp_tools
+    )
+    try:
+        from kith.services import custom_tools as custom_tools_svc
+
+        custom_names = frozenset(
+            str(((schema.get("function") or {}).get("name")) or "")
+            for schema in custom_tools_svc.schemas(agent_db_path)
+        )
+    except Exception:
+        # Accounting. A ledger that cannot separate his own tools from the built-ins is still
+        # a useful ledger, and must not be able to take down the turn.
+        custom_names = frozenset()
     # Whether the four semantic tools are worth their schema, resolved once for the same
     # reason and with the same consequence if it changed mid-turn. A handful of `stat` calls,
     # not a server start — see `manager.any_available`.
@@ -604,20 +753,13 @@ def _run_turn(
     nudged = False  # the "don't walk away empty-handed" nudge fires at most once
 
     for round_index in range(budget):
-        # Keep only the most recent tool outputs full; stub older ones. Without this,
-        # a page he fetched 30 tool-calls ago re-sends in full every round — that's
-        # what turned one browse-heavy tick into 500k tokens. Stubbing forces him to
-        # ACT on what he just read (write it to his working file) instead of hoarding
-        # dozens of pages in context, and keeps the loop affordable enough to reach
-        # the "compile & deliver" phase.
-        # Three channels carry bulk into a conversation, and for a long time only the first
-        # was watched: tool results, pictures, and the arguments of a write. Every one of
-        # them re-sends in full on every round until something trims it.
-        _compact_tool_history(convo, offload_result)
-        _compact_images(convo)
-        _compact_call_arguments(convo)
         # Re-read tools each round so a tool Kith just built is usable right away.
         # `allow` scopes the toolset to the current mode (fewer tokens, sharper focus).
+        #
+        # Built before the history is reduced rather than after, so the ledger below sees the
+        # tool block. The old ordering reduced first and counted `content` lengths only, which
+        # missed 11,000 tokens of schemas — the single largest fixed cost in the prompt — and
+        # therefore decided how tight the room was from roughly half the evidence.
         schemas = tools.tool_schemas(
             agent_db_path, only=allow, mcp=mcp_tools, language_server=has_language_server
         )
@@ -647,6 +789,55 @@ def _run_turn(
         # the landing reserve — the thing that stops a turn gathering until it runs out of
         # rounds — was a suggestion, and a model that named a search tool anyway got one.
         permitted = {s["function"]["name"] for s in schemas}
+
+        # What is in the window, by category — the whole request, tool block included. Three
+        # things read this: the threshold below, the meter the person sees, and anything later
+        # that wants to evict by what a thing *is* rather than by how old it is.
+        #
+        # Costed with the ratio `room` calibrated against what the provider actually charged for
+        # the last round, so the number shown matches the bill instead of a constant.
+        book = ledger.take(
+            convo,
+            schemas,
+            persona=config.system or "",
+            window=config.context_window,
+            chars_per_token=room.chars_per_token,
+            mcp_names=mcp_names,
+            custom_names=custom_names,
+        )
+
+        # Past the threshold, fold the middle of the turn into notes — once, rather than shaving
+        # a little more off every round. See `services/compaction`: shaving rewrites the prefix
+        # continuously and the cache can never be read, while a fold produces a new stable prefix
+        # and caching resumes for every round after it.
+        #
+        # `_room_is_tight` is still the gate when the window is unknown, where a share of it
+        # cannot be computed and the old absolute budget is the only honest measure.
+        over = book.past(_FOLD_ABOVE_SHARE) if config.context_window > 0 else _room_is_tight(convo, 0)
+        if over:
+            folded = False
+            if compaction.already_folded(convo) < _MAX_FOLDS:
+                yield {"type": "compacting", "used": book.used, "window": book.window}
+                folded = compaction.fold(
+                    convo, partial(_summarise, config=config, host=host)
+                )
+            if not folded:
+                # Either it has been folded as often as is worth paying for, or there was no safe
+                # place to cut. Fall back to the older shaving, which is lossy and breaks the
+                # prefix — and is still better than a turn that dies on a 400.
+                _compact_tool_history(convo, offload_result)
+                _compact_images(convo)
+                _compact_call_arguments(convo)
+            book = ledger.take(
+                convo,
+                schemas,
+                persona=config.system or "",
+                window=config.context_window,
+                chars_per_token=room.chars_per_token,
+                mcp_names=mcp_names,
+                custom_names=custom_names,
+            )
+        yield {"type": "context", "context": book.as_wire()}
 
         # Make room before asking, not after being refused. A conversation that outgrew the
         # window used to come back as `Cloud model returned 400` and end the turn — no
@@ -822,11 +1013,9 @@ def _run_turn(
                     # redesigning a UI. The data URI is taken out of the tool result so the
                     # same 600KB is not also sitting there as base64 text.
                     convo.append(
-                        {
-                            "role": "tool",
-                            "tool_name": step["name"],
-                            "content": json.dumps(_without_image(result)),
-                        }
+                        _tool_result_message(
+                            convo, step["name"], json.dumps(_without_image(result))
+                        )
                     )
                     convo.append(
                         {
@@ -838,7 +1027,7 @@ def _run_turn(
                         }
                     )
                     continue
-                convo.append({"role": "tool", "tool_name": step["name"], "content": json.dumps(result)})
+                convo.append(_tool_result_message(convo, step["name"], json.dumps(result)))
 
     # Out of tool budget — force a final answer so there's always a reply.
     yield from _final_answer(convo, config, host, schemas)

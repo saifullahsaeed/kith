@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, Loader2, RotateCcw, TerminalSquare } from "lucide-react";
+import { ChevronDown, FolderOpen, Loader2, RotateCcw, Search, TerminalSquare } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -35,9 +35,30 @@ const inputClass =
 export function AdvancedTab() {
   const confirm = useConfirm();
   const [snapshot, setSnapshot] = useState<TuningSnapshot | null>(null);
-  const [draft, setDraft] = useState<Record<string, number | string>>({});
+  const [draft, setDraft] = useState<Record<string, number | string | boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [onlyChanged, setOnlyChanged] = useState(false);
+
+  /**
+   * Has this setting been touched — saved away from its default, *or* edited and not yet saved?
+   *
+   * Both, because "changed" means the same thing to the person either way and the filter is for
+   * finding what you touched. Reading only `isDefault` — the server's view — meant editing a
+   * setting left the Changed button disabled, which is the moment you most want it.
+   */
+  const isTouched = (knob: Tunable) => !knob.isDefault || draft[knob.key] !== undefined;
+
+  /** Does this knob survive the find box and the changed-only filter? */
+  const matches = (knob: Tunable) => {
+    if (onlyChanged && !isTouched(knob)) return false;
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    // The key and the environment variable are searchable too: someone who read a comment or a
+    // stack trace knows `live_tool_chars`, not "Tool output kept in full".
+    return `${knob.label} ${knob.help} ${knob.key} ${knob.env}`.toLowerCase().includes(needle);
+  };
 
   const load = useCallback(() => {
     fetchTuning()
@@ -113,14 +134,63 @@ export function AdvancedTab() {
     );
   }
 
+  const groups = snapshot.groups
+    .map((group) => ({ ...group, settings: group.settings.filter(matches) }))
+    .filter((group) => group.settings.length > 0);
+  const shownCount = groups.reduce((sum, group) => sum + group.settings.length, 0);
+  const changedCount = snapshot.groups.reduce(
+    (sum, group) => sum + group.settings.filter(isTouched).length,
+    0,
+  );
+
   return (
     <div className="space-y-8">
+      {/*
+        A find box and a filter, because forty settings is a list you search, not a list you read.
+        Before these the only way to reach one was to scroll three screens past 7,655 characters
+        of warnings — every one of them expanded, all at the same weight, so nothing stood out
+        and nothing could be found.
+      */}
+      <div className="bg-background/95 sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 px-1 py-2 backdrop-blur">
+        <div className="relative min-w-48 flex-1">
+          <Search className="text-muted-foreground/50 pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2" />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={`Search ${snapshot.groups.reduce((n, g) => n + g.settings.length, 0)} settings…`}
+            className="w-full rounded-md border bg-transparent py-1.5 ps-8 pe-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+            aria-label="Search settings"
+          />
+        </div>
+        <Button
+          variant={onlyChanged ? "default" : "outline"}
+          size="sm"
+          onClick={() => setOnlyChanged((on) => !on)}
+          disabled={!changedCount}
+          title={
+            changedCount
+              ? "Show only the settings that differ from their default"
+              : "Everything is at its default"
+          }
+        >
+          Changed {changedCount ? `(${changedCount})` : ""}
+        </Button>
+      </div>
+
       <p className="text-muted-foreground text-xs leading-relaxed">
         Every one of these changes how he behaves, and takes effect on his next turn — nothing here
-        needs a restart. Each says what it costs you to get wrong.
+        needs a restart. Each says what it does; open <strong className="font-medium">why</strong> on
+        a row for what it costs you to get wrong.
       </p>
 
-      {snapshot.groups.map((group) => (
+      {!shownCount ? (
+        <p className="text-muted-foreground py-8 text-center text-sm">
+          Nothing matches {query ? <code className="font-mono">{query}</code> : "that"}.
+        </p>
+      ) : null}
+
+      {groups.map((group) => (
         <section key={group.key}>
           <div className="mb-3">
             <h2 className="text-sm font-semibold">{group.label}</h2>
@@ -137,7 +207,12 @@ export function AdvancedTab() {
                     // Typing a value back to what's stored isn't a change, so the Save
                     // button shouldn't claim there's something to save.
                     const next = { ...current };
-                    if (value === "" || value === knob.value) delete next[knob.key];
+                    // Blank is a real, saveable value for some settings — an unpinned provider,
+                    // no fallback model, provider ordering left to OpenRouter — so it only
+                    // counts as "no change" when blank is already what is stored. Treating ""
+                    // as always-discard made those three impossible to clear from here.
+                    const same = value === knob.value;
+                    if (same || (value === "" && knob.value === "")) delete next[knob.key];
                     else next[knob.key] = value;
                     return next;
                   })
@@ -222,6 +297,13 @@ export function AdvancedTab() {
 
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
 
+      {/*
+        Clearance for the bar below. It is `sticky`, so content scrolls *under* it — which meant
+        the last row of the last group sat permanently behind the Save button, half-legible, with
+        the tail of its help text poking out beneath. Fifty-six pixels of nothing is the whole fix.
+      */}
+      <div aria-hidden className="h-14" />
+
       <div className="sticky bottom-0 -mx-6 flex items-center gap-3 border-t bg-background/95 px-6 py-3 backdrop-blur">
         <Button
           variant="ghost"
@@ -252,15 +334,23 @@ function Row({
   onReset,
 }: {
   knob: Tunable;
-  draft: number | string | undefined;
-  onChange: (value: number | string) => void;
+  draft: number | string | boolean | undefined;
+  onChange: (value: number | string | boolean) => void;
   onReset: () => void;
 }) {
   const shown = draft ?? knob.value;
   const changed = draft !== undefined;
+  // Open when you have touched it: the row you are editing is the one whose consequence you
+  // should be reading, and that is exactly when hiding it would be the trap the old
+  // always-expanded layout was guarding against.
+  const [why, setWhy] = useState(false);
+  const open = why || changed || !knob.isDefault;
+
+  const [does, ...breaks] = splitHelp(knob.help);
+  const consequence = breaks.join(" ");
 
   return (
-    <div className="flex flex-wrap items-start gap-x-4 gap-y-2 p-3">
+    <div className="flex flex-wrap items-start gap-x-4 gap-y-1 p-3">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-2">
           <span className="text-sm font-medium">{knob.label}</span>
@@ -283,28 +373,145 @@ function Row({
             </span>
           ) : null}
         </div>
-        <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">{knob.help}</p>
+        {/*
+          What it does, always. What breaks, on request.
+
+          This used to show the whole help string on all forty rows at once — 7,655 characters of
+          warnings, every one as prominent as the label it belonged to, which is a document rather
+          than a control panel. But hiding the consequence entirely would recreate the trap the
+          old layout existed to prevent: a sharp number whose cost you only discover by hovering.
+          The registry writes every help string as "what it does, then what breaks at the
+          extremes" — 33 of 35 have that second sentence — so the split is already in the data.
+        */}
+        <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
+          {does}
+          {consequence && !open ? (
+            <button
+              type="button"
+              onClick={() => setWhy(true)}
+              className="text-muted-foreground/60 hover:text-kith ms-1.5 inline-flex items-baseline gap-0.5 align-baseline text-[11px] underline decoration-dotted"
+            >
+              why <ChevronDown className="size-3 self-center" />
+            </button>
+          ) : null}
+        </p>
+        {consequence && open ? (
+          <p className="text-muted-foreground/70 border-kith/30 mt-1 border-s-2 ps-2 text-xs leading-relaxed">
+            {consequence}
+          </p>
+        ) : null}
       </div>
 
       <label className="flex shrink-0 items-center gap-2">
-        <span className="w-32">
-          <input
-            type={knob.kind === "text" ? "text" : "number"}
-            step={knob.kind === "float" ? 0.05 : 1}
-            min={knob.min ?? undefined}
-            max={knob.max ?? undefined}
-            className={`${inputClass} ${changed ? "border-kith" : ""} ${knob.kind === "text" ? "text-left" : ""}`}
-            value={String(shown)}
-            disabled={knob.fromEnv}
-            placeholder={String(knob.default)}
-            spellCheck={false}
-            onChange={(event) => onChange(event.target.value)}
-            aria-label={knob.label}
-          />
+        <span className={knob.kind === "text" && !knob.choices?.length ? "w-64" : "w-32"}>
+          <Field knob={knob} shown={shown} changed={changed} onChange={onChange} />
         </span>
-        <span className="text-muted-foreground/70 w-16 text-[11px]">{knob.unit}</span>
+        <span className="text-muted-foreground/70 w-14 text-[11px]">{knob.unit}</span>
       </label>
     </div>
+  );
+}
+
+/**
+ * "What it does." / "What breaks at the extremes."
+ *
+ * The registry's own description of the `help` field, so this reads a documented shape rather
+ * than guessing at prose. Falls back to the whole string as the first part when there is only one
+ * sentence — two knobs are like that, and they simply have no `why` to open.
+ */
+function splitHelp(help: string): string[] {
+  const parts = help.split(/(?<=[.!?])\s+/);
+  return parts.length > 1 ? parts : [help];
+}
+
+/**
+ * The control a setting deserves, chosen by what it actually is.
+ *
+ * Everything used to be `type={kind === "text" ? "text" : "number"}`, which quietly meant every
+ * boolean was a number box. `String(true)` is not a valid number, so the browser rendered the
+ * field empty and fell back to the placeholder — three settings showing a greyed-out `true` that
+ * read as unset, with no way to type `false`. You could not tell on from off, let alone change it.
+ *
+ * A knob with a handful of legal values gets a select for the same reason: a free-text box for
+ * `prefer_provider_by` is a spelling test whose failure is silent, because the router ignores an
+ * unknown value and the setting saves looking exactly as typed.
+ */
+function Field({
+  knob,
+  shown,
+  changed,
+  onChange,
+}: {
+  knob: Tunable;
+  shown: number | string | boolean;
+  changed: boolean;
+  onChange: (value: number | string | boolean) => void;
+}) {
+  if (knob.kind === "bool") {
+    const on = shown === true || shown === "true";
+    return (
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={knob.label}
+        disabled={knob.fromEnv}
+        onClick={() => onChange(!on)}
+        className={`flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+          on ? "bg-kith/80 border-kith" : "bg-foreground/10"
+        } ${changed ? "ring-kith/40 ring-2" : ""}`}
+      >
+        {/* The knob. Translated rather than justified, so it slides instead of jumping. */}
+        <span
+          className={`bg-background size-4 rounded-full shadow-sm transition-transform ${
+            on ? "translate-x-6" : "translate-x-1"
+          }`}
+        />
+      </button>
+    );
+  }
+
+  // `?.` because an older server sends no `choices` at all — see the note on the field. Falling
+  // through to a plain text box is the right degradation: the value still shows and still saves,
+  // and the server validates it either way.
+  const choices = knob.choices ?? [];
+  if (choices.length) {
+    return (
+      <select
+        className={`${inputClass} text-left ${changed ? "border-kith" : ""}`}
+        value={String(shown)}
+        disabled={knob.fromEnv}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label={knob.label}
+      >
+        {choices.map((choice) => (
+          <option key={choice} value={choice}>
+            {/* Blank is a real answer for some of these — "leave it to the provider" — and an
+                empty option row is unclickable and unreadable. */}
+            {choice || "— none —"}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <input
+      type={knob.kind === "text" ? "text" : "number"}
+      step={knob.kind === "float" ? 0.05 : 1}
+      min={knob.min ?? undefined}
+      max={knob.max ?? undefined}
+      className={`${inputClass} ${changed ? "border-kith" : ""} ${knob.kind === "text" ? "text-left" : ""}`}
+      value={String(shown)}
+      disabled={knob.fromEnv}
+      // The placeholder is normally the default, which for the several knobs whose default is
+      // blank left an empty box with no hint in it — indistinguishable from a field that failed
+      // to load. Say that blank is the setting.
+      placeholder={String(knob.default) || "not set"}
+      spellCheck={false}
+      onChange={(event) => onChange(event.target.value)}
+      aria-label={knob.label}
+    />
   );
 }
 

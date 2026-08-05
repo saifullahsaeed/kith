@@ -255,7 +255,27 @@ class AutonomyRunner:
             "costUsd": round(self._cost_usd, 6),
             "lastTickTokens": self._last_tick_tokens,
             "lastTickUncached": self._last_tick_uncached,
+            # Finished work nobody has checked. The `review` column existed, a tick was already
+            # putting work into it, and no surface said so — it was reachable only by opening the
+            # control panel and going looking, which is the same "queue nobody is shown" failure
+            # as the silently parked tasks. Here because this payload is what the panel beside the
+            # chat already polls, so the count lands next to the Run button rather than three
+            # clicks away from it.
+            "toReview": self._awaiting_review(),
         }
+
+    def _awaiting_review(self) -> list[dict]:
+        """Tasks a tick has finished and handed over, newest first.
+
+        Capped at a handful: this is a nudge with a button on it, not the board. Silent on failure
+        for the same reason every other bit of accounting here is — a count that cannot be read is
+        not a reason to make the status endpoint fail.
+        """
+        try:
+            waiting = [t for t in repo.tasks.list_tasks(AGENT_DB_PATH) if t.get("status") == "review"]
+            return [{"id": t["id"], "goal": t.get("goal") or ""} for t in waiting[:6]]
+        except Exception:
+            return []
 
     def _record_failed_tick(self, exc: Exception) -> None:
         """Leave a durable trace of a tick that died.
@@ -679,13 +699,22 @@ class AutonomyRunner:
         # Tools run inside this loop, and `base_dir()` reads the project from here — this
         # is what makes a relative path he writes land in the project rather than in his
         # own folder. Bound for the duration of the step only; see `working_on`.
-        with session_context.working_on(working_project):
+        with session_context.working_on(working_project), session_context.nobody_watching():
             for event in stream_agent(
                 messages,
                 tick_config,
                 ollama_host(),
                 AGENT_DB_PATH,
-                max_rounds=16,
+                # A setting now, and no longer a third of what chat gets. Hardcoded at 16 it left
+                # 12 working rounds after the landing reserve, so a task bigger than that was cut
+                # into pieces — each one starting from an empty context and re-reading the codebase
+                # to work out where it was. Measured: a median task took 7 of them, one took 20,
+                # and eight consecutive ticks on a single piece of work spent ~2M prompt tokens
+                # before the loop-breaker stopped it re-verifying finished work.
+                #
+                # Read per step rather than captured once, so raising it takes effect on the next
+                # tick instead of the next restart.
+                max_rounds=int(tuning.value("tick_max_rounds")),
                 allow=_ALLOW.get(mode),
                 # A tick that leaves nothing behind is a tick that will be repeated.
                 expect_durable=True,
@@ -1020,6 +1049,17 @@ class AutonomyRunner:
         """
         if working_task_id is None:
             return
+        # A ceiling on the whole task, not just on stalled stretches. `focus_grind_limit` below
+        # only fires when *nothing* moved, so a task that ticks one checklist item every few ticks
+        # resets it forever and grinds on. Measured on a real board: median 7 ticks a task, but #9
+        # took 20 and #15 took 18 — at roughly four minutes and a quarter-million prompt tokens
+        # each, that is most of a working day on one item nobody had looked at.
+        #
+        # Hitting it is not failure and not a stall, so it does not go through `_give_up`: the work
+        # is real, there is just too much of it to keep going unwatched. It goes to `review`, where
+        # no tick can pick it up again and the next conversation is shown it.
+        if self._over_the_task_cap(working_task_id):
+            return
         progress = self._focus_progress_of(repo.tasks.task_detail(AGENT_DB_PATH, working_task_id))
         if working_task_id != self._focus_id:
             self._focus_id, self._focus_progress, self._focus_grind = working_task_id, progress, 0
@@ -1033,6 +1073,52 @@ class AutonomyRunner:
             if given_up:
                 self._emit("breakout", f"set aside — {self._focus_grind} steps, no progress: {given_up}")
             self._focus_id, self._focus_grind = None, 0
+
+    def _over_the_task_cap(self, task_id: int) -> bool:
+        """Has this one task had more unattended ticks than it is allowed? Then send it to review.
+
+        Counted from the flight recorder rather than from an attribute, deliberately: an in-memory
+        counter resets when the process restarts, and "restart the app" would silently become the
+        way to give a task another twelve hours.
+
+        The count is of ticks that *worked this task* — `mode='start'` with this goal as the focus —
+        so planning ticks and replies do not spend the budget.
+        """
+        detail = repo.tasks.task_detail(AGENT_DB_PATH, task_id)
+        if not detail:
+            return False
+        cap = int(tuning.value("task_tick_cap"))
+        if cap <= 0:
+            return False  # switched off
+        goal = str(detail.get("goal") or "").strip()
+        if not goal:
+            return False
+        try:
+            spent = repo.messages.times_worked(AGENT_DB_PATH, goal)
+        except Exception:
+            return False  # accounting must never stop the work
+        if spent < cap:
+            return False
+
+        repo.tasks.update_task(AGENT_DB_PATH, task_id, status="review")
+        repo.tasks.add_task_comment(
+            AGENT_DB_PATH,
+            task_id,
+            "kith",
+            f"I have spent {spent} ticks on this and it is still not finished, so I am stopping "
+            "rather than carrying on unwatched. What is done is done and written down above — "
+            "have a look and either send it back to me or split it into something smaller.",
+        )
+        repo.messages.add_message(
+            AGENT_DB_PATH,
+            f"I have stopped after {spent} ticks on “{goal}” (task #{task_id}) — it needs a look "
+            "before I spend more on it.",
+            link=f"/tasks/{task_id}",
+            kind="stuck",
+        )
+        self._emit("breakout", f"stopped after {spent} ticks — sent to review: {goal[:60]}")
+        self._focus_id, self._focus_grind = None, 0
+        return True
 
     def _task_moved_on(self, task_id: int) -> bool:
         """Has the task he is working stopped being his to work?

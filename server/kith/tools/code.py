@@ -106,7 +106,10 @@ def repo_map(path: Path, args: dict):
     "proving least. It works out the runner from the project itself, and reports counts plus "
     "the failing test names rather than the whole log. Pass `filter` with a file path or a "
     "test name to run just that one while you are fixing it — much faster, and the noise of "
-    "the other two hundred is not what you need.",
+    "the other two hundred is not what you need. A slow suite does not block you: if it is "
+    "not done after a short wait you get back `status: \"running\"` instead of the usual "
+    "counts — call run_tests again with the same path and filter to check on it, as many "
+    "times as it takes, and you will get the real result the moment it finishes.",
     {
         "path": {**STR, "description": "The project folder (default: your whole folder)."},
         "filter": {

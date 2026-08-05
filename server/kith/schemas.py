@@ -22,7 +22,11 @@ class ConfigSchema(Schema):
     system = String(metadata={"description": "System prompt / persona"})
     think = Boolean(metadata={"description": "Whether the model reasons before answering"})
     effort = String(
-        metadata={"description": "Reasoning effort: '', 'low', 'medium' or 'high'", "example": "medium"}
+        metadata={
+            "description": "Reasoning effort: '' (let the provider decide), 'none', 'minimal', 'low', "
+            "'medium', 'high', 'xhigh' or 'max'",
+            "example": "medium",
+        }
     )
     baseUrl = String(
         metadata={
@@ -83,6 +87,13 @@ class HealthSchema(Schema):
     ollamaReachable = Boolean(metadata={"description": "Ollama answered a probe"})
 
 
+class ReviewItemSchema(Schema):
+    """One piece of finished work waiting to be checked."""
+
+    id = Integer(metadata={"description": "Task id"})
+    goal = String(metadata={"description": "What the task was"})
+
+
 class AutonomyStatusSchema(Schema):
     working = List(
         String(),
@@ -109,6 +120,17 @@ class AutonomyStatusSchema(Schema):
             "description": "What autonomy has actually cost this session, in dollars, as "
             "billed by the provider rather than estimated from token counts"
         }
+    )
+    # And this is the third field to learn that lesson the hard way. `status()` returned it, the
+    # panel read it, and the review bar rendered nothing at all — because the schema had no
+    # `toReview` and marshmallow dropped it on the way out without a word.
+    toReview = List(
+        Nested(ReviewItemSchema),
+        metadata={
+            "description": "Work a tick finished and handed over for checking — the 'review' "
+            "column. Chat is the reviewer: a tick verifying its own output wrote the brief, chose "
+            "the requirements and supplied the evidence."
+        },
     )
 
 

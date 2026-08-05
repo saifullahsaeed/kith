@@ -7,6 +7,8 @@ worse than no knob — someone will set it and get a surprise.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from kith.domain.tuning import GROUPS, TUNABLES, for_key
@@ -69,7 +71,7 @@ class TestCoercion:
         assert for_key("max_rounds").coerce(12.7) == 12
 
     def test_nonsense_is_refused_with_the_label(self):
-        with pytest.raises(ValueError, match="Tool rounds per turn"):
+        with pytest.raises(ValueError, match="Tool rounds per message"):
             for_key("max_rounds").coerce("soon")
 
     def test_text_is_trimmed(self):
@@ -195,3 +197,160 @@ class TestBooleans:
     def test_it_defaults_to_on(self):
         # The behaviour it prevents is the one that was actually observed.
         assert tuning.value("stop_after_delegating") is True
+
+
+class TestAKnobWithAFixedSetOfAnswers:
+    """A free-text box for a setting with three legal values is a spelling test.
+
+    And the failure was silent: OpenRouter ignores an unknown `sort`, so `prefer_provider_by`
+    saved as "pirce", displayed back exactly as typed, and did nothing at all — a setting that
+    looks applied and is not. Refusing is right here, unlike the numeric knobs, which clamp: a
+    number out of range has a nearest legal value that is obviously what was meant, and a
+    misspelt word does not.
+    """
+
+    def test_a_legal_value_passes(self):
+        assert for_key("prefer_provider_by").coerce("throughput") == "throughput"
+
+    def test_an_illegal_value_is_refused_rather_than_ignored(self):
+        with pytest.raises(ValueError) as raised:
+            for_key("prefer_provider_by").coerce("pirce")
+        # The message has to list what *is* allowed; "invalid" sends someone to the source.
+        assert "price" in str(raised.value)
+        assert "pirce" in str(raised.value)
+
+    def test_blank_is_legal_where_blank_means_something(self):
+        # "Leave it to OpenRouter's own balancing" is a real answer, and omitting it from the
+        # list would make it unreachable from the interface.
+        assert for_key("prefer_provider_by").coerce("") == ""
+
+    def test_blank_is_refused_where_it_means_nothing(self):
+        with pytest.raises(ValueError):
+            for_key("search_engine").coerce("")
+
+    def test_surrounding_space_is_forgiven(self):
+        assert for_key("search_engine").coerce("  native  ") == "native"
+
+    @pytest.mark.parametrize(
+        "knob", [k for k in TUNABLES if k.choices], ids=lambda k: k.key
+    )
+    def test_choices_only_ever_sit_on_a_text_knob(self, knob):
+        # A number with an enum is a number with the wrong `kind`, and the interface would
+        # render a select full of digits.
+        assert knob.kind == "text"
+
+    @pytest.mark.parametrize(
+        "knob", [k for k in TUNABLES if k.choices], ids=lambda k: k.key
+    )
+    def test_the_default_is_one_of_them(self, knob):
+        # Otherwise the first save refuses the value the person was already running with.
+        assert knob.default in knob.choices
+
+    def test_they_reach_the_interface(self):
+        # The whole point — the client renders a select from this, and falls back to a free-text
+        # box when it is absent, which is what an older server sends.
+        assert for_key("prefer_provider_by").public()["choices"] == [
+            "price",
+            "throughput",
+            "latency",
+            "",
+        ]
+
+    def test_a_free_text_knob_says_so_with_an_empty_list(self):
+        # Not `None`: the client reads `.length`, and a missing key took the settings page down
+        # once already.
+        assert for_key("ollama_host").public()["choices"] == []
+
+
+#: Tunables where a shared, cross-mode "turn" is accurate rather than a labelling drift — see
+#: `TestOneWordPerConcept`. Module-level because a class body's decorators run before the class
+#: object exists, so `TestOneWordPerConcept._SHARED_TURN_OK` is not yet reachable from inside its
+#: own `@pytest.mark.parametrize` calls. Checked by key so adding a new shared tunable requires a
+#: deliberate choice here, not a silent pass.
+_SHARED_TURN_OK = {"landing_reserve", "live_tool_chars", "mcp_call_timeout"}
+
+
+class TestOneWordPerConcept:
+    """Two concepts, each with one name — checked so a future entry can't drift back apart.
+
+    The settings page used "turn" and "chat message" for the same thing depending which
+    tunable you were reading (`max_rounds` said "Tool rounds per **turn**", right next to
+    `history_keep_recent` saying "Recent messages kept verbatim" with help text that already
+    said "messages" — the label and its own help text disagreed within one entry). And it
+    used "tick" and "step" for the unattended unit depending which tunable you were reading —
+    `task_tick_cap` said "Most **ticks** one task may take" while `tick_max_rounds` right above
+    it said "Tool rounds per unattended **step**". The Work Panel — the surface a person looks
+    at every session — only ever says "step", never "tick", so that is the word that won.
+
+    "Turn" survives in a few places on purpose: `landing_reserve`, `live_tool_chars` and
+    `mcp_call_timeout` describe something genuinely shared between a chat message and an
+    unattended step, and "turn" is the correct umbrella word for that — swapping it for
+    "message" or "step" there would make the text specific to one mode when it is not. What
+    is checked here is the failure that actually happened: the *same concept* wearing two
+    names depending which entry you happened to be reading.
+    """
+
+    #: `tick`/`ticks` as a plain-English noun for the autonomous unit. Excludes the checkbox
+    #: sense ("ticked off") and the verb sense ("turn into") by requiring the exact plural or
+    #: bare noun forms that only ever meant the unit in this file.
+    _NOUN_TICK = re.compile(r"\bticks?\b(?!\s+off)")
+    #: `turn`/`turns` as a noun for one exchange. Excludes "turn into", "turn on/off", "in turn" —
+    #: but only when the next word is literally "into"/"on"/"off"; "turn his loop into a spiral"
+    #: still matches, because English lets the object sit between the verb and its particle. That
+    #: false positive is a feature, not a gap: it happened once (`min_gap`), and the fix was to
+    #: reword the help text away from the phrasal verb rather than chase every shape a sentence
+    #: can take. A test that fails loudly on an ambiguous case is doing its job.
+    _NOUN_TURN = re.compile(r"\bturns?\b(?!\s+(?:into|on|off))")
+
+    @pytest.mark.parametrize("knob", TUNABLES, ids=lambda k: k.key)
+    def test_no_label_says_tick_for_the_unattended_unit(self, knob):
+        assert not self._NOUN_TICK.search(knob.label), (
+            f"{knob.key}: label {knob.label!r} says 'tick' — the established word is 'step'"
+        )
+
+    @pytest.mark.parametrize("knob", TUNABLES, ids=lambda k: k.key)
+    def test_no_help_text_says_tick_for_the_unattended_unit(self, knob):
+        assert not self._NOUN_TICK.search(knob.help), (
+            f"{knob.key}: help text says 'tick(s)' — the established word is 'step'"
+        )
+
+    @pytest.mark.parametrize("knob", TUNABLES, ids=lambda k: k.key)
+    def test_no_unit_says_ticks(self, knob):
+        assert knob.unit != "ticks", f"{knob.key}: unit is 'ticks' — should be 'steps'"
+
+    @pytest.mark.parametrize(
+        "knob", [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
+        ids=lambda k: k.key,
+    )
+    def test_no_label_says_turn_outside_the_shared_cases(self, knob):
+        assert not self._NOUN_TURN.search(knob.label), (
+            f"{knob.key}: label {knob.label!r} says 'turn' — say 'message' (chat) or 'step' (a "
+            "tick), or add this key to _SHARED_TURN_OK if it is genuinely about both"
+        )
+
+    @pytest.mark.parametrize(
+        "knob", [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
+        ids=lambda k: k.key,
+    )
+    def test_no_help_text_says_turn_outside_the_shared_cases(self, knob):
+        assert not self._NOUN_TURN.search(knob.help), (
+            f"{knob.key}: help text says 'turn' — say 'message' (chat) or 'step' (a tick), or "
+            "add this key to _SHARED_TURN_OK if it is genuinely about both"
+        )
+
+    def test_the_group_blurbs_agree_too(self):
+        # The section headings a person actually reads first — same rule, same two exceptions
+        # don't apply here since no group is chat-and-tick-shared in name only.
+        for group in GROUPS:
+            text = f"{group.label} {group.blurb}"
+            assert not self._NOUN_TICK.search(text), f"{group.key}: {text!r} says 'tick'"
+            assert not self._NOUN_TURN.search(text), f"{group.key}: {text!r} says 'turn'"
+
+    def test_the_shared_exception_list_is_still_accurate(self):
+        # If one of these three ever loses its "turn", the exception is stale and should shrink —
+        # this fails loudly instead of the set silently protecting a label that no longer needs it.
+        for key in _SHARED_TURN_OK:
+            knob = for_key(key)
+            assert self._NOUN_TURN.search(knob.label) or self._NOUN_TURN.search(knob.help), (
+                f"{key} no longer says 'turn' anywhere — remove it from _SHARED_TURN_OK"
+            )

@@ -246,13 +246,32 @@ export interface Tunable {
   env: string;
   label: string;
   help: string;
-  default: number | string;
+  default: number | string | boolean;
   group: string;
-  kind: "int" | "float" | "text";
+  /**
+   * `"bool"` was missing from this union while the server had been sending it all along, and
+   * that omission was the whole bug: the settings row reads `kind === "text" ? "text" : "number"`,
+   * so a boolean fell through to a number input. `String(true)` is not a valid number, so the
+   * browser rendered the field empty and showed the placeholder instead — three settings that
+   * displayed a greyed-out `true`, indistinguishable from unset, and impossible to type `false`
+   * into. Adding the member here is what makes the missing branch a type error.
+   */
+  kind: "int" | "float" | "text" | "bool";
   min: number | null;
   max: number | null;
   unit: string;
-  value: number | string;
+  /**
+   * The only accepted values, when there are a handful. Empty means free text.
+   *
+   * Optional, and it has to be: declaring it `string[]` was correct about the current server and
+   * wrong about the running one. A type says what the wire *should* carry and validates nothing —
+   * the server on the other end had not been restarted, sent no `choices`, and
+   * `knob.choices.length` took the whole settings page down with it. Any field added to this
+   * payload is absent for as long as some build is a version behind, which during development is
+   * always and after shipping is every upgrade.
+   */
+  choices?: string[];
+  value: number | string | boolean;
   isDefault: boolean;
   /** An environment variable is winning, so editing the field would do nothing. */
   fromEnv: boolean;
@@ -296,7 +315,7 @@ export async function fetchTuning(signal?: AbortSignal): Promise<TuningSnapshot>
 /** Change settings. Values are clamped server-side, so what comes back is what he'll
  *  actually use — which may not be exactly what was sent. */
 export async function saveTuning(
-  updates: Record<string, number | string>,
+  updates: Record<string, number | string | boolean>,
 ): Promise<TuningSnapshot> {
   const response = await fetch("/api/tuning", {
     method: "PATCH",

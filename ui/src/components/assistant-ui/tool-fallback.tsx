@@ -269,10 +269,12 @@ function ToolFallbackContent({
 
 function ToolFallbackArgs({
   argsText,
+  toolName,
   className,
   ...props
 }: React.ComponentProps<"div"> & {
   argsText?: string;
+  toolName?: string;
 }) {
   if (!argsText) return null;
 
@@ -285,7 +287,7 @@ function ToolFallbackArgs({
       {/* Labelled rows, not a JSON blob. The arguments are the half that made today's
           diagnoses possible — seeing `after: [35]` go in and nothing come out — so they are
           worth reading rather than decoding. */}
-      <ToolArgs argsText={argsText} />
+      <ToolArgs argsText={argsText} toolName={toolName} />
     </div>
   );
 }
@@ -570,7 +572,11 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
       />
       <ToolFallbackContent>
         <ToolFallbackError status={status} />
-        <ToolFallbackArgs argsText={argsText} className={cn(isCancelled && "opacity-60")} />
+        <ToolFallbackArgs
+          argsText={argsText}
+          toolName={toolName}
+          className={cn(isCancelled && "opacity-60")}
+        />
         {isRequiresAction && (
           <ToolFallbackApproval
             addResult={addResult}

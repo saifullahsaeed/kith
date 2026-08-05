@@ -3,12 +3,12 @@ import {
   Activity,
   AlarmClock,
   CircleDot,
+  ClipboardCheck,
   PanelRightClose,
   Square,
   TriangleAlert,
   Undo2,
   Unlock,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -125,6 +125,7 @@ export function WorkPanel({
   conversationId = "",
   width,
   onClose,
+  onReview,
 }: {
   autonomy: Autonomy;
   /** The conversation on screen. The feed narrows to it, so switching sessions switches
@@ -133,8 +134,12 @@ export function WorkPanel({
   conversationId?: string;
   width: number;
   onClose: () => void;
+  /** Ask him, in the thread, to check the work a tick handed over. A message rather than a step,
+   *  because the point of the review column is that the reviewer is not the tick. */
+  onReview: (taskIds: number[]) => void;
 }) {
-  const { status, activity, stop, tick, cancel } = autonomy;
+  const { status, activity, stop, cancel } = autonomy;
+  const toReview = status?.toReview ?? [];
   // How many sessions are carrying on by themselves. The panel's header speaks for the
   // machine, so it asks the plural question; stopping *one* lives on the session bar above
   // the thread, next to the session it belongs to.
@@ -210,21 +215,50 @@ export function WorkPanel({
         </Button>
       </div>
 
+      {/*
+        Finished work waiting to be checked, with the button that gets it checked.
+
+        The `review` column and the instruction telling him how to judge it both existed already —
+        and neither was visible anywhere. A tick would finish a task, hand it over, and the only way
+        to find out was to open the control panel and go looking. That is the same failure as the
+        silently parked tasks: a queue nobody is shown is a queue nobody works.
+
+        It goes here, above Run, because this panel is already the thing beside the chat that says
+        what he is doing — and because reviewing is *chat's* job. Chat has the conversation the work
+        came out of; a tick reviewing its own output is what the column exists to prevent. So the
+        button sends a message into the thread rather than starting a step.
+      */}
+      {toReview.length > 0 ? (
+        <div className="border-border/60 bg-kith-soft/40 flex items-start gap-2.5 border-b px-4 py-2.5">
+          <ClipboardCheck className="text-kith mt-0.5 size-3.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-medium">
+              {toReview.length} finished — needs your check
+            </p>
+            <p className="text-muted-foreground truncate text-[11px]" title={toReview.map((t) => `#${t.id} ${t.goal}`).join("\n")}>
+              {toReview.map((t) => t.goal).join(" · ")}
+            </p>
+          </div>
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0"
+            onClick={() => onReview(toReview.map((t) => t.id))}
+            title="Have him check it here, where the conversation is — not in a step marking its own homework."
+          >
+            Review
+          </Button>
+        </div>
+      ) : null}
+
       {/* controls */}
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
-        {/* One slot for the step in front of you: it starts one, or it cuts short the one
-            running. Two buttons sat here, both saying "Stop" behind the same square icon —
-            one abandoning the step in flight, one stopping every session from carrying on —
-            and nothing on screen said which was which.
-
-            "Interrupt" rather than a third "Stop", because it is a different verb and it now
-            shares a screen with two other things called Stop: this session's, on the session
-            bar, and every session's, next to it. Stopping is about whether he continues;
-            interrupting is about the step he is inside, which he may well follow with
-            another. Same word for both was the whole confusion.
-
-            "Run once" was the other half of "Let it roam": once meant "just this, do not set
-            him loose". Roaming is gone, so the word contrasted with nothing. */}
+        {/* Interrupt only, and only while a step is actually running — chat has no manual
+            "run one now" trigger anymore, so this slot has nothing to show the rest of the
+            time. "Interrupt" rather than "Stop", because it already shares a screen with two
+            things called Stop: this session's, on the session bar, and every session's, next
+            to it. Stopping is about whether he continues; interrupting is about the step he
+            is inside, which a session already working may well follow with another. */}
         {ticking ? (
           <Button
             size="sm"
@@ -238,17 +272,7 @@ export function WorkPanel({
             <Square className={cn("size-3.5", stopping && "animate-pulse")} />
             {stopping ? "Stopping…" : "Interrupt"}
           </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void tick()}
-            title="Take one self-directed step now."
-          >
-            <Zap className="size-3.5" />
-            Run
-          </Button>
-        )}
+        ) : null}
         {/* The other scope, and deliberately not a second button competing with the first.
             Stopping one session lives on the session bar above the thread, where the session
             is; this is the "all of them" one, so it names how many and stays out of the way
@@ -319,25 +343,14 @@ export function WorkPanel({
             <span className="flex size-11 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
               <Activity className="size-5" />
             </span>
-            {/* No button here, and that is the fix rather than an omission. This one said
-                "Run a step", the one in the bar a few pixels above says "Run", and both
-                called the same function — so the first thing anyone saw on an empty feed was
-                two differently-named buttons that did the same thing, which is worse than one
-                unexplained button. The empty state says where the controls are; the controls
-                stay in one place. */}
+            {/* No button here — there is no manual trigger to point at any more. This fills
+                in on its own: filing a task or a reminder coming due is what starts a
+                session, not anything pressed in this panel. */}
             <p className="max-w-[17rem] text-sm text-muted-foreground">
               {conversationId ? (
-                <>
-                  Nothing here yet in this conversation. Talk to him, or hit{" "}
-                  <span className="text-foreground font-medium">Keep working</span> above the
-                  thread and he carries on by himself until it is done or you stop him.
-                </>
+                <>Nothing here yet in this conversation. Talk to him, or file a task.</>
               ) : (
-                <>
-                  Quiet for now. <span className="text-foreground font-medium">Run</span> takes
-                  one step; <span className="text-foreground font-medium">Keep working</span> on
-                  a conversation lets him carry on by himself.
-                </>
+                <>Quiet for now. This fills in once something sets a session working.</>
               )}
             </p>
             {hidden > 0 && !everything ? (

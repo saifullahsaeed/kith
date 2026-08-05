@@ -34,6 +34,7 @@ import {
   ErrorPrimitive,
   groupPartByType,
   MessagePrimitive,
+  SelectionToolbarPrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
   type ToolCallMessagePartComponent,
@@ -52,8 +53,10 @@ import {
   Paperclip,
   MoreHorizontalIcon,
   PencilIcon,
+  Reply,
   RefreshCwIcon,
   SquareIcon,
+  XIcon,
 } from "lucide-react";
 import {
   createContext,
@@ -121,8 +124,20 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
         ["--composer-padding" as string]: "8px",
       }}
     >
+      {/* Global on purpose — it listens on `document`, not on anything inside this subtree, so
+          it only has to be mounted once regardless of where the selection happens. */}
+      <SelectionQuoteToolbar />
       <ThreadPrimitive.Viewport
         turnAnchor="top"
+        // Off by default the moment `turnAnchor` is "top" — which silently also killed "if
+        // content grows while I'm already at the bottom, follow it down." A resumed
+        // conversation's real height keeps settling for a moment after the initial
+        // scroll-to-bottom fires (`content-visibility: auto` placeholders measuring in,
+        // tool-result cards expanding), and with this off nothing ever re-corrects, so it can
+        // only ever land short of the true bottom on a long history — never past it. The
+        // library's own guard (`!(isRunning && hasActiveTopAnchor())`) already excludes an
+        // actively-streaming turn, so this doesn't touch the reason `turnAnchor="top"` exists.
+        autoScroll
         data-slot="aui_thread-viewport"
         className={cn(
           "relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth",
@@ -176,16 +191,53 @@ const ThreadMessage: FC = () => {
   return <AssistantMessageComponent />;
 };
 
+/**
+ * Select some text in a message, and a "Reply" button appears next to it — click it and that
+ * excerpt rides along as a quote on the next message you send.
+ *
+ * Entirely `@assistant-ui/react`'s own `SelectionToolbarPrimitive` / the composer's
+ * `Quote`/`QuoteText`/`QuoteDismiss` (see `Composer` below for the other half) — it already
+ * does the part that matters (detecting the selection, positioning a portal at it, confining
+ * it to one message, wiring the click through to `composer.setQuote`) correctly and for free;
+ * this only supplies how the button looks.
+ */
+const SelectionQuoteToolbar: FC = () => (
+  <SelectionToolbarPrimitive.Root>
+    <SelectionToolbarPrimitive.Quote asChild>
+      <button
+        type="button"
+        className="border-border/60 bg-popover text-foreground fade-in-0 zoom-in-95 animate-in inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur-sm duration-100 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-accent active:scale-95"
+      >
+        <Reply className="size-3.5" />
+        Reply
+      </button>
+    </SelectionToolbarPrimitive.Quote>
+  </SelectionToolbarPrimitive.Root>
+);
+
 const ThreadScrollToBottom: FC = () => {
   return (
     <ThreadPrimitive.ScrollToBottom asChild>
       {/* End-aligned rather than centred, and smaller. Centred over a 44rem column it landed
           squarely on the last line of the reply — so the one control for "take me back down"
-          was drawn through the sentence you were reading. */}
+          was drawn through the sentence you were reading.
+
+          It's always mounted — `disabled` is how the primitive says "you're already at the
+          bottom" — so appearing/disappearing is a transition on that attribute, not a mount.
+          `disabled:invisible` cut straight to gone with nothing in between; scale+fade over the
+          same easing the rest of the app's discloures use reads as the button arriving rather
+          than blinking on. A couple more pixels of clearance from the composer, and a lift on
+          hover so it reads as pressable before you press it. */}
       <TooltipIconButton
         tooltip="Scroll to bottom"
         variant="outline"
-        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background/80 dark:hover:bg-accent absolute -top-11 end-1 z-10 self-end rounded-full p-2.5 shadow-sm backdrop-blur-sm disabled:invisible"
+        className={cn(
+          "aui-thread-scroll-to-bottom dark:border-border dark:bg-background/80 dark:hover:bg-accent",
+          "absolute -top-14 end-2 z-10 self-end rounded-full p-2.5 shadow-md backdrop-blur-sm",
+          "scale-100 opacity-100 transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]",
+          "hover:scale-110 active:scale-90",
+          "disabled:pointer-events-none disabled:scale-50 disabled:opacity-0",
+        )}
       >
         <ArrowDownIcon className="size-4" />
       </TooltipIconButton>
@@ -260,6 +312,7 @@ const Composer: FC = () => {
         // a suggestion of an input; you had to know it was there.
         className="border-border dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] dark:shadow-none"
       >
+        <ComposerQuoteStrip />
         <ComposerAttachmentStrip />
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"
@@ -320,6 +373,23 @@ const ComposerHint: FC = () => (
  * simply vanished. Whether to inline a picture or hand him a path is decided on the server,
  * next to the model config — not here by hiding a button.
  */
+/** The other half of `SelectionQuoteToolbar`: what a quote looks like once it's actually
+ *  attached, so it's obvious what's about to be sent along with the message rather than a
+ *  silent extra a person only discovers after sending. `ComposerPrimitive.Quote` already
+ *  renders nothing when there's no quote set, so no extra `AuiIf` here. */
+const ComposerQuoteStrip: FC = () => (
+  <ComposerPrimitive.Quote className="border-border/50 bg-muted/40 flex items-start gap-2 rounded-lg border-s-2 border-s-kith/60 px-2.5 py-1.5 text-xs">
+    <Reply className="text-muted-foreground/60 mt-0.5 size-3.5 shrink-0" />
+    <ComposerPrimitive.QuoteText className="text-muted-foreground min-w-0 flex-1 line-clamp-2 leading-relaxed" />
+    <ComposerPrimitive.QuoteDismiss
+      aria-label="Remove quote"
+      className="text-muted-foreground/60 hover:text-foreground shrink-0"
+    >
+      <XIcon className="size-3.5" />
+    </ComposerPrimitive.QuoteDismiss>
+  </ComposerPrimitive.Quote>
+);
+
 const ComposerAttachmentStrip: FC = () => (
   <AuiIf condition={(s) => s.composer.attachments.length > 0}>
     <div className="flex flex-wrap gap-1.5 px-1 pt-1">
@@ -510,19 +580,11 @@ const AssistantMessage: FC = () => {
                 if (ReasoningGroup) {
                   return <ReasoningGroup group={part}>{children}</ReasoningGroup>;
                 }
-                const running = part.status.type === "running";
-                return (
-                  // Ghost, not the default bordered card. A collapsed "Reasoning" was the
-                  // heaviest object in a turn — a full-width box with its own margin — for
-                  // the part of the turn a reader is least often after. Disclosure triggers
-                  // are all one weight now: a row.
-                  <ReasoningRoot streaming={running} variant="ghost" className="mb-0">
-                    <ReasoningTrigger active={running} />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
-                );
+                // Ghost, not the default bordered card, when it does get the full disclosure —
+                // a collapsed "Reasoning" used to be the heaviest object in a turn for the part
+                // of it a reader is least often after. `ReasoningRun` decides, by length,
+                // whether this one is worth a disclosure at all.
+                return <ReasoningRun group={part}>{children}</ReasoningRun>;
               }
               case "text":
                 return <MarkdownText />;
@@ -603,6 +665,50 @@ const ToolRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, chi
 /** A unit separator: safe in a way a comma or a space is not, since tool names are joined and
  *  split back apart. */
 const RUN_SEPARATOR = "\u001f";
+
+/** Below this many characters, a reasoning block is a one-line narration ("Let me check the
+ *  API.") rather than an actual chain of thought — and giving it the same disclosure as a real
+ *  one (its own row, a chevron, a click to read three words) is the thing making a turn with a
+ *  reasoning blurb before every tool call look busier than it is. Long enough to catch a real
+ *  sentence or two before switching over. */
+const REASONING_INLINE_MAX = 160;
+
+/**
+ * A run of reasoning, collapsed to quiet inline text when it's short enough to just read, or
+ * the full disclosure when it's substantial enough to be worth collapsing.
+ *
+ * The split isn't about row count — it's that "Reasoning ›" and three words behind it is a
+ * worse deal than just showing the three words. A genuine multi-sentence chain of thought still
+ * gets the full trigger; the difference is whether there's enough there to want to hide by
+ * default.
+ */
+const ReasoningRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, children }) => {
+  const length = useAuiState((s) =>
+    group.indices.reduce((total, index) => {
+      const part = s.message.parts[index];
+      return total + (part && part.type === "reasoning" ? part.text.length : 0);
+    }, 0),
+  );
+  const running = group.status.type === "running";
+  const brief = !running && length > 0 && length <= REASONING_INLINE_MAX;
+
+  if (brief) {
+    return (
+      <div className="text-muted-foreground/60 my-1 text-xs italic leading-relaxed [&_p]:my-0">
+        {children}
+      </div>
+    );
+  }
+
+  return (
+    <ReasoningRoot streaming={running} variant="ghost" className="mb-0">
+      <ReasoningTrigger active={running} />
+      <ReasoningContent aria-busy={running}>
+        <ReasoningText>{children}</ReasoningText>
+      </ReasoningContent>
+    </ReasoningRoot>
+  );
+};
 
 /**
  * What the turn cost, on the footer row with the rest of the turn's metadata.
