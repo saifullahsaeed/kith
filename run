@@ -23,11 +23,12 @@
 #
 # Two things do not reload, and knowing which saves a confused minute:
 #   * desktop/src — Electron main-process code. `./run dev` again.
-#   * The autonomy loop is off under `dev` (KITH_NO_BACKGROUND) — a reloader restart resumes it
-#     mid-step and can re-fire a reminder that already fired. Use plain `./run` when you want it.
-#     MCP servers *do* start under `dev`: they were skipped here at first, which quietly left the
-#     model with no MCP tools for a whole session, and that is far worse than the npx process a
-#     reload leaks.
+#   * Nothing else. `dev` used to switch off MCP and the autonomy loop (KITH_NO_BACKGROUND) so
+#     that a reloader restart could not orphan an npx child or resume the loop mid-step. Both
+#     were the wrong trade and are gone: without MCP the model silently had no MCP tools, and
+#     without the autonomy loop a session you left stopped advancing — which is the whole
+#     mechanism for having two projects going at once. A leaked process is untidy; neither of
+#     those is. `KITH_NO_BACKGROUND=1` still works if you want it, but `dev` no longer sets it.
 #
 set -euo pipefail
 
@@ -180,7 +181,7 @@ start_server() {
       # PYTHONUNBUFFERED because stdout to a file is block-buffered: "Detected change …
       # reloading" then sits in an 8KB buffer, so the log says nothing happened for minutes
       # after it did. That made this look broken while it was working, when I tested it.
-      export KITH_RELOAD=1 KITH_NO_BACKGROUND=1 PYTHONUNBUFFERED=1
+      export KITH_RELOAD=1 PYTHONUNBUFFERED=1
     else
       export KITH_UI_DIST="${here}/ui/dist"
     fi

@@ -23,6 +23,43 @@ type Piece =
 export const USAGE_PART = "round-usage";
 
 /**
+ * Attempts at *starting* a turn — and only at starting one.
+ *
+ * The distinction is the whole design. Retrying a connection that never opened is free: nothing
+ * happened on the server, so trying again is the same request. Retrying a stream that has already
+ * begun is not, and must never be added here: by then he may have called tools, written files and
+ * committed, and the server has no idea the client gave up on the reply. A second attempt would
+ * do all of it again. So this loop ends the instant a response body exists, and a mid-stream
+ * failure surfaces as an error rather than being papered over.
+ *
+ * Five, because the thing this actually catches is the server being briefly away — a reloader
+ * restart under `./run dev` takes a second or two, and before this, saving a .py file while a
+ * turn was in flight lost the turn.
+ */
+const RETRIES = 5;
+
+/** 300ms, 600, 1.2s, 2.4s — a bit over four seconds across all five attempts, which covers a
+ *  restart without leaving someone watching a dead button for a quarter of a minute. */
+const backoff = (attempt: number) => 300 * 2 ** (attempt - 1);
+
+/** Sleep, unless we are aborted first. False means "stop, the person cancelled" — an abort
+ *  during the wait must not be discovered only after the next attempt has been sent. */
+function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(false);
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
  * An assistant-ui adapter that streams from the Kith server.
  *
  * Pieces are kept in arrival order rather than grouped by kind. A turn is a loop —
@@ -46,31 +83,44 @@ export function createBackendAdapter(conversation?: {
 }): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
-      let response: Response;
-      try {
-        response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: toWireMessages(messages),
-            // Omitted on the first turn; the server opens one and tells us which.
-            ...(conversation?.get() ? { conversationId: conversation.get() } : {}),
-          }),
-          signal: abortSignal,
-        });
-      } catch (error) {
-        if (isAbort(error)) return;
-        throw new Error(
-          "Can't reach the Kith server. Start it: cd kith/server && .venv/bin/python app.py",
-        );
+      const body = JSON.stringify({
+        messages: toWireMessages(messages),
+        // Omitted on the first turn; the server opens one and tells us which.
+        ...(conversation?.get() ? { conversationId: conversation.get() } : {}),
+      });
+
+      /* Getting the turn *started*, with retries. See `RETRIES` for what is and is not retried,
+       * and why this stops the moment the response body begins. */
+      let response: Response | null = null;
+      let lastError = "";
+      for (let attempt = 0; attempt < RETRIES; attempt++) {
+        if (abortSignal?.aborted) return;
+        if (attempt > 0 && !(await pause(backoff(attempt), abortSignal))) return;
+        try {
+          const tried = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+            signal: abortSignal,
+          });
+          if (tried.ok && tried.body) {
+            response = tried;
+            break;
+          }
+          const detail = await tried.text().catch(() => "");
+          lastError = `Server error ${tried.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`;
+          // A 4xx is the server saying this request is wrong, and sending it again unchanged
+          // gets the same answer — only slower, and four more times. Retrying is for the
+          // server being briefly unable, not for it being clear.
+          if (tried.status < 500 && tried.status !== 429) break;
+        } catch (error) {
+          if (isAbort(error)) return;
+          lastError =
+            "Can't reach the Kith server. Start it: cd kith/server && .venv/bin/python app.py";
+        }
       }
 
-      if (!response.ok || !response.body) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(
-          `Server error ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`,
-        );
-      }
+      if (!response) throw new Error(lastError || "Could not start the turn.");
 
       const pieces: Piece[] = [];
       const toolById = new Map<string, ToolPart>();
