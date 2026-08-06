@@ -181,7 +181,7 @@ KINDS: dict[str, Kind] = {
                 d.get("priority") or "normal",
                 d.get("due_at"),
                 d.get("description") or "",
-                d.get("status") or "todo",
+                d.get("status") or "backlog",
                 "user",
                 d.get("project_id"),
             ),

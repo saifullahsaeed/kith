@@ -25,6 +25,11 @@ export interface AutonomyStatus {
    * missing field: that exact assumption crashed the settings page earlier today.
    */
   toReview?: { id: number; goal: string }[];
+  /**
+   * Plans drafted with the planning-a-task skill, waiting for a look before any
+   * implementation starts — the `planning` column. Same optionality reasoning as `toReview`.
+   */
+  toApprove?: { id: number; goal: string }[];
 }
 
 export interface ActivityItem {

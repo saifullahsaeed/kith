@@ -23,7 +23,7 @@ def _runner_on(db, monkeypatch, events):
 def test_error_ticks_do_not_count_toward_the_grind_limit(db, monkeypatch):
     tuning.apply({"focus_grind_limit": 3, "stall_break": 50, "stall_giveup": 50})
     task = repo.tasks.add_task(
-        db, "Make db:generate pass", "high", None, "done when it exits 0", "todo", "kith", None, None
+        db, "Make db:generate pass", "high", None, "done when it exits 0", "working", "kith", None, None
     )
     repo.tasks.add_checklist_item(db, task["id"], "run db:generate")
 

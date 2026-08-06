@@ -26,8 +26,6 @@ export interface ConversationSummary {
  * collision was invisible while this type was written out inline — nothing extended the
  * summary, so nothing compared the two — and typing it honestly is what surfaced it. */
 export interface ConversationDetail extends Omit<ConversationSummary, "messages"> {
-  /** User and assistant text, in the shape /api/chat wants back. */
-  messages: { role: string; content: string }[];
   /** How many messages it holds — the number the listing calls `messages`. */
   messageCount: number;
   /** The turn's actual shape — reasoning, prose, calls with results — for rendering back. */
@@ -49,7 +47,9 @@ export type StoredPart =
   | { kind: "reasoning"; text: string }
   | { kind: "tool"; id: string; name: string; arguments: Record<string, unknown>; result?: unknown }
   | { kind: "usage"; uncached: number; cached: number; out: number }
-  | { kind: "context"; context: ContextLedger; folded: boolean };
+  // `baseline` is `{}` — not absent — on a turn recorded before this field existed; a
+  // structurally real-but-empty reading, not a real one, which is why it's `Partial`.
+  | { kind: "context"; context: ContextLedger; baseline: Partial<ContextLedger>; folded: boolean };
 
 export interface StoredTurn {
   role: "user" | "assistant";

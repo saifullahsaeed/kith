@@ -80,6 +80,10 @@ export function createBackendAdapter(conversation?: {
       // The most recent reading of the context window, and whether this turn had to fold
       // itself to keep going. Both belong on the same footer as the token count.
       let context: ContextLedger | undefined;
+      // Round one's reading — before this turn's own tool calls added anything, so it's what
+      // actually carried over from the conversation so far. See turn-usage.tsx for why this,
+      // not `context`, is the headline number.
+      let baseline: ContextLedger | undefined;
       let folded = false;
 
       /** Append to the piece being written, or start a new one when the channel
@@ -97,7 +101,14 @@ export function createBackendAdapter(conversation?: {
             return [
               {
                 type: "tool-call",
-                toolCallId: tool.id,
+                // The backend's own id resets to c1 at the start of every turn — never unique
+                // across a whole conversation, only within the one it came from. There is only
+                // ever one live turn at a time, so a fixed prefix is enough to keep it out of
+                // reach of every past turn's ids, which `toThreadMessages` scopes by turn index
+                // instead (see workspace.tsx) — the two schemes just have to never coincide,
+                // not match. Internal lookups below still key on the raw id; only what the UI
+                // sees needs to be unique.
+                toolCallId: `live-${tool.id}`,
                 toolName: tool.name,
                 args: tool.args,
                 argsText: JSON.stringify(tool.args),
@@ -111,7 +122,7 @@ export function createBackendAdapter(conversation?: {
         });
         // Last, so it reads as the message's footer and stays put as rounds arrive.
         if (rounds.length > 0 || context) {
-          const usage: TurnUsage = { rounds, context, folded };
+          const usage: TurnUsage = { rounds, context, baseline, folded };
           parts.push({ type: "data", name: USAGE_PART, data: usage });
         }
         return parts;
@@ -144,8 +155,11 @@ export function createBackendAdapter(conversation?: {
               out: event.stats.responseTokens ?? 0,
             });
           } else if (event.type === "context") {
-            // Replaced rather than accumulated: this is a reading of the window as it stands,
-            // not a thing that happened. The last one is the only one that is still true.
+            // `context` is replaced rather than accumulated: this is a reading of the window
+            // as it stands, not a thing that happened, so the last one is the only one still
+            // true. `baseline` is the opposite on purpose — set once, from the first reading,
+            // since that is the one that predates anything this turn did.
+            if (!baseline) baseline = event.context;
             context = event.context;
           } else if (event.type === "compacting") {
             // He is about to fold the middle of this turn into notes. Worth showing because it

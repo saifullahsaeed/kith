@@ -46,6 +46,14 @@ const RESOURCES = path.join(__dirname, "..", "resources");
  */
 export const TRAY_ICON = path.join(RESOURCES, "trayTemplate.png");
 
+/**
+ * The app's real icon — dock, notifications, anywhere the running app needs to say who it
+ * is with a picture rather than a name. A packaged build already gets this from the .app
+ * bundle itself; it is unpackaged (`npm run dev`) that has nothing, because that is
+ * genuinely running as Electron.app, not Kith.app, until something says otherwise.
+ */
+export const APP_ICON = path.join(RESOURCES, "icon.png");
+
 /** Schemes we are willing to hand to the operating system. */
 export const EXTERNAL_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 

@@ -34,6 +34,26 @@ from kith.services import compaction, tuning
 # strictly serial, because with those the order *is* the meaning.
 _PARALLEL_SAFE = frozenset({"web_search", "fetch_url", "browse_page", "search_sources"})
 
+# Tools whose entire contract is "call again with the same arguments to check on it" — see
+# `run_tests`'s own tool description, and `check_process`, which is watching something
+# precisely because it has not changed yet. The thrash-guard below exists to catch calling
+# the same thing again with nothing to show for the last attempt; for these two, calling
+# again *is* what showing something for it looks like, not a sign of being stuck.
+_POLL_TOOLS = frozenset({"run_tests", "check_process"})
+
+
+def _is_repeat(name: str, seen: int) -> bool:
+    """Has this exact call been made enough times already to be a stall, not progress?
+
+    One free repeat before flagging: a single retry is often legitimate, and it takes a
+    second one with the same arguments and nothing changed to look like a loop rather than
+    persistence. `_POLL_TOOLS` are exempt outright, regardless of `seen` — blocking them
+    after two checks would mean a test suite or a build that takes ten minutes can only ever
+    be checked on twice before the model is told to stop trying and answer without knowing
+    the result.
+    """
+    return seen >= 2 and name not in _POLL_TOOLS
+
 # Enough to collapse the batches of six searches he actually makes, low enough
 # that a round can't open dozens of sockets (or docker execs) at once.
 
@@ -796,25 +816,37 @@ def _run_turn(
         #
         # Costed with the ratio `room` calibrated against what the provider actually charged for
         # the last round, so the number shown matches the bill instead of a constant.
-        book = ledger.take(
-            convo,
-            schemas,
-            persona=config.system or "",
-            window=config.context_window,
-            chars_per_token=room.chars_per_token,
-            mcp_names=mcp_names,
-            custom_names=custom_names,
-        )
+        def take_reading() -> ledger.Ledger:
+            return ledger.take(
+                convo,
+                schemas,
+                persona=config.system or "",
+                window=config.context_window,
+                chars_per_token=room.chars_per_token,
+                mcp_names=mcp_names,
+                custom_names=custom_names,
+            )
 
-        # Past the threshold, fold the middle of the turn into notes — once, rather than shaving
-        # a little more off every round. See `services/compaction`: shaving rewrites the prefix
-        # continuously and the cache can never be read, while a fold produces a new stable prefix
-        # and caching resumes for every round after it.
+        book = take_reading()
+
+        # Two separate pressure signals used to get two separate responses. `over` is a share
+        # of the whole window — the fold's own trigger, 80% by default. `tight` is `room`'s own
+        # absolute ceiling, which also charges for the biggest single round-to-round growth
+        # seen so far, and can fire well under `over` on a turn that already had one huge
+        # round in it. `over` tried a real fold first and only fell back to shaving; `tight`
+        # went straight to dropping whole exchanges, with no fold attempt at all.
         #
-        # `_room_is_tight` is still the gate when the window is unknown, where a share of it
-        # cannot be computed and the old absolute budget is the only honest measure.
+        # Both mutate the middle of `convo`, and mutating anything but the very end breaks the
+        # provider's prefix cache the same way either way — but only the fold path was ever
+        # built to avoid firing that every round. Measured on a real turn: cache held above
+        # 99.8% for several rounds straight, then one `tight`-triggered drop sent the very next
+        # round out at 3.2% cached — 400,483 tokens re-billed in full for a conversation that
+        # had grown by all of 5,424 tokens since the last one. So now both signals get the
+        # same first response, and dropping is the last resort for both, not the only response
+        # to one of them.
         over = book.past(_FOLD_ABOVE_SHARE) if config.context_window > 0 else _room_is_tight(convo, 0)
-        if over:
+        tight = room.is_tight(conversation_chars(convo, schemas))
+        if over or tight:
             folded = False
             if compaction.already_folded(convo) < _MAX_FOLDS:
                 yield {"type": "compacting", "used": book.used, "window": book.window}
@@ -828,28 +860,26 @@ def _run_turn(
                 _compact_tool_history(convo, offload_result)
                 _compact_images(convo)
                 _compact_call_arguments(convo)
-            book = ledger.take(
-                convo,
-                schemas,
-                persona=config.system or "",
-                window=config.context_window,
-                chars_per_token=room.chars_per_token,
-                mcp_names=mcp_names,
-                custom_names=custom_names,
-            )
-        yield {"type": "context", "context": book.as_wire()}
+            book = take_reading()
 
-        # Make room before asking, not after being refused. A conversation that outgrew the
-        # window used to come back as `Cloud model returned 400` and end the turn — no
-        # compaction, no retry, no chance to save what it had.
+        # Still tight after folding or shaving — the fold was exhausted, or neither move freed
+        # enough room. Guaranteed to work, unlike either above, which is exactly why it is the
+        # last resort rather than the first: it breaks the cache the same way they do.
         #
         # The toolset is deliberately untouched here. Reusing the `landing` latch was the
         # obvious move and is wrong: it is one-way, so context pressure at round 3 of a
         # 40-round turn would remove shell and every file tool for the remaining 37 and leave
         # him structurally unable to do the thing he was asked. Trim the history; leave the
         # capability alone.
+        dropped_any = False
         while room.is_tight(conversation_chars(convo, schemas)) and _drop_oldest_exchange(convo):
-            pass
+            dropped_any = True
+        if dropped_any:
+            book = take_reading()
+
+        # Taken last, so it always describes the request about to be sent — not a reading from
+        # before the last thing that could still change it.
+        yield {"type": "context", "context": book.as_wire()}
 
         content = ""
         tool_calls: list[dict] = []
@@ -961,7 +991,7 @@ def _run_turn(
             sig = f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
             seen = seen_calls.get(sig, 0)
             seen_calls[sig] = seen + 1
-            repeat = seen >= 2
+            repeat = _is_repeat(name, seen)
             planned.append({"id": call_id, "name": name, "arguments": arguments, "repeat": repeat})
 
         for batch in _batches(planned):

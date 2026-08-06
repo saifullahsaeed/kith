@@ -69,3 +69,45 @@ class TestTheToolListIsStableWithinATurn:
         # Tools are part of the cached prefix, so a reordering between rounds would throw
         # the cache away as surely as an edit would.
         assert first == again
+
+
+class TestReplayedToolCallsSurviveTheBuild:
+    """`conversations.full_messages` now puts tool_calls/tool-shaped messages into what
+    gets built here — a real gap found while planning that fix: the per-message loop was
+    written for prose-only history and would otherwise drop a `tool`-role message outright,
+    drop a `tool_calls`-bearing assistant message for having no `content`, and even a
+    message that survived both would then be flattened to bare `{"role","content"}` by
+    `_with_attachments`. None of that is hypothetical — it's exactly what the loop did
+    before this test existed."""
+
+    def test_a_replayed_call_and_its_result_keep_their_shape(self):
+        history = [
+            {"role": "user", "content": "read config.py"},
+            {
+                "role": "assistant",
+                "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": "config.py"}}}],
+            },
+            {"role": "tool", "tool_name": "read_file", "content": json.dumps("DEBUG=True")},
+            {"role": "assistant", "content": "It's set to debug mode."},
+        ]
+
+        built = _prompt(history)
+
+        calls = [m for m in built if m.get("role") == "assistant" and m.get("tool_calls")]
+        tools = [m for m in built if m.get("role") == "tool"]
+        assert len(calls) == 1
+        assert calls[0]["tool_calls"] == history[1]["tool_calls"]
+        assert len(tools) == 1
+        assert tools[0] == {"role": "tool", "tool_name": "read_file", "content": json.dumps("DEBUG=True")}
+        # And the ordinary text either side of it survived unchanged, same as ever. Last is
+        # the fresh "present state" system message `_build_messages` always appends; the
+        # turn's own last word is the one before it.
+        assert built[-2] == {"role": "assistant", "content": "It's set to debug mode."}
+
+    def test_attachments_on_an_ordinary_message_still_work(self):
+        """The fix that made room for tool_calls must not have broken the path it sits
+        beside — an ordinary attachment still reaches `_with_attachments` and gets
+        rendered, unaffected by the new branches ahead of it in the loop."""
+        history = [{"role": "user", "content": "what is this", "attachments": []}]
+        built = _prompt(history)
+        assert built[-2] == {"role": "user", "content": "what is this"}

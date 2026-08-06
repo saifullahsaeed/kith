@@ -8,6 +8,8 @@ being wrong, and that removing a conversation from a list does not delete an aft
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from kith.services import conversations
@@ -102,6 +104,119 @@ class TestRecording:
 
     def test_recording_without_an_id_is_a_no_op_not_a_crash(self, db):
         conversations.record(db, "", "user", "nowhere")  # must not raise
+
+
+class TestFullMessagesReplaysToolHistoryToo:
+    """`full_messages` is what a real turn replays — `messages` is what the client shows
+    and what a brand-new conversation starts from. They have to agree with each other for
+    everything that isn't a tool call, and only diverge for exactly that."""
+
+    def test_a_conversation_with_no_tool_calls_matches_messages(self, db):
+        opened = conversations.start(db)
+        conversations.record(db, opened["id"], "user", "hi")
+        conversations.record(db, opened["id"], "assistant", "hello")
+        assert conversations.full_messages(opened["id"]) == conversations.messages(opened["id"])
+
+    def test_a_call_and_its_result_become_an_assistant_and_a_tool_message(self, db):
+        opened = conversations.start(db, "go")
+        conversations.record(db, opened["id"], "user", "read config.py")
+        conversations.record_event(
+            opened["id"], "tool_call", {"id": "c0", "name": "read_file", "arguments": {"path": "config.py"}}
+        )
+        conversations.record_event(
+            opened["id"], "tool_result", {"id": "c0", "name": "read_file", "result": {"ok": True, "result": "DEBUG=True"}}
+        )
+        conversations.record(db, opened["id"], "assistant", "It's set to debug mode.")
+
+        assert conversations.full_messages(opened["id"]) == [
+            {"role": "user", "content": "read config.py"},
+            {
+                "role": "assistant",
+                "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": "config.py"}}}],
+            },
+            {"role": "tool", "tool_name": "read_file", "content": json.dumps({"ok": True, "result": "DEBUG=True"})},
+            {"role": "assistant", "content": "It's set to debug mode."},
+        ]
+
+    def test_calls_batched_before_any_result_still_pair_one_to_one_in_order(self, db):
+        """Parallel-safe tools fire every `tool_call` before any `tool_result` lands — the
+        reconstruction still pairs by id, one call to its own result, in the order the
+        results actually arrived."""
+        opened = conversations.start(db, "go")
+        conversations.record(db, opened["id"], "user", "search two things")
+        for call_id, query in (("c0", "roadmap"), ("c1", "pricing")):
+            conversations.record_event(
+                opened["id"], "tool_call", {"id": call_id, "name": "web_search", "arguments": {"query": query}}
+            )
+        for call_id, query in (("c0", "roadmap"), ("c1", "pricing")):
+            conversations.record_event(
+                opened["id"], "tool_result", {"id": call_id, "name": "web_search", "result": f"about {query}"}
+            )
+
+        queries = [
+            m["tool_calls"][0]["function"]["arguments"]["query"]
+            for m in conversations.full_messages(opened["id"])
+            if m.get("tool_calls")
+        ]
+        assert queries == ["roadmap", "pricing"]
+
+    def test_a_repeated_identical_read_is_not_collapsed(self, db):
+        """Dedup is a live, in-memory trick that never touches the transcript — replaying
+        gets the real content both times, not a pointer to itself."""
+        opened = conversations.start(db, "go")
+        conversations.record(db, opened["id"], "user", "read it twice")
+        for call_id in ("c0", "c1"):
+            conversations.record_event(
+                opened["id"], "tool_call", {"id": call_id, "name": "read_file", "arguments": {"path": "a.py"}}
+            )
+            conversations.record_event(
+                opened["id"], "tool_result", {"id": call_id, "name": "read_file", "result": "same content"}
+            )
+
+        tool_messages = [m for m in conversations.full_messages(opened["id"]) if m.get("role") == "tool"]
+        assert len(tool_messages) == 2
+        assert all(m["content"] == json.dumps("same content") for m in tool_messages)
+
+    def test_a_call_with_no_recorded_result_is_dropped(self, db):
+        """The turn crashed mid-call. Emitting it with nothing to pair it to would make a
+        provider reject the whole replayed request."""
+        opened = conversations.start(db, "go")
+        conversations.record(db, opened["id"], "user", "run it")
+        conversations.record_event(
+            opened["id"], "tool_call", {"id": "c0", "name": "shell", "arguments": {"command": "sleep 999"}}
+        )
+
+        assert conversations.full_messages(opened["id"]) == [{"role": "user", "content": "run it"}]
+
+    def test_an_id_reused_by_a_later_turn_does_not_pair_with_the_earlier_orphan(self, db):
+        """The agent loop's own call ids reset to c0 at the start of every real turn, so a
+        crashed turn's orphaned "c0" must not be mistaken for a later turn's "c0"."""
+        opened = conversations.start(db, "go")
+        conversations.record(db, opened["id"], "user", "first — will crash")
+        conversations.record_event(
+            opened["id"], "tool_call", {"id": "c0", "name": "shell", "arguments": {"command": "one"}}
+        )
+        conversations.record(db, opened["id"], "user", "second — reuses c0")
+        conversations.record_event(
+            opened["id"], "tool_call", {"id": "c0", "name": "shell", "arguments": {"command": "two"}}
+        )
+        conversations.record_event(opened["id"], "tool_result", {"id": "c0", "name": "shell", "result": "two ran"})
+
+        pairs = [m for m in conversations.full_messages(opened["id"]) if m.get("tool_calls")]
+        assert len(pairs) == 1
+        assert pairs[0]["tool_calls"][0]["function"]["arguments"] == {"command": "two"}
+
+    def test_reasoning_and_stats_are_not_replayed(self, db):
+        opened = conversations.start(db, "go")
+        conversations.record(db, opened["id"], "user", "go")
+        conversations.record_event(opened["id"], "reasoning", {"text": "thinking..."})
+        conversations.record_event(opened["id"], "stats", {"stats": {"promptTokens": 5}})
+        conversations.record(db, opened["id"], "assistant", "done")
+
+        assert conversations.full_messages(opened["id"]) == [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": "done"},
+        ]
 
 
 class TestTheFileSurvivesThings:

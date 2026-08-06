@@ -186,6 +186,25 @@ class TestActuallyRunningASuite:
         assert "shell" in str(caught.value)
 
 
+@pytest.fixture
+def project(workspace_root):
+    (workspace_root / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+    (workspace_root / "tests").mkdir()
+    subprocess.run([sys.executable, "-m", "venv", str(workspace_root / ".venv")], capture_output=True)
+    subprocess.run([str(workspace_root / ".venv/bin/pip"), "install", "-q", "pytest"], capture_output=True)
+    return workspace_root
+
+
+@pytest.fixture(autouse=True)
+def drain_the_shared_slot():
+    """`run` shares one registry entry across every test that uses `project` — the same one
+    `check_process`/`stop_process` would see. Left alive, a slow suite from one test would
+    still be running (or still occupying the name) when the next test starts."""
+    yield
+    with contextlib.suppress(ProcessError):
+        processes.stop(testing._PROCESS_NAME)
+
+
 class TestASlowSuiteDoesNotBlockOrGetKilled:
     """The whole reason `run` starts the suite in the background instead of just waiting.
 
@@ -194,25 +213,6 @@ class TestASlowSuiteDoesNotBlockOrGetKilled:
     check now hands back `status: "running"` instead, and a later call re-attaches to the
     same run rather than starting a second one.
     """
-
-    @pytest.fixture
-    def project(self, workspace_root):
-        (workspace_root / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
-        (workspace_root / "tests").mkdir()
-        subprocess.run([sys.executable, "-m", "venv", str(workspace_root / ".venv")], capture_output=True)
-        subprocess.run(
-            [str(workspace_root / ".venv/bin/pip"), "install", "-q", "pytest"], capture_output=True
-        )
-        return workspace_root
-
-    @pytest.fixture(autouse=True)
-    def drain_the_shared_slot(self):
-        """`run` shares one registry entry across every test in this class — the same one
-        `check_process`/`stop_process` would see. Left alive, a slow suite from one test
-        would still be running (or still occupying the name) when the next test starts."""
-        yield
-        with contextlib.suppress(ProcessError):
-            processes.stop(testing._PROCESS_NAME)
 
     def test_a_slow_suite_reports_running_then_the_real_result_once_done(self, project):
         marker = project / "ran.marker"
@@ -254,6 +254,100 @@ class TestASlowSuiteDoesNotBlockOrGetKilled:
         # Let the original finish so teardown's stop() is tidying up something dead, not
         # racing a live one.
         testing.run(".", wait=5)
+
+
+class TestTheNoteEscalatesOnceItIsGenuinelySlow:
+    """Found live: the guard and the backoff both worked, and Kith still sat inside one turn
+    polling `run_tests` for three straight minutes rather than handing back and checking
+    later. The first `status: "running"` is nothing to act on; the second is the signal to
+    stop checking in this turn — set a reminder and answer now instead."""
+
+    def test_the_first_still_running_does_not_mention_a_reminder(self, project):
+        (project / "tests" / "test_a.py").write_text(
+            "import time\ndef test_slow():\n    time.sleep(1.5)\n"
+        )
+
+        first = testing.run(".", wait=0.3)
+
+        assert first.get("status") == "running"
+        assert "set_reminder" not in first["note"]
+
+        testing.run(".", wait=5)  # drain it so teardown isn't racing a live one
+
+    def test_the_second_still_running_says_this_is_genuinely_slow(self, project):
+        (project / "tests" / "test_a.py").write_text(
+            "import time\ndef test_slow():\n    time.sleep(1.5)\n"
+        )
+
+        testing.run(".", wait=0.3)
+        second = testing.run(".", wait=0.3)
+
+        assert second.get("status") == "running"
+        assert "set_reminder" in second["note"]
+        assert "genuinely slow" in second["note"]
+
+        testing.run(".", wait=5)
+
+
+class TestALongPollWaitsLongerEachTimeInsteadOfEveryTwentySeconds:
+    """A caller that does not pass `wait` gets a schedule, not a constant — see `_next_wait`.
+    The point: a suite genuinely taking ten minutes should cost a handful of checks, not one
+    every twenty seconds for the whole ten minutes."""
+
+    def test_a_fresh_run_uses_the_base_wait(self):
+        assert testing._next_wait(None) == testing.WAIT
+
+    def test_a_run_already_going_a_while_waits_longer(self):
+        waited = testing._next_wait(testing.WAIT)
+        assert waited > testing.WAIT
+
+    def test_the_wait_never_exceeds_the_cap(self):
+        assert testing._next_wait(10_000) == testing.MAX_WAIT
+
+    def test_it_grows_monotonically_with_how_long_the_suite_has_already_run(self):
+        earlier = testing._next_wait(5)
+        later = testing._next_wait(50)
+        assert later >= earlier
+
+    def test_an_explicit_wait_overrides_the_schedule(self, tmp_path, monkeypatch):
+        """Tests pass `wait=` directly to stay fast — that must keep working exactly as
+        before, unaffected by the schedule existing at all."""
+        from kith.infra import workspace
+
+        monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+        # The current interpreter, not the project's — a fresh `tmp_path` has no venv of its
+        # own, and this test only needs *some* pytest to run one trivial test, fast.
+        monkeypatch.setattr(testing, "python_for", lambda root: sys.executable)
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_a.py").write_text("def test_ok():\n    assert True\n")
+
+        called = []
+        monkeypatch.setattr(testing, "_next_wait", lambda elapsed: called.append(elapsed) or 999)
+
+        result = testing.run(".", wait=0.01)
+
+        assert called == [], f"the schedule ran even though an explicit wait was given: {called!r}"
+        assert result.get("ok") is True
+
+
+class TestBackgroundProcessesExposeHowLongTheyHaveRun:
+    def test_an_unknown_name_has_no_elapsed_time(self, running):
+        assert running.elapsed("ghost") is None
+
+    def test_a_running_process_reports_a_real_elapsed_time(self, running):
+        running.start("sleep 5", "sleeper")
+        time.sleep(0.2)
+
+        elapsed = running.elapsed("sleeper")
+
+        assert elapsed is not None and elapsed >= 0.15, f"expected roughly 0.2s, got {elapsed!r}"
+
+    def test_a_stopped_process_has_no_elapsed_time_any_more(self, running):
+        running.start("sleep 5", "sleeper")
+        running.stop("sleeper")
+
+        assert running.elapsed("sleeper") is None
 
 
 class TestBackgroundProcesses:

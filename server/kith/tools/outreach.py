@@ -14,8 +14,10 @@ def _reach_out(path: Path, a: dict) -> dict:
     if not message:
         raise ValueError("message is required")
     # He chose to say this. The most deliberate kind, and the only one that survives the
-    # quietest setting.
-    saved = repo.messages.add_message(path, message, kind="reachout")
+    # quietest setting. Linked to the inbox rather than nothing — a notification that only
+    # brings the window forward leaves them reading a preview and then hunting for where the
+    # rest of it is.
+    saved = repo.messages.add_message(path, message, kind="reachout", link="/messages")
     return {"sent": True, "id": saved["id"], "note": "They'll see this when they next look."}
 
 

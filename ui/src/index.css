@@ -310,6 +310,29 @@
   mask-image: linear-gradient(to top, transparent 0, #000 1.25rem);
 }
 
+/* ── Find in conversation ────────────────────────────────────────────── */
+
+/* Painted through the CSS Custom Highlight API rather than by wrapping matches in `<mark>`:
+   nothing is inserted into a tree React owns, so a match landing across the middle of rendered
+   markdown cannot break the markup around it. See `lib/thread-find.ts`.
+
+   `::highlight()` accepts only a handful of properties — colour, background, text-decoration,
+   text-shadow, and the text stroke. No border, no outline, no padding, which is why the current
+   match is distinguished by a stronger fill rather than by a ring. */
+
+/* Every other match: enough to see where else the word is while you scroll past, not enough to
+   compete with the one you are standing on. */
+::highlight(kith-find) {
+  background-color: color-mix(in oklab, var(--kith) 20%, transparent);
+}
+
+/* The one you are on. Registered second in `paintRanges`, which is what puts it on top of the
+   general highlight rather than under it. */
+::highlight(kith-find-current) {
+  background-color: color-mix(in oklab, var(--kith) 62%, transparent);
+  color: var(--foreground);
+}
+
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

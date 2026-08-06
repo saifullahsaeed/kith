@@ -28,6 +28,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from kith.llm.budget import message_chars
+from kith.services.compaction import _as_text
+
 #: Marks the folded block so a reader — and the model — can tell a summary of the past from
 #: something that was actually said in it.
 _SUMMARY_HEADER = "[Summary of the earlier part of this conversation]"
@@ -62,6 +65,28 @@ _FOLD_ABOVE_SHARE = 0.8
 #: window into a character budget; real calibration happens per-round inside a turn, which this
 #: runs before.
 _CHARS_PER_TOKEN = 3.7
+
+#: Ceiling on how much new territory one summarisation call may be asked to read, when the
+#: model's own window is unknown. Deliberately not `max_chars` — that is the threshold for
+#: when the *whole conversation* is worth folding, not what a single *request* can actually
+#: carry. Large enough that no ordinary fold ever brushes against it, so it only engages when
+#: something upstream already went wrong: a conversation that outgrew this much in one sitting
+#: before a fold ever ran (a stale brief left behind by a data-shape change, a summariser that
+#: has been failing silently) — see `_fold_input_ceiling`, `_capped_cut`.
+_FLAT_FOLD_INPUT_CHARS = 200_000
+
+
+def _fold_input_ceiling(window: int) -> float:
+    """How much new territory one summarisation call may read, scaled to the model's window.
+
+    Half the window, in characters — the same margin `_budget_chars` reserves against the
+    main prompt, applied here to the summariser's own much smaller request (an instruction
+    and a block of text, no persona or tool schemas riding along, so it can afford to use
+    more of the window than the main turn's netted-out share).
+    """
+    if window <= 0:
+        return _FLAT_FOLD_INPUT_CHARS
+    return window * _CHARS_PER_TOKEN * 0.5
 
 
 def _budget_chars(config, agent_db_path: Path | None) -> float:
@@ -111,12 +136,14 @@ def fold(
     max_chars = _budget_chars(config, agent_db_path)
     keep_recent = int(tuning.value("history_keep_recent"))
     prior = conversations.latest_summary(conversation_id) if conversation_id else {}
+    window = int(getattr(config, "context_window", 0) or 0)
     return compact(
         history,
         lambda text: _summarize(text, config, host),
         prior,
         max_chars=max_chars,
         keep_recent=keep_recent,
+        max_fold_chars=_fold_input_ceiling(window),
     )
 
 
@@ -154,18 +181,35 @@ def compact(
     *,
     max_chars: int,
     keep_recent: int,
+    max_fold_chars: float = _FLAT_FOLD_INPUT_CHARS,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Fold old turns into a brief. Returns ``(messages, new_brief_or_None)``.
 
     ``new_brief`` is ``{"through": n, "text": ...}`` when a fresh summary was made and should
     be persisted, or ``None`` when the history was left as-is or an existing brief was reused.
+
+    Sized with :func:`kith.llm.budget.message_chars` rather than a bare ``len(content)`` —
+    ``history`` can now carry replayed tool calls (see ``conversations.full_messages``), and
+    a ``{"role": "assistant", "tool_calls": [...]}`` message has no string ``content`` at
+    all. Measuring only string content did not just under-count one of those, it made it
+    invisible: zero, every time, however large its arguments actually were.
     """
     prior = prior or {}
     covered = int(prior.get("through") or 0)
     brief = str(prior.get("text") or "")
     count = len(history)
 
-    prose = sum(len(m["content"]) for m in history if isinstance(m.get("content"), str))
+    # A stored cursor only means anything against the shape it was cut from. Replayed tool
+    # calls (`conversations.full_messages`) changed that shape from under any brief made
+    # before today: the same numeric index that used to land between two turns can now land
+    # inside one — between a tool call and its own result. Replaying from there is not "a
+    # slightly wrong resume point", it is a message list a provider will refuse outright.
+    # Distrust the cursor whenever it no longer points at an actual boundary, and start over
+    # rather than build on a number that has stopped meaning what it once did.
+    if covered and not (covered >= count or history[covered].get("role") == "user"):
+        covered, brief = 0, ""
+
+    prose = sum(message_chars(m) for m in history)
     # Short, and never folded before — leave it byte-for-byte as it came in.
     if prose <= max_chars and not brief:
         return history, None
@@ -185,13 +229,25 @@ def compact(
     # cadence, not a budget, for the rest of the conversation's life — measured against a real
     # 2-day, 40-fold conversation: still folding every ~9 messages long after the actual
     # accumulated text was nowhere near what the window could hold.
-    tail_chars = sum(len(m["content"]) for m in history[covered:] if isinstance(m.get("content"), str))
+    tail_chars = sum(message_chars(m) for m in history[covered:])
     if brief and 0 <= covered <= count and tail_chars <= max_chars:
         return [_summary_message(brief), *history[covered:]], None
 
     # (Re)fold everything but the most recent `keep_recent` turns.
-    cut = max(0, count - keep_recent)
-    text = _render(history[:cut])
+    cut = _turn_aware_cut(history, keep_recent)
+    if cut <= covered:
+        # Nothing new precedes the protected tail — leave it alone rather than pay for a
+        # summary of nothing.
+        return history, None
+    # How far past `covered` one call may read. Deliberately not `max_chars` — that is the
+    # trigger threshold for the *whole* conversation, not what one *request* can actually
+    # digest. A conversation that fell behind before this ever ran (replayed tool calls make
+    # old turns far bigger than a flat message count once assumed) can owe far more new
+    # territory than any one call could read: catching up over a handful of bounded,
+    # always-successful calls beats one call asked to read all of it, which is exactly the
+    # shape that makes the request fail outright rather than merely cost more.
+    cut = _capped_cut(history, covered, cut, max_fold_chars)
+    text = _as_text(history[covered:cut])
     if brief:
         # Carry the previous brief forward rather than dropping what it captured.
         text = f"[Summary so far]\n{brief}\n\n[Continued]\n{text}"
@@ -205,10 +261,68 @@ def _summary_message(brief: str) -> dict[str, Any]:
     return {"role": "system", "content": f"{_SUMMARY_HEADER}\n{brief}"}
 
 
-def _render(messages: list[dict[str, Any]]) -> str:
-    lines = []
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            lines.append(f"{message.get('role', '?')}: {content}")
-    return "\n\n".join(lines)
+def _turn_starts(history: list[dict[str, Any]]) -> list[int]:
+    """Index of each turn's own user message, in order.
+
+    A ``role == "user"`` entry is always exactly one turn boundary and nothing else can be
+    mistaken for one: every synthetic user-role message the live loop injects mid-turn —
+    the landing directive, a dropped-exchange note, an in-turn fold's own summary — lives
+    only in that turn's in-memory ``convo`` and is never written to the transcript, so
+    ``conversations.full_messages`` never manufactures one of these that isn't real.
+    """
+    return [i for i, m in enumerate(history) if m.get("role") == "user"]
+
+
+def _turn_aware_cut(history: list[dict[str, Any]], keep_recent: int) -> int:
+    """Where to fold up to, keeping at most the last ``keep_recent`` turns whole.
+
+    Counts turns, not list items — a flat ``len(history) - keep_recent`` was the right
+    arithmetic back when a turn was reliably two items (one user, one assistant); replayed
+    tool calls make that no longer true, and a turn-heavy exchange could be twenty items to
+    a plain one's two. A cut can safely land on any turn boundary and never needs to check
+    for an open tool call the way the in-turn fold does (``compaction._open_calls_at``) —
+    a turn's own calls are always strictly between its opening user message and the next
+    one, so a boundary between turns can never fall inside a call/result pairing.
+
+    ``keep_recent`` is a ceiling on what stays untouched, not a precondition a short
+    conversation must clear before folding is allowed to help at all: a conversation with
+    fewer turns than ``keep_recent`` still folds whatever precedes its most recent ones,
+    rather than folding nothing and quietly disabling the one mechanism relied on to bound
+    growth. Only a single turn (or none) has nothing before it to fold, and returns 0.
+    """
+    starts = _turn_starts(history)
+    if len(starts) <= 1:
+        return 0
+    protect = min(max(0, keep_recent), len(starts) - 1)
+    return starts[len(starts) - protect] if protect else len(history)
+
+
+def _capped_cut(history: list[dict[str, Any]], covered: int, cut: int, ceiling: float) -> int:
+    """The furthest turn boundary between ``covered`` and ``cut`` whose new territory —
+    ``history[covered:boundary]`` — still fits ``ceiling``.
+
+    ``_turn_aware_cut`` answers "how far *should* this fold reach"; this answers "how much of
+    that can one request actually carry". They can disagree by a lot: a conversation that
+    fell behind before folding ever ran on it can owe millions of characters of new territory,
+    and asking one summarisation call to read all of it either exceeds the model's own input
+    limit outright or is simply too slow to be worth attempting. Splitting the difference over
+    several turns, each comfortably under the ceiling, means every one of those calls actually
+    succeeds — the alternative is the same oversized call failing, silently, forever.
+
+    Always advances at least one turn boundary when ``cut > covered``: a single turn whose own
+    content alone exceeds ``ceiling`` still has to move forward once, rather than stall here
+    permanently waiting for a smaller one that a real conversation will never produce.
+    """
+    if cut <= covered:
+        return cut
+    starts = set(_turn_starts(history))
+    total = 0
+    best = covered
+    for i in range(covered, cut):
+        total += message_chars(history[i])
+        if (i + 1) in starts or i + 1 == cut:
+            if total <= ceiling or best == covered:
+                best = i + 1
+            else:
+                break
+    return best

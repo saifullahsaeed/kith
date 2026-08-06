@@ -12,9 +12,15 @@ from kith.infra.db.models import Reminder
 from kith.infra.db.support import utc_now_iso
 
 
-def add_reminder(path: Path, fire_at: str, note: str) -> dict:
+def add_reminder(path: Path, fire_at: str, note: str, conversation_id: str = "") -> dict:
     with session(path) as db:
-        row = Reminder(fire_at=fire_at, note=note, status="pending", created_at=utc_now_iso())
+        row = Reminder(
+            fire_at=fire_at,
+            note=note,
+            status="pending",
+            created_at=utc_now_iso(),
+            conversation_id=conversation_id or None,
+        )
         db.add(row)
         db.flush()
         return as_dict(row)

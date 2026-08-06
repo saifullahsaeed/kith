@@ -48,7 +48,7 @@ class TestABriefIsReadable:
         base = {
             "id": 7,
             "goal": "Build the authenticated dashboard shell",
-            "status": "doing",
+            "status": "working",
             "priority": "high",
             "description": "npm run build passes and /dashboard renders when logged in",
             "checklist": [

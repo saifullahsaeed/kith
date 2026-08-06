@@ -321,3 +321,83 @@ class TestTheLoopActuallyUsesIt:
         """Ollama reports none. Guessing would trim a conversation with plenty of room."""
         seen = self.loop_with(monkeypatch, db, window=0, prompt_tokens=900_000, rounds=4)
         assert not any(m.get("_dropped") for convo in seen for m in convo)
+
+
+class TestTheMeterMatchesWhatWasActuallySent:
+    """Found live: a real turn showed 814,600 tokens on the meter (77.5% — under the fold's
+    own 80% trigger, so no fold ran) while this loop's *other* threshold — `is_tight`, a
+    separate absolute ceiling that also charges for the biggest round-to-round growth seen so
+    far — fired right after and cut what was actually sent down to 408,313. The "context"
+    event used to be yielded before that trim ran, so the number shown described a request
+    that was never sent. Now it runs first: whatever "context" reports must always match the
+    round that request actually was, trimmed or not.
+    """
+
+    def events_for(self, monkeypatch, db, window: int, prompt_tokens: int, rounds: int):
+        """Like `TestTheLoopActuallyUsesIt.loop_with`, but keeps every yielded event, not
+        just what was sent — the whole point here is checking the two against each other."""
+        from kith.services import agent_loop
+
+        seen: list[list[dict]] = []
+        calls = {"n": 0}
+
+        def fake_stream(convo, config, host, tools=None, tool_choice="auto"):
+            seen.append([dict(m) for m in convo])
+            calls["n"] += 1
+            stats = {"promptTokens": prompt_tokens, "responseTokens": 10}
+            if calls["n"] >= rounds:
+                return iter([{"type": "turn", "content": "done", "tool_calls": [], "stats": stats}])
+            return iter(
+                [
+                    {
+                        "type": "turn",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": f"c{calls['n']}",
+                                "function": {"name": "read_file", "arguments": '{"path": "x"}'},
+                            }
+                        ],
+                        "stats": stats,
+                    }
+                ]
+            )
+
+        monkeypatch.setattr(agent_loop, "_stream_once", fake_stream)
+        monkeypatch.setattr(
+            agent_loop.tools,
+            "run_tool",
+            lambda *a, **k: {"ok": True, "result": "y" * 40_000},
+        )
+        from kith.config import default_config
+
+        config = replace(default_config(), context_window=window, num_predict=2_000)
+        events = list(
+            agent_loop.stream_agent([{"role": "user", "content": "go"}], config, "", db, max_rounds=rounds)
+        )
+        contexts = [e["context"] for e in events if e.get("type") == "context"]
+        return seen, contexts
+
+    def test_a_trimmed_round_reports_what_it_actually_sent(self, db, monkeypatch):
+        """A window small enough that `is_tight` trims most rounds, but roomy enough — and
+        with growth small enough — that the fold's own 80% share never trips. If the two
+        thresholds ever disagree, this is where it shows: the display must follow whichever
+        one actually acted.
+        """
+        seen, contexts = self.events_for(monkeypatch, db, window=30_000, prompt_tokens=20_000, rounds=5)
+        assert any(m.get("_dropped") for convo in seen for m in convo), (
+            "nothing was trimmed — this test needs a round where it was, to mean anything"
+        )
+        assert len(seen) == len(contexts), "one context reading is expected per round"
+
+        for convo_sent, reading in zip(seen, contexts):
+            sent_chars = conversation_chars(convo_sent)
+            # The ratio drifts round to round as real stats come in, so this isn't an exact
+            # equality — it is a ceiling. What matters is the direction of the old bug: the
+            # displayed size must never come from a *bigger* convo than the one just sent.
+            implied_chars_upper_bound = reading["used"] * budget.MAX_RATIO
+            assert sent_chars <= implied_chars_upper_bound * 1.05, (
+                f"reported {reading['used']} tokens implies at most ~{implied_chars_upper_bound:.0f} "
+                f"chars, but {sent_chars} chars were actually sent — the meter is describing a "
+                "smaller request than the one that went out"
+            )

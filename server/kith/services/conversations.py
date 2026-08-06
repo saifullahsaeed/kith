@@ -179,15 +179,77 @@ def latest_summary(conversation_id: str) -> dict:
 
 
 def messages(conversation_id: str) -> list[dict]:
-    """The conversation, in the shape /api/chat wants back.
+    """The conversation, prose only — what the client shows and starts a fresh chat from.
 
-    Only user and assistant text: replaying a stored tool call would mean replaying its
-    id and its result, and a tool result from an hour ago is not a fact about now.
+    Only user and assistant text. See :func:`full_messages` for the version a real turn
+    actually replays, which carries tool history forward too.
     """
     out = []
     for entry in read(conversation_id):
         if entry.get("type") == "message" and entry.get("role") in ("user", "assistant"):
             out.append({"role": entry["role"], "content": entry.get("content") or ""})
+    return out
+
+
+def full_messages(conversation_id: str) -> list[dict]:
+    """The conversation a real turn replays — prose, and every tool call with its result.
+
+    Where :func:`messages` drops all of that, this puts it back: a new turn should
+    remember what the last one actually read and ran, not just what it said. That is a
+    deliberate tradeoff, not a free lunch — a tool result from hours ago is replayed as
+    though it were still true, which it might not be. Matching how the field generally
+    treats this axis (Claude Code keeps tool history until it compacts, rather than
+    dropping it every turn) rather than trying to time-box around the staleness risk.
+
+    Reconstructed from the transcript's own ``tool_call``/``tool_result`` events rather
+    than the rounds they were originally batched into — nothing in the transcript records
+    which calls shared a round, and nothing needs to: ``openai_compat._to_openai`` pairs a
+    ``tool`` message to the assistant message immediately before it *positionally*, not by
+    id, so one call to its own result, in the order they actually resolved, is exactly the
+    shape it wants. ``pending`` is keyed by the transcript's own per-turn call id (unique
+    only within the turn that produced it — the agent loop resets its counter at the start
+    of every real turn) and is cleared at every user message rather than trusted to stay
+    unique for the whole file, so a crashed turn's orphaned call can never be mistaken for
+    a later turn's reuse of the same id. A call with no matching result — the turn crashed
+    mid-call — is left out entirely: a provider refuses a ``tool_calls`` message it cannot
+    pair to one, which would fail the whole request that tried to replay it.
+    """
+    out: list[dict] = []
+    pending: dict[str, dict] = {}
+    for entry in read(conversation_id):
+        kind = entry.get("type")
+        if kind == "message" and entry.get("role") in ("user", "assistant"):
+            if entry["role"] == "user":
+                pending = {}  # a turn boundary — nothing from before it can still be open
+            out.append({"role": entry["role"], "content": entry.get("content") or ""})
+        elif kind == "tool_call":
+            call_id = str(entry.get("id") or "")
+            if call_id:
+                pending[call_id] = entry
+        elif kind == "tool_result":
+            call = pending.pop(str(entry.get("id") or ""), None)
+            if call is None:
+                continue  # no matching call this turn — nothing safe to pair it to
+            out.append(
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": call.get("name") or "",
+                                "arguments": call.get("arguments") or {},
+                            }
+                        }
+                    ],
+                }
+            )
+            out.append(
+                {
+                    "role": "tool",
+                    "tool_name": entry.get("name") or call.get("name") or "",
+                    "content": json.dumps(entry.get("result")),
+                }
+            )
     return out
 
 
@@ -209,7 +271,7 @@ def timeline(conversation_id: str) -> list[dict]:
     def assistant() -> dict:
         nonlocal current
         if current is None or current["role"] != "assistant":
-            current = {"role": "assistant", "parts": []}
+            current = {"role": "assistant", "parts": [], "at": entry.get("at") or ""}
             out.append(current)
         return current
 
@@ -217,7 +279,11 @@ def timeline(conversation_id: str) -> list[dict]:
     for entry in read(conversation_id):
         kind = entry.get("type")
         if kind == "message" and entry.get("role") == "user":
-            current = {"role": "user", "parts": [{"kind": "text", "text": entry.get("content") or ""}]}
+            current = {
+                "role": "user",
+                "parts": [{"kind": "text", "text": entry.get("content") or ""}],
+                "at": entry.get("at") or "",
+            }
             out.append(current)
         elif kind == "reasoning":
             assistant()["parts"].append({"kind": "reasoning", "text": entry.get("text") or ""})
@@ -257,6 +323,10 @@ def timeline(conversation_id: str) -> list[dict]:
                 {
                     "kind": "context",
                     "context": entry.get("context") or {},
+                    # What was actually persisted going into this turn — before its own tool
+                    # calls added anything. Absent on a turn recorded before this field existed;
+                    # the UI falls back to `context` for those.
+                    "baseline": entry.get("baseline") or {},
                     "folded": bool(entry.get("folded")),
                 }
             )
@@ -454,16 +524,24 @@ def _to_public(row: dict) -> dict:
     ).public()
 
 
+class ProjectLocked(Exception):
+    """Raised when a conversation already bound to a project is asked to move or unbind."""
+
+
 def set_project(agent_db: Path, conversation_id: str, project_id: int | None) -> dict:
-    """Point this session at a project, or at nothing.
+    """Point this session at a project, or at nothing — the first time only.
 
     He binds a session himself by working on something — starting a project, filing a task
     under one — and this is the same decision made by hand, for the times that guess is
-    wrong or you want to say it up front.
+    wrong or you want to say it up front. Once bound, though, it holds: a conversation is
+    stuck with the project it picked for the rest of its life, the same way it is stuck with
+    whatever it has already said. Wanting a different project is what a new conversation is
+    for.
     """
     if repo.conversations.get(agent_db, conversation_id) is None:
         raise KeyError(conversation_id)
-    repo.conversations.set_project(agent_db, conversation_id, project_id)
+    if not repo.conversations.set_project(agent_db, conversation_id, project_id):
+        raise ProjectLocked(conversation_id)
     return get(agent_db, conversation_id)
 
 

@@ -47,6 +47,7 @@ from kith.autonomy.prompts import (
 from kith.autonomy.toolsets import _ALLOW
 from kith.config import AGENT_DB_PATH, default_config, ollama_host
 from kith.domain import clock, stall
+from kith.domain.enums import TASK_ACTIVE
 from kith.infra.db import repositories as repo
 from kith.services import memory_context, session_context, tuning
 from kith.services.agent_loop import stream_agent
@@ -170,29 +171,21 @@ class AutonomyRunner:
         return self.status()
 
     def nudge(self, conversation_id: str = "", why: str = "") -> None:
-        """Something happened that this session should get on with.
+        """Something happened that used to make this session get on with it by itself.
 
-        The loop only wakes for a session that is *working*, and that used to be settable
-        only by a button. So filing a task in a conversation did nothing until someone found
-        and pressed a control whose two copies both called the same function — you asked for
-        a thing, he wrote it down, and then both of you waited.
+        Ticks are isolated from chat for now — not just the two manual buttons, but this
+        too. This used to flip the conversation to *working* and start the loop the instant
+        a task became actionable or someone commented on one, so filing a task from chat
+        quietly handed it to the tick loop with nobody watching, which is exactly the
+        unattended-work shape being isolated, not merely its two manual triggers.
 
-        Distinct from `keep_working`, deliberately, and the difference is the token meter.
-        Starting work zeroes the budget on purpose so a resumed session is not instantly
-        capped by an earlier run; doing that on every task filed would mean the cap could
-        never be reached at all. A nudge starts the loop and leaves the meter alone.
-
-        A session stopped for budget stays stopped. That cap exists to be hit, and an event
-        arriving afterwards is not a reason to spend past it.
+        A no-op on purpose, with every call site left alone: `add_task`, `update_task` and a
+        task comment still call this the moment they decide something is worth getting on
+        with, and that decision is worth keeping — it is only the "so start working on it
+        unattended" half that stops here. Turning it back on later is one change here rather
+        than a hunt through every caller that assumed nudging did something.
         """
-        if not conversation_id or conversation_id in self._session_capped:
-            return
-        try:
-            repo.conversations.set_working(AGENT_DB_PATH, conversation_id, True)
-        except Exception:
-            return  # bookkeeping; never take down the thing that triggered it
-        self.ensure_loop()
-        self._emit("status", why or "working", conversation=conversation_id)
+        return
 
     def rest(self, conversation_id: str = "") -> dict:
         """Stop taking steps. One session, or all of them when none is named.
@@ -262,6 +255,11 @@ class AutonomyRunner:
             # chat already polls, so the count lands next to the Run button rather than three
             # clicks away from it.
             "toReview": self._awaiting_review(),
+            # The other half of the same pattern, one step earlier: a plan drafted with the
+            # planning-a-task skill and ready for a look, before any implementation starts.
+            # 'planning' is only ever entered from chat, so anything showing up here is a plan
+            # somebody actually asked to be written — never a tick's own initiative.
+            "toApprove": self._awaiting_approval(),
         }
 
     def _awaiting_review(self) -> list[dict]:
@@ -273,6 +271,15 @@ class AutonomyRunner:
         """
         try:
             waiting = [t for t in repo.tasks.list_tasks(AGENT_DB_PATH) if t.get("status") == "review"]
+            return [{"id": t["id"], "goal": t.get("goal") or ""} for t in waiting[:6]]
+        except Exception:
+            return []
+
+    def _awaiting_approval(self) -> list[dict]:
+        """Plans drafted and waiting for a look, newest first. See `_awaiting_review` — same
+        shape, same reason it exists: a queue nobody is shown is a queue nobody works."""
+        try:
+            waiting = [t for t in repo.tasks.list_tasks(AGENT_DB_PATH) if t.get("status") == "planning"]
             return [{"id": t["id"], "goal": t.get("goal") or ""} for t in waiting[:6]]
         except Exception:
             return []
@@ -352,6 +359,7 @@ class AutonomyRunner:
                 "can't keep spending while you're away. Tell me to keep going if you want "
                 "more, or raise the session budget in settings.",
                 kind="stuck",
+                link="/messages",
             )
             self._emit("done", short, conversation=conversation_id)
         except Exception:
@@ -516,6 +524,11 @@ class AutonomyRunner:
         no idea who asked. Set here rather than deeper in because the step is the unit that
         belongs to a session — every tool call inside it does too.
         """
+        # Reminders and schedules tied to a real chat report back to *that* chat, regardless
+        # of which session the round-robin below is about to pick — the reminder itself
+        # already says which conversation this belongs to, so it does not wait its turn.
+        self._fire_conversation_reminders()
+
         # Whose turn it is. Everything that reads the board reads it through this, because
         # work belongs to a session now and a tick that ignored that was two sessions racing
         # for the same top-priority task.
@@ -534,6 +547,71 @@ class AutonomyRunner:
                     except Exception:
                         pass
 
+    def _fire_conversation_reminders(self) -> None:
+        """Reminders and schedules tied to a real chat, fired as a continuation of *that*
+        chat rather than through the generic autonomy-mode tick — see
+        `kith.tools.time._set_reminder`. Runs every tick, ahead of the round-robin step:
+        the reminder already says which conversation it belongs to, so it does not wait to
+        be picked, and it must not be picked twice — `_step` excludes anything handled here.
+        """
+        now = clock.now_iso()
+        reminders = [r for r in repo.reminders.due_reminders(AGENT_DB_PATH, now) if r.get("conversation_id")]
+        schedules = [s for s in repo.schedules.due_schedules(AGENT_DB_PATH, now) if s.get("conversation_id")]
+        if not reminders and not schedules:
+            return
+
+        # Grouped, so two reminders due for the same chat at once become one continuation
+        # with both notes, not two separate replies talking past each other.
+        by_conversation: dict[str, list[str]] = {}
+        for r in reminders:
+            by_conversation.setdefault(r["conversation_id"], []).append(r["note"])
+        for s in schedules:
+            by_conversation.setdefault(s["conversation_id"], []).append(f"(standing) {s['note']}")
+
+        for conversation_id, notes in by_conversation.items():
+            with session_context.working_in(conversation_id), session_context.nobody_watching():
+                try:
+                    self._continue_conversation(conversation_id, notes)
+                except Exception:
+                    # A reminder that fails to report back must not take the rest of the
+                    # tick down — every other conversation waiting on one still gets its turn.
+                    traceback.print_exc()
+
+        # Retired regardless of whether the continuation above succeeded — matching the
+        # generic path's own "fires once" rule. A tick that keeps failing to report back is
+        # a bug to find from the traceback just printed, not a reason to retry forever.
+        for r in reminders:
+            repo.reminders.set_reminder_status(AGENT_DB_PATH, r["id"], "done")
+            self._emit("reminder", r["note"], conversation=r["conversation_id"])
+        for s in schedules:
+            nxt = clock.next_fire_after(s.get("every_minutes"), s.get("daily_at"))
+            repo.schedules.reschedule(AGENT_DB_PATH, s["id"], nxt)
+            self._emit("reminder", f"(standing) {s['note']}", conversation=s["conversation_id"])
+
+    def _continue_conversation(self, conversation_id: str, notes: list[str]) -> None:
+        """Run one turn in `conversation_id`, triggered by a reminder instead of a message
+        typed in — but everything downstream of that is the same machinery a real chat turn
+        uses. That is the whole point: the result becomes an actual message in the
+        transcript, not a line in the live Mind feed that is gone the moment nobody is
+        looking at it.
+        """
+        from kith.api.routes.chat import _Recorder, _build_messages, _turn
+        from kith.services import conversations
+
+        config = default_config()
+        trigger = (
+            "One of your reminders just fired. Check on it and tell them what changed — "
+            "briefly, the way you would mid-conversation, not a report — or that nothing "
+            "has, if that's the honest answer.\n\n" + "\n".join(f"- {note}" for note in notes)
+        )
+        history = conversations.full_messages(conversation_id) + [{"role": "user", "content": trigger}]
+        messages = _build_messages(history, config, conversation_id)
+        conversations.record(AGENT_DB_PATH, conversation_id, "user", trigger)
+
+        recorder = _Recorder(conversation_id)
+        for _ in _turn(recorder, messages, config, conversation_id, opening=trigger):
+            pass  # driving the generator is the point — nothing is streaming this anywhere
+
     def _step(self, session: dict | None, conversation_id: str) -> None:
         config = default_config()
 
@@ -549,8 +627,11 @@ class AutonomyRunner:
         now = clock.now_iso()
         pending = self._new_pending()
         awaiting = repo.tasks.tasks_awaiting_kith(AGENT_DB_PATH)  # tasks he was answered on
-        reminders_due = repo.reminders.due_reminders(AGENT_DB_PATH, now)
-        schedules_due = repo.schedules.due_schedules(AGENT_DB_PATH, now)
+        # Conversation-bound ones already ran, above, as a continuation of the chat that set
+        # them — see `_fire_conversation_reminders`. What is left here has nowhere of its own
+        # to report to, so it is fine to fold into whichever session this tick is on.
+        reminders_due = [r for r in repo.reminders.due_reminders(AGENT_DB_PATH, now) if not r.get("conversation_id")]
+        schedules_due = [s for s in repo.schedules.due_schedules(AGENT_DB_PATH, now) if not s.get("conversation_id")]
         due = bool(reminders_due or schedules_due)
         # A laid-out project with no tasks under it is work, not quiet. Read before
         # `idle` is computed, because otherwise a whole project sits inert and he rests.
@@ -955,7 +1036,7 @@ class AutonomyRunner:
             return [
                 {"id": task["id"], "goal": task["goal"], "project": closed[int(task["project_id"])]}
                 for task in repo.tasks.list_tasks(AGENT_DB_PATH)
-                if task.get("status") in ("todo", "doing")
+                if task.get("status") in TASK_ACTIVE
                 and task.get("project_id")
                 and int(task["project_id"]) in closed
                 and self._in_scope(task, project, held_by)
@@ -981,7 +1062,7 @@ class AutonomyRunner:
             return
         self._said_blocked_at = now
         try:
-            repo.messages.add_message(AGENT_DB_PATH, note, kind="stuck")
+            repo.messages.add_message(AGENT_DB_PATH, note, kind="stuck", link="/messages")
         except Exception:
             pass
 
@@ -1140,7 +1221,7 @@ class AutonomyRunner:
             return False
         if not row:
             return True  # deleted under him
-        return str(row.get("status") or "") not in ("todo", "doing")
+        return str(row.get("status") or "") not in TASK_ACTIVE
 
     @staticmethod
     def _project_of(row: dict | None) -> int | None:

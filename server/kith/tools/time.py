@@ -13,11 +13,17 @@ from kith.tools.registry import tool
 
 
 def _set_reminder(path: Path, a: dict) -> dict:
+    from kith.services import session_context
+
     note = (a.get("note") or "").strip()
     if not note:
         raise ValueError("note is required")
     fire_at = clock.resolve_fire_at(a.get("in_minutes"), a.get("at"))
-    reminder = repo.reminders.add_reminder(path, fire_at, note)
+    # Captured, not asked for: the model has no reason to think about which conversation it
+    # is in, and a required argument it has to remember is one it will eventually forget.
+    # This is what lets firing report back to the actual chat instead of whichever session
+    # the tick's round-robin happens to be on at the time.
+    reminder = repo.reminders.add_reminder(path, fire_at, note, conversation_id=session_context.current())
     return {**reminder, "fires": clock.humanize_until(fire_at)}
 
 
@@ -29,12 +35,16 @@ def _list_reminders(path: Path) -> list[dict]:
 
 
 def _schedule(path: Path, a: dict) -> dict:
+    from kith.services import session_context
+
     note = (a.get("note") or "").strip()
     if not note:
         raise ValueError("note is required")
     every, daily = a.get("every_minutes"), a.get("daily_at")
     next_fire = clock.next_fire_after(every, daily)
-    sched = repo.schedules.add_schedule(path, note, next_fire, every, daily)
+    sched = repo.schedules.add_schedule(
+        path, note, next_fire, every, daily, conversation_id=session_context.current()
+    )
     return {**sched, "fires": clock.humanize_until(next_fire)}
 
 

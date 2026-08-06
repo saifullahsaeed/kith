@@ -1,9 +1,9 @@
 """Work in a finished project is not silently unreachable.
 
-A project completes itself when its roadmap clears, which is right. Nothing then stopped an
-actionable task being added underneath, where `active_tasks` would never return it — so the
-board showed two `todo` tasks, the person pressed Run, and every tick answered "caught up —
-resting". Three symptoms, one cause, and none of them pointed at it:
+A person can close a project at any point — including one with an open board — and nothing then
+stopped an actionable task being added underneath afterward, where `active_tasks` would never
+return it — so the board showed two `todo` tasks, the person pressed Run, and every tick answered
+"caught up — resting". Three symptoms, one cause, and none of them pointed at it:
 
 * the work never started, and the reason given was the most reassuring sentence available;
 * the project picker showed a bare `1` instead of a name, because the interface lists only
@@ -45,6 +45,7 @@ class TestFilingWorkIntoAFinishedProject:
                 "goal": "Build the dashboard shell",
                 "description": "npm run build passes and /dashboard renders when logged in",
                 "project_id": finished_project,
+                "status": "planned",
             },
         )
 
@@ -59,6 +60,7 @@ class TestFilingWorkIntoAFinishedProject:
                 "goal": "Build the dashboard shell",
                 "description": "npm run build passes and /dashboard renders when logged in",
                 "project_id": finished_project,
+                "status": "planned",
             },
         )
 
@@ -70,7 +72,7 @@ class TestFilingWorkIntoAFinishedProject:
         task = repo.tasks.add_task(db, "Later", "normal", None, "", "backlog", "kith", finished_project)
         repo.projects.update_project(db, finished_project, status="done")
 
-        registry.get("update_task").run(db, {"id": int(task["id"]), "status": "todo"})
+        registry.get("update_task").run(db, {"id": int(task["id"]), "status": "planned"})
 
         assert repo.projects.get_project(db, finished_project)["status"] == "active"
 
@@ -100,6 +102,7 @@ class TestFilingWorkIntoAFinishedProject:
                 "goal": "Build the dashboard shell",
                 "description": "npm run build passes and /dashboard renders when logged in",
                 "project_id": finished_project,
+                "status": "planned",
             },
         )
 
@@ -111,8 +114,8 @@ class TestSayingWhyHeIsIdle:
         """ "Caught up — resting" with two todo tasks on the board is a lie by omission, and
         it is the reason this took so long to find."""
         monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        repo.tasks.add_task(db, "Dashboard", "high", None, "", "todo", "kith", finished_project)
-        repo.tasks.add_task(db, "Design system", "high", None, "", "todo", "kith", finished_project)
+        repo.tasks.add_task(db, "Dashboard", "high", None, "", "planned", "kith", finished_project)
+        repo.tasks.add_task(db, "Design system", "high", None, "", "planned", "kith", finished_project)
 
         status, note = runner_module().AutonomyRunner()._why_idle()
 
@@ -130,7 +133,7 @@ class TestSayingWhyHeIsIdle:
         """It would be picked up, so there is nothing to explain."""
         monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
         project = repo.projects.add_project(db, "Live", "ongoing")
-        repo.tasks.add_task(db, "Do it", "high", None, "", "todo", "kith", int(project["id"]))
+        repo.tasks.add_task(db, "Do it", "high", None, "", "planned", "kith", int(project["id"]))
 
         assert runner_module().AutonomyRunner()._shut_out(None, set()) == []
 
@@ -138,7 +141,7 @@ class TestSayingWhyHeIsIdle:
         monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
         project = repo.projects.add_project(db, "On hold", "later")
         repo.projects.update_project(db, int(project["id"]), status="paused")
-        repo.tasks.add_task(db, "Do it", "high", None, "", "todo", "kith", int(project["id"]))
+        repo.tasks.add_task(db, "Do it", "high", None, "", "planned", "kith", int(project["id"]))
 
         shut = runner_module().AutonomyRunner()._shut_out(None, set())
 

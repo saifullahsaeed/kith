@@ -22,7 +22,7 @@ import * as crypto from "node:crypto";
 import * as http from "node:http";
 import { URL } from "node:url";
 
-import { BACKEND_ORIGIN } from "./config";
+import { APP_ICON, BACKEND_ORIGIN } from "./config";
 
 import { getMainWindow, showMainWindow } from "./window";
 
@@ -288,7 +288,7 @@ async function notify(
   if (!Notification.isSupported()) {
     return reply(503, { error: "this machine can't show notifications" });
   }
-  const notification = new Notification({ title, body });
+  const notification = new Notification({ title, body, icon: APP_ICON });
   notification.on("click", () => {
     showMainWindow();
     if (link) void openInApp(link);

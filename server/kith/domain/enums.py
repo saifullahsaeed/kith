@@ -10,19 +10,31 @@ MEMORY_LEVELS = ("core", "recall")
 REMINDER_STATUSES = ("pending", "done", "cancelled")
 CURIOSITY_STATUSES = ("open", "exploring", "explored", "dropped")
 SCHEDULE_STATUSES = ("active", "paused")
-# Kanban columns for tasks. 'todo'/'doing' are actionable; 'backlog' is not yet
-# started, 'review' is finished work nobody has checked yet, 'waiting' is parked on
-# the person, 'done'/'dropped' are closed.
+# Kanban columns for tasks. 'backlog' is not yet started; 'planning' is a plan being
+# drafted or awaiting approval; 'planned' is approved and ready to implement; 'working' is
+# actionable, in progress; 'review' is finished work nobody has checked yet; 'waiting' is
+# parked on the person; 'done'/'dropped' are closed.
+#
+# The gate between 'planning' and 'planned' exists for the same reason the one below does,
+# one step earlier: a plan nobody but its author has seen is a guess wearing the clothes of a
+# decision. Entering 'planning' is always a person asking for one, in chat — never a tick's own
+# initiative — so a plan waiting for a look is always one somebody actually wanted looked at.
 #
 # 'review' exists because an unattended tick was the only judge of its own work. It ran
 # `_verify_done` on itself — enumerate the brief, answer per item — and then closed the task,
 # which is marking your own homework with the answer sheet you wrote. It is also the column that
 # stops a task being reopened and ground on: nothing in `review` is offered to a tick at all, so
 # work that is finished-pending-a-look cannot be picked up and reworked for another twelve hours.
-TASK_STATUSES = ("backlog", "todo", "doing", "review", "waiting", "done", "dropped")
-#: What a tick may pick up. Deliberately narrow — `review` and `waiting` are both "someone else's
-#: turn", and a tick that could reach either would take back work it had already handed over.
-TASK_ACTIVE = ("todo", "doing")
+TASK_STATUSES = ("backlog", "planning", "planned", "working", "review", "waiting", "done", "dropped")
+#: What a tick may pick up on its own. Deliberately narrow — `backlog` and `planning` are not
+#: here because starting either is always a person's decision, made in chat, not a tick's; and
+#: `review`/`waiting` are both "someone else's turn", so a tick that could reach either would
+#: take back work it had already handed over.
+TASK_ACTIVE = ("planned", "working")
+#: Closed, either way. The one set both `active_tasks` (repositories/tasks.py) and `add_task`'s
+#: duplicate-merge / milestone-cap checks (tools/tasks.py) need, kept in one place after both
+#: had grown their own copy of the same two strings.
+TASK_SETTLED = ("done", "dropped")
 TASK_PRIORITIES = ("low", "normal", "high")
 PROJECT_STATUSES = ("active", "done", "paused", "archived")
 MILESTONE_STATUSES = ("todo", "done")

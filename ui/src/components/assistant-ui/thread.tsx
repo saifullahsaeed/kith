@@ -5,6 +5,7 @@ import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-s
 import { PermissionPrompt } from "@/components/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
+import { ContextMeter } from "@/components/assistant-ui/context-meter";
 import {
   Reasoning,
   ReasoningContent,
@@ -20,7 +21,10 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/presence";
+import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
+import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { USAGE_PART } from "@/lib/backend/adapter";
 import { summariseRun } from "@/lib/tool-language";
 import { cn } from "@/lib/utils";
@@ -55,6 +59,7 @@ import {
   PencilIcon,
   Reply,
   RefreshCwIcon,
+  RotateCcw,
   SquareIcon,
   XIcon,
 } from "lucide-react";
@@ -333,22 +338,76 @@ const Composer: FC = () => {
         />
         <ComposerAction />
       </div>
-      <ComposerHint />
+      <ComposerMeter />
     </ComposerPrimitive.Root>
   );
 };
+
+/**
+ * How full the window is right now — not attached to any one reply, because a meter that
+ * only exists on the last message you happened to send disappears the moment you stop
+ * sending them, which is exactly when "how much room do I have left" is worth checking.
+ * One meter, here, always current; not one per message any more (see turn-usage.tsx).
+ *
+ * Reads it off the latest assistant message's own usage data rather than a separate
+ * fetch — the number already exists, live, the instant a turn reports it in.
+ *
+ * Always `context` — the most recent reading, whatever round it came from — never
+ * `baseline`. Preferring `baseline` at rest was the previous fix for a *different* bounce:
+ * before tool calls were replayed across turns at all, a new turn's first reading was
+ * always tiny, so showing this turn's own peak made it look like it dropped the instant
+ * the next message was sent. Now that a turn's tool history is replayed in full
+ * (`conversations.full_messages`), that reason is largely gone — and holding `baseline`
+ * bought a worse version of the same complaint: a turn that did real work climbs live,
+ * then the second it finishes, the number reverts to what it was *before that work
+ * happened*, which reads as having lost everything it just did. `context` is the number
+ * that turn actually ended on; it stays put until the next one has something newer to say.
+ */
+const ComposerMeter: FC = () => {
+  const messages = useAuiState((s) => s.thread.messages);
+  const usage = latestUsage(messages);
+  const reading = usage?.context ?? usage?.baseline;
+  if (!reading) return null;
+  return (
+    <div className="mt-1.5 flex justify-center">
+      <ContextMeter context={reading} folded={usage?.folded} />
+    </div>
+  );
+};
+
+/** The most recent assistant turn's usage data part, walking back from the end — there is
+ * at most one per turn (see `USAGE_PART`), and an in-progress turn's is exactly as current
+ * as the round that just landed. */
+function latestUsage(messages: readonly unknown[]): TurnUsage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as { role?: string; content?: unknown[] };
+    if (message.role !== "assistant") continue;
+    for (const part of message.content ?? []) {
+      const candidate = part as { type?: string; name?: string; data?: TurnUsage };
+      if (candidate.type === "data" && candidate.name === USAGE_PART && candidate.data) {
+        return candidate.data;
+      }
+    }
+  }
+  return undefined;
+}
 
 /**
  * How to send, while there is nothing to send.
  *
  * Enter-sends and shift-Enter-newlines is a convention, not a law, and the composer is a
  * multi-line box with a send button — which is exactly the shape that makes someone type a
- * paragraph, press Enter for the next line, and post half a thought. It costs one faint line,
- * and only while the box is empty: once you are typing you already know.
+ * paragraph, press Enter for the next line, and post half a thought. Only while the box is
+ * empty: once you are typing you already know.
+ *
+ * On the action row, immediately left of the paperclip, rather than centred on a line of its
+ * own below the shell. That line was empty space the rest of the time, so the composer changed
+ * height the moment you typed a character — and the hint is about the two keys sitting beside
+ * the send button, so it belongs in the same cluster as them.
  */
 const ComposerHint: FC = () => (
   <AuiIf condition={(s) => s.composer.isEmpty && s.composer.attachments.length === 0}>
-    <div className="text-muted-foreground/40 pointer-events-none mt-1.5 flex justify-center gap-3 text-[10px] select-none">
+    <div className="text-muted-foreground/40 pointer-events-none me-1 flex items-center gap-3 text-[10px] select-none">
       <span>
         <kbd className="font-sans">⏎</kbd> send
       </span>
@@ -440,6 +499,7 @@ const ComposerAction: FC = () => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-end">
       <div className="flex items-center gap-1.5">
+        <ComposerHint />
         <AttachButton />
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>
@@ -738,6 +798,43 @@ const TurnUsageFooter: FC = () => {
 };
 
 const AssistantActionBar: FC = () => {
+  const { checkpoints, reload, turnOffset } = useCheckpoints();
+  const renderedIndex = useAuiState((s) => s.message.index);
+  const confirm = useConfirm();
+
+  // `s.message.index` counts the *rendered* messages, and the thread mounts only the tail of a
+  // long conversation — so it is an absolute turn index only when nothing has been windowed
+  // away. Checkpoints are tagged absolutely, so the offset has to be added back before the two
+  // can be compared at all.
+  const messageIndex = renderedIndex + turnOffset;
+
+  // The newest checkpoint at or before this turn — restoring reaches back to right
+  // before whatever Kith changed on the way to this message, skipping past any turn
+  // that made no file changes at all.
+  const candidate = checkpoints
+    .filter((c) => c.turnIndex <= messageIndex)
+    .sort((a, b) => b.turnIndex - a.turnIndex)[0];
+
+  const onRestore = async () => {
+    const ok = await confirm({
+      title: "Restore files to this point?",
+      description:
+        `Reverts every file Kith has touched in ${candidate.repoRoot.split("/").pop()} back to ` +
+        `how it was right before "${candidate.trigger}". A file you created by hand since — ` +
+        "outside anything Kith did — is left alone, not deleted. A safety checkpoint of the " +
+        "current state is taken first, so this itself can be undone.",
+      confirmLabel: "Restore",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await restoreCheckpoint(candidate.id);
+      reload();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "restore failed");
+    }
+  };
+
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning
@@ -777,6 +874,15 @@ const AssistantActionBar: FC = () => {
               Export as Markdown
             </ActionBarMorePrimitive.Item>
           </ActionBarPrimitive.ExportMarkdown>
+          {candidate ? (
+            <ActionBarMorePrimitive.Item
+              onSelect={onRestore}
+              className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
+            >
+              <RotateCcw className="size-4" />
+              Restore files to here
+            </ActionBarMorePrimitive.Item>
+          ) : null}
         </ActionBarMorePrimitive.Content>
       </ActionBarMorePrimitive.Root>
     </ActionBarPrimitive.Root>

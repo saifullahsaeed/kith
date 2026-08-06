@@ -51,10 +51,16 @@ from kith.services.code.processes import ProcessError, processes
 #: makes calling `run` again find the same run instead of starting another.
 _PROCESS_NAME = "run-tests"
 
-#: How long to wait, once, before handing control back. Long enough that a normal suite
-#: finishes inside a single call and nothing about the caller's experience changes; short
-#: enough that a slow one does not block the turn it arrived on.
+#: How long the *first* call waits before handing control back. Long enough that a normal
+#: suite finishes inside a single call and nothing about the caller's experience changes;
+#: short enough that a slow one does not block the turn it arrived on.
 WAIT = 20.0
+
+#: The most any later call waits. A suite already known to be slow does not need checking
+#: every `WAIT` seconds for however long it runs — that is a lot of round trips spent asking
+#: "done yet?" for a ten-minute suite. Waiting longer each time, capped here, gets the same
+#: total wait in far fewer of them.
+MAX_WAIT = 60.0
 
 #: Most failures to name individually. Past this the list stops being a thing to act on and
 #: becomes the log again — and twelve failures are nearly always one cause.
@@ -255,12 +261,17 @@ def _not_installed(runner: Runner, output: str) -> str:
     return ""
 
 
-def run(path: str = ".", filter_: str = "", wait: float = WAIT) -> dict[str, Any]:
+def run(path: str = ".", filter_: str = "", wait: float | None = None) -> dict[str, Any]:
     """Run the project's tests and report what failed — or that it is still running.
 
     A second call while the same run is still going re-attaches instead of starting another;
     a call naming a different path or filter while one is in flight is refused, because
     starting it would mean two suites racing over the same files with only one handle back.
+
+    ``wait`` defaults to a schedule rather than a constant: the first call waits `WAIT`
+    seconds, and a call that finds the suite already running longer than that waits longer
+    still, up to `MAX_WAIT` — see `_next_wait`. Passing an explicit value (tests do, to stay
+    fast) always wins over the schedule.
     """
     from kith.infra import workspace as sandbox
 
@@ -295,18 +306,38 @@ def run(path: str = ".", filter_: str = "", wait: float = WAIT) -> dict[str, Any
         except ProcessError as exc:
             raise TestingError(str(exc)) from None
 
+    # Whether this call found the suite already going — i.e. this is the *second or later*
+    # check, not the first. That distinction decides which note comes back: the first still-
+    # running is nothing to worry about, but a second one means this is genuinely slow, and
+    # sitting in this same turn checking on it again is worse than saying so and moving on.
+    already_checked_once = existing is not None and existing.get("alive")
+
+    if wait is None:
+        wait = _next_wait(processes.elapsed(_PROCESS_NAME))
     state = _await(_PROCESS_NAME, wait)
     if state.get("alive"):
+        if already_checked_once:
+            note = (
+                "Still running, and this is not the first check — it is genuinely slow, not "
+                "just slower than instant. Sitting in this turn polling it further is the "
+                "wrong move now: tell them it's running, set a reminder for a few minutes out "
+                "to check back (`set_reminder`), and end this turn. Calling run_tests again "
+                "later — this turn or a fresh one, it makes no difference — re-attaches to the "
+                "same run and gets the real result whenever it finishes."
+            )
+        else:
+            note = (
+                "Still running — slower than a quick check, but not yet slow enough to call "
+                "genuinely long. Calling run_tests again with the same path and filter, once "
+                "more, is fine here — you'll know from the next response whether it's actually "
+                "a long one or was just this close to done."
+            )
         return {
             "ran": command,
             "runner": runner.name,
             "status": "running",
             "for": state.get("for"),
-            "note": (
-                "Still running — slower than a quick check. Call run_tests again with the "
-                "same path and filter to check on it; the counts and failures come back the "
-                "moment it finishes, however long that takes."
-            ),
+            "note": note,
         }
 
     output = processes.full_output(_PROCESS_NAME)
@@ -345,6 +376,20 @@ def run(path: str = ".", filter_: str = "", wait: float = WAIT) -> dict[str, Any
         # a suite that collected no tests also exits zero on some runners.
         result["log"] = output[-800:]
     return result
+
+
+def _next_wait(elapsed: float | None) -> float:
+    """How long an unspecified call may wait, given how long the suite has already run.
+
+    ``elapsed`` is `None` for a suite just started by this call — nothing to scale from, so
+    the base `WAIT`. Otherwise the wait grows with how long it has already been running,
+    capped at `MAX_WAIT`: a suite still going after `WAIT` seconds gets a longer look next
+    time, and one still going well past that gets the longest look every time from then on,
+    rather than a fixed twenty-second check repeated for as long as it runs.
+    """
+    if elapsed is None:
+        return WAIT
+    return min(MAX_WAIT, WAIT + elapsed)
 
 
 def _await(name: str, wait: float) -> dict[str, Any]:

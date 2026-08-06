@@ -62,7 +62,7 @@ export interface TaskDetail extends Task {
   /** The milestone's title, for showing it without another lookup. */
   milestone_title: string | null;
   /** Titles of the unfinished milestones holding this back. Empty when he can work on it —
-   *  status alone cannot tell you this, and the page would otherwise say "todo" about
+   *  status alone cannot tell you this, and the page would otherwise say "planned" about
    *  something he will not touch. */
   held_by: string[];
   comments: TaskComment[];
@@ -85,7 +85,7 @@ export interface Milestone {
   tasks_total: number;
   tasks_done: number;
   tasks_active: number;
-  /** In `doing` — where he is right now. */
+  /** In `working` — where he is right now. */
   tasks_doing: number;
   tasks_waiting: number;
   created_at: string;

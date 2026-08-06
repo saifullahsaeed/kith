@@ -84,13 +84,31 @@ def delete(path: Path, conversation_id: str) -> None:
 # over one board, which could only be on for everything or off for everything.
 
 
-def set_project(path: Path, conversation_id: str, project_id: int | None) -> None:
-    """Bind a session to the project it is working on, or unbind it."""
+def set_project(path: Path, conversation_id: str, project_id: int | None) -> bool:
+    """Bind a session to the project it is working on, or unbind it — once.
+
+    Refuses once a project is already set and a *different* value (including null, an
+    unbind) is asked for: a conversation that has picked a project is stuck with it for the
+    rest of its life, the same way it is stuck with whatever it has already said. Re-setting
+    the same value is a harmless no-op, and the first bind of an unbound conversation always
+    succeeds. Returns whether the requested value now actually holds, so a caller that needs
+    to tell "bound" apart from "refused, already bound elsewhere" can — `adopt()` does not
+    need to (it is bookkeeping and silent either way); the explicit `/conversations/.../project`
+    route does, so the person gets a real answer instead of a click that quietly did nothing.
+    """
     with session(path) as db:
         row = db.get(Conversation, conversation_id)
-        if row is not None:
-            row.project_id = int(project_id) if project_id else None
-            row.updated_at = utc_now_iso()
+        if row is None:
+            return False
+        current = int(row.project_id) if row.project_id else None
+        wanted = int(project_id) if project_id else None
+        if current is not None and current != wanted:
+            return False
+        if current == wanted:
+            return True
+        row.project_id = wanted
+        row.updated_at = utc_now_iso()
+        return True
 
 
 def project_of(path: Path, conversation_id: str) -> int | None:

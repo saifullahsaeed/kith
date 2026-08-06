@@ -49,7 +49,10 @@ def _run_case(runner, case: dict) -> dict:
         case["goal"],
         priority="high",
         description=case["description"],
-        status="todo",
+        # 'planned' rather than 'backlog': this is testing whether a tick picks up and advances
+        # ready work, not the planning-a-task skill (chat-only, not a tick's to run) — seeding
+        # past the planning gate is what keeps those two concerns from being tangled together.
+        status="planned",
         created_by="eval",
     )
     tid = task["id"]
@@ -71,7 +74,7 @@ def _run_case(runner, case: dict) -> dict:
 
     # Simple, honest scoring — presence of a real deliverable is the main signal.
     delivered = len(deliverables) > 0
-    advanced = detail.get("status") in ("doing", "waiting", "done")
+    advanced = detail.get("status") in ("working", "waiting", "done")
     score = int(delivered) + int(advanced)
 
     repo.tasks.delete_task(AGENT_DB_PATH, tid)

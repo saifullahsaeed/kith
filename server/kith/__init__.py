@@ -8,6 +8,8 @@ drive it.
 
 from __future__ import annotations
 
+import os
+
 from apiflask import APIFlask
 from flask_cors import CORS
 
@@ -33,6 +35,56 @@ __all__ = ["create_app"]
 #: cannot forge its Origin, so listing these costs nothing.
 _DEV_PORTS = (5173, 4173)
 _ALLOWED_ORIGINS = [f"http://{host}:{port}" for host in ("localhost", "127.0.0.1") for port in _DEV_PORTS]
+
+
+def _owns_background() -> bool:
+    """Whether this process is the one that should run the long-lived background work.
+
+    Building the app and owning background work were the same statement until a reloader
+    existed, and then they stopped being: `flask run --reload` re-executes the module, so
+    `app = create_app()` happens in *two* processes — the watcher that never serves a request,
+    and the child that does. Nothing here is idempotent across processes. `runner.ensure_loop`
+    guards on `self._thread`, which is per-process, so two processes means two autonomy loops
+    firing the same reminders and taking the same steps twice. `connect_async` spawns MCP
+    servers under `npx`, so it means two sets of those, and there is no `atexit` anywhere to
+    reap the ones the previous child left behind.
+
+    So it is decided here rather than left to luck: with the reloader on, only the child that
+    Werkzeug marks as the serving process owns any of it. Without the reloader — packaged,
+    Docker, a plain `python app.py`, the test suite — there is only one process, and it does.
+    """
+    if os.environ.get("KITH_RELOAD") != "1":
+        return True
+    return os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+
+
+def _start_background() -> None:
+    """The work that outlives a request: embeddings, the context-window probe, MCP servers,
+    and the autonomy loop.
+
+    All off the request path deliberately — each one is either a network call or a subprocess
+    that downloads on first run, and none of them may stand between launching and answering.
+
+    `KITH_NO_BACKGROUND` skips the autonomy loop only — the one thing a reloader restart can do
+    real damage with, since it restarts mid-step and can re-fire a reminder that already fired.
+
+    It deliberately does *not* skip MCP any more. It did at first, on the grounds that a reload
+    drops MCP child processes without reaping them, so each save leaks an `npx`. True, but the
+    wrong trade by a wide margin: `agent_loop` reads `mcp_manager.snapshot()`, which is empty
+    until something has connected, so skipping this silently handed the model **no MCP tools at
+    all** for a whole dev session. A leaked process is untidy; a model quietly missing half its
+    tools is a different program.
+    """
+    embeddings.backfill_async(AGENT_DB_PATH)  # embed any memories that predate vectors
+    # Learn the model's context window if it was chosen before that was recorded.
+    backfill_context_window_async(CONFIG_DB_PATH)
+    # Bring up any MCP servers that are switched on, in a thread: one installed by npx or uvx
+    # downloads on first run, and that must not be what stands between launching and answering.
+    connect_mcp_async(CONFIG_DB_PATH)
+    if os.environ.get("KITH_NO_BACKGROUND") == "1":
+        print("[kith] background: autonomy loop off (KITH_NO_BACKGROUND); MCP still connecting")
+        return
+    runner.ensure_loop()  # keep the checker alive so reminders/schedules fire on time
 
 
 def create_app() -> APIFlask:
@@ -81,16 +133,8 @@ def create_app() -> APIFlask:
 
     config_store.init(CONFIG_DB_PATH)
     migrations.init(AGENT_DB_PATH)
-    embeddings.backfill_async(AGENT_DB_PATH)  # embed any memories that predate vectors
-    # Learn the model's context window if it was chosen before that was recorded. Off the
-    # request path for the same reason as the line above: it is a network call, and it must
-    # not stand between launching and answering.
-    backfill_context_window_async(CONFIG_DB_PATH)
-    # Bring up any MCP servers that are switched on. In a thread for the same reason as the
-    # two lines above: a server installed by npx or uvx downloads on first run, and that must
-    # not be what stands between launching and answering.
-    connect_mcp_async(CONFIG_DB_PATH)
-    runner.ensure_loop()  # keep the checker alive so reminders/schedules fire on time
+    if _owns_background():
+        _start_background()
     print(f"[kith] config db: {CONFIG_DB_PATH}")
     print(f"[kith] agent db:  {AGENT_DB_PATH}")
     print(f"[kith] embeddings: {tuning.value('embed_model')}")

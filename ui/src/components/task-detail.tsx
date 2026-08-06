@@ -36,11 +36,14 @@ import {
 
 // Mirrors TASK_STATUSES on the server. A status missing from here is a task that cannot be moved
 // out of it from the interface, and one whose current column renders blank.
-const STATUSES = ["backlog", "todo", "doing", "review", "waiting", "done", "dropped"];
+const STATUSES = ["backlog", "planning", "planned", "working", "review", "waiting", "done", "dropped"];
 const STATUS_LABEL: Record<string, string> = {
   backlog: "Backlog",
-  todo: "To do",
-  doing: "Doing",
+  // Same reasoning as "Finished, needs checking" below, one step earlier: not "Plan" or
+  // "Planning" on its own — it should read as where the *plan* is, not an instruction.
+  planning: "Plan ready for your look",
+  planned: "Planned",
+  working: "Working",
   // Not "Review" — it reads as an instruction to the person. He finished it and wants a look
   // before it counts as done; the column belongs to him, not to them.
   review: "Finished, needs checking",
@@ -119,7 +122,7 @@ export function TaskDetailPage({
    * in the description would throw their sentence away, so a refresh is skipped whenever a
    * field on this page has focus — you cannot lose an edit to a background fetch.
    */
-  const active = task?.status === "doing";
+  const active = task?.status === "working";
   useEffect(() => {
     const tick = () => {
       // Skip only when there is genuinely an edit in flight — a field with something typed in
@@ -247,7 +250,7 @@ export function TaskDetailPage({
             />
           </div>
 
-          {/* Whether this is actually workable, stated first, because a status of "todo" on a
+          {/* Whether this is actually workable, stated first, because a status of "planned" on a
             task the roadmap is holding back is the page telling you something untrue about
             the most important thing on it. */}
           {held.length > 0 ? (

@@ -55,14 +55,40 @@ def create_project(path: Path, args: dict):
         project_files.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
         session_context.adopt(path, made.get("id"), deliberate=True)
-        return {**made, "memory": f"{directory}/.kith/memory.md"}
+        return {**made, "memory": f"{directory}/.kith/memory.md", **_adoption_note(path, made)}
     made = repo.projects.add_project(path, args["name"], args.get("description") or "")
     # The conversation that started it is the one working on it. Nothing used to write this
     # down, so `conversations.project_id` existed in the schema, was read on every chat turn
     # to decide which project memory to show, and was never once set — which is why two
     # sessions saw the same everything.
     session_context.adopt(path, made.get("id"), deliberate=True)
-    return made
+    return {**made, **_adoption_note(path, made)}
+
+
+def _adoption_note(path: Path, made: dict) -> dict:
+    """Did starting this project actually bind the conversation to it?
+
+    A conversation locks to the first project it works on and stays there for good — so a
+    session already working on something else does not move just because it started a
+    second project. `adopt()` already refuses that silently, which is right for it (bookkeeping
+    must not fail loudly), but the tool call that triggered it is not bookkeeping: without
+    this, the response reads as "made and you're in it" whichever one actually happened, and
+    there was no way to tell them apart short of asking `list_projects` afterwards.
+    """
+    from kith.services import session_context
+
+    conversation_id = session_context.current()
+    if not conversation_id:
+        return {}
+    if repo.conversations.project_of(path, conversation_id) == int(made["id"]):
+        return {}
+    return {
+        "note": (
+            "This conversation is already working on a different project and stays there — "
+            "this one now exists, but nothing here moved to it. Start a new conversation to "
+            "work in it."
+        )
+    }
 
 
 @tool(
@@ -85,12 +111,13 @@ def list_projects(path: Path, args: dict):
 
 @tool(
     "update_project",
-    "Update a project — change its name/description, or set its status. Set 'done' "
-    "when the whole project is finished (then you can rest and stop working its "
-    "tasks), 'paused' to set it aside, 'archived' to file it away.",
+    "Update a project — change its name/description, 'paused' to set it aside, "
+    "'archived' to file it away. Marking one 'done' is not yours to do, even once "
+    "every task under it is finished — that is a judgement about the whole project, "
+    "and it stays your person's call. Tell them it looks finished and let them close it.",
     {
         "id": INT,
-        "status": {**STR, "enum": list(PROJECT_STATUSES)},
+        "status": {**STR, "enum": [s for s in PROJECT_STATUSES if s != "done"]},
         "name": STR,
         "description": STR,
     },
@@ -99,19 +126,26 @@ def list_projects(path: Path, args: dict):
 def update_project(path: Path, args: dict):
     from kith.services import session_context
 
-    out = repo.projects.update_project(
-        path, args["id"], args.get("status"), args.get("name"), args.get("description")
-    )
-    # Closing a project takes back the freedom its folder came with, and that has to land
-    # now rather than whenever a cache happens to expire.
-    if args.get("status"):
+    status = args.get("status")
+    if status == "done":
+        # The schema already leaves "done" off the enum; this is the backstop for a
+        # provider that does not enforce it strictly, or a raw call to the API. A silent
+        # drop here would read as "saved" while doing nothing — say plainly why not.
+        return {
+            "error": "Only a person can mark a project done. Tell them it looks finished "
+            "and let them close it themselves."
+        }
+    out = repo.projects.update_project(path, args["id"], status, args.get("name"), args.get("description"))
+    # Pausing or archiving a project takes back the freedom its folder came with, and that
+    # has to land now rather than whenever a cache happens to expire.
+    if status:
         from kith.services import permissions
 
         permissions.forget_linked_projects()
-    # Finishing or parking a project is the one update that should *not* claim it: a session
-    # whose project has just been marked done is a session with nothing left to do, and
-    # binding it there would keep it pointed at closed work.
-    if args.get("status") in (None, "active"):
+    # Parking a project is the one update that should *not* claim it: a session whose
+    # project has just been set aside has nothing left to do there, and binding it would
+    # keep it pointed at work nobody wants touched right now.
+    if status in (None, "active"):
         session_context.adopt(path, args["id"])
     return out
 

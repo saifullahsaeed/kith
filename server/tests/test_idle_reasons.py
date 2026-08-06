@@ -58,7 +58,7 @@ class TestWhyIdle:
         first = repo.projects.add_milestone(db, project, "Design")["id"]
         second = repo.projects.add_milestone(db, project, "Build")["id"]
         repo.projects.add_dependency(db, second, first)
-        repo.tasks.add_task(db, "build the thing", "", project_id=project, milestone_id=second)
+        repo.tasks.add_task(db, "build the thing", "", status="planned", project_id=project, milestone_id=second)
         status, note = runner._why_idle()
         assert "blocked" in status
         assert "milestones that aren't finished" in note
@@ -69,7 +69,7 @@ class TestWhyIdle:
         first = repo.projects.add_milestone(db, project, "Design")["id"]
         second = repo.projects.add_milestone(db, project, "Build")["id"]
         repo.projects.add_dependency(db, second, first)
-        repo.tasks.add_task(db, "build", "", project_id=project, milestone_id=second)
+        repo.tasks.add_task(db, "build", "", status="planned", project_id=project, milestone_id=second)
         asked = repo.tasks.add_task(db, "answer me", "")
         repo.tasks.update_task(db, asked["id"], status="waiting")
         status, _ = runner._why_idle()

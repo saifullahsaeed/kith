@@ -88,7 +88,7 @@ class TestAdoptingAProject:
         project = repo.projects.add_project(db, "Laid out yesterday", "")
         task = repo.tasks.add_task(db, "the first step", project_id=project["id"])
         with session_context.working_in(session_id):
-            task_tools.update_task(db, {"id": task["id"], "status": "doing"})
+            task_tools.update_task(db, {"id": task["id"], "status": "working"})
         assert repo.conversations.project_of(db, session_id) == project["id"]
 
     def test_adding_a_milestone_claims_the_project(self, db, session_id):
@@ -201,8 +201,8 @@ class TestATickAdvancesOneSession:
 
         mine = repo.projects.add_project(db, "Mine", "")
         theirs = repo.projects.add_project(db, "Theirs", "")
-        repo.tasks.add_task(db, "my step", project_id=mine["id"])
-        repo.tasks.add_task(db, "their step", project_id=theirs["id"])
+        repo.tasks.add_task(db, "my step", status="planned", project_id=mine["id"])
+        repo.tasks.add_task(db, "their step", status="planned", project_id=theirs["id"])
 
         one = conversations.start(db, "one")["id"]
         two = conversations.start(db, "two")["id"]
@@ -234,7 +234,7 @@ class TestATickAdvancesOneSession:
 
         empty = repo.projects.add_project(db, "Nothing left", "")
         busy = repo.projects.add_project(db, "Plenty left", "")
-        repo.tasks.add_task(db, "still to do", project_id=busy["id"])
+        repo.tasks.add_task(db, "still to do", status="planned", project_id=busy["id"])
 
         done_session = conversations.start(db, "finished")["id"]
         busy_session = conversations.start(db, "busy")["id"]
@@ -256,7 +256,7 @@ class TestATickAdvancesOneSession:
         self._quiet(module, monkeypatch, runner)
 
         project = repo.projects.add_project(db, "Something", "")
-        repo.tasks.add_task(db, "a step", project_id=project["id"])
+        repo.tasks.add_task(db, "a step", status="planned", project_id=project["id"])
         session = conversations.start(db, "working")["id"]
         repo.conversations.set_project(db, session, project["id"])
         working(db, session)
@@ -278,8 +278,8 @@ class TestATickAdvancesOneSession:
         self._quiet(module, monkeypatch, runner)
 
         claimed = repo.projects.add_project(db, "Claimed", "")
-        repo.tasks.add_task(db, "someone else's step", project_id=claimed["id"])
-        repo.tasks.add_task(db, "an errand")  # no project
+        repo.tasks.add_task(db, "someone else's step", status="planned", project_id=claimed["id"])
+        repo.tasks.add_task(db, "an errand", status="planned")  # no project
 
         driver = conversations.start(db, "driver")["id"]
         general = conversations.start(db, "general")["id"]
@@ -375,15 +375,49 @@ class TestSayingItByHand:
         body, status = out if isinstance(out, tuple) else (out, 200)
         return status, body.get_json()
 
-    def test_it_binds_and_unbinds(self, db, monkeypatch):
+    def test_it_binds_on_the_first_pick(self, db, monkeypatch):
         project = repo.projects.add_project(db, "By hand", "")
         session = conversations.start(db, "a session")["id"]
 
         status, body = self.call(db, monkeypatch, session, {"projectId": project["id"]})
         assert (status, body["projectId"]) == (200, project["id"])
 
+    def test_it_does_not_unbind_once_picked(self, db, monkeypatch):
+        """The one-way door. Unbinding used to be how you corrected a wrong guess — now a new
+        conversation is, so asking to undo a pick must fail loudly rather than quietly work."""
+        project = repo.projects.add_project(db, "By hand", "")
+        session = conversations.start(db, "a session")["id"]
+        self.call(db, monkeypatch, session, {"projectId": project["id"]})
+
         status, body = self.call(db, monkeypatch, session, {"projectId": None})
-        assert (status, body["projectId"]) == (200, None)
+
+        assert status == 409
+        assert "error" in body
+        assert repo.conversations.project_of(db, session) == project["id"]
+
+    def test_it_does_not_move_to_a_different_project_either(self, db, monkeypatch):
+        first = repo.projects.add_project(db, "First pick", "")
+        second = repo.projects.add_project(db, "Second thoughts", "")
+        session = conversations.start(db, "a session")["id"]
+        self.call(db, monkeypatch, session, {"projectId": first["id"]})
+
+        status, body = self.call(db, monkeypatch, session, {"projectId": second["id"]})
+
+        assert status == 409
+        assert "error" in body
+        assert repo.conversations.project_of(db, session) == first["id"]
+
+    def test_re_picking_the_same_project_is_not_an_error(self, db, monkeypatch):
+        """Not every second call is an attempted move — confirming what is already true
+        must succeed, since a UI that re-sends the current value on every render is not
+        expressing a change of mind."""
+        project = repo.projects.add_project(db, "By hand", "")
+        session = conversations.start(db, "a session")["id"]
+        self.call(db, monkeypatch, session, {"projectId": project["id"]})
+
+        status, body = self.call(db, monkeypatch, session, {"projectId": project["id"]})
+
+        assert (status, body["projectId"]) == (200, project["id"])
 
     def test_a_project_that_does_not_exist_is_refused(self, db, monkeypatch):
         session = conversations.start(db, "a session")["id"]

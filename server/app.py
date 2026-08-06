@@ -15,4 +15,25 @@ app = create_app()
 if __name__ == "__main__":
     host = os.environ.get("HOST", "127.0.0.1")  # set HOST=0.0.0.0 in a container
     port = int(os.environ.get("PORT", "8611"))
-    app.run(host=host, port=port, threaded=True)
+    reload = os.environ.get("KITH_RELOAD") == "1"
+
+    if reload:
+        # `use_reloader` alone, never `debug=True`. Debug mode also mounts the Werkzeug
+        # debugger, which is an interactive Python console on any traceback — a remote shell
+        # for anything that can reach the port, and every process running as you can reach
+        # loopback. Reloading is the part that was wanted; the console is not.
+        #
+        # `reloader_type="stat"` rather than the default "auto". Auto uses watchdog when it is
+        # installed, and watchdog watches whole *directories* — including `server/`, which holds
+        # `data/` with the config and agent databases in it. He writes to those constantly, so
+        # every tool call would restart the server underneath itself. The stat reloader polls
+        # only the .py files actually imported, which is exactly the set worth watching.
+        app.run(
+            host=host,
+            port=port,
+            threaded=True,
+            use_reloader=True,
+            reloader_type="stat",
+        )
+    else:
+        app.run(host=host, port=port, threaded=True)

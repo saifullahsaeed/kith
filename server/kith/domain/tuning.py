@@ -344,13 +344,15 @@ TUNABLES: tuple[Tunable, ...] = (
         key="history_keep_recent",
         env="KITH_HISTORY_KEEP_RECENT",
         label="Recent messages kept verbatim",
-        help="How many of the latest messages stay word-for-word when older ones are folded "
-        "into a summary. Too few and he forgets what was just said; too many and the fold "
-        "barely shrinks anything.",
-        default=8,
+        help="How many of your most recent messages stay word-for-word — the tool calls "
+        "each one made included, not just what was said — when older ones are folded into "
+        "a summary. Too few and he forgets what he just read or ran; too many and the fold "
+        "barely shrinks anything, since one message's worth of tool calls can be far "
+        "bigger than a plain reply.",
+        default=4,
         group="chat",
-        minimum=2,
-        maximum=50,
+        minimum=1,
+        maximum=20,
         unit="messages",
     ),
     Tunable(

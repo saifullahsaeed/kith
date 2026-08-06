@@ -50,7 +50,7 @@ class TestFoldingWhenItGrows:
     def test_old_turns_become_a_brief_and_recent_ones_survive(self):
         history = _turns(12, 1000)  # 12,000 chars, over budget
 
-        messages, summary = compact(history, lambda t: "THE BRIEF", max_chars=5000, keep_recent=4)
+        messages, summary = compact(history, lambda t: "THE BRIEF", max_chars=5000, keep_recent=2)
 
         # A leading summary system message, then exactly the last 4 turns, verbatim and in order.
         assert messages[0]["role"] == "system"
@@ -62,7 +62,7 @@ class TestFoldingWhenItGrows:
         history = _turns(12, 1000)
         seen = {}
 
-        compact(history, lambda t: seen.setdefault("text", t) or "b", max_chars=5000, keep_recent=4)
+        compact(history, lambda t: seen.setdefault("text", t) or "b", max_chars=5000, keep_recent=2)
 
         # The 5th turn's content (index 4, letter 'E') is old; the 9th (index 8) is recent.
         assert "E" * 1000 in seen["text"]
@@ -105,17 +105,17 @@ class TestReusingTheBriefWithoutAnotherCall:
         history = _turns(12, 1000)  # 12,000 chars
         calls = []
 
-        _, fresh = compact(history, lambda t: calls.append(t) or "BRIEF-1", max_chars=5000, keep_recent=8)
+        _, fresh = compact(history, lambda t: calls.append(t) or "BRIEF-1", max_chars=5000, keep_recent=4)
         assert fresh is not None  # the first fold, as expected: 12,000 > 5,000
 
         history = history + _turns(2, 1000)  # one more small turn: 2,000 more chars
 
         # The real budget can (and normally does) come out the same on the next call — it is
         # recomputed from the model's window, not from this history — but a bigger one here
-        # makes the point cleanly: the tail since the cut (10 turns, 10,000 chars) fits inside
+        # makes the point cleanly: the tail since the cut (10 items, 10,000 chars) fits inside
         # it, so it must reuse regardless of how many turns that took.
         _, fresh2 = compact(
-            history, lambda t: calls.append(t) or "BRIEF-2", prior=fresh, max_chars=20_000, keep_recent=8
+            history, lambda t: calls.append(t) or "BRIEF-2", prior=fresh, max_chars=20_000, keep_recent=4
         )
 
         assert fresh2 is None, f"refolded again while the new tail still fit the budget: {fresh2}"
@@ -128,11 +128,11 @@ class TestReusingTheBriefWithoutAnotherCall:
         history = _turns(12, 1000)
         calls = []
 
-        _, fresh = compact(history, lambda t: calls.append(t) or "BRIEF-1", max_chars=5000, keep_recent=8)
+        _, fresh = compact(history, lambda t: calls.append(t) or "BRIEF-1", max_chars=5000, keep_recent=4)
 
         history = history + _turns(10, 1000)  # 10,000 more chars since the cut — past the budget
         _, fresh2 = compact(
-            history, lambda t: calls.append(t) or "BRIEF-2", prior=fresh, max_chars=5000, keep_recent=8
+            history, lambda t: calls.append(t) or "BRIEF-2", prior=fresh, max_chars=5000, keep_recent=4
         )
 
         assert fresh2 is not None
@@ -174,7 +174,7 @@ class TestFoldWiresSettingsPersistenceAndTheModel:
     def test_it_folds_using_the_configured_thresholds(self, db, monkeypatch):
         from kith.services import tuning
 
-        tuning.apply({"history_max_chars": 5000, "history_keep_recent": 4})
+        tuning.apply({"history_max_chars": 5000, "history_keep_recent": 2})
         conv = conversations.start(db, "hi")["id"]
         monkeypatch.setattr(history, "_summarize", lambda text, config, host: "STUB BRIEF")
 
@@ -260,3 +260,152 @@ class TestTheBudgetScalesToTheRealWindow:
 
         assert fresh is not None
         assert messages != hist
+
+
+def _tool_heavy_turn(n_calls: int, size: int = 500) -> list[dict]:
+    """One turn shaped like a real one that did work: one user message, then N call/result
+    pairs — the shape `conversations.full_messages` actually produces, not `_turns`'s
+    uniform user/assistant alternation."""
+    out = [{"role": "user", "content": "go"}]
+    for i in range(n_calls):
+        out.append(
+            {"role": "assistant", "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": f"f{i}.py"}}}]}
+        )
+        out.append({"role": "tool", "tool_name": "read_file", "content": "X" * size})
+    return out
+
+
+class TestTheCutCountsTurnsNotListItems:
+    """`_turns()` can't exercise this on its own — it's uniformly 2 items per turn, so a
+    flat-index cut and a turn-aware one land on the same place by coincidence. A real
+    tool-heavy turn is where they'd disagree."""
+
+    def test_a_single_tool_heavy_turn_is_never_split_across_the_cut(self):
+        """10 tool calls in ONE turn is 21 flat items. A flat-index cut of `count -
+        keep_recent` would happily slice into the middle of it; a turn-aware one can't —
+        it only ever lands on a user-message boundary."""
+        tail = [{"role": "user", "content": "next"}, {"role": "assistant", "content": "ok"}]
+        hist = _tool_heavy_turn(10) + tail
+
+        messages, summary = compact(hist, lambda t: "BRIEF", max_chars=100, keep_recent=1)
+
+        assert summary is not None
+        assert messages[1:] == tail  # only the trailing exchange survives untouched
+
+    def test_a_tool_calls_message_is_actually_counted_not_treated_as_zero(self):
+        """A `{"role": "assistant", "tool_calls": [...]}` message has no string `content` —
+        the old `isinstance(content, str)` size check silently counted it as zero, which
+        would leave this conversation looking empty and never fold at all."""
+        hist = _tool_heavy_turn(5, size=2000) + [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": "ok"},
+        ]
+
+        messages, summary = compact(hist, lambda t: "BRIEF", max_chars=500, keep_recent=1)
+
+        assert summary is not None  # would stay None forever if tool_calls sized as 0
+
+    def test_a_conversation_shorter_than_keep_recent_still_folds_something(self):
+        """Three turns, `keep_recent=8` — fewer turns than the ceiling protects, and
+        already well over budget. This must not disable folding outright, and must not
+        waste a model call summarising an empty slice — both would leave the conversation
+        permanently unfolded."""
+        hist = _tool_heavy_turn(5, size=1000) * 3  # three tool-heavy turns, well over budget
+        calls = []
+
+        messages, summary = compact(hist, lambda t: calls.append(t) or "BRIEF", max_chars=2000, keep_recent=8)
+
+        assert summary is not None
+        assert messages != hist
+        assert calls and calls[0].strip()  # not a wasted call summarising an empty slice
+
+    def test_a_single_turn_alone_has_nothing_before_it_to_fold(self):
+        """The one case that's still correctly a no-op: there is no earlier turn to fold
+        into a brief, whatever `keep_recent` says."""
+        hist = _tool_heavy_turn(20, size=1000)
+        calls = []
+
+        messages, summary = compact(hist, lambda t: calls.append(t) or "BRIEF", max_chars=2000, keep_recent=999)
+
+        assert summary is None
+        assert messages == hist
+        assert calls == []
+
+
+class TestAStaleCursorIsDistrustedRatherThanReplayedBlind:
+    """Found live: a brief made before `conversations.full_messages` started replaying tool
+    calls had `through=246`, an index into that older, shorter shape. Replayed against
+    today's list the same number landed on a `tool` message, not a turn boundary — between a
+    call and its own result — and reusing it verbatim would hand the provider a message list
+    it must refuse outright. A cursor is only trustworthy if it still points at an actual
+    boundary in *this* history."""
+
+    def test_a_cursor_that_lands_inside_a_call_result_pair_is_discarded(self):
+        hist = _tool_heavy_turn(3) + [{"role": "user", "content": "next"}, {"role": "assistant", "content": "ok"}]
+        prior = {"through": 2, "text": "STALE"}  # index 2 is a `tool` message, not a boundary
+        calls = []
+
+        messages, fresh = compact(
+            hist, lambda t: calls.append(t) or "FRESH", prior=prior, max_chars=100, keep_recent=1
+        )
+
+        assert fresh == {"through": 7, "text": "FRESH"}  # refolded from scratch, not from index 2
+        assert "STALE" not in calls[0]  # the stale brief's text is dropped, not carried forward blind
+        assert messages[0] == {
+            "role": "system",
+            "content": "[Summary of the earlier part of this conversation]\nFRESH",
+        }
+
+    def test_a_cursor_that_still_lands_on_a_real_boundary_is_kept(self):
+        """The contrast case: nothing about a stored cursor is distrusted just because it is
+        old — only because it stopped matching the shape it is being replayed against."""
+        hist = _tool_heavy_turn(3) + [{"role": "user", "content": "next"}, {"role": "assistant", "content": "ok"}]
+        prior = {"through": 7, "text": "KEPT"}  # index 7 is the tail's own user message — real
+
+        messages, fresh = compact(hist, lambda t: "unused", prior=prior, max_chars=100_000, keep_recent=1)
+
+        assert fresh is None  # reused outright, no model call needed
+        assert "KEPT" in messages[0]["content"]
+
+
+class TestOneFoldCallHasABoundedInputEvenWhenMuchMoreIsOwed:
+    """Found on the same real conversation: a brief that has never successfully advanced (or
+    never run at all) can owe a summarisation call millions of characters of new territory —
+    replayed tool calls make old turns far bigger than a flat message count ever anticipated.
+    Asking one call to read all of it either exceeds the model's own input limit outright or
+    is simply too slow to be worth attempting, and fails the same way on every turn after,
+    forever. Capping one call's input means catching up costs a few always-successful turns
+    instead of one guaranteed-to-fail one, retried without end."""
+
+    def test_a_huge_backlog_folds_partially_rather_than_all_at_once(self):
+        hist = []
+        for _ in range(20):
+            hist += _tool_heavy_turn(5, size=2000)  # 220 items, 20 turns, 216,960 chars total
+        seen = {}
+
+        messages, fresh = compact(
+            hist,
+            lambda t: seen.setdefault("text", t) or "PARTIAL",
+            max_chars=1000,
+            keep_recent=1,
+            max_fold_chars=20_000,
+        )
+
+        assert fresh is not None
+        # One turn's worth (11 items) advanced, not the ~19 turns actually owed toward the
+        # keep_recent=1 target — bounded progress, not the full, doomed-to-fail backlog.
+        assert fresh["through"] == 11
+        assert len(seen["text"]) <= 20_000  # bounded by the ceiling, not the 216,960-char total
+
+    def test_a_single_oversized_turn_still_advances_rather_than_stalling_forever(self):
+        """The ceiling bounds a call's input; it cannot make a real turn smaller. One turn
+        whose own content alone exceeds it must still move forward once, or a conversation
+        with a single huge exchange would stall here permanently."""
+        huge_turn = _tool_heavy_turn(50, size=2000)  # 101 items, 108,223 chars — one turn
+        tail = [{"role": "user", "content": "next"}, {"role": "assistant", "content": "ok"}]
+        hist = huge_turn + tail
+
+        messages, fresh = compact(hist, lambda t: "BRIEF", max_chars=100, keep_recent=1, max_fold_chars=1000)
+
+        assert fresh == {"through": len(huge_turn), "text": "BRIEF"}
+        assert messages[1:] == tail

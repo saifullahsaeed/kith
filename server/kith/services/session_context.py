@@ -83,6 +83,18 @@ def a_turn() -> Iterator[None]:
         _scratch.reset(token)
 
 
+def in_turn() -> bool:
+    """Is this call happening inside a real turn — distinct from `turn_notes()`, which
+    deliberately collapses "no turn at all" and "a turn that has recorded nothing yet" to
+    the same empty dict, because its one caller does not care which.
+
+    Checkpointing does care: a test or script driving a write/edit/shell function directly,
+    with no `a_turn()` around it, is not Kith working, and must not silently start creating
+    real git commits on every such call with no memoization to make it cheap.
+    """
+    return _scratch.get() is not None
+
+
 #: Whether this work is happening with nobody watching. False in chat, in a test, in a script —
 #: the honest default, since the only thing that can truthfully claim otherwise is the tick loop.
 _unattended: ContextVar[bool] = ContextVar("kith_unattended", default=False)
@@ -152,11 +164,14 @@ def adopt(path: Path, project_id: int | None, deliberate: bool = False) -> None:
     project's task is bookkeeping and should leave the session where it is.
 
     The person's own choice in the interface does not come through here at all — it sets the
-    conversation's project directly — so they can always move a session, and nothing he does
-    can override them.
+    conversation's project directly, through the same repository call this makes, which now
+    refuses to move a binding either way. A conversation is stuck with the first project it
+    picks, however that happened; wanting a different one is what a new conversation is for.
 
     Silent when nothing is bound: a tool called from a test, a script, or a tick with no
-    session has no conversation to adopt anything, and that is not an error.
+    session has no conversation to adopt anything, and that is not an error. Also silent
+    when the binding is refused as already-locked — `deliberate=True` still asks, but asking
+    is not the same as it being granted.
     """
     conversation_id = current()
     if not conversation_id or not project_id:

@@ -7,6 +7,8 @@
  *   /control-panel/<tab>       → the panel open on a tab (e.g. /control-panel/memories)
  *   /tasks/<id>                → the panel open on that task's detail
  *   /settings/<tab>            → settings on a tab (model | tools | chat | advanced)
+ *   /messages                  → the inbox open, for a notice with nothing narrower to
+ *                                point at (a reach-out, a stall, a session resting itself)
  */
 
 // The panel's internal tab values. The URL uses these verbatim except for the
@@ -51,10 +53,17 @@ export type Route = {
   tab: PanelTab;
   taskId: number | null;
   settingsTab: SettingsTab | null;
+  inboxOpen: boolean;
 };
 
 /** Read the current URL into the app's view state. */
-const HOME: Route = { panelOpen: false, tab: "overview", taskId: null, settingsTab: null };
+const HOME: Route = {
+  panelOpen: false,
+  tab: "overview",
+  taskId: null,
+  settingsTab: null,
+  inboxOpen: false,
+};
 
 export function parseLocation(pathname: string = window.location.pathname): Route {
   if (pathname.startsWith("/settings")) {
@@ -72,6 +81,9 @@ export function parseLocation(pathname: string = window.location.pathname): Rout
     const tab = slugTab(pathname.split("/")[2] ?? "") ?? "overview";
     return { ...HOME, panelOpen: true, tab };
   }
+  if (pathname.startsWith("/messages")) {
+    return { ...HOME, inboxOpen: true };
+  }
   return HOME;
 }
 
@@ -79,3 +91,4 @@ export const pathForHome = () => "/";
 export const pathForTab = (tab: PanelTab) => `/control-panel/${tabSlug(tab)}`;
 export const pathForTask = (id: number) => `/tasks/${id}`;
 export const pathForSettings = (tab: SettingsTab = "model") => `/settings/${tab}`;
+export const pathForMessages = () => "/messages";

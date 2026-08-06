@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.domain import stall
-from kith.domain.enums import TASK_PRIORITIES, TASK_STATUSES
+from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db import repositories as repo
 from kith.tools import paging
 from kith.tools.paging import PAGE_PARAMS
@@ -219,13 +219,20 @@ def _update_task(path: Path, a: dict) -> dict | None:
         )
     # Promoting something out of the backlog is the moment it becomes work, and therefore the
     # moment worth waking for. This is the other half of scaffolding into `backlog`: you lay
-    # the roadmap out with nothing running, and moving the first task to `todo` is what says
+    # the roadmap out with nothing running, and approving a plan into `planned` is what says
     # go — rather than a button somewhere else that means the same thing.
-    if (a.get("status") or "") in _ACTIONABLE:
+    if (a.get("status") or "") in TASK_ACTIVE:
         reopened = _reopen_if_finished(path, (out or {}).get("project_id"))
         _get_on_with_it(f"task ready: {str((out or {}).get('goal') or '')[:40]}")
         if reopened and out:
             return {**out, "note": reopened}
+    # Handing a plan over for approval is worth showing in full, not just the status change —
+    # otherwise the person reviewing it sees "→ planning" and has to go read the file
+    # themselves to find out what they are actually being asked to approve.
+    if requested == "planning" and out:
+        plan = _plan_doc(path, out.get("id"), out.get("project_id"))
+        if plan:
+            return {**out, "plan": plan}
     return out
 
 
@@ -236,22 +243,13 @@ _VERIFY_MIN_BRIEF = 80
 #: gates a task that carries a written brief.
 _MIN_DONE_CHARS = 24
 
-#: Statuses that mean a task is off the board — it neither blocks a duplicate nor counts against
-#: a milestone's task cap.
-_SETTLED = ("done", "dropped")
-
-#: Statuses the tick can actually pick up — see `repo.tasks.active_tasks`. A task arriving in
-#: one of these is a reason to wake; a task arriving in `backlog` deliberately is not.
-_ACTIONABLE = ("todo", "doing")
-
-
 def _reopen_if_finished(path: Path, project_id: int | None) -> str:
     """Filing work into a finished project means it is not finished. Say so, and reopen it.
 
-    A project completes itself when its roadmap clears, which is right — and then nothing
-    stopped an actionable task being added underneath afterwards, where it was **invisible**:
-    `active_tasks` excludes everything under a done or paused project, so the board showed two
-    `todo` tasks and every tick reported "caught up — resting".
+    Whoever closed it — a person, always, now — nothing then stopped an actionable task being
+    added underneath afterwards, where it was **invisible**: `active_tasks` excludes everything
+    under a done or paused project, so the board showed two `todo` tasks and every tick reported
+    "caught up — resting".
 
     Three symptoms, one cause, and none of them pointed here. The work never started. The
     project picker showed a bare `1` instead of a name, because the interface lists only
@@ -304,6 +302,27 @@ def _mirror_brief(path: Path, task_id: int | None) -> None:
         pass
 
 
+def _plan_doc(path: Path, task_id: int | None, project_id: int | None) -> str:
+    """The plan the planning-a-task skill wrote, if there is one at the convention it names.
+
+    Best effort and silent, the same way `_mirror_brief` is: the skill's `.kith/work/task-<id>.md`
+    is prose guidance to the model, not an enforced path, so a plan filed anywhere else — or a
+    task with no project directory at all — just does not attach. The status change still goes
+    through either way; this only decides whether the approval carries the doc with it.
+    """
+    if not task_id or not project_id:
+        return ""
+    try:
+        project = repo.projects.get_project(path, int(project_id))
+        directory = str((project or {}).get("directory") or "").strip()
+        if not directory:
+            return ""
+        doc = Path(directory) / ".kith" / "work" / f"task-{task_id}.md"
+        return doc.read_text(encoding="utf-8") if doc.is_file() else ""
+    except Exception:
+        return ""
+
+
 def _get_on_with_it(why: str) -> None:
     """Wake the session this is happening in, if there is one.
 
@@ -329,8 +348,9 @@ def _get_on_with_it(why: str) -> None:
     "how you'll KNOW it's done — ideally something runnable (a command that exits 0, a test that "
     'passes, a file that exists). "Verify/inspect/consolidate X" is a done-condition, not a task '
     "of its own. A task under a project or milestone MUST carry such a description. 'priority' is "
-    "high for what matters most; 'due_at' if it's time-bound. New tasks start in 'todo'; use "
-    "'backlog' if it's not to start yet.",
+    "high for what matters most; 'due_at' if it's time-bound. New tasks start in 'backlog' — "
+    "nothing is pickable until it's been through the planning-a-task skill and approved into "
+    "'planned', so there is no separate 'ready but unplanned' column any more.",
     {
         "goal": {**STR, "description": "Short title — the outcome, not a verb like 'verify X'."},
         "description": {
@@ -340,7 +360,7 @@ def _get_on_with_it(why: str) -> None:
         },
         "priority": {**STR, "enum": list(TASK_PRIORITIES), "description": "low | normal | high."},
         "due_at": {**STR, "description": "Optional due time, ISO 8601 (your local zone)."},
-        "status": {**STR, "enum": list(TASK_STATUSES), "description": "Defaults to 'todo'."},
+        "status": {**STR, "enum": list(TASK_STATUSES), "description": "Defaults to 'backlog'."},
         "project_id": {**INT, "description": "Optional: the project this task belongs to."},
         "milestone_id": {
             **INT,
@@ -377,7 +397,7 @@ def add_task(path: Path, args: dict):
     # the pile. Scoped to the same project so unrelated look-alikes aren't collapsed.
     new_sig = stall.signature(f"{goal} {description}")
     for existing in repo.tasks.list_tasks(path):
-        if existing.get("status") in _SETTLED or existing.get("project_id") != project_id:
+        if existing.get("status") in TASK_SETTLED or existing.get("project_id") != project_id:
             continue
         prior = stall.signature(f"{existing['goal']} {existing.get('description') or ''}")
         if stall.similar(new_sig, prior):
@@ -396,7 +416,7 @@ def add_task(path: Path, args: dict):
         open_here = sum(
             1
             for t in repo.tasks.list_tasks(path)
-            if t.get("milestone_id") == milestone_id and t.get("status") not in _SETTLED
+            if t.get("milestone_id") == milestone_id and t.get("status") not in TASK_SETTLED
         )
         if open_here >= cap:
             return {
@@ -407,12 +427,13 @@ def add_task(path: Path, args: dict):
                 ),
             }
 
-    # A task attached to a milestone is a roadmap being laid out, and a roadmap is not started
-    # halfway through writing it. Defaulting those to `backlog` is what stops him picking up
-    # task one while the third is still being typed — which is what happened, and what made
-    # scaffolding a project feel like a race. A standalone errand still lands in `todo`,
-    # because filing one of those *is* asking for it to happen.
-    status = args.get("status") or ("backlog" if milestone_id else "todo")
+    # Everything starts in `backlog` now, milestone or not — the old split (a standalone errand
+    # landing straight in `todo`, ready to pick up) does not have anywhere to go any more, because
+    # nothing is pickable at all until it has been through the planning-a-task skill and someone
+    # has approved it into `planned`. The problem `backlog`-for-milestones originally solved — a
+    # roadmap being laid out is not started halfway through writing it — is now just true of every
+    # task by construction, not a special case for the ones filed under a milestone.
+    status = args.get("status") or "backlog"
     made = repo.tasks.add_task(
         path,
         goal,
@@ -433,7 +454,7 @@ def add_task(path: Path, args: dict):
     # And something actionable is a reason to get on with it. The loop only wakes for a session
     # that is working, so before this a task filed in a conversation sat there until someone
     # found the button — you asked for a thing, he wrote it down, and you both waited.
-    if status in _ACTIONABLE:
+    if status in TASK_ACTIVE:
         reopened = _reopen_if_finished(path, made.get("project_id"))
         _get_on_with_it(f"new task: {goal[:40]}")
         if reopened:
@@ -454,11 +475,15 @@ def list_tasks(path: Path, args: dict):
 
 @tool(
     "update_task",
-    "Update a task — move it between columns (backlog/todo/doing/waiting/done/dropped), "
-    "or change its goal, description, priority, due date, or which project/milestone it belongs to. "
-    "Move it to 'doing' when you start, 'done' when finished, 'dropped' if you're giving up. "
-    "Marking the last task of a milestone 'done' auto-completes that milestone, and completing "
-    "all of a project's milestones auto-completes the project — so just keep tasks honest. "
+    "Update a task — move it between columns (backlog/planning/planned/working/waiting/done/"
+    "dropped), or change its goal, description, priority, due date, or which project/milestone "
+    "it belongs to. New work starts in 'backlog'. Move it to 'planning' once you've drafted a "
+    "plan with the planning-a-task skill and it's ready for their look; to 'planned' once they "
+    "approve it; to 'working' once you actually start; 'done' when finished, 'dropped' if you're "
+    "giving up. ('review' is not yours to choose — closing a brief-carrying task while nobody is "
+    "watching lands it there on its own; see verification below.) Marking the last task of a "
+    "milestone 'done' auto-completes that milestone, and completing all of a project's milestones "
+    "auto-completes the project — so just keep tasks honest. "
     "Once a task is 'done' or 'dropped', leave it alone — don't re-work it. "
     "Moving a task with a written brief to 'done' REQUIRES `verification` — see below.",
     {

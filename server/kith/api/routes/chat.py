@@ -108,11 +108,24 @@ def _build_messages(messages, config, conversation_id: str = ""):
     if fresh is not None and conversation_id:
         conversations.record_summary(conversation_id, fresh["through"], fresh["text"])
     for message in folded:
-        if message.get("role") == "system":
+        role = message.get("role")
+        if role == "system":
             # The folded brief. Passed straight through — it carries no attachments.
             out.append({"role": "system", "content": str(message.get("content") or "")})
             continue
-        if message.get("role") not in ("user", "assistant"):
+        if role == "assistant" and message.get("tool_calls"):
+            # A replayed tool call from an earlier turn (see `conversations.full_messages`).
+            # Nothing to attach and no empty-content check applies — it carries no `content`
+            # at all, that's not the same as having nothing to say.
+            out.append(
+                {"role": "assistant", "content": message.get("content"), "tool_calls": message["tool_calls"]}
+            )
+            continue
+        if role == "tool":
+            # A replayed tool result. Passed straight through, same reason.
+            out.append({"role": "tool", "tool_name": message.get("tool_name", ""), "content": message.get("content", "")})
+            continue
+        if role not in ("user", "assistant"):
             continue
         # An assistant turn with nothing in it carries no information and is refused by some
         # providers outright — "the message at position N with role 'assistant' must not be
@@ -298,6 +311,14 @@ class _Recorder:
         self.said: list[str] = []
         #: The latest context reading, written once when the turn ends. See `saw`.
         self.context: dict = {}
+        #: The FIRST reading of the turn — round 1, before this turn's own tool calls added
+        #: anything. That makes it the size of everything actually *persisted* going into this
+        #: turn: persona, folded brief, prose said so far, tool schemas. Round-to-round growth
+        #: within a turn is real but thrown away on the next one (see `history.py`'s docstring
+        #: on why tool history isn't replayed) — so `self.context` bounces with how much work a
+        #: given turn happened to do, while this climbs steadily with the conversation itself
+        #: and is what a meter meant to answer "how much of my history is in here" should show.
+        self.baseline_context: dict = {}
         self.folded = False
 
     def saw(self, event: dict) -> None:
@@ -316,6 +337,8 @@ class _Recorder:
             # window rather than something that happened — so the last one is the only one still
             # true, and forty categorised breakdowns in the transcript would all say what it
             # says. Written once in `finish`.
+            if not self.baseline_context:
+                self.baseline_context = event.get("context") or {}
             self.context = event.get("context") or {}
             return
         if kind == "compacting":
@@ -336,7 +359,7 @@ class _Recorder:
             conversations.record_event(
                 self.conversation_id,
                 "context",
-                {"context": self.context, "folded": self.folded},
+                {"context": self.context, "baseline": self.baseline_context, "folded": self.folded},
             )
         if error:
             conversations.record_event(self.conversation_id, "error", {"message": error})
@@ -500,7 +523,7 @@ class _MindFeed:
 )
 def chat(payload):
     config = merge_overrides(default_config(), payload.get("config") or {})
-    history = payload.get("messages") or []
+    client_history = payload.get("messages") or []
 
     # Which conversation this belongs to. Opened on the first message rather than when the
     # window opens, so idly launching the app does not litter the history with empties.
@@ -509,10 +532,21 @@ def chat(payload):
     # decides which project's memory he is shown, and building the prompt first meant that
     # question was asked with no session to ask it about.
     conversation_id = str(payload.get("conversationId") or "").strip()
-    latest = next((m.get("content", "") for m in reversed(history) if m.get("role") == "user"), "")
-    if not conversation_id:
+    latest_message = next((m for m in reversed(client_history) if m.get("role") == "user"), None)
+    latest = (latest_message or {}).get("content", "") or ""
+    if conversation_id:
+        # The client's own copy is prose-only by design (it strips tool calls before ever
+        # sending them) and everything in it but the message just typed is now ignored —
+        # the transcript rebuilds the real thing, tool history included. Taken whole rather
+        # than just its text, so an attachment riding on it isn't dropped now that it's no
+        # longer simply "the tail of the list we were using anyway".
+        history_messages = conversations.full_messages(conversation_id) + [
+            latest_message or {"role": "user", "content": latest}
+        ]
+    else:
         conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
-    messages = _build_messages(history, config, conversation_id)
+        history_messages = client_history
+    messages = _build_messages(history_messages, config, conversation_id)
     conversations.record(AGENT_DB_PATH, conversation_id, "user", latest)
 
     def generate():

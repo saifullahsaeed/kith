@@ -34,7 +34,7 @@ BRIEF = (
 )
 
 
-def _a_task(db: Path, status: str = "doing") -> dict:
+def _a_task(db: Path, status: str = "working") -> dict:
     return repo.tasks.add_task(
         db, "Implement the frontend chooser", "high", None, BRIEF, status, "kith", None, None
     )
@@ -119,7 +119,7 @@ class TestReviewIsOutOfReachOfTicks:
         project = repo.projects.add_project(db, "portal", "", "")
         milestone = repo.projects.add_milestone(db, project["id"], "the foundation", None)
         task = repo.tasks.add_task(
-            db, "do the thing", "normal", None, BRIEF, "doing", "kith", project["id"], milestone["id"]
+            db, "do the thing", "normal", None, BRIEF, "working", "kith", project["id"], milestone["id"]
         )
         repo.tasks.update_task(db, task["id"], status="review")
         assert repo.projects.get_project(db, project["id"])["status"] == "active"
@@ -130,7 +130,7 @@ class TestReviewIsOutOfReachOfTicks:
 
 class TestChatIsShownTheQueue:
     def test_nothing_to_say_when_nothing_waits(self, db: Path):
-        _a_task(db, status="doing")
+        _a_task(db, status="working")
         assert memory_context.review_block(db) == ""
 
     def test_a_waiting_task_is_listed(self, db: Path):
@@ -144,7 +144,7 @@ class TestChatIsShownTheQueue:
         _a_task(db, status="review")
         block = memory_context.review_block(db)
         assert "status='done'" in block
-        assert "status='todo'" in block
+        assert "status='working'" in block
 
     def test_it_asks_for_a_spot_check_not_a_re_audit(self, db: Path):
         """Re-doing the work to check the work costs more attention than the delegation saved."""
@@ -197,7 +197,7 @@ class TestTheCeiling:
         runner_module = sys.modules["kith.autonomy.runner"]
         monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
         tuning.apply({"task_tick_cap": 3})
-        task = _a_task(db, status="doing")
+        task = _a_task(db, status="working")
         self._ticks_on(db, task["goal"], 3)
 
         stopped = runner_module.AutonomyRunner()._over_the_task_cap(task["id"])
@@ -212,7 +212,7 @@ class TestTheCeiling:
         runner_module = sys.modules["kith.autonomy.runner"]
         monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
         tuning.apply({"task_tick_cap": 3})
-        task = _a_task(db, status="doing")
+        task = _a_task(db, status="working")
         self._ticks_on(db, task["goal"], 4)
         runner_module.AutonomyRunner()._over_the_task_cap(task["id"])
 
@@ -231,10 +231,10 @@ class TestTheCeiling:
         runner_module = sys.modules["kith.autonomy.runner"]
         monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
         tuning.apply({"task_tick_cap": 12})
-        task = _a_task(db, status="doing")
+        task = _a_task(db, status="working")
         self._ticks_on(db, task["goal"], 5)
         assert runner_module.AutonomyRunner()._over_the_task_cap(task["id"]) is False
-        assert repo.tasks.task_detail(db, task["id"])["status"] == "doing"
+        assert repo.tasks.task_detail(db, task["id"])["status"] == "working"
 
     def test_zero_switches_it_off(self, db: Path, monkeypatch):
         import sys
@@ -244,7 +244,7 @@ class TestTheCeiling:
         runner_module = sys.modules["kith.autonomy.runner"]
         monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
         tuning.apply({"task_tick_cap": 0})
-        task = _a_task(db, status="doing")
+        task = _a_task(db, status="working")
         self._ticks_on(db, task["goal"], 99)
         assert runner_module.AutonomyRunner()._over_the_task_cap(task["id"]) is False
 

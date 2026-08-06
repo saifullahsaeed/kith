@@ -139,7 +139,7 @@ const KIND_ICON: Record<TimelineKind, ReactNode> = {
   tool: <Wrench className="size-3.5 text-rose-500" />,
 };
 // Mirrors TASK_STATUSES on the server — see the note in task-detail.tsx.
-const TASK_STATUSES = ["backlog", "todo", "doing", "review", "waiting", "done", "dropped"];
+const TASK_STATUSES = ["backlog", "planning", "planned", "working", "review", "waiting", "done", "dropped"];
 const PROJECT_STATUSES = ["active", "done", "paused", "archived"];
 /** How each kind reads in a "Delete this …?" question. */
 const KIND_LABEL: Record<string, string> = {
@@ -232,7 +232,7 @@ export function ControlPanel({
   // was cost — polling the whole snapshot every six seconds forever — and the fix for that
   // is to poll at the rate the situation deserves rather than to make someone manage it.
   // "Is anything happening" — a task in progress, or a tick running at all. The first version
-  // only looked at `doing`, so between picking a task up and marking it doing he was working
+  // only looked at `working`, so between picking a task up and marking it working he was working
   // and the panel was refreshing every twenty seconds.
   const [ticking, setTicking] = useState(false);
   useEffect(() => {
@@ -251,7 +251,7 @@ export function ControlPanel({
       window.clearInterval(timer);
     };
   }, []);
-  const busy = ticking || Boolean(snap?.tasks?.some((task) => task.status === "doing"));
+  const busy = ticking || Boolean(snap?.tasks?.some((task) => task.status === "working"));
   useEffect(() => {
     const id = window.setInterval(load, busy ? 3_000 : 20_000);
     return () => window.clearInterval(id);
@@ -1291,8 +1291,12 @@ function taskTally(tasks: BrainSnapshot["tasks"]) {
   const of = (...s: string[]) => tasks.filter((t) => s.includes(t.status)).length;
   return {
     total: tasks.length,
-    open: of("backlog", "todo"),
-    doing: of("doing"),
+    open: of("backlog", "planned"),
+    // Counted apart from `open`, for the same reason `review` is counted apart from `done`
+    // below: a plan waiting on a decision is not the same thing as work nobody has looked at
+    // yet, even though both currently show as "nothing is happening on this."
+    planning: of("planning"),
+    working: of("working"),
     // Counted apart from `done`, because that is the whole point of the column: work he believes
     // is finished but nobody has checked. Rolling it into `done` would put the project's progress
     // bar at 100% on his own say-so.
@@ -1464,7 +1468,7 @@ function TaskTally({ tally }: { tally: ReturnType<typeof taskTally> }) {
   if (!tally.total) return <span className="text-muted-foreground/70">no tasks yet</span>;
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
-      {tally.doing ? <span className="text-emerald-500">{tally.doing} doing</span> : null}
+      {tally.working ? <span className="text-emerald-500">{tally.working} working</span> : null}
       {tally.waiting ? (
         <span className="font-medium text-kith">{tally.waiting} waiting on you</span>
       ) : null}
@@ -1474,6 +1478,13 @@ function TaskTally({ tally }: { tally: ReturnType<typeof taskTally> }) {
       {tally.review ? (
         <span className="font-medium text-amber-600 dark:text-amber-400">
           {tally.review} to check
+        </span>
+      ) : null}
+      {/* Same shape as `review`, one step earlier: a plan waiting on a decision before any
+          work starts, rather than work waiting on a check after it's done. */}
+      {tally.planning ? (
+        <span className="font-medium text-violet-600 dark:text-violet-400">
+          {tally.planning} to approve
         </span>
       ) : null}
       {tally.open ? <span>{tally.open} to do</span> : null}
@@ -2060,11 +2071,13 @@ function TaskLane({
     milestones.find((m) => m.id === id)?.title ?? null;
 
   const rank = (task: BrainSnapshot["tasks"][number]) => {
-    if (task.status === "doing") return 0;
+    if (task.status === "working") return 0;
     if (task.status === "waiting") return 1;
-    // Just under "waiting on you", because both are the person's turn — this one just needs a look
-    // rather than an answer. Above "to do", so a task that is finished and only needs checking does
-    // not sit below work that has not started.
+    // Just under "waiting on you", because both are the person's turn — these just need a look
+    // rather than an answer. A plan (before work starts) and finished work (after) are the same
+    // shape of "your turn," so they rank together, ahead of "to do", so neither sits below work
+    // that has not started at all.
+    if (task.status === "planning") return 2;
     if (task.status === "review") return 2;
     if (task.milestone_id && blocked.has(task.milestone_id)) return 4;
     return 3;
@@ -2121,7 +2134,7 @@ function TaskLane({
             <li key={task.id} className="group flex items-center gap-3 px-3 py-2.5">
               <button
                 onClick={() =>
-                  update("task", task.id, { status: task.status === "done" ? "todo" : "done" })
+                  update("task", task.id, { status: task.status === "done" ? "working" : "done" })
                 }
                 aria-label={task.status === "done" ? "Reopen" : "Mark done"}
                 className={cn(
@@ -2141,8 +2154,11 @@ function TaskLane({
               >
                 <span className="block truncate text-sm">{task.goal}</span>
                 <span className="text-muted-foreground/70 flex items-center gap-1.5 text-[10px]">
-                  {task.status === "doing" ? (
+                  {task.status === "working" ? (
                     <span className="text-kith">working on it</span>
+                  ) : null}
+                  {task.status === "planning" ? (
+                    <span className="text-violet-500/90">plan ready for your look</span>
                   ) : null}
                   {task.status === "waiting" ? (
                     <span className="text-orange-400/90">waiting on you</span>

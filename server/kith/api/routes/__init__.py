@@ -13,6 +13,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     autonomy,
     brain,
     chat,
+    checkpoints,
     config,
     conversations,
     health,

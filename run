@@ -9,30 +9,104 @@
 # the working command was six lines long and lived in someone's shell history.
 #
 #   ./run          build the interface if it changed, start the server, open the window
+#   ./run dev      the same window, but both halves reload on save (see below)
 #   ./run server   backend only (for a browser at 127.0.0.1:8611, or a second window)
-#   ./run stop     stop both
+#   ./run stop     stop everything
 #   ./run --fresh  rebuild the interface even if it looks current
+#
+# `dev` differs from `all` in where the *page* comes from, which is the only thing that
+# decides whether a saved .tsx shows up without a restart. `all` builds ui/dist and the
+# server serves it, so the window holds a snapshot taken at launch. `dev` runs the Vite dev
+# server and points the window at that instead, so the interface hot-reloads, and turns on
+# the server's own reloader so a saved .py restarts it. The server still answers on 8611
+# either way — in `dev` the Vite proxy forwards /api to it, adding the API token on the way.
+#
+# Two things do not reload, and knowing which saves a confused minute:
+#   * desktop/src — Electron main-process code. `./run dev` again.
+#   * The autonomy loop is off under `dev` (KITH_NO_BACKGROUND) — a reloader restart resumes it
+#     mid-step and can re-fire a reminder that already fired. Use plain `./run` when you want it.
+#     MCP servers *do* start under `dev`: they were skipped here at first, which quietly left the
+#     model with no MCP tools for a whole session, and that is far worse than the npx process a
+#     reload leaks.
 #
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 port=8611
 origin="http://127.0.0.1:${port}"
+vite_port=8610
+vite_origin="http://127.0.0.1:${vite_port}"
 log=/tmp/kith-server.log
 electron_log=/tmp/kith-electron.log
+vite_log=/tmp/kith-vite.log
 
 say() { printf '  %s\n' "$*"; }
 
 answering() { curl -fsS -o /dev/null --max-time 2 "${origin}/api/health" 2>/dev/null; }
 
-stop_all() {
+# The page, not the API: Vite answers / with HTML long before it has proxied anything, and
+# what the window needs is the document. Asking /api/health here would test the server twice
+# and tell us nothing about whether Vite is ready to serve.
+serving_ui() { curl -fsS -o /dev/null --max-time 2 "${vite_origin}/" 2>/dev/null; }
+
+# Whether the server is serving the interface itself, as `all` mode needs it to. `-f` is doing
+# the work: without KITH_UI_DIST the SPA routes are never registered, so / is a 404 with a JSON
+# body and curl fails. Asked of / rather than /api/health, because a server can be perfectly
+# healthy and still have no page on it — which is precisely the state that opens a window on
+# {"message":"Not Found"} and reads as the app being broken.
+serving_page() { curl -fsS -o /dev/null --max-time 2 "${origin}/" 2>/dev/null; }
+
+# Just the backend. Separate from stop_all because `dev` has to replace a non-reloading server
+# without touching anything else: the first version of this called stop_all there, which killed
+# the Vite server two lines after starting it, and the window then opened on nothing.
+stop_server() {
   # By command line rather than a pidfile: a stale pidfile after a crash is worse than
   # no pidfile, because `stop` then silently does nothing and the next start attaches to
   # the process you thought you had killed.
-  pkill -f "electron \." 2>/dev/null || true
   pkill -f "${here}/server/app.py" 2>/dev/null || true
   pkill -f "app.py" 2>/dev/null || true
   sleep 1
+}
+
+stop_all() {
+  # Three patterns, because "the app" is three different process names depending on how it was
+  # started, and the original single `electron \.` matched none of them on macOS:
+  #   * `npx electron .`      → …/dist/Electron.app/Contents/MacOS/Electron .   (capital E,
+  #                             so the lowercase pattern never matched — pkill -f is case
+  #                             sensitive, and this quietly did nothing for as long as it existed)
+  #   * a packaged build      → …/desktop/release/mac-arm64/Kith.app/…/MacOS/Kith
+  #   * an installed build    → /Applications/Kith.app/…/MacOS/Kith
+  # A stale packaged window surviving `./run stop` is not cosmetic: it holds the
+  # single-instance lock, so every later `./run` exits instantly and silently and leaves you
+  # looking at the old window, which is a genuinely hard afternoon to debug.
+  pkill -f "node_modules/electron/dist/Electron.app" 2>/dev/null || true
+  pkill -f "${here}/desktop/release/.*/Kith" 2>/dev/null || true
+  osascript -e 'tell application "Kith" to quit' 2>/dev/null || true
+  # Matched on the path, not on "vite": a bare pkill -f vite would also match anyone else's
+  # unrelated vite on this machine. This is the one in ui/.
+  pkill -f "${here}/ui/node_modules/.bin/vite" 2>/dev/null || true
+  pkill -f "${here}/ui/node_modules/vite/bin/vite.js" 2>/dev/null || true
+  stop_server
+}
+
+start_vite() {
+  if serving_ui; then
+    say "vite already serving on ${vite_port}"
+    return
+  fi
+  say "starting vite…"
+  (
+    cd "${here}/ui"
+    nohup npm run dev </dev/null >"$vite_log" 2>&1 &
+    disown
+  )
+  for _ in $(seq 1 40); do
+    serving_ui && { say "interface (hot): ${vite_origin}"; return; }
+    sleep 0.5
+  done
+  say "vite did not come up — last lines of ${vite_log}:"
+  tail -12 "$vite_log" | sed 's/^/      /'
+  exit 1
 }
 
 build_ui() {
@@ -52,10 +126,46 @@ build_ui() {
   }
 }
 
+# Whether the server that is currently answering was started with its reloader on. The command
+# line is plain `python app.py` either way, so the environment is the only place this shows —
+# and `ps eww` is what prints it, for your own processes.
+#
+# Deliberately no `-o command=`: adding an output format makes macOS print argv and drop the
+# environment entirely, so the check silently answers "not reloading" for a server that is.
+# That is worse than no check, because the caller then restarts a healthy server every time.
+server_is_reloading() {
+  local pids
+  pids="$(pgrep -f "app.py" 2>/dev/null | tr '\n' ',' | sed 's/,$//')"
+  [[ -n "$pids" ]] || return 1
+  ps eww -p "$pids" 2>/dev/null | grep -q "KITH_RELOAD=1"
+}
+
+# $1: "dev" to run with the reloader on and background work off. Anything else is the normal
+# server, serving the built interface itself.
 start_server() {
+  local mode="${1:-}"
+  # Each mode needs a different thing of the server, so "something is answering" is not enough
+  # to attach to. Both directions of getting this wrong are silent and look like a broken app:
+  # attach to a non-reloading server in dev and no .py change ever takes effect; attach to a
+  # dev server in normal mode and the window opens on {"message":"Not Found"}, because a dev
+  # server has no KITH_UI_DIST and therefore no page on it. So each mode checks for what it
+  # actually requires and restarts if it is not there. Loud, because a restart does interrupt
+  # whatever he was in the middle of.
   if answering; then
-    say "server already answering on ${port}"
-    return
+    if [[ "$mode" == "dev" ]]; then
+      if server_is_reloading; then
+        say "reloading server already answering on ${port}"
+        return
+      fi
+      say "a non-reloading server is on ${port} — restarting it so .py changes take effect"
+    else
+      if serving_page; then
+        say "server already answering on ${port}"
+        return
+      fi
+      say "the server on ${port} has no interface on it — restarting it so the window has a page"
+    fi
+    stop_server
   fi
   local python="${here}/server/.venv/bin/python"
   [[ -x "$python" ]] || { say "no virtualenv at server/.venv — run: cd server && uv sync"; exit 1; }
@@ -63,10 +173,21 @@ start_server() {
   say "starting the server…"
   (
     cd "${here}/server"
+    # KITH_UI_DIST is deliberately unset in dev: the window is pointed at Vite, so a second
+    # copy of the interface served from a stale ui/dist could only ever be the wrong one to
+    # end up looking at. 8611 is the API and nothing else there.
+    if [[ "$mode" == "dev" ]]; then
+      # PYTHONUNBUFFERED because stdout to a file is block-buffered: "Detected change …
+      # reloading" then sits in an 8KB buffer, so the log says nothing happened for minutes
+      # after it did. That made this look broken while it was working, when I tested it.
+      export KITH_RELOAD=1 KITH_NO_BACKGROUND=1 PYTHONUNBUFFERED=1
+    else
+      export KITH_UI_DIST="${here}/ui/dist"
+    fi
     # </dev/null matters: without it the child inherits this shell's stdin, and if the
     # caller piped us anywhere (./run | tee, ./run | sed) the pipe never closes and the
     # script appears to hang long after both processes are up and answering.
-    KITH_UI_DIST="${here}/ui/dist" nohup "$python" app.py </dev/null >"$log" 2>&1 &
+    nohup "$python" app.py </dev/null >"$log" 2>&1 &
     disown
   )
 
@@ -81,16 +202,60 @@ start_server() {
   exit 1
 }
 
+# Any other copy of the app already holding the single-instance lock. Checked by process rather
+# than by asking the OS, because there is no way to ask: `requestSingleInstanceLock` only
+# answers from inside an Electron process, and by then it is too late to say anything useful.
+another_instance() {
+  pgrep -f "node_modules/electron/dist/Electron.app" >/dev/null 2>&1 ||
+    pgrep -f "/Kith.app/Contents/MacOS/Kith" >/dev/null 2>&1
+}
+
+# $1: "dev" to point the window at the Vite dev server rather than at the server's own copy.
 start_app() {
+  local mode="${1:-}"
+
+  # The failure this prevents is the worst kind: `npx electron .` loses the single-instance race,
+  # calls app.exit(0) before it can write a line to its log, and then the `activate` below pulls
+  # the *other* copy to the front. So the script says "opening the window…", a window appears,
+  # and it is not the one it just tried to open — showing whatever that copy is pointed at. An
+  # empty /tmp/kith-electron.log is the only evidence, and it looks like nothing happened at all.
+  if another_instance; then
+    say "another copy of Kith is already open, and it holds the single-instance lock —"
+    say "so this would silently do nothing and just refocus that one. Close it first, or:"
+    say "    ./run stop && ./run ${mode:-}"
+    exit 1
+  fi
+
   say "opening the window…"
   (cd "${here}/desktop" && npm run build >/tmp/kith-desktop-build.log 2>&1) || {
     say "the desktop shell failed to compile — see /tmp/kith-desktop-build.log"
     exit 1
   }
-  (cd "${here}/desktop" && nohup npx electron . </dev/null >"$electron_log" 2>&1 & disown)
+  (
+    cd "${here}/desktop"
+    # ELECTRON_RUN_AS_NODE makes the electron binary behave as plain Node — `require("electron")`
+    # then returns a path string instead of the API, so `app` is undefined and the shell dies on
+    # its first line with a TypeError that names none of this. Some editors' integrated terminals
+    # export it for their own tooling, and inheriting it is not a thing to debug twice.
+    unset ELECTRON_RUN_AS_NODE
+    # One variable does the whole job: the shell reads KITH_ORIGIN for the page it loads, for
+    # its health probe, for the allowlist that decides which URLs stay in the window, and for
+    # openInApp's fallback. Pointing it at Vite moves all four together, which is why this
+    # needs no --dev branch inside the shell itself.
+    if [[ "$mode" == "dev" ]]; then
+      export KITH_ORIGIN="${vite_origin}"
+    fi
+    nohup npx electron . </dev/null >"$electron_log" 2>&1 &
+    disown
+  )
   sleep 3
   osascript -e 'tell application "Kith" to activate' 2>/dev/null || true
-  say "logs: ${log} · ${electron_log}"
+  if [[ "$mode" == "dev" ]]; then
+    say "logs: ${log} · ${electron_log} · ${vite_log}"
+    say "saved .tsx reloads itself · saved .py restarts the server · desktop/src needs ./run dev again"
+  else
+    say "logs: ${log} · ${electron_log}"
+  fi
 }
 
 case "${1:-all}" in
@@ -102,13 +267,20 @@ case "${1:-all}" in
     build_ui "${2:-}"
     start_server
     ;;
+  dev)
+    # No build_ui: Vite compiles from source on demand, so a build here would only produce a
+    # ui/dist nothing in this mode reads.
+    start_vite
+    start_server dev
+    start_app dev
+    ;;
   all | --fresh)
     build_ui "${1:-}"
     start_server
     start_app
     ;;
   *)
-    say "usage: ./run [server|stop|--fresh]"
+    say "usage: ./run [dev|server|stop|--fresh]"
     exit 2
     ;;
 esac

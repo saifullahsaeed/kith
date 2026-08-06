@@ -62,6 +62,40 @@ class TestWhatGetsWrittenDown:
         assert len(readings) == 1, f"{len(readings)} readings written; forty rounds would be forty"
         assert readings[0]["context"]["used"] == 213_700
 
+    def test_the_baseline_is_the_first_reading_not_the_last(self, db: Path, tmp_path, monkeypatch):
+        """The meter a person wants answers "how much of my history is in here", which is what
+        round one's reading is — before this turn's own tool calls piled anything on top of it.
+        A turn that does five rounds of searching should not make the *next* turn's baseline
+        look like it did too; only the first round of *this* turn counts."""
+        monkeypatch.setattr(conversations, "directory", lambda: tmp_path)
+        recorder = _the_recorder_class()("c1b")
+        for used in (10_000, 90_000, 213_700):
+            recorder.saw({"type": "context", "context": {**LEDGER, "used": used}})
+        recorder.finish()
+
+        reading = next(
+            json.loads(line)
+            for line in (tmp_path / "c1b.jsonl").read_text().splitlines()
+            if line.strip() and json.loads(line).get("type") == "context"
+        )
+        assert reading["baseline"]["used"] == 10_000
+        assert reading["context"]["used"] == 213_700
+
+    def test_a_single_round_turn_has_a_matching_baseline_and_context(self, db: Path, tmp_path, monkeypatch):
+        """The ordinary case — a reply with no tool calls has nothing to grow across rounds, so
+        there is only one reading and both fields say the same thing."""
+        monkeypatch.setattr(conversations, "directory", lambda: tmp_path)
+        recorder = _the_recorder_class()("c1c")
+        recorder.saw({"type": "context", "context": LEDGER})
+        recorder.finish()
+
+        reading = next(
+            json.loads(line)
+            for line in (tmp_path / "c1c.jsonl").read_text().splitlines()
+            if line.strip() and json.loads(line).get("type") == "context"
+        )
+        assert reading["baseline"] == reading["context"]
+
     def test_a_turn_that_never_folded_says_so(self, db: Path, tmp_path, monkeypatch):
         monkeypatch.setattr(conversations, "directory", lambda: tmp_path)
         recorder = _the_recorder_class()("c2")
@@ -124,3 +158,30 @@ class TestReopeningTheConversation:
         reading = next(part for part in parts if part["kind"] == "context")
         assert reading["context"]["used"] == 213_700
         assert reading["folded"] is True
+
+    def test_the_baseline_comes_back_too(self, db: Path, tmp_path, monkeypatch):
+        monkeypatch.setattr(conversations, "directory", lambda: tmp_path)
+        recorder = _the_recorder_class()("c7")
+        recorder.saw({"type": "context", "context": {**LEDGER, "used": 10_000}})
+        recorder.saw({"type": "context", "context": {**LEDGER, "used": 213_700}})
+        recorder.finish()
+
+        parts = [part for turn in conversations.timeline("c7") for part in turn["parts"]]
+        reading = next(part for part in parts if part["kind"] == "context")
+        assert reading["baseline"]["used"] == 10_000
+        assert reading["context"]["used"] == 213_700
+
+    def test_an_older_conversation_with_no_baseline_field_does_not_break(self, db: Path, tmp_path, monkeypatch):
+        """A transcript written before this field existed. `timeline()` must not crash reading
+        it, and the UI's fallback (`baseline ?? context`) is what makes it show something
+        sensible rather than nothing."""
+        monkeypatch.setattr(conversations, "directory", lambda: tmp_path)
+        path = tmp_path / "c8.jsonl"
+        path.write_text(
+            json.dumps({"type": "context", "at": "2026-01-01T00:00:00Z", "context": LEDGER, "folded": False})
+            + "\n"
+        )
+        parts = [part for turn in conversations.timeline("c8") for part in turn["parts"]]
+        reading = next(part for part in parts if part["kind"] == "context")
+        assert reading["baseline"] == {}
+        assert reading["context"]["used"] == 213_700

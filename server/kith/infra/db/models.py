@@ -57,7 +57,7 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     goal: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="todo")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="backlog")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     priority: Mapped[str] = mapped_column(Text, nullable=False, default="normal")
@@ -154,6 +154,10 @@ class Reminder(Base):
     note: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Which chat asked to be reminded, or None for one set outside any conversation. See
+    #: `kith.autonomy.runner._fire_conversation_reminders` — this is what lets firing report
+    #: back to the actual chat instead of whichever session the tick happened to be on.
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Message(Base):
@@ -250,6 +254,8 @@ class Schedule(Base):
     last_fired: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Same as `Reminder.conversation_id` — which chat this standing job reports back to.
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class CustomTool(Base):
@@ -304,3 +310,21 @@ class TickLog(Base):
     tokens_uncached: Mapped[int | None] = mapped_column(Integer, nullable=True)
     seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Checkpoint(Base):
+    """Bookkeeping for the UI only. The chain's own integrity lives in git, as
+    ``refs/kith/checkpoint`` and each commit's own parent link — see
+    ``kith.infra.workspace._take_checkpoint``. Losing this table would only cost the UI's
+    ability to list/correlate checkpoints; git would still have every one of them."""
+
+    __tablename__ = "checkpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repo_root: Mapped[str] = mapped_column(Text, nullable=False)
+    sha: Mapped[str] = mapped_column(Text, nullable=False)
+    tree_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trigger: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)

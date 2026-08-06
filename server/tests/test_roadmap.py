@@ -28,7 +28,9 @@ def milestone(db, project_id, title, status="todo"):
 
 
 def task(db, project_id, milestone_id, goal="do it"):
-    row = repo.tasks.add_task(db, goal, "", project_id=project_id, milestone_id=milestone_id)
+    row = repo.tasks.add_task(
+        db, goal, "", status="planned", project_id=project_id, milestone_id=milestone_id
+    )
     return row["id"]
 
 
@@ -59,7 +61,7 @@ class TestTheGate:
         first = milestone(db, project, "Design")
         second = milestone(db, project, "Build")
         repo.projects.add_dependency(db, second, first)
-        repo.tasks.add_task(db, "buy milk", "", project_id=project)
+        repo.tasks.add_task(db, "buy milk", "", status="planned", project_id=project)
         assert len(repo.tasks.active_tasks(db)) == 1
 
     def test_held_back_work_is_distinguishable_from_no_work(self, db, project):
@@ -242,7 +244,7 @@ class TestTheMilestoneLink:
         first = milestone(db, project, "Design")
         second = milestone(db, project, "Build")
         repo.projects.add_dependency(db, second, first)
-        row = repo.tasks.add_task(db, "loose", "", project_id=project, milestone_id=second)
+        row = repo.tasks.add_task(db, "loose", "", status="planned", project_id=project, milestone_id=second)
         assert repo.tasks.active_tasks(db) == []
         repo.tasks.set_task_milestone(db, row["id"], None)
         assert len(repo.tasks.active_tasks(db)) == 1

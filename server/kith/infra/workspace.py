@@ -145,7 +145,13 @@ __pycache__/
 _GIT_AUTHOR = ("Kith", "kith@localhost")
 
 
-def _git(*args: str, check: bool = False) -> ExecResult:
+def _git(
+    *args: str,
+    check: bool = False,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: int = 120,
+) -> ExecResult:
     """One git command where the work is happening, with an identity of its own.
 
     Deliberately not through :func:`run_command`: that asks the permission layer, and these
@@ -161,8 +167,18 @@ def _git(*args: str, check: bool = False) -> ExecResult:
 
     The same mistake as `base_dir` itself, one layer along: that fix taught *paths* to follow
     the project and nobody checked git.
+
+    ``cwd`` defaults to ``base_dir()`` for every existing caller, but a checkpoint restore
+    has to target the repo a checkpoint was actually *taken* in, which may not be
+    ``base_dir()`` any more by the time someone restores it — so it takes an explicit
+    override rather than trusting the ambient session.
+
+    ``env`` is for the checkpoint machinery's shadow index (``GIT_INDEX_FILE``); it must be
+    built as ``{**os.environ, ...}`` by the caller, never a bare dict, or git won't resolve
+    on ``PATH``. ``None`` (the default) means "inherit the real environment," identical to
+    every call site before this parameter existed.
     """
-    here = base_dir()
+    here = cwd or base_dir()
     proc = subprocess.run(
         [
             "git",
@@ -174,7 +190,8 @@ def _git(*args: str, check: bool = False) -> ExecResult:
         ],
         capture_output=True,
         cwd=str(here),
-        timeout=120,
+        timeout=timeout,
+        env=env,
     )
     out = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
     if check and proc.returncode != 0:
@@ -274,6 +291,205 @@ def log(limit: int = 20) -> str:
         return "git is not available on this machine."
     out = _git("log", f"-{max(1, min(limit, 200))}", "--format=%h %ad %s", "--date=format:%d %b %H:%M").output
     return _clip(out.strip()) or "No history yet."
+
+
+# --------------------------------------------------------------------------- #
+# Checkpoints
+# --------------------------------------------------------------------------- #
+#
+# `commit_all` is deliberate, by design — a commit is a claim that something is a
+# coherent step, and that has to stay a judgement, not a reflex. But "deliberate" also
+# means there is no safety net between commits, and he edits files unattended. This is
+# that net: a snapshot taken automatically before every change, that never touches the
+# real index, HEAD, or a branch, so it can run on every mutating call without any risk
+# of disturbing a commit someone is deliberately building toward.
+#
+# The mechanism is entirely git's own: `write-tree`/`commit-tree` against a *shadow*
+# index write commit objects with zero side effects on the real one, and a single
+# chained ref (`refs/kith/checkpoint`) keeps every checkpoint reachable — and therefore
+# safe from `git gc` — for as long as the ref points at the tip. The database row is
+# bookkeeping for the UI only; lose it and the chain in git is still intact.
+#
+# Restoring is a person's decision, never his — there is no tool here an agent calls.
+
+#: Under `refs/kith/`, not `refs/heads/*` or `refs/tags/*` — the same idea as
+#: `refs/stash`, so it stays out of `git branch`/`git tag`/most GUIs by default.
+_CHECKPOINT_REF = "refs/kith/checkpoint"
+
+#: Shorter than the general 120s: a checkpoint attempt sits in front of every mutating
+#: call in a turn, including a shell command in an otherwise read-only turn, so a slow
+#: one should fail fast rather than stall the whole turn.
+_CHECKPOINT_TIMEOUT = 20
+
+#: git's own spelling for "this ref must not exist yet" in `update-ref`'s compare-and-
+#: swap. An empty string is not the same thing and must not be used here.
+_NO_REF_YET = "0" * 40
+
+
+def _shadow_index(repo_root: Path) -> Path:
+    """A persistent, alternate index for checkpoint snapshots — never the repo's real
+    ``.git/index``.
+
+    Reused across checkpoints rather than a fresh temp file each time: git's stat-cache
+    carries over between calls, so a file that has not changed since the last checkpoint
+    costs a stat, not a re-hash.
+
+    Resolved via ``rev-parse --git-dir`` rather than a hardcoded ``repo_root / ".git"``,
+    because a ``git worktree`` checkout has a *file* there, not a directory — joining a
+    path onto that would raise.
+    """
+    git_dir = _git("rev-parse", "--git-dir", cwd=repo_root, timeout=_CHECKPOINT_TIMEOUT).output.strip()
+    resolved = Path(git_dir)
+    if not resolved.is_absolute():
+        resolved = repo_root / resolved
+    return resolved / "kith-checkpoint-index"
+
+
+def _take_checkpoint(here: Path, trigger: str) -> dict | None:
+    """Snapshot the repo `here` is in, before he changes anything in it. `None` when
+    there is nothing to checkpoint — no git, no repo that could be made one, or nothing
+    has changed since the last checkpoint.
+
+    Best-effort, like `commit_all`: a checkpoint that fails must never take down the
+    real change it was guarding, so every failure returns `None` rather than raising.
+    """
+    if not has_git():
+        return None
+    root_here = _repo_root(here)
+    if root_here is None:
+        if not ensure_repo():
+            return None
+        root_here = _repo_root(here)
+        if root_here is None:
+            return None
+
+    env = {**os.environ, "GIT_INDEX_FILE": str(_shadow_index(root_here))}
+    added = _git("add", "-A", cwd=root_here, env=env, timeout=_CHECKPOINT_TIMEOUT)
+    if added.exit_code != 0:
+        return None
+    tree = _git("write-tree", cwd=root_here, env=env, timeout=_CHECKPOINT_TIMEOUT)
+    if tree.exit_code != 0:
+        return None
+    tree_sha = tree.output.strip()
+
+    parent = _git("rev-parse", "--verify", "-q", _CHECKPOINT_REF, cwd=root_here, timeout=_CHECKPOINT_TIMEOUT)
+    parent_sha = parent.output.strip() if parent.exit_code == 0 else None
+    if parent_sha:
+        parent_tree = _git(
+            "rev-parse", "--verify", "-q", f"{parent_sha}^{{tree}}", cwd=root_here, timeout=_CHECKPOINT_TIMEOUT
+        ).output.strip()
+        if parent_tree == tree_sha:
+            return None  # nothing has changed since the last checkpoint
+
+    commit_args = ["commit-tree", tree_sha]
+    if parent_sha:
+        commit_args += ["-p", parent_sha]
+    commit_args += ["-m", f"checkpoint: before {trigger}"]
+    commit = _git(*commit_args, cwd=root_here, timeout=_CHECKPOINT_TIMEOUT)
+    if commit.exit_code != 0:
+        return None
+    new_sha = commit.output.strip()
+
+    updated = _git(
+        "update-ref",
+        _CHECKPOINT_REF,
+        new_sha,
+        parent_sha or _NO_REF_YET,
+        cwd=root_here,
+        timeout=_CHECKPOINT_TIMEOUT,
+    )
+    if updated.exit_code != 0:
+        return None  # lost a race with a concurrent checkpoint on the same repo
+
+    return {"sha": new_sha, "tree_sha": tree_sha, "parent_sha": parent_sha, "repo_root": str(root_here)}
+
+
+def _checkpoint_before_change(trigger: str) -> None:
+    """The hook: called right after a mutating call's permission check passes, before
+    the change itself happens. A no-op outside a real turn, and at most once per repo
+    per turn — see `session_context.in_turn`/`turn_notes` for why both of those matter.
+    """
+    from kith.services import session_context
+
+    if not session_context.in_turn():
+        return
+    here = base_dir()
+    root_here = _repo_root(here) or here
+    notes = session_context.turn_notes()
+    key = f"checkpointed:{root_here}"
+    if notes.get(key):
+        return
+    notes[key] = True  # set before attempting — a failure here should not retry all turn
+    try:
+        result = _take_checkpoint(root_here, trigger)
+        if result is None:
+            return
+        from kith.config import AGENT_DB_PATH
+        from kith.infra.db.repositories import checkpoints as checkpoint_repo
+
+        checkpoint_repo.add_checkpoint(
+            AGENT_DB_PATH,
+            repo_root=result["repo_root"],
+            sha=result["sha"],
+            tree_sha=result["tree_sha"],
+            parent_sha=result["parent_sha"],
+            conversation_id=session_context.current() or None,
+            trigger=trigger,
+        )
+    except Exception:
+        pass  # a checkpoint must never take down the real change it was guarding
+
+
+def _mid_git_operation(repo_root: Path) -> str | None:
+    """The name of whatever git operation is half-finished here, or `None`. `read-tree
+    --reset` bypasses the safety check that would otherwise refuse to run mid-merge —
+    which means running it anyway would silently discard someone's unresolved conflict
+    resolution."""
+    git_dir = _git("rev-parse", "--git-dir", cwd=repo_root, timeout=_CHECKPOINT_TIMEOUT).output.strip()
+    resolved = Path(git_dir)
+    if not resolved.is_absolute():
+        resolved = repo_root / resolved
+    for name, marker in (
+        ("merge", "MERGE_HEAD"),
+        ("rebase", "rebase-merge"),
+        ("rebase", "rebase-apply"),
+        ("cherry-pick", "CHERRY_PICK_HEAD"),
+    ):
+        if (resolved / marker).exists():
+            return name
+    return None
+
+
+def restore_to_sha(repo_root: Path, sha: str) -> dict:
+    """Make the repo's real working tree and index exactly match a checkpoint. Takes one
+    more checkpoint of the current state first, unconditionally, so this is itself
+    undoable by restoring forward again.
+
+    ``git read-tree --reset -u`` alone is not enough: it only removes a working-tree file
+    if the file's entry is in the *real* index and absent from the target tree, and
+    nothing here has ever put anything into the real index — every checkpoint is taken
+    through the shadow index precisely so it never touches the real one. So the real
+    index has to be brought up to the *current* full state first (`add -A`), giving
+    `read-tree` an accurate "before" to diff the target tree against; only then does it
+    correctly delete a file that did not exist at checkpoint time. Verified against a
+    real repo before writing this, not assumed from documentation.
+    """
+    if not has_git():
+        raise WorkspaceError("git is not available on this machine.")
+    mid = _mid_git_operation(repo_root)
+    if mid:
+        raise WorkspaceError(f"{repo_root} has a {mid} in progress — finish or abort it in git before restoring.")
+
+    dirty_before = _git("status", "--porcelain", cwd=repo_root, timeout=_CHECKPOINT_TIMEOUT).output.strip()
+    safety = _take_checkpoint(repo_root, "restore")
+
+    synced = _git("add", "-A", cwd=repo_root, timeout=_CHECKPOINT_TIMEOUT)
+    if synced.exit_code != 0:
+        raise WorkspaceError(f"restore failed to read the current state: {synced.output.strip()[:300]}")
+    result = _git("read-tree", "--reset", "-u", sha, cwd=repo_root, timeout=_CHECKPOINT_TIMEOUT)
+    if result.exit_code != 0:
+        raise WorkspaceError(f"restore failed: {result.output.strip()[:300]}")
+    return {"dirty_before": dirty_before, "safety": safety}
 
 
 # --------------------------------------------------------------------------- #
@@ -580,6 +796,7 @@ def _capture(command: str, timeout: int) -> tuple[int, str]:
     backgrounding = _looks_backgrounded(command)
     if backgrounding:
         raise WorkspaceError(backgrounding)
+    _checkpoint_before_change("shell")
     # Where the command runs. The permission check above still measures against root(), so his own
     # folder AND the linked project both count as inside; but the command's cwd is the working base,
     # so relative paths in a shell line land in your project, not his scratch space.
@@ -847,6 +1064,7 @@ def write_file(path: str, content: str) -> str:
         raise WorkspaceError(f"content too large ({len(data)} bytes; max {_MAX_WRITE})")
     target = Path(resolve(path))
     permissions.require_path("write", target, root())
+    _checkpoint_before_change("write_file")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
@@ -995,6 +1213,7 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
     """
     target = Path(resolve(path))
     permissions.require_path("write", target, root())
+    _checkpoint_before_change("edit_file")
     if not target.is_file():
         raise WorkspaceError(f"there's no {path} to edit")
     try:
@@ -1057,6 +1276,11 @@ def edit_files(edits: list[dict]) -> dict:
         target = Path(resolve(raw))
         permissions.require_path("write", target, root())
         prepared.append((i, raw, target, edit))
+
+    # Once for the whole batch, not once per edit — the snapshot is "before any of the
+    # batch," matching the batch's own atomicity: nothing here is written until every edit
+    # has succeeded, so there is no in-between state worth a checkpoint of its own.
+    _checkpoint_before_change("edit_files")
 
     texts: dict[Path, str] = {}
     originals: dict[Path, str] = {}
@@ -1301,6 +1525,7 @@ def list_dir(path: str = ".") -> list[dict]:
 def make_dir(path: str) -> None:
     target = Path(resolve(path))
     permissions.require_path("write", target, root())
+    _checkpoint_before_change("make_dir")
     try:
         target.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1311,6 +1536,7 @@ def move(source: str, destination: str) -> None:
     src, dst = Path(resolve(source)), Path(resolve(destination))
     permissions.require_path("write", src, root())
     permissions.require_path("write", dst, root())
+    _checkpoint_before_change("move")
     if dst.exists():
         raise WorkspaceError(f"{dst.name} already exists here.")
     try:
@@ -1335,6 +1561,7 @@ def remove(path: str) -> str:
     if target.resolve() == root().resolve():
         raise WorkspaceError("that's his whole folder — not that.")
     permissions.require_path("delete", target, root())
+    _checkpoint_before_change("remove")
     if not target.exists() and not target.is_symlink():
         raise WorkspaceError(f"there is nothing at {path}.")
     return trash_path(target)

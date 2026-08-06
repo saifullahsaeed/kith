@@ -313,7 +313,7 @@ def roadmap(path: Path, project_id: int) -> dict:
                 # Separately from "active", because this is where he is *right now* — the
                 # graph pulses this node, which is what turns a roadmap into something you
                 # can watch him walk.
-                "tasks_doing": sum(1 for t in mine if t["status"] == "doing"),
+                "tasks_doing": sum(1 for t in mine if t["status"] == "working"),
                 "tasks_waiting": sum(1 for t in mine if t["status"] == "waiting"),
             }
         )

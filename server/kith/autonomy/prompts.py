@@ -221,7 +221,7 @@ def _resume_prompt(awaiting: list[dict]) -> str:
     return (
         f'On task #{task["id"]} — “{task["goal"]}” — your person just replied:\n"{last}"\n\n'
         "Act on it now: do the work, comment your progress on the task, move it forward "
-        "(to 'doing', or 'done' if finished), and attach a deliverable if you made something."
+        "(to 'working', or 'done' if finished), and attach a deliverable if you made something."
     )
 
 

@@ -23,7 +23,7 @@
 import { app, dialog } from "electron";
 
 import { loadWhenReady, recoverFromBackendRestarts, waitForBackend } from "./backend";
-import { BACKEND_ORIGIN, BACKEND_WAIT_MS } from "./config";
+import { APP_ICON, BACKEND_ORIGIN, BACKEND_WAIT_MS } from "./config";
 import {
   enableSandbox,
   identifyToRenderer,
@@ -63,6 +63,15 @@ if (!app.requestSingleInstanceLock()) {
 
 async function start(): Promise<void> {
   await app.whenReady();
+
+  // `setName` alone was not enough. It fixes what Notification Center *calls* this app;
+  // the icon it shows is still whatever the actually-running executable's is, and in
+  // development that executable is genuinely Electron.app, not Kith.app — no name change
+  // alters that. A packaged build needs none of this: the icon is already in the bundle
+  // itself, which is what macOS reads from in that case.
+  if (!app.isPackaged && process.platform === "darwin") {
+    app.dock?.setIcon(APP_ICON);
+  }
 
   // Both must happen before any content loads: an unconfigured session grants
   // every permission it is asked for.

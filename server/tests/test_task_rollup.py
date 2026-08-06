@@ -1,10 +1,16 @@
-"""Completion cascading: task → milestone → project.
+"""Completion cascading: task → milestone, and where it deliberately stops.
 
 The most intricate logic in the data layer, and the one most likely to be broken by
-a well-meaning edit. Its whole job is deciding when work is *finished*, and getting
+a well-meaning edit. Its job is deciding when a *milestone* is finished, and getting
 it wrong is quiet in both directions: a milestone that never closes leaves Kith
-poking at a done project forever, and one that closes early makes him rest with
+poking at a done piece of work forever, and one that closes early makes him rest with
 work outstanding.
+
+It used to keep climbing past the milestone and mark the *project* done too, on the
+same reasoning. That was the wrong claim for automation to make: a project closing is
+a judgement about the whole thing, not a fact bookkeeping can derive from an empty
+board, and it is a person's call now, never Kith's — see
+test_only_a_person_closes_a_project.py for the tool that would have let him make it anyway.
 """
 
 from __future__ import annotations
@@ -27,22 +33,26 @@ def test_milestone_waits_for_its_last_task(db: Path) -> None:
     assert projects.list_milestones(db, project["id"])[0]["status"] == "done"
 
 
-def test_project_completes_when_its_roadmap_does(db: Path) -> None:
+def test_a_cleared_roadmap_does_not_close_the_project(db: Path) -> None:
+    """The one this file used to assert the other way. Clearing the last milestone is
+    evidence the project looks finished, not a decision that it is."""
     project = projects.add_project(db, "p")
     milestone = projects.add_milestone(db, project["id"], "m")
     task = tasks.add_task(db, "only", milestone_id=milestone["id"])
 
     tasks.update_task(db, task["id"], status="done")
-    assert projects.get_project(db, project["id"])["status"] == "done"
+
+    assert projects.list_milestones(db, project["id"])[0]["status"] == "done"
+    assert projects.get_project(db, project["id"])["status"] == "active"
 
 
-def test_project_with_no_milestones_completes_on_its_tasks(db: Path) -> None:
-    """A project run purely off tasks still finishes — it has no roadmap to clear."""
+def test_a_project_with_no_milestones_does_not_close_on_its_tasks_either(db: Path) -> None:
+    """No roadmap to clear does not make the claim any smaller — still not Kith's to make."""
     project = projects.add_project(db, "p")
     task = tasks.add_task(db, "only", project_id=project["id"])
 
     tasks.update_task(db, task["id"], status="done")
-    assert projects.get_project(db, project["id"])["status"] == "done"
+    assert projects.get_project(db, project["id"])["status"] == "active"
 
 
 def test_dropped_counts_as_settled(db: Path) -> None:
@@ -77,7 +87,7 @@ def test_a_task_inherits_its_milestones_project(db: Path) -> None:
 def test_active_tasks_skip_a_parked_project(db: Path) -> None:
     """A finished or paused project lets him rest — this is what makes that true."""
     project = projects.add_project(db, "p")
-    task = tasks.add_task(db, "t", project_id=project["id"])
+    task = tasks.add_task(db, "t", status="planned", project_id=project["id"])
     assert any(t["id"] == task["id"] for t in tasks.active_tasks(db))
 
     projects.update_project(db, project["id"], status="paused")

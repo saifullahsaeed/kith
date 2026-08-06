@@ -74,10 +74,19 @@ def read_conversation(conversation_id: str):
             # (every caller already reads it) and the count keeps its meaning under one that
             # says what it is.
             "messageCount": meta.get("messages", 0),
-            "messages": conversations.messages(conversation_id),
             # What the interface renders: the turn's actual shape, not a paragraph of it.
             "timeline": conversations.timeline(conversation_id),
-            "entries": conversations.read(conversation_id),
+            # `messages` and `entries` used to ride along here and both are gone.
+            #
+            # They were the same conversation a second and third time — `messages` the flattened
+            # prose view, `entries` the entire raw transcript — and nothing read either. On a real
+            # 473-turn conversation the response was 48.1 MB, of which 25.6 MB (53%) was those two
+            # fields, downloaded and JSON-parsed by the browser before a single message rendered.
+            # The client's own `ConversationDetail` type never even declared `entries`.
+            #
+            # Both are still reachable if something ever needs them: `conversations.messages()` is
+            # what /api/chat is handed anyway, and the raw transcript is a file on disk. Sending
+            # them by default was paying for every caller's worst case on every open.
         }
     )
 
@@ -99,10 +108,11 @@ def rename_conversation(conversation_id: str):
 @api.doc(
     summary="What this session is working on",
     description=(
-        "Bind the conversation to a project, or pass null to unbind. This is what decides "
+        "Bind the conversation to a project — the first time only. This is what decides "
         "which project's `.kith/memory.md` he is shown here, and which tasks he advances "
         "when this session is left working — so two sessions on two projects stay out of "
-        "each other's way."
+        "each other's way. Once set it holds for the rest of the conversation's life; "
+        "start a new conversation for a different project rather than moving this one."
     ),
 )
 def set_conversation_project(conversation_id: str):
@@ -118,6 +128,14 @@ def set_conversation_project(conversation_id: str):
         return jsonify(conversations.set_project(AGENT_DB_PATH, conversation_id, project_id))
     except KeyError:
         return jsonify({"error": f"no conversation {conversation_id}"}), 404
+    except conversations.ProjectLocked:
+        bound = repo.conversations.project_of(AGENT_DB_PATH, conversation_id)
+        return jsonify(
+            {
+                "error": f"this conversation is already working on project #{bound} and "
+                "cannot be moved — start a new conversation for something else"
+            }
+        ), 409
 
 
 @api.delete("/conversations/<conversation_id>")

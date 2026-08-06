@@ -7,17 +7,13 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_STATUSES
+from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task, TaskComment
 from kith.infra.db.support import utc_now_iso
 
 # Rank for sorting: high first, then normal, then low.
 _PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
-
-# A task in one of these is finished as far as roll-up is concerned — "dropped"
-# counts as settled, or abandoning one task would keep its milestone open forever.
-_SETTLED = ("done", "dropped")
 
 _DELIVERABLE_KINDS = ("text", "file", "link")
 
@@ -33,7 +29,7 @@ def add_task(
     priority: str = "normal",
     due_at: str | None = None,
     description: str = "",
-    status: str = "todo",
+    status: str = "backlog",
     created_by: str = "kith",
     project_id: int | None = None,
     milestone_id: int | None = None,
@@ -41,7 +37,7 @@ def add_task(
     if priority not in TASK_PRIORITIES:
         priority = "normal"
     if status not in TASK_STATUSES:
-        status = "todo"
+        status = "backlog"
     now = utc_now_iso()
     with session(path) as db:
         # A task under a milestone belongs to that milestone's project. Resolved in
@@ -128,7 +124,7 @@ def active_tasks(path: Path) -> list[dict]:
 
     Three things are excluded, and the third is the one that gives a roadmap teeth:
 
-    * anything not todo/doing — nothing to do on it;
+    * anything not planned/working — nothing to do on it;
     * anything under a done or paused project, so a finished project lets him rest;
     * anything under a milestone whose predecessors are not finished. That last one is why
       milestones exist at all. Before it, the roadmap described progress after the fact
@@ -214,12 +210,16 @@ def update_task(
 
 
 def _roll_up(db: Session, task: Task) -> None:
-    """When a task is finished, roll the ladder up: if it clears its milestone,
-    mark the milestone done; if that clears the project's milestones, mark the
-    project done. Runs inside the caller's transaction."""
+    """When a task is finished and it clears its milestone, mark the milestone done.
+
+    Stops there on purpose. This used to keep climbing — clearing a project's last
+    milestone marked the project itself done — but closing a project is a claim about
+    the whole thing being finished, not a status any amount of task bookkeeping should
+    make on a person's behalf. A milestone closing is a fact about the roadmap; a project
+    closing is a decision, and it stays theirs even when the board is empty.
+    """
     now = utc_now_iso()
     milestone_id = task.milestone_id
-    project_id = task.project_id
 
     if milestone_id:
         if _open_count(db, Task, Task.milestone_id == milestone_id) == 0:
@@ -227,42 +227,12 @@ def _roll_up(db: Session, task: Task) -> None:
             if milestone and milestone.status != "done":
                 milestone.status = "done"
                 milestone.updated_at = now
-            # A task linked to a milestone but not a project still rolls up.
-            if milestone and not project_id:
-                project_id = milestone.project_id
-
-    if not project_id:
-        return
-
-    total_milestones = (
-        db.scalar(select(func.count()).select_from(Milestone).where(Milestone.project_id == project_id)) or 0
-    )
-    open_milestones = (
-        db.scalar(
-            select(func.count())
-            .select_from(Milestone)
-            .where(Milestone.project_id == project_id, Milestone.status != "done")
-        )
-        or 0
-    )
-    open_tasks = _open_count(db, Task, Task.project_id == project_id)
-
-    # Done when the roadmap is cleared, or — for a project run purely off tasks with
-    # no milestones — when nothing is left to do under it.
-    cleared = (total_milestones > 0 and open_milestones == 0) or (total_milestones == 0 and open_tasks == 0)
-    if not cleared:
-        return
-    project = db.get(Project, project_id)
-    # Only 'active' → 'done': a paused or archived project stays as its person left it.
-    if project and project.status == "active":
-        project.status = "done"
-        project.updated_at = now
 
 
 def _open_count(db: Session, model: type[Task], *conditions) -> int:
     """How many unsettled tasks match — the roll-up's only real question."""
     return int(
-        db.scalar(select(func.count()).select_from(model).where(*conditions, model.status.not_in(_SETTLED)))
+        db.scalar(select(func.count()).select_from(model).where(*conditions, model.status.not_in(TASK_SETTLED)))
         or 0
     )
 
@@ -381,7 +351,7 @@ def task_detail(path: Path, task_id: int) -> dict | None:
             return None
         task = as_dict(row)
     # Whether this can be worked on at all, and if not, why. A task page that shows a
-    # status of "todo" while the roadmap is quietly holding it back is telling you something
+    # status of "planned" while the roadmap is quietly holding it back is telling you something
     # untrue about the most important thing on the page.
     held_by: list[str] = []
     milestone_title = None

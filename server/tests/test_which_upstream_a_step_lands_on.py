@@ -48,7 +48,7 @@ class TestAStepNamesItsSession:
         runner = runner_on(db, monkeypatch)
         monkeypatch.setattr(runner, "_new_pending", lambda: [])
         session = conversations.start(db, "some work")["id"]
-        repo.tasks.add_task(db, "a step")
+        repo.tasks.add_task(db, "a step", status="planned")
         repo.conversations.set_working(db, session, True)
 
         runner._tick()
@@ -64,8 +64,8 @@ class TestAStepNamesItsSession:
         two = conversations.start(db, "two")["id"]
         first = repo.projects.add_project(db, "First", "")
         second = repo.projects.add_project(db, "Second", "")
-        repo.tasks.add_task(db, "first step", project_id=first["id"])
-        repo.tasks.add_task(db, "second step", project_id=second["id"])
+        repo.tasks.add_task(db, "first step", status="planned", project_id=first["id"])
+        repo.tasks.add_task(db, "second step", status="planned", project_id=second["id"])
         repo.conversations.set_project(db, one, first["id"])
         repo.conversations.set_project(db, two, second["id"])
         repo.conversations.set_working(db, one, True)
@@ -81,7 +81,7 @@ class TestAStepNamesItsSession:
         id is the honest answer for it rather than an arbitrary session's."""
         runner = runner_on(db, monkeypatch)
         monkeypatch.setattr(runner, "_new_pending", lambda: [])
-        repo.tasks.add_task(db, "an errand")
+        repo.tasks.add_task(db, "an errand", status="planned")
 
         runner._tick()
 

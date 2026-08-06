@@ -92,7 +92,8 @@ def review_block(path: Path) -> str:
     lines.append(
         "Read what you claimed on the task and check the one thing most likely to be wrong — the "
         "claim resting on the least evidence, not every claim. Then close it (update_task "
-        "status='done') or send it back (status='todo') saying what is missing. Do not re-do the "
+        "status='done') or send it back (status='working') saying what is missing — it was already "
+        "implemented, just not correctly, so it needs finishing, not re-planning. Do not re-do the "
         "work to check the work. If they are talking to you about something else, this can wait."
     )
     return "\n".join(lines)

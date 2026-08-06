@@ -415,6 +415,50 @@ def _migrations():
         # no directory and should not be given a pretend one.
         conn.execute("ALTER TABLE projects ADD COLUMN directory TEXT")
 
+    def v26_checkpoints(conn):
+        # A safety net under every file change he makes. See
+        # kith.infra.workspace._take_checkpoint/_checkpoint_before_change — this table is
+        # bookkeeping for the UI, not the source of truth for the chain itself, which lives
+        # entirely in git as refs/kith/checkpoint and its own parent links.
+        conn.executescript(
+            """
+            CREATE TABLE checkpoints (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_root       TEXT NOT NULL,
+                sha             TEXT NOT NULL,
+                tree_sha        TEXT NOT NULL,
+                parent_sha      TEXT,
+                conversation_id TEXT,
+                trigger         TEXT NOT NULL,
+                created_at      TEXT NOT NULL
+            );
+            CREATE INDEX idx_checkpoints_conversation ON checkpoints (conversation_id, created_at);
+            CREATE INDEX idx_checkpoints_repo ON checkpoints (repo_root, created_at DESC);
+            """
+        )
+
+    def v27_reminder_conversation(conn):
+        # Which chat asked to be reminded, so firing one can report back to it instead of
+        # whichever session the tick's round-robin happened to be on. Nullable: a reminder set
+        # outside any conversation — none exist yet, but the column has to allow for one — has
+        # nothing to report back to and keeps today's tick-wide behaviour.
+        conn.execute("ALTER TABLE reminders ADD COLUMN conversation_id TEXT")
+        conn.execute("ALTER TABLE schedules ADD COLUMN conversation_id TEXT")
+
+    def v28_task_planning_statuses(conn):
+        # A plan-then-implement gate, the same shape 'open' -> 'todo' took in v14: old
+        # vocabulary out, new columns in, existing rows carried forward rather than left
+        # speaking a word the app no longer recognises.
+        #
+        # 'todo' meant "actionable, not started" — under the gate nothing is actionable until
+        # a plan for it has been approved, so there is no direct equivalent. Existing rows are
+        # grandfathered into 'planned' rather than sent back to 'planning': the gate is for
+        # work entered from here on, not a retroactive plan demanded of a queue that was never
+        # asked to write one. 'doing' -> 'working' is a plain rename; 'backlog', 'review',
+        # 'waiting', 'done' and 'dropped' are unchanged.
+        conn.execute("UPDATE tasks SET status = 'planned' WHERE status = 'todo'")
+        conn.execute("UPDATE tasks SET status = 'working' WHERE status = 'doing'")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -441,6 +485,9 @@ def _migrations():
         v23_message_kind,
         v24_project_directory,
         v25_session_work,
+        v26_checkpoints,
+        v27_reminder_conversation,
+        v28_task_planning_statuses,
     ]
 
 

@@ -258,6 +258,15 @@ class Processes:
                 result["note"] = "still running; nothing new since you last looked"
             return result
 
+    def elapsed(self, name: str) -> float | None:
+        """How long a named process has been running, in seconds — or None if nothing by
+        that name exists. A raw number rather than `check`'s formatted `for` string, for a
+        caller that wants to do arithmetic with it (`testing.py` scales how long its next
+        wait is by this) rather than show it to someone."""
+        with self._lock:
+            found = self._running.get(_clean_name(name))
+            return (time.time() - found.started) if found else None
+
     def full_output(self, name: str) -> str:
         """The complete log for a named process, start to finish.
 

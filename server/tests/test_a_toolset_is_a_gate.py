@@ -134,3 +134,23 @@ class TestTheLoopEnforcesWhatItOffered:
         questions and he needs the one about repeating."""
         step = {"name": "journal", "arguments": {"entry": "x"}, "repeat": True}
         assert "already made this exact call" in str(agent_loop._run(step, db, set()))
+
+
+class TestPollingToolsAreExemptFromTheThrashGuard:
+    """`run_tests`'s own tool description says to call it again with the same arguments to
+    check on a still-running suite — as does `check_process` for anything else long-running.
+    For every other tool, the same pattern (identical call, nothing to show for it) is a
+    stall. The guard has to tell these apart, or a ten-minute suite can only ever be checked
+    on twice before the model is told to stop and answer without knowing the result."""
+
+    def test_an_ordinary_tool_is_flagged_on_the_third_identical_call(self):
+        assert agent_loop._is_repeat("journal", seen=0) is False
+        assert agent_loop._is_repeat("journal", seen=1) is False
+        assert agent_loop._is_repeat("journal", seen=2) is True
+
+    def test_run_tests_is_never_flagged_however_many_times_its_seen(self):
+        assert agent_loop._is_repeat("run_tests", seen=2) is False
+        assert agent_loop._is_repeat("run_tests", seen=30) is False
+
+    def test_check_process_is_never_flagged_either(self):
+        assert agent_loop._is_repeat("check_process", seen=10) is False

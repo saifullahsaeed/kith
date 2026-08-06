@@ -45,16 +45,20 @@ def conversation(db):
 
 
 class TestFilingATask:
-    def test_a_standalone_task_is_actionable_and_wakes_him(self, db, conversation, woken, monkeypatch):
-        """Filing an errand *is* asking for it to happen."""
+    def test_a_standalone_task_lands_in_the_backlog_and_does_not_wake_him(
+        self, db, conversation, woken, monkeypatch
+    ):
+        """Filing an errand used to be enough to ask for it to happen. Now nothing is
+        pickable until it has been through the planning-a-task skill and approved —
+        a standalone errand is no longer a special case that skips that gate."""
         from kith.tools import registry
 
         monkeypatch.setattr("kith.tools.tasks.repo", repo)
         with session_context.working_in(conversation):
             made = registry.get("add_task").run(db, {"goal": "Fix the login bug"})
 
-        assert made["status"] == "todo"
-        assert woken, "filing an actionable task did not wake the session"
+        assert made["status"] == "backlog"
+        assert not woken, "filing a task should not skip the planning gate"
 
     def test_a_task_under_a_milestone_lands_in_the_backlog(self, db, conversation, woken):
         """A roadmap is not started halfway through writing it — he used to pick up task one
@@ -90,18 +94,18 @@ class TestFilingATask:
                     "goal": "Do the urgent thing now",
                     "description": "the command `make urgent` exits 0 when this is done",
                     "milestone_id": int(milestone["id"]),
-                    "status": "todo",
+                    "status": "planned",
                 },
             )
 
-        assert made["status"] == "todo"
+        assert made["status"] == "planned"
         assert woken
 
     def test_a_backlog_task_is_invisible_to_the_picker(self, db):
         """The status has always existed and always been excluded. What was missing was
         anything defaulting to it."""
         repo.tasks.add_task(db, "Later", "normal", None, "", "backlog", "kith")
-        repo.tasks.add_task(db, "Now", "normal", None, "", "todo", "kith")
+        repo.tasks.add_task(db, "Now", "normal", None, "", "planned", "kith")
 
         goals = {task["goal"] for task in repo.tasks.active_tasks(db)}
 
@@ -109,21 +113,22 @@ class TestFilingATask:
 
 
 class TestPromotingOutOfTheBacklog:
-    def test_moving_a_task_to_todo_wakes_him(self, db, conversation, woken):
-        """The other half of scaffolding into backlog: this is what says go."""
+    def test_approving_a_plan_wakes_him(self, db, conversation, woken):
+        """The other half of scaffolding into backlog: approving a plan into `planned`
+        is what says go."""
         from kith.tools import registry
 
         made = repo.tasks.add_task(db, "Later", "normal", None, "", "backlog", "kith")
 
         with session_context.working_in(conversation):
-            registry.get("update_task").run(db, {"id": int(made["id"]), "status": "todo"})
+            registry.get("update_task").run(db, {"id": int(made["id"]), "status": "planned"})
 
         assert woken
 
     def test_moving_it_back_to_backlog_does_not(self, db, conversation, woken):
         from kith.tools import registry
 
-        made = repo.tasks.add_task(db, "Now", "normal", None, "", "todo", "kith")
+        made = repo.tasks.add_task(db, "Now", "normal", None, "", "planned", "kith")
 
         with session_context.working_in(conversation):
             registry.get("update_task").run(db, {"id": int(made["id"]), "status": "backlog"})
@@ -140,7 +145,7 @@ class TestWritingToHimOnATask:
         project = repo.projects.add_project(db, "App", "an app")
         repo.conversations.create(db, "c-app", "Working on App", "kith-1")
         repo.conversations.set_project(db, "c-app", int(project["id"]))
-        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "todo", "kith", int(project["id"]))
+        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "planned", "kith", int(project["id"]))
 
         brain.create(db, "task_comment", {"task_id": int(task["id"]), "body": "any progress?"})
 
@@ -155,7 +160,7 @@ class TestWritingToHimOnATask:
             raise RuntimeError("no")
 
         monkeypatch.setattr(runner_module().AutonomyRunner, "nudge", explode)
-        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "todo", "kith")
+        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "planned", "kith")
 
         brain.create(db, "task_comment", {"task_id": int(task["id"]), "body": "hello"})
 
@@ -163,7 +168,7 @@ class TestWritingToHimOnATask:
         assert [one["body"] for one in comments] == ["hello"]
 
     def test_it_is_found_as_something_he_owes_an_answer_to(self, db):
-        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "todo", "kith")
+        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "planned", "kith")
         repo.tasks.add_task_comment(db, int(task["id"]), "user", "any progress?")
 
         owed = {one["id"] for one in repo.tasks.tasks_awaiting_kith(db)}
@@ -198,13 +203,36 @@ class TestWakingIsNotSpending:
         runner_module().AutonomyRunner().nudge("", "no session here")
 
 
+class TestNudgingNoLongerStartsUnattendedWork:
+    """Ticks are isolated from chat, and this is the half that isn't a button: filing a task
+    or writing a comment still decides something is worth getting on with (the `woken`
+    fixture above proves that wiring is intact), but `nudge` itself no longer acts on it."""
+
+    def test_it_does_not_flip_the_conversation_to_working(self, db):
+        repo.conversations.create(db, "c-1", "A chat", "kith-1")
+
+        runner_module().AutonomyRunner().nudge("c-1", "a task became actionable")
+
+        # The raw repository row stores it as SQLite's 0/1, not a Python bool.
+        assert not repo.conversations.get(db, "c-1")["working"]
+
+    def test_it_does_not_start_the_loop(self):
+        runner = runner_module().AutonomyRunner()
+        started: list[str] = []
+        runner.ensure_loop = lambda: started.append("loop")  # type: ignore[method-assign]
+
+        runner.nudge("c-1", "a task became actionable")
+
+        assert not started
+
+
 class TestATaskThatChangesUnderHim:
     def test_a_blocked_task_stops_the_step(self, db, monkeypatch):
         """Pulling a task out from under him is a clear instruction to stop touching it, and
         it should not have to wait for him to finish the thing you blocked."""
         runner = runner_module().AutonomyRunner()
         monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        task = repo.tasks.add_task(db, "In flight", "normal", None, "", "doing", "kith")
+        task = repo.tasks.add_task(db, "In flight", "normal", None, "", "working", "kith")
 
         assert runner._task_moved_on(int(task["id"])) is False
 
@@ -224,7 +252,7 @@ class TestATaskThatChangesUnderHim:
         reads = []
         real = repo.tasks.task_detail
         monkeypatch.setattr(repo.tasks, "task_detail", lambda *a, **k: (reads.append(1), real(*a, **k))[1])
-        task = repo.tasks.add_task(db, "In flight", "normal", None, "", "doing", "kith")
+        task = repo.tasks.add_task(db, "In flight", "normal", None, "", "working", "kith")
 
         for _ in range(20):
             runner._task_moved_on(int(task["id"]))

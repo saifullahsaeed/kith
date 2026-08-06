@@ -40,7 +40,7 @@ _BRIEF = (
 )
 
 
-def _a_task(db: Path, status: str = "todo") -> dict:
+def _a_task(db: Path, status: str = "working") -> dict:
     return repo.tasks.add_task(
         db, "Implement the frontend chooser", "high", None, _BRIEF, status, "kith", None, None
     )
@@ -110,7 +110,7 @@ class TestParkingWorkIsNeverSilent:
         """`_verify_done` refuses a close it does not believe, sets 'waiting' itself, and
         notifies. It then falls through the same update path — so without a marker this is
         where the duplicate would appear."""
-        task = _a_task(db, status="doing")
+        task = _a_task(db, status="working")
         run_tool(
             "update_task",
             {
@@ -131,7 +131,7 @@ class TestParkingWorkIsNeverSilent:
     def test_an_ordinary_move_says_nothing(self, db: Path):
         """Only the column that means "your turn" is worth interrupting them for."""
         task = _a_task(db)
-        for status in ("doing", "todo", "backlog"):
+        for status in ("working", "planned", "backlog"):
             run_tool("update_task", {"id": task["id"], "status": status}, db)
         assert [m for m in repo.messages.list_messages(db, 20) if m.get("kind") == "stuck"] == []
 

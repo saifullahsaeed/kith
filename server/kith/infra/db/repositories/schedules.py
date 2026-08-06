@@ -13,7 +13,12 @@ from kith.infra.db.support import utc_now_iso
 
 
 def add_schedule(
-    path: Path, note: str, next_fire: str, every_minutes: int | None = None, daily_at: str | None = None
+    path: Path,
+    note: str,
+    next_fire: str,
+    every_minutes: int | None = None,
+    daily_at: str | None = None,
+    conversation_id: str = "",
 ) -> dict:
     with session(path) as db:
         row = Schedule(
@@ -23,6 +28,7 @@ def add_schedule(
             next_fire=next_fire,
             status="active",
             created_at=utc_now_iso(),
+            conversation_id=conversation_id or None,
         )
         db.add(row)
         db.flush()

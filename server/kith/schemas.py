@@ -132,6 +132,14 @@ class AutonomyStatusSchema(Schema):
             "the requirements and supplied the evidence."
         },
     )
+    toApprove = List(
+        Nested(ReviewItemSchema),
+        metadata={
+            "description": "Plans drafted with the planning-a-task skill and waiting for a look "
+            "before any implementation starts — the 'planning' column. Always entered from chat, "
+            "never a tick's own initiative."
+        },
+    )
 
 
 class AutonomyControlSchema(Schema):

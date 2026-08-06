@@ -4,6 +4,7 @@ import {
   AlarmClock,
   CircleDot,
   ClipboardCheck,
+  FileCheck2,
   PanelRightClose,
   Square,
   TriangleAlert,
@@ -126,6 +127,7 @@ export function WorkPanel({
   width,
   onClose,
   onReview,
+  onApprove,
 }: {
   autonomy: Autonomy;
   /** The conversation on screen. The feed narrows to it, so switching sessions switches
@@ -137,9 +139,13 @@ export function WorkPanel({
   /** Ask him, in the thread, to check the work a tick handed over. A message rather than a step,
    *  because the point of the review column is that the reviewer is not the tick. */
   onReview: (taskIds: number[]) => void;
+  /** Same shape, one step earlier: ask him, in the thread, to walk through a plan waiting for
+   *  approval — a real conversation about it, not a bare yes/no button. */
+  onApprove: (taskIds: number[]) => void;
 }) {
   const { status, activity, stop, cancel } = autonomy;
   const toReview = status?.toReview ?? [];
+  const toApprove = status?.toApprove ?? [];
   // How many sessions are carrying on by themselves. The panel's header speaks for the
   // machine, so it asks the plural question; stopping *one* lives on the session bar above
   // the thread, next to the session it belongs to.
@@ -245,6 +251,35 @@ export function WorkPanel({
             className="shrink-0"
             onClick={() => onReview(toReview.map((t) => t.id))}
             title="Have him check it here, where the conversation is — not in a step marking its own homework."
+          >
+            Review
+          </Button>
+        </div>
+      ) : null}
+
+      {/*
+        Same pattern, one step earlier: a plan drafted with the planning-a-task skill, waiting
+        for a look before any implementation starts. Always entered from chat — see
+        `TASK_STATUSES` in domain/enums.py — so anything showing up here is a plan somebody
+        actually asked to see, never a tick's own initiative.
+      */}
+      {toApprove.length > 0 ? (
+        <div className="border-border/60 bg-kith-soft/40 flex items-start gap-2.5 border-b px-4 py-2.5">
+          <FileCheck2 className="text-kith mt-0.5 size-3.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-medium">
+              {toApprove.length} plan{toApprove.length === 1 ? "" : "s"} — need your approval
+            </p>
+            <p className="text-muted-foreground truncate text-[11px]" title={toApprove.map((t) => `#${t.id} ${t.goal}`).join("\n")}>
+              {toApprove.map((t) => t.goal).join(" · ")}
+            </p>
+          </div>
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0"
+            onClick={() => onApprove(toApprove.map((t) => t.id))}
+            title="Look at the plan here, in the conversation — so you can push back on it, not just approve or not."
           >
             Review
           </Button>

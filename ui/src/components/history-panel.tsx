@@ -12,6 +12,7 @@ import {
   type ConversationSummary,
   type TranscriptHit,
 } from "@/lib/backend";
+import { fetchBrain, type Project } from "@/lib/backend/brain";
 import { openOnHost } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
@@ -35,10 +36,11 @@ const MAX = 500;
  * Right-click gives Reveal, because each conversation is a real file on disk and the point
  * of keeping them in plain text is that you can go and look.
  *
- * It is grouped by day, which it was not, and that was the whole problem with it at scale.
- * Seventeen hundred rows reading "hi · 2 msg · 2:28 AM" three times over, with "2:28 AM" and
- * "Jul 31" in the same column and nothing saying which day any of them belonged to, is a list
- * you scroll rather than one you scan.
+ * Grouped by project. It was flat first — seventeen hundred rows reading "hi · 2 msg · 2:28 AM"
+ * with nothing saying which day any belonged to — then grouped by day, which fixed the scanning
+ * but not the finding: with two projects running at once, every day interleaves sessions from
+ * both, so the one axis that told them apart was the one not in use. The day a session last moved
+ * is on its own row now, which is where it was always more useful than in a heading.
  */
 export function HistoryPanel({
   activeId,
@@ -114,8 +116,17 @@ export function HistoryPanel({
 
   // Grouped in the order the server sent them (most recent first), never re-sorted: the
   // listing's order is the answer to "what was I just doing", and a client that sorts it
-  // again is a client that can disagree with it.
-  const days = useMemo(() => groupByDay(items), [items]);
+  // again is a client that can disagree with it. That order carries through to the groups —
+  // the project you touched last ends up on top without anything sorting them.
+  const [projects, setProjects] = useState<Project[]>([]);
+  // Names and statuses for the group headings. Reloaded with the list, because he starts
+  // projects himself mid-conversation, so a name can appear between one open and the next.
+  useEffect(() => {
+    fetchBrain()
+      .then((brain) => setProjects(brain.projects))
+      .catch(() => {});
+  }, [items]);
+  const groups = useMemo(() => groupByProject(items, projects), [items, projects]);
   // A full page back means there are almost certainly more behind it. The alternative was
   // showing 100 of seventeen hundred with nothing on screen saying so, which is a silent
   // truncation dressed as a complete list.
@@ -205,16 +216,19 @@ export function HistoryPanel({
             </p>
           ) : (
             <>
-              {days.map((day) => (
-                <section key={day.label}>
+              {groups.map((group) => (
+                <section key={group.key}>
                   {/* Sticky, so the day you are looking at is named while you are inside it.
                       It needs the panel's own backdrop to sit on, which is why the aside has
                       a background now rather than letting the room show straight through. */}
                   <h3 className="bg-sidebar/80 text-muted-foreground/70 sticky top-0 z-10 px-2.5 py-1.5 text-[10px] font-medium tracking-wider uppercase backdrop-blur-sm">
-                    {day.label}
+                    {group.label}
+                    {group.status ? (
+                      <span className="text-muted-foreground/45 normal-case"> · {group.status}</span>
+                    ) : null}
                   </h3>
                   <ul className="space-y-0.5 pb-1">
-                    {day.items.map((item) => (
+                    {group.items.map((item) => (
                       <li key={item.id}>
                         <ItemMenu
                           title={item.title}
@@ -278,7 +292,7 @@ export function HistoryPanel({
                               ) : null}
                             </span>
                             <span className="text-muted-foreground/60 text-[10px] tabular-nums">
-                              {item.messages} msg · {clock(item.updatedAt)}
+                              {item.messages} msg · {dayLabel(item.updatedAt)} {clock(item.updatedAt)}
                             </span>
                           </button>
                         </ItemMenu>
@@ -317,21 +331,52 @@ export function HistoryPanel({
   );
 }
 
-interface Day {
+interface Group {
+  key: string;
   label: string;
+  /** Shown beside the name when the project is not active — being bound to a closed one is
+   *  *why* nothing is happening in these sessions, which is the thing worth knowing. */
+  status?: string;
   items: ConversationSummary[];
 }
 
-/** Split the listing into consecutive runs that fall on the same day. */
-function groupByDay(items: ConversationSummary[]): Day[] {
-  const days: Day[] = [];
+/**
+ * Group the listing by the project each session is working on.
+ *
+ * By project rather than by day, which is what this was. A day is how you'd look for something
+ * if you remembered when it happened; a project is how you look for it when you remember what it
+ * was about — and with two projects running at once, consecutive days interleave sessions from
+ * both, so the one axis that separated them was the one not being used. The day each session
+ * last moved is on its own row instead, so nothing is lost by dropping the date headings.
+ *
+ * "No project" goes last and is a real group, not an empty state: a session for a one-off errand
+ * is meant to stay unbound.
+ */
+function groupByProject(items: ConversationSummary[], projects: Project[]): Group[] {
+  const known = new Map(projects.map((project) => [project.id, project]));
+  const groups = new Map<string, Group>();
   for (const item of items) {
-    const label = dayLabel(item.updatedAt);
-    const last = days[days.length - 1];
-    if (last && last.label === label) last.items.push(item);
-    else days.push({ label, items: [item] });
+    const id = item.projectId;
+    const key = id === null ? "none" : String(id);
+    let group = groups.get(key);
+    if (!group) {
+      const project = id === null ? undefined : known.get(id);
+      group = {
+        key,
+        // A project he started this session on may not be in the list yet, and an id is a
+        // better answer than a blank heading.
+        label: id === null ? "No project" : (project?.name ?? `Project #${id}`),
+        status: project && project.status !== "active" ? project.status : undefined,
+        items: [],
+      };
+      groups.set(key, group);
+    }
+    group.items.push(item);
   }
-  return days;
+  // Insertion order is already most-recently-active first, because `items` arrives newest first
+  // — so the project you touched last is at the top without sorting anything.
+  const all = [...groups.values()];
+  return [...all.filter((g) => g.key !== "none"), ...all.filter((g) => g.key === "none")];
 }
 
 /** "Today", "Yesterday", a weekday inside the last week, then a date. Never a bare time —

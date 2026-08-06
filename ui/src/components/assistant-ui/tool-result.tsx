@@ -1,10 +1,12 @@
 "use client";
 
 import { memo, useState, type FC, type ReactNode } from "react";
+import { useThreadRuntime } from "@assistant-ui/react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { BookOpenText, Check, Copy } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { CodeBlock, copyText } from "@/components/file-view";
 import { useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
@@ -698,8 +700,11 @@ const Fields: FC<{ value: Record<string, unknown> }> = ({ value }) => (
  *  each object only ever has one of them. */
 const STATUS_TONE: Record<string, string> = {
   backlog: "bg-muted text-muted-foreground",
-  todo: "bg-sky-500/15 text-sky-500",
-  doing: "bg-kith/15 text-kith",
+  // Its own tone, distinct from "review"'s violet below — both are "needs a person's look,"
+  // but for opposite reasons: a plan before any work starts, versus finished work after.
+  planning: "bg-indigo-500/15 text-indigo-400",
+  planned: "bg-sky-500/15 text-sky-500",
+  working: "bg-kith/15 text-kith",
   review: "bg-violet-500/15 text-violet-400",
   waiting: "bg-orange-500/15 text-orange-500",
   done: "bg-emerald-500/15 text-emerald-500",
@@ -739,6 +744,23 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
   const comments = Array.isArray(value.comments) ? value.comments.length : 0;
   const deliverables = Array.isArray(value.deliverables) ? value.deliverables.length : 0;
   const description = typeof value.description === "string" ? value.description.trim() : "";
+  // `update_task` attaches this the moment a task lands in `planning` — see `_plan_doc` in
+  // tools/tasks.py. Only there, so approving something you have not actually read is not the
+  // easy path: the doc shows up exactly once, right when it is time to decide on it.
+  const plan = typeof value.plan === "string" ? value.plan.trim() : "";
+  const runtime = useThreadRuntime();
+  const approve = () => {
+    const id = value.id;
+    runtime.append({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `Approved — move #${String(id)} to 'planned' and get started.`,
+        },
+      ],
+    });
+  };
 
   return (
     <div className="flex flex-col gap-2 rounded-lg p-2.5 ring-1 ring-border/60">
@@ -793,6 +815,23 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
               {deliverables} deliverable{deliverables === 1 ? "" : "s"}
             </span>
           ) : null}
+        </div>
+      ) : null}
+      {plan ? (
+        <div className="flex flex-col gap-1.5 border-t border-border/50 pt-2">
+          <Label>plan, waiting for a look</Label>
+          <div className="max-h-96 overflow-auto rounded-lg bg-muted/30 p-2.5 ring-1 ring-border/60">
+            <Prose text={plan} />
+          </div>
+          <Button
+            size="xs"
+            variant="outline"
+            className="w-fit"
+            onClick={approve}
+            title="Approve the plan as written and move this to 'planned' — say something instead to ask for changes."
+          >
+            Approve
+          </Button>
         </div>
       ) : null}
     </div>

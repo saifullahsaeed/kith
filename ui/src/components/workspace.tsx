@@ -7,6 +7,7 @@ import {
 } from "@assistant-ui/react";
 
 import { Thread } from "@/components/assistant-ui/thread";
+import { CheckpointsProvider } from "@/components/assistant-ui/checkpoints-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/app-header";
 import { ControlPanel } from "@/components/control-panel";
@@ -24,7 +25,14 @@ import { useMood } from "@/hooks/use-mood";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { cn } from "@/lib/utils";
 import { moodHue } from "@/lib/backend/mood";
-import { parseLocation, pathForHome, pathForSettings, pathForTab, pathForTask } from "@/lib/router";
+import {
+  parseLocation,
+  pathForHome,
+  pathForMessages,
+  pathForSettings,
+  pathForTab,
+  pathForTask,
+} from "@/lib/router";
 import {
   createBackendAdapter,
   fetchConversation,
@@ -58,6 +66,13 @@ const HISTORY_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + 96; // 912
  * reloaded, which is the one thing a window is supposed to be good at. */
 const LAST_CONVERSATION = "kith-conversation";
 
+/** Turns mounted when a conversation opens, and added by each "load earlier".
+ *
+ * Forty rather than a round hundred: it is comfortably more than fits on a screen, so the thread
+ * still reads as continuous history rather than a stub, while staying far below the point where
+ * mounting and markdown-parsing the tail is what you are waiting for. */
+const WINDOW = 40;
+
 /** The ready-state app: chat runtime, header, and the autonomy ("Work") panel.
  * Split out so its hooks only run once the backend is reachable. */
 export function Workspace({
@@ -79,6 +94,21 @@ export function Workspace({
   // Messages to seed the thread with when resuming. Bumping `threadKey` remounts the
   // runtime, which is the only way to replace a local runtime's messages wholesale.
   const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
+  /* The whole conversation as fetched, and how much of its tail is actually mounted.
+   *
+   * Held apart because the two are different questions. A 473-turn conversation was handed to
+   * the runtime entire, and `content-visibility: auto` does not save you from that: it skips
+   * layout and paint for off-screen messages, but React still mounts every one and
+   * `MarkdownText` still parses every character — ~547 KB of prose before anything appears. So
+   * the fix has to be to not mount them, not to style them cheaply.
+   *
+   * It also fixes where the scroll lands. Until a message is laid out the browser assumes the
+   * 200px of `contain-intrinsic-size`, so 473 of them made the initial `scrollHeight` a
+   * ~95,000px guess against a much larger real height — "scroll to bottom" went to the bottom of
+   * that fiction, which is near the top. Mount forty and the height is honest.
+   */
+  const [timeline, setTimeline] = useState<StoredTurn[]>([]);
+  const [shown, setShown] = useState(WINDOW);
   const [threadKey, setThreadKey] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   // What this session is working on. Held here rather than fetched inside the bar because
@@ -132,19 +162,59 @@ export function Workspace({
     [runtime],
   );
 
+  /**
+   * Same shape as `reviewFinished`, one step earlier: ask him to walk through a plan waiting
+   * for approval — here, in the thread, where you can actually push back on it rather than
+   * a bare yes/no. Approving or asking for changes is his call to act on afterward
+   * (`update_task(status='planned')` or revising the plan file), not something this button
+   * does directly.
+   */
+  const approvePlan = useCallback(
+    (taskIds: number[]) => {
+      if (!taskIds.length) return;
+      const list = taskIds.map((id) => `#${id}`).join(", ");
+      const text =
+        `I'd like to look at the plan for ${list} before you start. Walk me through it — what ` +
+        `you found, what you're about to do, and anything you're unsure about — so I can approve ` +
+        `it (move it to 'planned') or tell you what to change.`;
+      runtime.thread.append({ role: "user", content: [{ type: "text", text }] });
+    },
+    [runtime],
+  );
+
   const openConversation = useCallback(async (id: string) => {
     const detail = await fetchConversation(id).catch(() => null);
     if (!detail) return;
     setConversationId(id);
     setProjectId(detail.projectId ?? null);
-    setResumed(toThreadMessages(detail.timeline));
+    setTimeline(detail.timeline);
+    setShown(WINDOW);
+    setResumed(toThreadMessages(detail.timeline.slice(-WINDOW)));
     setThreadKey((n) => n + 1);
     remember(id);
   }, []);
 
+  /* Widen the window by another page and rebuild the thread.
+   *
+   * A remount (`threadKey`) rather than a prepend, because `useLocalRuntime` reads
+   * `initialMessages` once — prepending is exactly what it cannot do, and working around that
+   * properly means moving to `useExternalStoreRuntime`. Acceptable here only because this is an
+   * explicit click on a conversation you are already looking at, not something that happens
+   * while you scroll. No refetch: the whole timeline is already in hand.
+   */
+  const loadEarlier = useCallback(() => {
+    const next = Math.min(shown + WINDOW, timeline.length);
+    if (next === shown) return;
+    setShown(next);
+    setResumed(toThreadMessages(timeline.slice(-next)));
+    setThreadKey((n) => n + 1);
+  }, [shown, timeline]);
+
   const newConversation = useCallback(() => {
     setConversationId("");
     setProjectId(null);
+    setTimeline([]);
+    setShown(WINDOW);
     setResumed([]);
     setThreadKey((n) => n + 1);
     remember("");
@@ -198,7 +268,10 @@ export function Workspace({
   const navigate = useNavigate();
   const route = parseLocation(location.pathname);
   const panelOpen = route.panelOpen;
-  const [inboxOpen, setInboxOpen] = useState(false);
+  // A notification with nothing narrower to point at (a reach-out, a stall, a session
+  // resting itself) links here — so it has to be a real URL, the same way the task panel
+  // and settings already are, not state a click sets and a notification has no way to reach.
+  const inboxOpen = route.inboxOpen;
 
   /* Which panels the window can currently afford.
    *
@@ -328,7 +401,7 @@ export function Workspace({
               mindOpen={mindVisible}
               onOpenInbox={() => {
                 inbox.enableNotifications();
-                setInboxOpen(true);
+                navigate(pathForMessages());
               }}
               onOpenMind={toggleMind}
               onOpenPanel={() => navigate(pathForTab("overview"))}
@@ -394,7 +467,32 @@ export function Workspace({
                     random rather than as a layout bug. */}
                 <div className="relative min-h-0 flex-1">
                   <ErrorBoundary where="The conversation">
-                    <Thread />
+                    <CheckpointsProvider
+                      conversationId={conversationId}
+                      // How many turns were dropped off the front by the window. Checkpoints are
+                      // tagged with their absolute turn index and matched against the *rendered*
+                      // message index, so without this the offer silently walks backwards through
+                      // the conversation as you window — "restore to here" on the first visible
+                      // message would target whatever happened 433 turns earlier. A destructive
+                      // action aiming at the wrong commit is the worst thing windowing could have
+                      // broken, so the offset travels with the checkpoints rather than being
+                      // recomputed anywhere that compares them.
+                      turnOffset={Math.max(0, timeline.length - shown)}
+                    >
+                      {timeline.length > shown ? (
+                        <div className="flex justify-center pt-3">
+                          <button
+                            type="button"
+                            onClick={loadEarlier}
+                            className="border-border/60 bg-card/60 text-muted-foreground hover:text-foreground rounded-full border px-3 py-1 text-[11px]"
+                          >
+                            Load {Math.min(WINDOW, timeline.length - shown)} earlier ·{" "}
+                            {timeline.length - shown} above
+                          </button>
+                        </div>
+                      ) : null}
+                      <Thread />
+                    </CheckpointsProvider>
                   </ErrorBoundary>
                 </div>
               </div>
@@ -420,6 +518,7 @@ export function Workspace({
                       width={mindRoom}
                       onClose={() => setMindOpen(false)}
                       onReview={reviewFinished}
+                      onApprove={approvePlan}
                     />
                   </ErrorBoundary>
                 </div>
@@ -434,7 +533,7 @@ export function Workspace({
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. */}
         <WorkspaceFileViewer />
-        {inboxOpen ? <InboxPanel inbox={inbox} onClose={() => setInboxOpen(false)} /> : null}
+        {inboxOpen ? <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} /> : null}
         {route.settingsTab ? (
           <ErrorBoundary where="Settings">
             <SettingsPage
@@ -483,6 +582,17 @@ function remember(conversationId: string): void {
  */
 function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
   const out: unknown[] = [];
+  // A running count of tool calls seen so far in this conversation, not the backend's own
+  // id. `${turnIndex}-${part.id}` was the earlier fix and is still right for the ordinary
+  // case, but it assumes the backend's per-turn ids are actually unique within whatever
+  // `timeline()` groups as one turn — true for a turn that is one `stream_agent` call, and
+  // false for older conversations where an autonomy tick continued the same conversation_id
+  // with no new user message in between: two separate turns, each restarting its own ids at
+  // c1, land in the transcript with nothing to tell `timeline()` to split them, so "c9" can
+  // appear twice *inside* one rendered turn. No amount of scoping by turn index fixes a
+  // collision that happens within a single turn index — only something that can never repeat
+  // does, so this counts instead of reading anything the backend assigned.
+  let callSeq = 0;
   for (const turn of timeline) {
     const content: unknown[] = [];
     // Collected rather than pushed as they arrive. One of these is recorded per model request,
@@ -499,6 +609,7 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     // `services/conversations`. Collected the same way the counts are, so it lands in the same
     // footer instead of somewhere in the middle of the reply.
     let context: ContextLedger | undefined;
+    let baseline: ContextLedger | undefined;
     let folded = false;
     for (const part of turn.parts) {
       if (part.kind === "text") content.push({ type: "text", text: part.text });
@@ -506,7 +617,18 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
       else if (part.kind === "tool") {
         content.push({
           type: "tool-call",
-          toolCallId: part.id,
+          // The backend resets its own tool-call ids to c1 at the start of every turn, so the
+          // raw id repeats across nearly every message in a long conversation — 209 times for
+          // "c9" alone in one real conversation, which is what actually crashed the thread on
+          // reopening it: two different messages both offering a tool call keyed "c9" collided
+          // in assistant-ui's own resource cache. A counter rather than the backend's id or
+          // even `${turnIndex}-${part.id}`: those still collide on a turn that is really two
+          // autonomy ticks glued together with no user message between them (older
+          // conversations, from before ticks stopped continuing a conversation on their own) —
+          // both ticks restart their own ids at c1, landing two "c9"s inside what `timeline()`
+          // reads as one turn. This never repeats, by construction, regardless of what the
+          // backend assigned or how the transcript is shaped.
+          toolCallId: `call-${callSeq++}`,
           toolName: part.name,
           args: part.arguments,
           argsText: JSON.stringify(part.arguments),
@@ -514,6 +636,10 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
         });
       } else if (part.kind === "context") {
         context = part.context;
+        // `{}` — not absent — on a turn recorded before this field existed; `window` is
+        // always present on a real reading, never on that placeholder. `turn-usage.tsx`
+        // falls back to `context` when this is undefined.
+        baseline = part.baseline?.window ? (part.baseline as ContextLedger) : undefined;
         folded = part.folded;
       } else {
         rounds.push({ uncached: part.uncached, cached: part.cached, out: part.out });
@@ -523,7 +649,7 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     // Token counts ride back as the same data part the live stream uses, so the footer reads
     // the same on a resumed turn as it did on a fresh one.
     if (rounds.length || context) {
-      content.push({ type: "data", name: USAGE_PART, data: { rounds, context, folded } });
+      content.push({ type: "data", name: USAGE_PART, data: { rounds, context, baseline, folded } });
     }
     if (content.length) out.push({ role: turn.role, content });
   }

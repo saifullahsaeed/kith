@@ -18,7 +18,7 @@ export interface RoadmapNode {
   tasks_total: number;
   tasks_done: number;
   tasks_active: number;
-  /** In `doing` — where he is right now. The graph pulses this node. */
+  /** In `working` — where he is right now. The graph pulses this node. */
   tasks_doing: number;
   /** In `waiting` — he asked you something and stopped. */
   tasks_waiting: number;
