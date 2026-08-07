@@ -50,13 +50,13 @@ FILENAME = "api.token"
 #: ``/api/health`` — the shell polls this before the window exists to know whether the
 #: server is up. It returns nothing but liveness.
 #:
-#: ``/api/autonomy/stream`` — an EventSource, which cannot send headers. Putting the token
+#: ``/api/activity/stream`` — an EventSource, which cannot send headers. Putting the token
 #: in the query string instead would print it into Werkzeug's request log on every
 #: reconnect, which is a worse leak than the one being closed. It is gated on being
 #: same-origin instead (see :func:`_same_origin`), so a web page cannot subscribe; a local
 #: process can, and gets a feed of status and token counts, no content. That trade is
 #: written down rather than discovered.
-OPEN_PATHS = frozenset({"/api/health", "/api/autonomy/stream"})
+OPEN_PATHS = frozenset({"/api/health", "/api/activity/stream"})
 
 #: Documentation. Serving the schema of an API someone cannot call is not a leak, and
 #: locking it means /docs is a login wall on a single-user machine.

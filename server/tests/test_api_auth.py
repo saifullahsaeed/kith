@@ -91,21 +91,21 @@ def good(app):
 
 class TestTheDoorIsShut:
     @pytest.mark.parametrize(
-        "path", ["/api/autonomy", "/api/conversations", "/api/permissions", "/api/tuning"]
+        "path", ["/api/activity", "/api/conversations", "/api/permissions", "/api/tuning"]
     )
     def test_no_token_is_refused(self, client, path):
         assert client.get(path).status_code == 401
 
-    def test_the_right_token_gets_in(self, client, good, path="/api/autonomy"):
+    def test_the_right_token_gets_in(self, client, good, path="/api/activity"):
         assert client.get(path, headers={auth.HEADER: good}).status_code == 200
 
     def test_a_wrong_token_is_refused(self, client):
-        assert client.get("/api/autonomy", headers={auth.HEADER: "not-it"}).status_code == 401
+        assert client.get("/api/activity", headers={auth.HEADER: "not-it"}).status_code == 401
 
     def test_an_empty_token_is_refused(self, client):
         # An empty header must not compare equal to anything, and must not be read as
         # "no header, so skip the check".
-        assert client.get("/api/autonomy", headers={auth.HEADER: ""}).status_code == 401
+        assert client.get("/api/activity", headers={auth.HEADER: ""}).status_code == 401
 
     def test_writes_are_refused_too(self, client):
         # The reads are the obvious case; the writes are the ones that cost something. This
@@ -114,8 +114,8 @@ class TestTheDoorIsShut:
         assert response.status_code == 401
 
     def test_the_refusal_does_not_say_which_way_it_failed(self, client):
-        without = client.get("/api/autonomy").get_json()
-        wrong = client.get("/api/autonomy", headers={auth.HEADER: "x"}).get_json()
+        without = client.get("/api/activity").get_json()
+        wrong = client.get("/api/activity", headers={auth.HEADER: "x"}).get_json()
         # "Wrong token" versus "no token" is a hint, and nobody who needs the difference is
         # unable to read the file.
         assert without == wrong
@@ -126,20 +126,20 @@ class TestWhatStaysOpen:
         # The shell polls this before a window exists, and it returns nothing but liveness.
         assert client.get("/api/health").status_code == 200
 
-    def test_the_autonomy_stream_is_open_to_our_own_page(self, client):
+    def test_the_activity_stream_is_open_to_our_own_page(self, client):
         # An EventSource cannot send headers. Putting the token in the query string would
         # print it into the request log on every reconnect — a worse leak than the one being
         # closed — so this is gated on being same-origin instead.
         assert (
-            client.get("/api/autonomy/stream", headers={"Sec-Fetch-Site": "same-origin"}).status_code == 200
+            client.get("/api/activity/stream", headers={"Sec-Fetch-Site": "same-origin"}).status_code == 200
         )
 
-    def test_the_autonomy_stream_refuses_another_site(self, client):
-        response = client.get("/api/autonomy/stream", headers={"Sec-Fetch-Site": "cross-site"})
+    def test_the_activity_stream_refuses_another_site(self, client):
+        response = client.get("/api/activity/stream", headers={"Sec-Fetch-Site": "cross-site"})
         assert response.status_code == 403
 
     def test_a_cross_origin_header_also_refuses_the_stream(self, client):
-        response = client.get("/api/autonomy/stream", headers={"Origin": "https://evil.example"})
+        response = client.get("/api/activity/stream", headers={"Origin": "https://evil.example"})
         assert response.status_code == 403
 
     def test_the_schema_stays_readable(self, client):
@@ -150,7 +150,7 @@ class TestWhatStaysOpen:
     def test_a_preflight_is_not_the_request(self, client):
         # The browser cannot attach the token to a preflight. Refusing it would break every
         # cross-origin call from the dev server before the real request was ever made.
-        assert client.options("/api/autonomy").status_code < 400
+        assert client.options("/api/activity").status_code < 400
 
 
 class TestTheSecretItself:
