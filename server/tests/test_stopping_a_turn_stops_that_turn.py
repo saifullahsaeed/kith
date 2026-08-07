@@ -29,19 +29,20 @@ from kith.services import conversations
 
 @pytest.fixture
 def feed(db: Path, monkeypatch):
-    """The Mind feed, pointed at a temp database and stubbed at the runner.
+    """The Mind feed, pointed at a temp database and stubbed at the module.
 
-    Same reason as `test_a_chat_turn_is_on_the_record`: the package re-exports the runner
-    singleton, so only patching `sys.modules` reaches `from kith.autonomy.runner import runner`.
+    Patched through `sys.modules` rather than by setting an attribute: `_MindFeed._publish`
+    does `from kith.services.activity import feed` inside the call, so it reads the module out
+    of `sys.modules` every time and an attribute patch would never be seen.
     """
     published: list[dict] = []
     monkeypatch.setattr(route, "AGENT_DB_PATH", db)
 
-    class FakeRunner:
+    class FakeFeed:
         def publish(self, kind, text, **fields):
             published.append({"kind": kind, "text": text, **fields})
 
-    monkeypatch.setitem(sys.modules, "kith.autonomy.runner", type("M", (), {"runner": FakeRunner()})())
+    monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": FakeFeed()})())
     return published
 
 

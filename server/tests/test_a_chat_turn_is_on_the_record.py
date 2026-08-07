@@ -24,8 +24,8 @@ def feed(db, monkeypatch):
     """A _MindFeed writing to a temp database, with what it publishes captured.
 
     Patched through `sys.modules` rather than by setting an attribute: the package
-    re-exports the singleton, so `kith.autonomy.runner` as an *attribute* is the instance
-    while `from kith.autonomy.runner import runner` reads the module out of sys.modules.
+    re-exports the singleton, so `kith.services.activity` as an *attribute* is the instance
+    while `from kith.services.activity import feed` reads the module out of sys.modules.
     Patching the attribute looks like it works and changes nothing — three tests once ran
     against the live database that way.
     """
@@ -34,11 +34,11 @@ def feed(db, monkeypatch):
     published: list[dict] = []
     monkeypatch.setattr(chat_route, "AGENT_DB_PATH", db)
 
-    class FakeRunner:
+    class FakeFeed:
         def publish(self, kind, text, **fields):
             published.append({"kind": kind, "text": text, **fields})
 
-    monkeypatch.setitem(sys.modules, "kith.autonomy.runner", type("M", (), {"runner": FakeRunner()})())
+    monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": FakeFeed()})())
     return published
 
 
@@ -102,7 +102,7 @@ class TestTheLiveFeed:
             def publish(self, *_a, **_k):
                 raise RuntimeError("no feed today")
 
-        monkeypatch.setitem(sys.modules, "kith.autonomy.runner", type("M", (), {"runner": Broken()})())
+        monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": Broken()})())
         watcher = a_turn()
         watcher.saw({"type": "tool_call", "name": "shell", "arguments": {}})
         watcher.finish()  # no exception is the assertion

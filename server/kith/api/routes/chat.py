@@ -15,7 +15,6 @@ from pathlib import Path
 from flask import Response, jsonify
 
 from kith.api.blueprint import api
-from kith.autonomy.prompts import _describe_call, _short_args
 from kith.config import (
     AGENT_DB_PATH,
     default_config,
@@ -30,6 +29,7 @@ from kith.schemas import (
     ChatRequestSchema,
 )
 from kith.services import conversations, history, memory_context, session_context
+from kith.services.activity import describe_call, short_args
 from kith.services.agent_loop import stream_agent
 
 #: What a conversation is for.
@@ -519,9 +519,9 @@ class _MindFeed:
 
     def _publish(self, kind: str, text: str, **fields) -> None:
         try:
-            from kith.autonomy.runner import runner
+            from kith.services.activity import feed
 
-            runner.publish(kind, text, conversation=self.conversation_id, **fields)
+            feed.publish(kind, text, conversation=self.conversation_id, **fields)
         except Exception:
             # A feed line must never be the thing that takes a turn down.
             pass
@@ -532,9 +532,9 @@ class _MindFeed:
             self.tools.append(event["name"])
             self._publish(
                 "tool",
-                _describe_call(event["name"], event.get("arguments") or {}),
+                describe_call(event["name"], event.get("arguments") or {}),
                 tool=event["name"],
-                args=_short_args(event.get("arguments") or {}),
+                args=short_args(event.get("arguments") or {}),
             )
         elif kind == "delta" and event.get("role") == "text":
             self.said += event.get("text") or ""
