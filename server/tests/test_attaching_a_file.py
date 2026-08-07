@@ -188,7 +188,8 @@ class TestTheComposerAndTheServerAgree:
         assert 'accept = "*"' in adapter, "the composer is restricting attachments by type again"
 
     def test_the_image_only_adapter_is_gone(self):
-        workspace = self._source("components", "workspace.tsx")
+        # `components/shell/workspace.tsx` since the loose components were grouped.
+        workspace = self._source("components", "shell", "workspace.tsx")
         # It accepts image/* only, and its send() hides the payload where the wire step was
         # not looking. Either alone breaks the feature.
         assert "SimpleImageAttachmentAdapter" not in workspace
@@ -200,7 +201,8 @@ class TestTheComposerAndTheServerAgree:
         assert "kithData" in wire or "attachment.content" in wire
 
     def test_the_attach_button_is_not_hidden_by_capability(self):
-        workspace = self._source("components", "workspace.tsx")
+        # `components/shell/workspace.tsx` since the loose components were grouped.
+        workspace = self._source("components", "shell", "workspace.tsx")
         # It used to appear only for models reporting vision, so on a text model a file could
         # not be attached at all — even though a file is exactly what a text model can use.
         assert "capabilities?.images ?" not in workspace

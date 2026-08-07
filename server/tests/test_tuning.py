@@ -231,17 +231,13 @@ class TestAKnobWithAFixedSetOfAnswers:
     def test_surrounding_space_is_forgiven(self):
         assert for_key("search_engine").coerce("  native  ") == "native"
 
-    @pytest.mark.parametrize(
-        "knob", [k for k in TUNABLES if k.choices], ids=lambda k: k.key
-    )
+    @pytest.mark.parametrize("knob", [k for k in TUNABLES if k.choices], ids=lambda k: k.key)
     def test_choices_only_ever_sit_on_a_text_knob(self, knob):
         # A number with an enum is a number with the wrong `kind`, and the interface would
         # render a select full of digits.
         assert knob.kind == "text"
 
-    @pytest.mark.parametrize(
-        "knob", [k for k in TUNABLES if k.choices], ids=lambda k: k.key
-    )
+    @pytest.mark.parametrize("knob", [k for k in TUNABLES if k.choices], ids=lambda k: k.key)
     def test_the_default_is_one_of_them(self, knob):
         # Otherwise the first save refuses the value the person was already running with.
         assert knob.default in knob.choices
@@ -319,7 +315,8 @@ class TestOneWordPerConcept:
         assert knob.unit != "ticks", f"{knob.key}: unit is 'ticks' — should be 'steps'"
 
     @pytest.mark.parametrize(
-        "knob", [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
+        "knob",
+        [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
         ids=lambda k: k.key,
     )
     def test_no_label_says_turn_outside_the_shared_cases(self, knob):
@@ -329,7 +326,8 @@ class TestOneWordPerConcept:
         )
 
     @pytest.mark.parametrize(
-        "knob", [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
+        "knob",
+        [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
         ids=lambda k: k.key,
     )
     def test_no_help_text_says_turn_outside_the_shared_cases(self, knob):

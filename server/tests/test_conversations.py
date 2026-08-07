@@ -124,7 +124,9 @@ class TestFullMessagesReplaysToolHistoryToo:
             opened["id"], "tool_call", {"id": "c0", "name": "read_file", "arguments": {"path": "config.py"}}
         )
         conversations.record_event(
-            opened["id"], "tool_result", {"id": "c0", "name": "read_file", "result": {"ok": True, "result": "DEBUG=True"}}
+            opened["id"],
+            "tool_result",
+            {"id": "c0", "name": "read_file", "result": {"ok": True, "result": "DEBUG=True"}},
         )
         conversations.record(db, opened["id"], "assistant", "It's set to debug mode.")
 
@@ -134,7 +136,11 @@ class TestFullMessagesReplaysToolHistoryToo:
                 "role": "assistant",
                 "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": "config.py"}}}],
             },
-            {"role": "tool", "tool_name": "read_file", "content": json.dumps({"ok": True, "result": "DEBUG=True"})},
+            {
+                "role": "tool",
+                "tool_name": "read_file",
+                "content": json.dumps({"ok": True, "result": "DEBUG=True"}),
+            },
             {"role": "assistant", "content": "It's set to debug mode."},
         ]
 
@@ -146,7 +152,9 @@ class TestFullMessagesReplaysToolHistoryToo:
         conversations.record(db, opened["id"], "user", "search two things")
         for call_id, query in (("c0", "roadmap"), ("c1", "pricing")):
             conversations.record_event(
-                opened["id"], "tool_call", {"id": call_id, "name": "web_search", "arguments": {"query": query}}
+                opened["id"],
+                "tool_call",
+                {"id": call_id, "name": "web_search", "arguments": {"query": query}},
             )
         for call_id, query in (("c0", "roadmap"), ("c1", "pricing")):
             conversations.record_event(
@@ -200,7 +208,9 @@ class TestFullMessagesReplaysToolHistoryToo:
         conversations.record_event(
             opened["id"], "tool_call", {"id": "c0", "name": "shell", "arguments": {"command": "two"}}
         )
-        conversations.record_event(opened["id"], "tool_result", {"id": "c0", "name": "shell", "result": "two ran"})
+        conversations.record_event(
+            opened["id"], "tool_result", {"id": "c0", "name": "shell", "result": "two ran"}
+        )
 
         pairs = [m for m in conversations.full_messages(opened["id"]) if m.get("tool_calls")]
         assert len(pairs) == 1

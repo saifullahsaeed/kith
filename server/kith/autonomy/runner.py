@@ -595,7 +595,7 @@ class AutonomyRunner:
         transcript, not a line in the live Mind feed that is gone the moment nobody is
         looking at it.
         """
-        from kith.api.routes.chat import _Recorder, _build_messages, _turn
+        from kith.api.routes.chat import _build_messages, _Recorder, _turn
         from kith.services import conversations
 
         config = default_config()
@@ -604,7 +604,7 @@ class AutonomyRunner:
             "briefly, the way you would mid-conversation, not a report — or that nothing "
             "has, if that's the honest answer.\n\n" + "\n".join(f"- {note}" for note in notes)
         )
-        history = conversations.full_messages(conversation_id) + [{"role": "user", "content": trigger}]
+        history = [*conversations.full_messages(conversation_id), {"role": "user", "content": trigger}]
         messages = _build_messages(history, config, conversation_id)
         conversations.record(AGENT_DB_PATH, conversation_id, "user", trigger)
 
@@ -630,8 +630,12 @@ class AutonomyRunner:
         # Conversation-bound ones already ran, above, as a continuation of the chat that set
         # them — see `_fire_conversation_reminders`. What is left here has nowhere of its own
         # to report to, so it is fine to fold into whichever session this tick is on.
-        reminders_due = [r for r in repo.reminders.due_reminders(AGENT_DB_PATH, now) if not r.get("conversation_id")]
-        schedules_due = [s for s in repo.schedules.due_schedules(AGENT_DB_PATH, now) if not s.get("conversation_id")]
+        reminders_due = [
+            r for r in repo.reminders.due_reminders(AGENT_DB_PATH, now) if not r.get("conversation_id")
+        ]
+        schedules_due = [
+            s for s in repo.schedules.due_schedules(AGENT_DB_PATH, now) if not s.get("conversation_id")
+        ]
         due = bool(reminders_due or schedules_due)
         # A laid-out project with no tasks under it is work, not quiet. Read before
         # `idle` is computed, because otherwise a whole project sits inert and he rests.

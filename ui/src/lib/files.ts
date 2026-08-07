@@ -88,7 +88,7 @@ export function looksLikeHisFile(text: string): boolean {
 }
 
 /** His home inside the sandbox — stripped so the server's own path anchoring applies. */
-export function toSandboxPath(text: string): string {
+function toSandboxPath(text: string): string {
   return text
     .trim()
     .replace(/^\/home\/kith\//, "")
@@ -130,8 +130,12 @@ async function open(body: unknown): Promise<HandoffResult> {
  * anything executable is revealed rather than run, and that call is better made where the
  * file is than by a renderer that would have to ask first.
  */
-export function openWorkspaceFile(path: string, reveal = false): Promise<HandoffResult> {
-  return open({ path, reveal });
+export function openWorkspaceFile(
+  path: string,
+  reveal = false,
+  projectId?: number | null,
+): Promise<HandoffResult> {
+  return open({ path, reveal, ...(projectId != null ? { projectId } : {}) });
 }
 
 /** Open or reveal an absolute path — his databases, his persona folder, a transcript.
@@ -146,8 +150,10 @@ export async function openOnHost(hostPath: string, reveal = false): Promise<void
  * Fetched rather than used as a `src` directly: /api needs the token header, and an
  * `<img src>` cannot carry one — so an image element pointed at this URL gets a 401 and
  * shows a broken-image icon with nothing in the console to explain it. See `useMedia`. */
-export function rawFileUrl(path: string): string {
-  return `/api/workspace/raw?path=${encodeURIComponent(path)}`;
+export function rawFileUrl(path: string, projectId?: number | null): string {
+  const q = new URLSearchParams({ path });
+  if (projectId != null) q.set("projectId", String(projectId));
+  return `/api/workspace/raw?${q}`;
 }
 
 // -- the viewer, openable from anywhere ------------------------------------- //
@@ -188,25 +194,48 @@ export const makeFolder = (path: string) => change("/api/workspace/folder", { pa
 export const rename = (path: string, to: string) => change("/api/workspace/rename", { path, to });
 export const remove = (path: string) => change("/api/workspace/file", { path }, "DELETE");
 
-/** Copy text to the clipboard, falling back for a non-secure origin.
+/** Copy text to the clipboard, and say whether it actually happened.
  *
  * `navigator.clipboard` needs a secure context, and Kith is served over plain http on
- * loopback — which browsers do treat as secure, but Electron's behaviour has varied, so
- * the old path stays as a backstop rather than leaving "Copy path" silently dead. */
-export async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return;
-  } catch {
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.append(area);
-    area.select();
-    document.execCommand("copy");
-    area.remove();
+ * loopback — which browsers do treat as secure, but the desktop app's webview can refuse it
+ * (unfocused window, a permission it never granted) the same way a browser does. The version
+ * that used to live here had no idea: it fired the write and its callers showed "Copied" a
+ * moment later regardless, so a silently-refused copy looked identical to a real one, and the
+ * only way anyone found out was pasting and getting the wrong thing.
+ *
+ * There were two of these for a while — this one and a corrected copy inside the file viewer,
+ * which is where the boolean was worked out. Everything that copied through *this* one kept
+ * lying, including a comment elsewhere asserting they were already the same function. One
+ * implementation now, and it is the one that tells the truth.
+ *
+ * Falling back to `execCommand("copy")` on a hidden textarea isn't nostalgia — it uses a
+ * different permission path, so it's a real second attempt rather than the same failure twice.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the legacy path below.
+    }
   }
+  if (typeof document === "undefined") return false;
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  document.body.removeChild(area);
+  return ok;
 }
 
 /** "2.4 KB", "1.1 MB" — sizes as a person reads them. */

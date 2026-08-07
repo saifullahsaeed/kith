@@ -4,8 +4,8 @@ Measured across 1,071 recorded rounds of the same `openai/gpt-5.6-luna`, restric
 input-dominated rounds so the response length cannot skew the rate:
 
     usual                     $0.13 per million uncached prompt tokens
-    2026-08-03 15:54–15:58    $1.01–1.10   (and `cachedTokens: 0` on four of them)
-    2026-08-01 23:24–23:30    $4.12–6.59
+    2026-08-03 15:54-15:58    $1.01-1.10   (and `cachedTokens: 0` on four of them)
+    2026-08-01 23:24-23:30    $4.12-6.59
 
 Those are contiguous blocks at one rate, not scattered outliers — which is the signature of the
 mechanism that replaced pinning. `openrouter_provider` was deliberately left blank because the
@@ -80,7 +80,7 @@ class TestTheCeiling:
 class TestNotPayingForACacheWeDoNotGet:
     def test_requiring_full_capability_is_now_the_default(self):
         """Off, a round may be served by a host that does not do prompt caching. Four recorded
-        rounds came back with `cachedTokens: 0` on prompts of 24k–56k tokens."""
+        rounds came back with `cachedTokens: 0` on prompts of 24k-56k tokens."""
         assert tuning.value("require_provider_parameters") is True
         assert _provider(require_provider_parameters=True)["require_parameters"] is True
 

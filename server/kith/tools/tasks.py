@@ -243,6 +243,7 @@ _VERIFY_MIN_BRIEF = 80
 #: gates a task that carries a written brief.
 _MIN_DONE_CHARS = 24
 
+
 def _reopen_if_finished(path: Path, project_id: int | None) -> str:
     """Filing work into a finished project means it is not finished. Say so, and reopen it.
 

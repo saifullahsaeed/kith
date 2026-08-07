@@ -22,7 +22,7 @@ and been unable to see it.
 Second bug in the same function: the working file was addressed as `work/task-N.md` while the
 persona and `project_files.ensure` both say `.kith/work/`. The person moved their `work/` folder
 into `.kith/` and every tick went on instructing him to write outside it, so the notes split down
-the middle — tasks 34–41 under `.kith/work/`, 42–50 under `work/` — and the prompt could only
+the middle — tasks 34-41 under `.kith/work/`, 42-50 under `work/` — and the prompt could only
 ever see one side.
 """
 
@@ -74,7 +74,7 @@ class TestHeSeesWhatHeWrote:
 
 class TestTheirCorrectionsAreNeverDropped:
     def test_a_note_from_the_person_survives_a_full_budget(self):
-        """"sqlite is not being used any more, we moved to postgres" is exactly the sentence that
+        """ "sqlite is not being used any more, we moved to postgres" is exactly the sentence that
         must not fall off the end of a budget. Theirs are rare and usually a correction."""
         flood = [_mine("x" * 900) for _ in range(20)]  # far past the budget
         correction = _theirs("stop using sqlite, this project is on postgres now")
@@ -124,12 +124,12 @@ class TestTheWorkingFileIsWhereThePersonaSaysItIs:
         """`project_files.ensure` creates `.kith/work/` and the persona sends notes there. This
         line said `work/`, so following either one put the file where the other could not see it."""
         source = prompts.__loader__.get_source("kith.autonomy.prompts")
-        assert 'f".kith/work/task-{detail[\'id\']}.md"' in source
+        assert "f\".kith/work/task-{detail['id']}.md\"" in source
 
     def test_the_pre_move_location_is_still_read(self):
         """Nine real files sit at `work/task-4X.md`. Moving the path must not orphan them."""
         source = prompts.__loader__.get_source("kith.autonomy.prompts")
-        assert 'f"work/task-{detail[\'id\']}.md"' in source
+        assert "f\"work/task-{detail['id']}.md\"" in source
         # And only ever read — the instruction he is given names the new location.
         instruct = source.split("You have no working file")[1][:200]
         assert "work_path" in instruct

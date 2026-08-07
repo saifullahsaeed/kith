@@ -2,7 +2,7 @@
 
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
-import { PermissionPrompt } from "@/components/permission-prompt";
+import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
 import { ContextMeter } from "@/components/assistant-ui/context-meter";
@@ -22,7 +22,7 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
-import { PresenceOrb } from "@/components/presence";
+import { PresenceOrb } from "@/components/shell/presence";
 import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { USAGE_PART } from "@/lib/backend/adapter";

@@ -150,7 +150,7 @@ function locate(pieces: Piece[], at: number): { node: Text; offset: number } | n
 /** Whether this browser can paint highlights. Chromium always can, which is what ships; an
  *  older Safari cannot, and there the bar still counts and still scrolls — only the tint is
  *  missing, which is a degraded find rather than a broken one. */
-export const canHighlight = (): boolean => typeof CSS !== "undefined" && "highlights" in CSS;
+const canHighlight = (): boolean => typeof CSS !== "undefined" && "highlights" in CSS;
 
 const ALL = "kith-find";
 const CURRENT = "kith-find-current";

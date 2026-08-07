@@ -33,7 +33,7 @@ export type PanelTab = (typeof TABS)[number];
 const SLUG_FOR: Partial<Record<PanelTab, string>> = { memory: "memories" };
 const TAB_FOR_SLUG: Record<string, PanelTab> = { memories: "memory" };
 
-export function tabSlug(tab: PanelTab): string {
+function tabSlug(tab: PanelTab): string {
   return SLUG_FOR[tab] ?? tab;
 }
 

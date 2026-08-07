@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { PresenceOrb } from "@/components/presence";
+import { PresenceOrb } from "@/components/shell/presence";
 import { AccessStep } from "@/components/onboarding/access-step";
 import { ConnectStep } from "@/components/onboarding/connect-step";
 import { ModelStep } from "@/components/onboarding/model-step";

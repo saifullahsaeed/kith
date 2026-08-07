@@ -54,9 +54,7 @@ class TestWhatGetsWrittenDown:
         recorder.finish()
 
         written = [
-            json.loads(line)
-            for line in (tmp_path / "c1.jsonl").read_text().splitlines()
-            if line.strip()
+            json.loads(line) for line in (tmp_path / "c1.jsonl").read_text().splitlines() if line.strip()
         ]
         readings = [r for r in written if r.get("type") == "context"]
         assert len(readings) == 1, f"{len(readings)} readings written; forty rounds would be forty"
@@ -171,7 +169,9 @@ class TestReopeningTheConversation:
         assert reading["baseline"]["used"] == 10_000
         assert reading["context"]["used"] == 213_700
 
-    def test_an_older_conversation_with_no_baseline_field_does_not_break(self, db: Path, tmp_path, monkeypatch):
+    def test_an_older_conversation_with_no_baseline_field_does_not_break(
+        self, db: Path, tmp_path, monkeypatch
+    ):
         """A transcript written before this field existed. `timeline()` must not crash reading
         it, and the UI's fallback (`baseline ?? context`) is what makes it show something
         sensible rather than nothing."""

@@ -51,7 +51,7 @@ def _provider(config: Config | None = None) -> dict:
 class TestRequiringACapableProvider:
     def test_on_by_default_after_measuring_what_off_cost(self):
         """Off, a round could be served by a host that does not do prompt caching — and four
-        recorded rounds on 2026-08-03 came back with `cachedTokens: 0` on prompts of 24k–56k,
+        recorded rounds on 2026-08-03 came back with `cachedTokens: 0` on prompts of 24k-56k,
         every token billed fresh, at ~8x the usual unit price as well. Prompt caching is most of
         the economics of a long turn, so a host that silently drops it is not a cheaper host."""
         assert _provider()["require_parameters"] is True

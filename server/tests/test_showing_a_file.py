@@ -225,8 +225,13 @@ class TestTheViewerAndTheServerAgree:
 
         from kith import settings
 
-        source = (settings.SERVER_ROOT.parent / "ui" / "src" / "components" / "file-view.tsx").read_text()
-        assert "const IMAGES" in source, "the IMAGES table has been renamed; update this test"
+        # `components/files/kinds.ts` — what the viewer decides a file *is*, from its name.
+        # It was `components/file-view.tsx` until that 1,073-line module was split; the table
+        # itself is unchanged.
+        source = (
+            settings.SERVER_ROOT.parent / "ui" / "src" / "components" / "files" / "kinds.ts"
+        ).read_text()
+        assert "const IMAGES" in source, "the IMAGES table has moved or been renamed; update this test"
         table = source.split("const IMAGES", 1)[1].split("\n};", 1)[0]
         return set(re.findall(r"^\s{2}(\w+):", table, re.M)) | {"pdf"}
 

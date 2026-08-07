@@ -23,11 +23,6 @@ export async function markAllMessagesRead(): Promise<void> {
   if (!res.ok) throw new Error("mark all read failed");
 }
 
-export async function markMessageRead(id: number): Promise<void> {
-  const res = await fetch(`/api/messages/${id}/read`, { method: "POST" });
-  if (!res.ok) throw new Error("mark read failed");
-}
-
 /** Send a message to Kith on his own channel — he sees it on his next step and replies. */
 export async function sendMessage(body: string): Promise<void> {
   const res = await fetch("/api/messages", {

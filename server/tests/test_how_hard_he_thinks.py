@@ -49,6 +49,4 @@ class TestBlankEffortLeavesItToTheThinkToggle:
         just being dropped with no substitute at all. Falling back to the toggle is that
         substitute, not a silent no-op.
         """
-        assert _reasoning_options(_config(effort="ludicrous", think=True)) == {
-            "reasoning": {"enabled": True}
-        }
+        assert _reasoning_options(_config(effort="ludicrous", think=True)) == {"reasoning": {"enabled": True}}

@@ -7,9 +7,38 @@ from pathlib import Path
 from flask import jsonify, request, send_file
 
 from kith.api.blueprint import api
+from kith.config import AGENT_DB_PATH
 from kith.infra import default_app
 from kith.infra import workspace as sandbox
+from kith.infra.db import repositories as repo
 from kith.services import handoff
+
+
+def _anchor(path: str, project_id: str | None) -> str:
+    """A relative path, anchored to a specific project's folder rather than guessed at.
+
+    `resolve()` anchors a relative path to the *active session's* linked project — which
+    a plain GET from the interface has none of, so it fell back to the global workspace
+    root every time. That is invisible for anything he wrote directly into that root, and
+    a flat "there's no <path>" for everything else: a task's deliverable, its plan doc,
+    any relative path shown for a project with its own folder — all stored relative to the
+    project that was live when he wrote them, none of it re-derivable from the path alone.
+
+    The interface already knows which project a deliverable or a task's plan belongs to,
+    so it is the one piece of context worth passing explicitly rather than assuming.
+    Absolute paths and requests with no project id are returned unchanged — resolve() and
+    the global root remain exactly as they were for everything else that reads through here.
+    """
+    if not project_id or Path(path).expanduser().is_absolute():
+        return path
+    try:
+        project = repo.projects.get_project(AGENT_DB_PATH, int(project_id))
+        directory = str((project or {}).get("directory") or "").strip()
+        if directory:
+            return str(Path(directory) / path)
+    except Exception:
+        pass
+    return path
 
 
 @api.get("/workspace")
@@ -34,6 +63,7 @@ def workspace_file():
     path = request.args.get("path") or ""
     if not path:
         return jsonify({"error": "path required"}), 400
+    path = _anchor(path, request.args.get("projectId"))
     try:
         # read_raw, not read_file: the viewer wants the real file, not the
         # line-numbered window the model reads.
@@ -55,6 +85,7 @@ def workspace_raw():
     path = request.args.get("path") or ""
     if not path:
         return jsonify({"error": "path required"}), 400
+    path = _anchor(path, request.args.get("projectId"))
     try:
         target, kind = sandbox.media_file(path)
     except Exception as exc:
@@ -86,6 +117,7 @@ def workspace_open():
         # One of his files, by workspace path: the common case, and the whole action in
         # a single request.
         if path:
+            path = _anchor(path, body.get("projectId"))
             return jsonify({"ok": True, **handoff.open_workspace_file(path, reveal=reveal).public()})
         # An absolute path — his databases, his persona folder, a transcript. Those are
         # not under his workspace, so they arrive already resolved.

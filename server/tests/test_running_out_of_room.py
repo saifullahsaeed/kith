@@ -390,7 +390,7 @@ class TestTheMeterMatchesWhatWasActuallySent:
         )
         assert len(seen) == len(contexts), "one context reading is expected per round"
 
-        for convo_sent, reading in zip(seen, contexts):
+        for convo_sent, reading in zip(seen, contexts, strict=False):
             sent_chars = conversation_chars(convo_sent)
             # The ratio drifts round to round as real stats come in, so this isn't an exact
             # equality — it is a ceiling. What matters is the direction of the old bug: the

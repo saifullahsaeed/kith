@@ -239,9 +239,7 @@ class TestASlowSuiteDoesNotBlockOrGetKilled:
 
     def test_a_different_run_while_one_is_in_flight_is_refused(self, project):
         (project / "tests" / "test_a.py").write_text(
-            "import time\n"
-            "def test_a():\n    time.sleep(1.5)\n"
-            "def test_b():\n    assert True\n"
+            "import time\ndef test_a():\n    time.sleep(1.5)\ndef test_b():\n    assert True\n"
         )
 
         first = testing.run(".", wait=0.3)
@@ -263,9 +261,7 @@ class TestTheNoteEscalatesOnceItIsGenuinelySlow:
     stop checking in this turn — set a reminder and answer now instead."""
 
     def test_the_first_still_running_does_not_mention_a_reminder(self, project):
-        (project / "tests" / "test_a.py").write_text(
-            "import time\ndef test_slow():\n    time.sleep(1.5)\n"
-        )
+        (project / "tests" / "test_a.py").write_text("import time\ndef test_slow():\n    time.sleep(1.5)\n")
 
         first = testing.run(".", wait=0.3)
 
@@ -275,9 +271,7 @@ class TestTheNoteEscalatesOnceItIsGenuinelySlow:
         testing.run(".", wait=5)  # drain it so teardown isn't racing a live one
 
     def test_the_second_still_running_says_this_is_genuinely_slow(self, project):
-        (project / "tests" / "test_a.py").write_text(
-            "import time\ndef test_slow():\n    time.sleep(1.5)\n"
-        )
+        (project / "tests" / "test_a.py").write_text("import time\ndef test_slow():\n    time.sleep(1.5)\n")
 
         testing.run(".", wait=0.3)
         second = testing.run(".", wait=0.3)
@@ -360,7 +354,7 @@ class TestBackgroundProcesses:
         process stuck waiting for a keypress looks identical to a healthy slow one — nothing
         in `check` tells them apart. Only one of the non-interactive vars is asserted; the
         point is that the whole set arrived, not any one var in particular."""
-        result = running.start("echo \"terminal-prompt=$GIT_TERMINAL_PROMPT\"", "quiet-git")
+        result = running.start('echo "terminal-prompt=$GIT_TERMINAL_PROMPT"', "quiet-git")
         assert "terminal-prompt=0" in result["output"]
 
     def test_full_output_is_not_capped_like_check_is(self, running):

@@ -107,8 +107,8 @@ def repo_map(path: Path, args: dict):
     "the failing test names rather than the whole log. Pass `filter` with a file path or a "
     "test name to run just that one while you are fixing it — much faster, and the noise of "
     "the other two hundred is not what you need. A slow suite does not block you: if it is "
-    "not done after a wait you get back `status: \"running\"` instead of the usual counts. "
-    "One repeat check is fine. A SECOND `status: \"running\"` in the same turn means it is "
+    'not done after a wait you get back `status: "running"` instead of the usual counts. '
+    'One repeat check is fine. A SECOND `status: "running"` in the same turn means it is '
     "genuinely slow — at that point do not sit in this turn checking a third time. Say it's "
     "running, use set_reminder for a few minutes out, and finish the turn; calling run_tests "
     "again later re-attaches to the same run and hands back the real result whenever it "

@@ -587,7 +587,7 @@ TUNABLES: tuple[Tunable, ...] = (
         # On, after measuring what off cost. Prompt caching is ~90% of the economics of a long
         # turn, and with this off a round can be served by a host that simply does not do it:
         # four recorded rounds on 2026-08-03 came back with `cachedTokens: 0` on prompts of
-        # 24k–56k tokens, every one billed fresh, at a unit price ~8x the usual host as well.
+        # 24k-56k tokens, every one billed fresh, at a unit price ~8x the usual host as well.
         # The "goes dark" risk is real but it is loud and recoverable; paying full price for a
         # cache we asked for and did not get is silent and was running for days.
         default=True,
@@ -629,6 +629,20 @@ TUNABLES: tuple[Tunable, ...] = (
         minimum=0.0,
         maximum=1_000.0,
         unit="$/Mtok",
+    ),
+    Tunable(
+        key="landing_effort",
+        env="KITH_LANDING_EFFORT",
+        label="Reasoning effort while landing",
+        help="How hard he thinks on the rounds held back by 'rounds saved for finishing' — "
+        "recording, delivering, ticking off, handing back, not gathering or deciding what to "
+        "do next. That is not a reasoning-heavy phase, and reasoning is charged as output "
+        "tokens regardless of whether any of it is shown. Blank leaves it to the model's own "
+        "default for every round, landing included.",
+        default="low",
+        group="connections",
+        kind="text",
+        choices=("", "none", "low", "medium", "high", "xhigh", "max"),
     ),
     Tunable(
         key="zero_data_retention",

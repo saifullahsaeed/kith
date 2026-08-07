@@ -54,6 +54,7 @@ def _is_repeat(name: str, seen: int) -> bool:
     """
     return seen >= 2 and name not in _POLL_TOOLS
 
+
 # Enough to collapse the batches of six searches he actually makes, low enough
 # that a round can't open dozens of sockets (or docker execs) at once.
 
@@ -718,6 +719,10 @@ def _run_turn(
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
     budget = max_rounds or tuning.value("max_rounds")
     reserve = min(tuning.value("landing_reserve"), max(2, budget // 3))
+    # Read once, same as `reserve` above: recording, delivering, ticking off, handing back is
+    # not a reasoning-heavy phase, and reasoning is billed as output tokens whether or not any
+    # of it is shown. Blank means "leave every round exactly as it was" — no override built.
+    landing_effort = str(tuning.value("landing_effort") or "").strip().lower()
     # Every MCP tool, frozen for this turn. Taken once rather than per round on purpose: the
     # tools block is part of the cached prompt prefix, so a server dying — or being switched
     # off in another tab — would shrink it mid-turn and discard the whole cache on the next
@@ -730,9 +735,7 @@ def _run_turn(
     # identical once they are all in the tools block. Resolved once per turn for the same reason
     # the snapshot is: these are inputs to a per-round accounting and must not touch a database
     # inside the request path.
-    mcp_names = frozenset(
-        str(((schema.get("function") or {}).get("name")) or "") for schema in mcp_tools
-    )
+    mcp_names = frozenset(str(((schema.get("function") or {}).get("name")) or "") for schema in mcp_tools)
     try:
         from kith.services import custom_tools as custom_tools_svc
 
@@ -816,7 +819,13 @@ def _run_turn(
         #
         # Costed with the ratio `room` calibrated against what the provider actually charged for
         # the last round, so the number shown matches the bill instead of a constant.
-        def take_reading() -> ledger.Ledger:
+        #
+        # `schemas` is bound as a default rather than closed over. Every call below happens in
+        # the same round that defined this, so closing over it reads correctly today — but
+        # `schemas` is rebound each round by the three narrowings above, so a call that ever
+        # outlived its round would silently cost the wrong toolset. Binding it says which round's
+        # tools this reading is of.
+        def take_reading(schemas: list[dict] = schemas) -> ledger.Ledger:
             return ledger.take(
                 convo,
                 schemas,
@@ -850,9 +859,7 @@ def _run_turn(
             folded = False
             if compaction.already_folded(convo) < _MAX_FOLDS:
                 yield {"type": "compacting", "used": book.used, "window": book.window}
-                folded = compaction.fold(
-                    convo, partial(_summarise, config=config, host=host)
-                )
+                folded = compaction.fold(convo, partial(_summarise, config=config, host=host))
             if not folded:
                 # Either it has been folded as often as is worth paying for, or there was no safe
                 # place to cut. Fall back to the older shaving, which is lossy and breaks the
@@ -888,7 +895,12 @@ def _run_turn(
         # Measured now, before the request, so it describes what was actually sent.
         sent = conversation_chars(convo, schemas)
 
-        for event in _stream_once(convo, config, host, tools=schemas):
+        # Only the request itself is lighter — `config` elsewhere in this loop (context
+        # window, persona, num_predict) is untouched, and the override does not survive past
+        # this one call.
+        round_config = replace(config, effort=landing_effort) if landing and landing_effort else config
+
+        for event in _stream_once(convo, round_config, host, tools=schemas):
             kind = event["type"]
             if kind == "delta":
                 yield event  # forward reasoning/answer tokens
@@ -1043,9 +1055,7 @@ def _run_turn(
                     # redesigning a UI. The data URI is taken out of the tool result so the
                     # same 600KB is not also sitting there as base64 text.
                     convo.append(
-                        _tool_result_message(
-                            convo, step["name"], json.dumps(_without_image(result))
-                        )
+                        _tool_result_message(convo, step["name"], json.dumps(_without_image(result)))
                     )
                     convo.append(
                         {

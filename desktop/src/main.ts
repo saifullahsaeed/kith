@@ -22,7 +22,7 @@
 
 import { app, dialog } from "electron";
 
-import { loadWhenReady, recoverFromBackendRestarts, waitForBackend } from "./backend";
+import { loadWhenReady, recoverFromBackendRestarts, waitForBackend } from "./server/backend";
 import { APP_ICON, BACKEND_ORIGIN, BACKEND_WAIT_MS } from "./config";
 import {
   enableSandbox,
@@ -30,11 +30,11 @@ import {
   installApplicationMenu,
   lockDownPermissions,
 } from "./hardening";
-import { registerRenderer, unregisterRenderer } from "./renderer-registration";
-import { startRenderService } from "./render-service";
-import { createTray, destroyTray } from "./tray";
-import { ensureServer, stopServer } from "./server-process";
-import { createMainWindow, markQuitting, showMainWindow } from "./window";
+import { registerRenderer, unregisterRenderer } from "./render/renderer-registration";
+import { startRenderService } from "./render/render-service";
+import { createTray, destroyTray } from "./window/tray";
+import { ensureServer, stopServer } from "./server/server-process";
+import { createMainWindow, markQuitting, showMainWindow } from "./window/window";
 
 // A second instance would fight the first over the same backend and the same
 // window; hand focus to the original instead.

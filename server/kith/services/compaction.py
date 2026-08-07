@@ -113,9 +113,7 @@ def _as_text(convo: list[dict[str, Any]]) -> str:
         content = message.get("content")
         if isinstance(content, list):
             content = " ".join(
-                str(part.get("text") or "[picture]")
-                for part in content
-                if isinstance(part, dict)
+                str(part.get("text") or "[picture]") for part in content if isinstance(part, dict)
             )
         text = str(content or "")
         for call in message.get("tool_calls") or []:

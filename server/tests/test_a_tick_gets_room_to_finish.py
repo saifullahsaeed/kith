@@ -58,7 +58,7 @@ class TestTheRoundBudget:
         """Captured once at construction it would need a restart, and the whole point of these
         being settings is that you can turn one up while he is working."""
         source = _runner_source()
-        assert "tuning.value(\"tick_max_rounds\")" in source
+        assert 'tuning.value("tick_max_rounds")' in source
 
 
 class TestTheOutputCap:

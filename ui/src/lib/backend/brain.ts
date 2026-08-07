@@ -261,8 +261,13 @@ export async function fetchWorkspace(
   return (await res.json()) as { path: string; entries: WorkspaceEntry[] };
 }
 
-export async function fetchWorkspaceFile(path: string): Promise<{ path: string; content: string }> {
-  const res = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+export async function fetchWorkspaceFile(
+  path: string,
+  projectId?: number | null,
+): Promise<{ path: string; content: string }> {
+  const q = new URLSearchParams({ path });
+  if (projectId != null) q.set("projectId", String(projectId));
+  const res = await fetch(`/api/workspace/file?${q}`);
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(err.error || "couldn't read that file");

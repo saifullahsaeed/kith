@@ -53,7 +53,7 @@ def _focus_prompt(detail: dict, active: list[dict]) -> str:
     # `.kith/work/`, matching the persona and `project_files.ensure` — which both said so while
     # this line said `work/`. The person moved their `work/` folder into `.kith/` and every tick
     # went on instructing him to write outside it, so the notes ended up split down the middle:
-    # tasks 34–41 under `.kith/work/`, tasks 42–50 under `work/`, and the prompt could only ever
+    # tasks 34-41 under `.kith/work/`, tasks 42-50 under `work/`, and the prompt could only ever
     # see one of the two.
     work_path = f".kith/work/task-{detail['id']}.md"
     saved = _read_working_file(work_path)

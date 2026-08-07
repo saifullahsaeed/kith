@@ -100,15 +100,15 @@ class TestADueReminderContinuesItsOwnChat:
         self, db, monkeypatch, no_generic_step, stub_chat_reply
     ):
         conv = conversations.start(db, "hi")["id"]
-        added = repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "check it", conversation_id=conv)
+        repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "check it", conversation_id=conv)
         runner = runner_on(db, monkeypatch)
 
         runner._tick()
 
         assert repo.reminders.list_reminders(db, status="pending") == []
-        remaining = [r for r in repo.reminders.list_reminders(db) if r["id"] == added["id"]]
-        # list_reminders(status=None) with no filter would show it if still pending; confirm
-        # via due_reminders instead, which only ever returns "pending".
+        # Asked of `due_reminders` rather than of the unfiltered list, since that only ever
+        # returns "pending" — a reminder still owing would come back from a date far enough out
+        # that nothing else could explain it.
         assert not repo.reminders.due_reminders(db, "2099-01-01T00:00:00+00:00")
 
     def test_two_reminders_due_for_the_same_chat_become_one_continuation(

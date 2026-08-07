@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
-from kith.tools import sources
+from kith.services import sources
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 

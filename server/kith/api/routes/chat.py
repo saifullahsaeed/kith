@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import base64
+import contextvars
 import itertools
 import json
+import queue
 import re
+import threading
 import time
 from pathlib import Path
 
-from flask import Response
+from flask import Response, jsonify
 
 from kith.api.blueprint import api
 from kith.autonomy.prompts import _describe_call, _short_args
@@ -73,6 +76,73 @@ CHAT_DIRECTIVE = (
 )
 
 
+#: Turns in flight, by conversation, so Stop has something to set.
+#:
+#: A turn used to be stopped by hanging up: the client aborted the fetch, the response generator
+#: raised GeneratorExit, and the turn died with it. That is gone now the turn runs on its own —
+#: which is the point, since it is also what killed a turn when you merely switched conversations
+#: — so stopping has to be said out loud rather than inferred from a closed socket. The two
+#: things were never the same intent; they only looked the same over HTTP.
+#:
+#: One slot per conversation, but the switch belongs to a *turn*, and a conversation outlives
+#: the turn running in it. That gap is not theoretical now nothing hangs up: send a message,
+#: switch away, come back and send another, and two turns share this dict. Reached through the
+#: four helpers below rather than directly, because every one of them turns on the identity of
+#: the event rather than on the key — see `_disarm` for the bug that reads as "Stop does
+#: nothing".
+_RUNNING: dict[str, threading.Event] = {}
+#: Held across read-then-write on `_RUNNING`. The turns contending for it are on separate
+#: threads by design, so "check whether this is still mine, then remove it" has to be one step.
+_RUNNING_LOCK = threading.Lock()
+
+
+def _arm(conversation_id: str) -> threading.Event:
+    """The switch for a turn about to start, and the one it must read for the rest of its life.
+
+    Returned rather than looked up again later. A turn that re-reads `_RUNNING[id]` between
+    events is reading whichever turn started most recently, which is how one click stopped two.
+    """
+    event = threading.Event()
+    with _RUNNING_LOCK:
+        _RUNNING[conversation_id] = event
+    return event
+
+
+def _disarm(conversation_id: str, event: threading.Event) -> None:
+    """Forget a finished turn's switch — but only if it is still the current one.
+
+    The `if` is the whole point. An unconditional `pop` meant the first turn to *finish*
+    deleted the entry a still-running turn was registered under, and Stop then answered
+    `{"stopping": false}` for a turn visibly in progress.
+    """
+    with _RUNNING_LOCK:
+        if _RUNNING.get(conversation_id) is event:
+            del _RUNNING[conversation_id]
+
+
+def _current(conversation_id: str) -> threading.Event | None:
+    with _RUNNING_LOCK:
+        return _RUNNING.get(conversation_id)
+
+
+def _stop(conversation_id: str) -> bool:
+    """Ask the turn running in a conversation to stop. False if there was none."""
+    event = _current(conversation_id)
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
+@api.post("/chat/<conversation_id>/stop")
+@api.doc(
+    summary="Stop the turn running in a conversation",
+    description="Asks it to stop after the event it is on. Returns whether there was one.",
+)
+def stop_turn(conversation_id: str):
+    return jsonify({"stopping": _stop(conversation_id)})
+
+
 def _build_messages(messages, config, conversation_id: str = ""):
     """The persona, then the turns, then the state he is in right now.
 
@@ -123,7 +193,13 @@ def _build_messages(messages, config, conversation_id: str = ""):
             continue
         if role == "tool":
             # A replayed tool result. Passed straight through, same reason.
-            out.append({"role": "tool", "tool_name": message.get("tool_name", ""), "content": message.get("content", "")})
+            out.append(
+                {
+                    "role": "tool",
+                    "tool_name": message.get("tool_name", ""),
+                    "content": message.get("content", ""),
+                }
+            )
             continue
         if role not in ("user", "assistant"):
             continue
@@ -540,8 +616,9 @@ def chat(payload):
         # the transcript rebuilds the real thing, tool history included. Taken whole rather
         # than just its text, so an attachment riding on it isn't dropped now that it's no
         # longer simply "the tail of the list we were using anyway".
-        history_messages = conversations.full_messages(conversation_id) + [
-            latest_message or {"role": "user", "content": latest}
+        history_messages = [
+            *conversations.full_messages(conversation_id),
+            latest_message or {"role": "user", "content": latest},
         ]
     else:
         conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
@@ -549,28 +626,78 @@ def chat(payload):
     messages = _build_messages(history_messages, config, conversation_id)
     conversations.record(AGENT_DB_PATH, conversation_id, "user", latest)
 
-    def generate():
-        # Tell the client which conversation it is in before anything else, so a chat
-        # started without an id can attach itself and reload into the same place.
-        yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
-        # A turn is a loop, and the transcript keeps its shape: what he reasoned, what he
-        # said, what he called and what came back, in the order it happened. Anything less
-        # and a resumed conversation is a summary of itself.
-        recorder = _Recorder(conversation_id)
+    # A turn is a loop, and the transcript keeps its shape: what he reasoned, what he said,
+    # what he called and what came back, in the order it happened. Anything less and a resumed
+    # conversation is a summary of itself.
+    recorder = _Recorder(conversation_id)
+    lines: queue.Queue = queue.Queue()
+
+    # Held as a local for the life of this turn, not re-read from `_RUNNING` between events.
+    # See `_arm`: the dict says which turn is current, and a turn asking that question about
+    # itself gets the wrong answer the moment a second one starts in the same conversation.
+    stopping = _arm(conversation_id)
+
+    def work():
+        """Advance the turn to the end, whether or not anyone is still reading.
+
+        This used to be the body of the response generator, and that is what made the browser
+        load-bearing: a generator only advances when something pulls on it, and the thing
+        pulling was Flask writing to the socket. Close the tab, switch conversations, drop the
+        wifi, and the turn stopped mid-step — not because anything cancelled it, but because
+        nothing was left asking for the next one. Work already done survived (the recorder
+        writes as it goes); the rest simply never happened.
+
+        Now the turn runs here, on its own, and the response below is only a reader. What a
+        disconnect costs you is the live view, not the turn.
+        """
         try:
             # Bound for the whole turn, so a tool that acts on a project records that this
             # session is the one working on it. Starting a project here and having nothing
             # know whose it was is how `conversations.project_id` stayed null from the day it
             # was added: read on every turn to pick the project memory, written by nobody.
+            #
+            # Entered *inside* the worker, not around it. The binding is a ContextVar, and a
+            # thread does not inherit its parent's — a `with` in the request thread would leave
+            # every tool call in here believing it belonged to no conversation, which is silent
+            # rather than loud: files still get written, and nothing records whose turn wrote
+            # them. See `copy_context` below for the other half of that.
             with session_context.working_in(conversation_id):
-                yield from _turn(recorder, messages, config, conversation_id, latest)
-        except GeneratorExit:
-            # Client disconnected (e.g. Stop was clicked) — end quietly, but keep what he
-            # had already said. A stopped answer is still an answer that was given.
-            recorder.finish(stopped=True)
-            raise
+                # The switch is handed to `_turn` rather than checked out here. Checking it
+                # here meant returning out of this loop with the generator suspended mid-body,
+                # and an abandoned generator is not a finished one: everything after its last
+                # `yield` — the tick-log row saying what the turn spent, the feed's own "done" —
+                # never ran. Stopping is the one case where you most want that row.
+                for line in _turn(recorder, messages, config, conversation_id, latest, stopping=stopping):
+                    lines.put(line)
         except Exception as exc:
-            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
+            # Broad on purpose: this thread is the only one running the turn, and the reader
+            # below cannot see an exception raised here — an uncaught one would leave it
+            # waiting on a queue nothing will ever put an end marker in.
+            lines.put(json.dumps({"type": "error", "message": str(exc)}) + "\n")
+        finally:
+            _disarm(conversation_id, stopping)
+            lines.put(None)  # the reader's only end-of-turn signal
+
+    # `copy_context().run` rather than a bare Thread target: everything else this request
+    # established in ContextVars — the project, the turn's scratch notes, whether this is
+    # unattended — has to travel with it. `turn_notes` is what keeps a turn to one checkpoint
+    # per repo, so losing it would take the checkpoint chain with it.
+    threading.Thread(
+        target=contextvars.copy_context().run,
+        args=(work,),
+        name=f"kith-turn-{conversation_id}",
+        daemon=True,
+    ).start()
+
+    def generate():
+        # Tell the client which conversation it is in before anything else, so a chat
+        # started without an id can attach itself and reload into the same place.
+        yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
+        while True:
+            line = lines.get()
+            if line is None:
+                return
+            yield line
 
     return Response(
         generate(),
@@ -579,56 +706,97 @@ def chat(payload):
     )
 
 
-def _turn(recorder: _Recorder, messages: list, config, conversation_id: str, opening: str = ""):
+def _turn(
+    recorder: _Recorder,
+    messages: list,
+    config,
+    conversation_id: str,
+    opening: str = "",
+    *,
+    stopping: threading.Event | None = None,
+):
     """One turn of the loop, streamed as it happens.
 
     Split out from the route so the session binding can wrap it in a `with` and every tool
     call inside knows which conversation it belongs to.
+
+    Ends itself, on every path — that is what the `finally` is for. A turn can be over five
+    ways: it finished, it reported an error, it died on the way out, someone stopped it, or the
+    caller gave up on the generator. Two of them each used to close the books at their own site
+    and the rest closed nothing at all, which is why a stopped turn left no tick-log row and a
+    feed that never said "done". One exit means the recorder and the feed are finished exactly
+    once, whoever decided the turn was over.
+
+    `stopping` is read between events, which is the only place a turn can be interrupted
+    without abandoning a tool call half-done. `agent_loop` has no cancellation hook of its own,
+    so this is as fine-grained as stopping gets, and it is enough: the wait is one tool call,
+    not the rest of the turn. None means nothing can stop this one — which is the reminder
+    path in `autonomy.runner`, where there is no one to click anything.
     """
     watcher = _MindFeed(conversation_id, opening)
-    for event in stream_agent(
-        messages,
-        config,
-        ollama_host(),
-        AGENT_DB_PATH,
-        conversation_id=conversation_id,
-        # Rounds stay on the declared knob (max_rounds, 40) rather than the tick's
-        # hardcoded 16. A conversation genuinely wants more room than an unattended
-        # step: you are here, so a long turn is one you can watch and stop, and the
-        # tick's 16 exists because nobody is.
-        #
-        # `expect_durable` stays off, and that was learned the hard way an hour after
-        # turning it on. A tick that leaves nothing behind really is a failure — the
-        # whole point of one is to make progress nobody asked to watch. But a
-        # conversation is not that, and cannot be told apart upfront: "what have you
-        # been working on" is answered by answering it. With durability demanded, he
-        # replied honestly that the board was empty and then wrote
-        # `session-findings-2026-07-31.md` to satisfy the rule — a file nobody wanted,
-        # about nothing, because the harness insisted on an artefact.
-        #
-        # The distinction that matters is not chat versus tick. It is "asked to do
-        # something" versus "asked something", and the transport does not know which
-        # it is carrying. So the directive above asks him to do the work, and nothing
-        # forces him to manufacture evidence of having done it.
-    ):
-        recorder.saw(event)
-        watcher.saw(event)
-        # Scrubbed on the way out too, not only on the way into the transcript. The model has
-        # not been sent base64 since the image leak was fixed and the transcript stopped
-        # storing it shortly after — but this line went on streaming the whole data URI to the
-        # browser, where the generic result renderer printed it. So looking at the interface
-        # showed forty thousand characters of base64 sitting in a tool result, which is
-        # indistinguishable from the bug that is actually fixed, and reasonable grounds to
-        # think it was back.
-        #
-        # It is a real cost as well as a misleading one: 44KB per image over the wire and into
-        # the DOM, for a string nothing on the other side can use. The interface only ever
-        # tested the field for truthiness to say "looked at it".
-        yield json.dumps(_readable(event)) + "\n"
-        if event.get("type") == "error":
-            recorder.finish(error=event.get("message"))
-            watcher.finish()
-            return
-    recorder.finish()
-    watcher.finish()
+    stopped = False
+    error: str | None = None
+    try:
+        for event in stream_agent(
+            messages,
+            config,
+            ollama_host(),
+            AGENT_DB_PATH,
+            conversation_id=conversation_id,
+            # Rounds stay on the declared knob (max_rounds, 40) rather than the tick's
+            # hardcoded 16. A conversation genuinely wants more room than an unattended
+            # step: you are here, so a long turn is one you can watch and stop, and the
+            # tick's 16 exists because nobody is.
+            #
+            # `expect_durable` stays off, and that was learned the hard way an hour after
+            # turning it on. A tick that leaves nothing behind really is a failure — the
+            # whole point of one is to make progress nobody asked to watch. But a
+            # conversation is not that, and cannot be told apart upfront: "what have you
+            # been working on" is answered by answering it. With durability demanded, he
+            # replied honestly that the board was empty and then wrote
+            # `session-findings-2026-07-31.md` to satisfy the rule — a file nobody wanted,
+            # about nothing, because the harness insisted on an artefact.
+            #
+            # The distinction that matters is not chat versus tick. It is "asked to do
+            # something" versus "asked something", and the transport does not know which
+            # it is carrying. So the directive above asks him to do the work, and nothing
+            # forces him to manufacture evidence of having done it.
+        ):
+            recorder.saw(event)
+            watcher.saw(event)
+            # Scrubbed on the way out too, not only on the way into the transcript. The model
+            # has not been sent base64 since the image leak was fixed and the transcript
+            # stopped storing it shortly after — but this line went on streaming the whole data
+            # URI to the browser, where the generic result renderer printed it. So looking at
+            # the interface showed forty thousand characters of base64 sitting in a tool result,
+            # which is indistinguishable from the bug that is actually fixed, and reasonable
+            # grounds to think it was back.
+            #
+            # It is a real cost as well as a misleading one: 44KB per image over the wire and
+            # into the DOM, for a string nothing on the other side can use. The interface only
+            # ever tested the field for truthiness to say "looked at it".
+            yield json.dumps(_readable(event)) + "\n"
+            if event.get("type") == "error":
+                error = event.get("message")
+                return
+            if stopping is not None and stopping.is_set():
+                stopped = True
+                return
+    except Exception as exc:
+        # A turn that died on the way out — the provider hung up, the socket broke — rather than
+        # one that reported an error event. Named here rather than left to propagate, because
+        # `finally` below closes the books either way, and with nothing set it would close them
+        # as though he had simply answered. The feed is told in the shape it already understands,
+        # so the row reads the same as any other failed turn.
+        error = str(exc)
+        watcher.saw({"type": "error", "message": error})
+        raise
+    finally:
+        # The single exit. Reached by all four ways a turn ends — it finished, it errored,
+        # someone stopped it, or the reader gave up and closed the generator — so the books are
+        # closed exactly once and no path can forget to do it.
+        recorder.finish(error=error, stopped=stopped)
+        watcher.finish()
+    # After the `finally`, so the order the client sees is unchanged: the row is written and
+    # the feed is closed, and only then does the stream say it is over.
     yield json.dumps({"type": "done"}) + "\n"

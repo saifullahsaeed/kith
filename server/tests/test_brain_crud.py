@@ -18,8 +18,9 @@ import pytest
 from kith.services import brain
 from kith.services.brain.kinds import KINDS
 
-#: What each of the panel's create forms posts. Taken from the `create(...)` calls in
-#: control-panel.tsx rather than invented here — exercising the real shapes is the point.
+#: What each of the panel's create forms posts. Taken from the `create(...)` calls under
+#: ui/src/components/control-panel/ rather than invented here — exercising the real shapes is
+#: the point.
 FORMS: dict[str, tuple[dict, str]] = {
     "memory": ({"content": "a thing worth keeping", "tags": ["probe"]}, "memories"),
     "note": ({"title": "A note", "body": "its body"}, "notes"),

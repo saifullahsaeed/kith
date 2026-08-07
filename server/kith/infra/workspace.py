@@ -376,7 +376,12 @@ def _take_checkpoint(here: Path, trigger: str) -> dict | None:
     parent_sha = parent.output.strip() if parent.exit_code == 0 else None
     if parent_sha:
         parent_tree = _git(
-            "rev-parse", "--verify", "-q", f"{parent_sha}^{{tree}}", cwd=root_here, timeout=_CHECKPOINT_TIMEOUT
+            "rev-parse",
+            "--verify",
+            "-q",
+            f"{parent_sha}^{{tree}}",
+            cwd=root_here,
+            timeout=_CHECKPOINT_TIMEOUT,
         ).output.strip()
         if parent_tree == tree_sha:
             return None  # nothing has changed since the last checkpoint
@@ -478,7 +483,9 @@ def restore_to_sha(repo_root: Path, sha: str) -> dict:
         raise WorkspaceError("git is not available on this machine.")
     mid = _mid_git_operation(repo_root)
     if mid:
-        raise WorkspaceError(f"{repo_root} has a {mid} in progress — finish or abort it in git before restoring.")
+        raise WorkspaceError(
+            f"{repo_root} has a {mid} in progress — finish or abort it in git before restoring."
+        )
 
     dirty_before = _git("status", "--porcelain", cwd=repo_root, timeout=_CHECKPOINT_TIMEOUT).output.strip()
     safety = _take_checkpoint(repo_root, "restore")

@@ -108,7 +108,7 @@ def _routing_options(config: Config) -> dict[str, Any]:
     # the same host without giving up fallbacks. The stickiness works — and that is the problem.
     # It keeps a session *together*; nothing makes it land somewhere *cheap*. So a session that
     # happens to open on an expensive upstream stays there for its whole life, which is exactly
-    # the shape in the data: 23:24, 23:25 and 23:30 all at $4.12–6.59 per million uncached
+    # the shape in the data: 23:24, 23:25 and 23:30 all at $4.12-6.59 per million uncached
     # prompt tokens, then 15:54 through 15:58 all at ~$1.01, against a usual $0.13. Contiguous
     # blocks at one rate, not scattered outliers. One model, up to fifty times the price,
     # decided by whichever door the session came in through.
@@ -314,8 +314,8 @@ def stream_once(
     # Who actually served this request. OpenRouter puts it on every chunk and nothing read it,
     # so a bill could not be attributed to an upstream — which is the one fact you need to pin
     # one. Measured across 1,071 recorded rounds of the same model: the usual rate is
-    # $0.13 per million uncached prompt tokens, with a clump at $1.01–1.10 and an hour on
-    # 2026-08-01 at $4.12–6.59. Same `openai/gpt-5.6-luna`, up to fifty times the price, and no
+    # $0.13 per million uncached prompt tokens, with a clump at $1.01-1.10 and an hour on
+    # 2026-08-01 at $4.12-6.59. Same `openai/gpt-5.6-luna`, up to fifty times the price, and no
     # record of which host did it.
     served_by = ""
     try:
@@ -436,9 +436,7 @@ def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _stats(
-    usage: dict | None, elapsed: float, model: str = "", provider: str = ""
-) -> dict[str, float]:
+def _stats(usage: dict | None, elapsed: float, model: str = "", provider: str = "") -> dict[str, float]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)

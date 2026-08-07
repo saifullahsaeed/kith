@@ -167,7 +167,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
 };
 
 /** A tool nobody has written a phrase for: its name, made readable, never raw code. */
-export function fallbackVerb(name: string): string {
+function fallbackVerb(name: string): string {
   return name.replace(/_/g, " ");
 }
 

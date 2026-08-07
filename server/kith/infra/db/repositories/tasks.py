@@ -232,7 +232,9 @@ def _roll_up(db: Session, task: Task) -> None:
 def _open_count(db: Session, model: type[Task], *conditions) -> int:
     """How many unsettled tasks match — the roll-up's only real question."""
     return int(
-        db.scalar(select(func.count()).select_from(model).where(*conditions, model.status.not_in(TASK_SETTLED)))
+        db.scalar(
+            select(func.count()).select_from(model).where(*conditions, model.status.not_in(TASK_SETTLED))
+        )
         or 0
     )
 

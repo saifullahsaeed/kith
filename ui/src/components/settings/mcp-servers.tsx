@@ -425,7 +425,7 @@ function Field({
  * `npx -y @scope/server "/Users/me/My Documents"` is one server and three arguments, and
  * splitting on whitespace alone would turn the last one into two directories that do not
  * exist — a failure that reads as "the server is broken". */
-export function splitCommand(line: string): string[] {
+function splitCommand(line: string): string[] {
   const out: string[] = [];
   const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
   let match: RegExpExecArray | null;
@@ -436,7 +436,7 @@ export function splitCommand(line: string): string[] {
 }
 
 /** `KEY=value` lines to an object, ignoring blanks and comments. */
-export function parseEnv(text: string): Record<string, string> {
+function parseEnv(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const raw of text.split("\n")) {
     const line = raw.trim();

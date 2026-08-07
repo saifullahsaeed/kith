@@ -93,9 +93,7 @@ class TestATickCannotCloseItsOwnWork:
                 {
                     "id": task["id"],
                     "status": "done",
-                    "verification": [
-                        {"requirement": "lists every model", "met": False, "evidence": ""}
-                    ],
+                    "verification": [{"requirement": "lists every model", "met": False, "evidence": ""}],
                 },
                 db,
             )
@@ -123,9 +121,10 @@ class TestReviewIsOutOfReachOfTicks:
         )
         repo.tasks.update_task(db, task["id"], status="review")
         assert repo.projects.get_project(db, project["id"])["status"] == "active"
-        assert [m for m in repo.projects.list_milestones(db) if m["id"] == milestone["id"]][0][
-            "status"
-        ] == "todo"
+        assert (
+            next(m for m in repo.projects.list_milestones(db) if m["id"] == milestone["id"])["status"]
+            == "todo"
+        )
 
 
 class TestChatIsShownTheQueue:

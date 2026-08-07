@@ -31,11 +31,20 @@ def _turn() -> list[dict]:
     return [
         {"role": "system", "content": PERSONA + "\n\nIt is Tuesday. You feel curious."},
         {"role": "user", "content": "have a look at the settings page"},
-        {"role": "assistant", "tool_calls": [{"id": "1", "function": {"name": "read_file", "arguments": "{}"}}]},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "1", "function": {"name": "read_file", "arguments": "{}"}}],
+        },
         {"role": "tool", "tool_name": "read_file", "content": "x" * 4_000},
-        {"role": "assistant", "tool_calls": [{"id": "2", "function": {"name": "read_skill", "arguments": "{}"}}]},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "2", "function": {"name": "read_skill", "arguments": "{}"}}],
+        },
         {"role": "tool", "tool_name": "read_skill", "content": "s" * 2_000},
-        {"role": "assistant", "tool_calls": [{"id": "3", "function": {"name": "remember", "arguments": "{}"}}]},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "3", "function": {"name": "remember", "arguments": "{}"}}],
+        },
         {"role": "tool", "tool_name": "remember", "content": "ok"},
         {"role": "assistant", "content": "Here is what I found."},
     ]
@@ -55,7 +64,7 @@ class TestTheCategoriesAreRight:
         assert book.of("skills") < book.of("code")
 
     def test_the_persona_is_split_out_of_the_system_prompt(self):
-        """"System prompt: 6k" hides the useful fact, which is that most of it is cached across
+        """ "System prompt: 6k" hides the useful fact, which is that most of it is cached across
         every turn Kith has ever had and is therefore nearly free."""
         book = ledger.take(_turn(), persona=PERSONA, window=1_000_000)
         assert book.of("persona") > book.of("system")
@@ -92,14 +101,15 @@ class TestTheCategoriesAreRight:
         assert with_tools.used > bare.used
 
     def test_a_picture_is_not_counted_as_conversation(self):
-        turn = _turn() + [
+        turn = [
+            *_turn(),
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "here:"},
                     {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
                 ],
-            }
+            },
         ]
         book = ledger.take(turn, persona=PERSONA, window=1_000_000)
         assert book.of("images") > 0

@@ -89,6 +89,27 @@ export function createBackendAdapter(conversation?: {
         ...(conversation?.get() ? { conversationId: conversation.get() } : {}),
       });
 
+      /* Stopping is now said, not inferred.
+       *
+       * It used to be inferred: aborting the fetch hung up, and the turn died because the
+       * server-side generator stopped being advanced. That is exactly what also killed a turn
+       * when you switched conversations — the same closed socket, two completely different
+       * intentions — so the turn no longer ends when the connection does. Which means Stop has
+       * to say so, or it would quietly do nothing.
+       *
+       * Fire-and-forget: this is a best-effort request on the way out, and there is nothing
+       * useful to do if it fails. No conversation id yet (a brand-new chat aborted before the
+       * server named it) means there is no turn to stop.
+       */
+      abortSignal?.addEventListener(
+        "abort",
+        () => {
+          const id = conversation?.get();
+          if (id) void fetch(`/api/chat/${id}/stop`, { method: "POST" }).catch(() => {});
+        },
+        { once: true },
+      );
+
       /* Getting the turn *started*, with retries. See `RETRIES` for what is and is not retried,
        * and why this stops the moment the response body begins. */
       let response: Response | null = null;

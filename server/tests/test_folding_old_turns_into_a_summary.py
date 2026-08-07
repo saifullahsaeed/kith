@@ -269,7 +269,10 @@ def _tool_heavy_turn(n_calls: int, size: int = 500) -> list[dict]:
     out = [{"role": "user", "content": "go"}]
     for i in range(n_calls):
         out.append(
-            {"role": "assistant", "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": f"f{i}.py"}}}]}
+            {
+                "role": "assistant",
+                "tool_calls": [{"function": {"name": "read_file", "arguments": {"path": f"f{i}.py"}}}],
+            }
         )
         out.append({"role": "tool", "tool_name": "read_file", "content": "X" * size})
     return out
@@ -296,12 +299,13 @@ class TestTheCutCountsTurnsNotListItems:
         """A `{"role": "assistant", "tool_calls": [...]}` message has no string `content` —
         the old `isinstance(content, str)` size check silently counted it as zero, which
         would leave this conversation looking empty and never fold at all."""
-        hist = _tool_heavy_turn(5, size=2000) + [
+        hist = [
+            *_tool_heavy_turn(5, size=2000),
             {"role": "user", "content": "go"},
             {"role": "assistant", "content": "ok"},
         ]
 
-        messages, summary = compact(hist, lambda t: "BRIEF", max_chars=500, keep_recent=1)
+        _messages, summary = compact(hist, lambda t: "BRIEF", max_chars=500, keep_recent=1)
 
         assert summary is not None  # would stay None forever if tool_calls sized as 0
 
@@ -325,7 +329,9 @@ class TestTheCutCountsTurnsNotListItems:
         hist = _tool_heavy_turn(20, size=1000)
         calls = []
 
-        messages, summary = compact(hist, lambda t: calls.append(t) or "BRIEF", max_chars=2000, keep_recent=999)
+        messages, summary = compact(
+            hist, lambda t: calls.append(t) or "BRIEF", max_chars=2000, keep_recent=999
+        )
 
         assert summary is None
         assert messages == hist
@@ -341,7 +347,11 @@ class TestAStaleCursorIsDistrustedRatherThanReplayedBlind:
     boundary in *this* history."""
 
     def test_a_cursor_that_lands_inside_a_call_result_pair_is_discarded(self):
-        hist = _tool_heavy_turn(3) + [{"role": "user", "content": "next"}, {"role": "assistant", "content": "ok"}]
+        hist = [
+            *_tool_heavy_turn(3),
+            {"role": "user", "content": "next"},
+            {"role": "assistant", "content": "ok"},
+        ]
         prior = {"through": 2, "text": "STALE"}  # index 2 is a `tool` message, not a boundary
         calls = []
 
@@ -359,7 +369,11 @@ class TestAStaleCursorIsDistrustedRatherThanReplayedBlind:
     def test_a_cursor_that_still_lands_on_a_real_boundary_is_kept(self):
         """The contrast case: nothing about a stored cursor is distrusted just because it is
         old — only because it stopped matching the shape it is being replayed against."""
-        hist = _tool_heavy_turn(3) + [{"role": "user", "content": "next"}, {"role": "assistant", "content": "ok"}]
+        hist = [
+            *_tool_heavy_turn(3),
+            {"role": "user", "content": "next"},
+            {"role": "assistant", "content": "ok"},
+        ]
         prior = {"through": 7, "text": "KEPT"}  # index 7 is the tail's own user message — real
 
         messages, fresh = compact(hist, lambda t: "unused", prior=prior, max_chars=100_000, keep_recent=1)
@@ -383,7 +397,7 @@ class TestOneFoldCallHasABoundedInputEvenWhenMuchMoreIsOwed:
             hist += _tool_heavy_turn(5, size=2000)  # 220 items, 20 turns, 216,960 chars total
         seen = {}
 
-        messages, fresh = compact(
+        _messages, fresh = compact(
             hist,
             lambda t: seen.setdefault("text", t) or "PARTIAL",
             max_chars=1000,

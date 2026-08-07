@@ -7,7 +7,7 @@ from flask import jsonify, request
 from kith.api.blueprint import api
 from kith.config import AGENT_DB_PATH
 from kith.infra.db import repositories as repo
-from kith.tools import sources
+from kith.services import sources
 
 
 @api.post("/sources")

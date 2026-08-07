@@ -160,7 +160,9 @@ class TestItStopsWhenThereIsNothingLeft:
         # A task exists, so the tick takes the work branch rather than the idle one. The
         # model call is not what is under test; that it does not clear `working` is.
         monkeypatch.setattr(
-            module.repo.tasks, "active_tasks", lambda _p: [{"id": 1, "goal": "something", "status": "working"}]
+            module.repo.tasks,
+            "active_tasks",
+            lambda _p: [{"id": 1, "goal": "something", "status": "working"}],
         )
         monkeypatch.setattr(module.repo.tasks, "tasks_awaiting_kith", lambda _p: [])
         monkeypatch.setattr(module.repo.reminders, "due_reminders", lambda _p, _n: [])

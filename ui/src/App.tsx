@@ -1,7 +1,7 @@
-import { ConnectionSplash } from "@/components/connection-splash";
-import { ContextMenu } from "@/components/context-menu";
+import { ConnectionSplash } from "@/components/shell/connection-splash";
+import { ContextMenu } from "@/components/shell/context-menu";
 import { Onboarding } from "@/components/onboarding/onboarding";
-import { Workspace } from "@/components/workspace";
+import { Workspace } from "@/components/shell/workspace";
 import { ConfirmProvider } from "@/components/ui/confirm";
 import { useBackendConfig } from "@/hooks/use-backend-config";
 import { useSetup } from "@/hooks/use-setup";

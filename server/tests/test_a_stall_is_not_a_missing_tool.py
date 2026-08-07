@@ -29,7 +29,6 @@ from kith.autonomy.toolsets import _ALLOW, _WORK
 from kith.infra.db import repositories as repo
 from kith.tools import run_tool
 
-
 #: Long enough to clear `_VERIFY_MIN_BRIEF` (80), so closing one of these goes through the
 #: verification gate rather than past it — which is the path the duplicate-notification risk
 #: lives on. The first version of this file used a 69-character brief and skipped the gate

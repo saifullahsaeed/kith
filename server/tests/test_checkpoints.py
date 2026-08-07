@@ -111,7 +111,7 @@ class TestACheckpointIsTakenAutomatically:
         log = _checkpoint_ref_log(project).strip().splitlines()
         assert len(log) == 2
         # The oldest is a root commit — no parent, so its line has only one token.
-        newest, parent_of_newest = log[0].split()
+        _newest, parent_of_newest = log[0].split()
         oldest = log[1].split()[0]
         assert parent_of_newest == oldest
 
@@ -140,9 +140,12 @@ class TestACheckpointIsTakenAutomatically:
             workspace.ensure_repo()
             workspace.write_file("a.py", "x = 1\n")
 
-        assert workspace._git(
-            "rev-parse", "--verify", "-q", workspace._CHECKPOINT_REF, cwd=home_and_project["project"]
-        ).exit_code != 0
+        assert (
+            workspace._git(
+                "rev-parse", "--verify", "-q", workspace._CHECKPOINT_REF, cwd=home_and_project["project"]
+            ).exit_code
+            != 0
+        )
         assert repo.checkpoints.list_for_conversation(home_and_project["db"], "") == []
 
     def test_a_machine_with_no_git_is_a_clean_no_op(self, on_project, monkeypatch):
@@ -152,10 +155,12 @@ class TestACheckpointIsTakenAutomatically:
 
     def test_it_is_recorded_against_the_conversation_bound_to_the_session(self, home_and_project, db):
         conversation = conversations.start(db, "hi")
-        with session_context.working_in(conversation["id"]):
-            with session_context.working_on(home_and_project["id"]):
-                with session_context.a_turn():
-                    workspace.write_file("a.py", "x = 1\n")
+        with (
+            session_context.working_in(conversation["id"]),
+            session_context.working_on(home_and_project["id"]),
+            session_context.a_turn(),
+        ):
+            workspace.write_file("a.py", "x = 1\n")
 
         rows = repo.checkpoints.list_for_conversation(db, conversation["id"])
         assert len(rows) == 1
@@ -200,15 +205,13 @@ class TestRestoring:
     def test_it_targets_the_checkpoints_own_repo_root_not_the_current_base_dir(self, home_and_project, db):
         project_a = home_and_project["project"]
         (project_a / "a.py").write_text("zero\n")
-        with session_context.working_on(home_and_project["id"]):
-            with session_context.a_turn():
-                # The checkpoint taken right before this — it captures "zero".
-                workspace.write_file("a.py", "first\n")
+        with session_context.working_on(home_and_project["id"]), session_context.a_turn():
+            # The checkpoint taken right before this — it captures "zero".
+            workspace.write_file("a.py", "first\n")
         checkpoint = _all_checkpoints(db)[-1]
 
-        with session_context.working_on(home_and_project["id"]):
-            with session_context.a_turn():
-                workspace.write_file("a.py", "second\n")
+        with session_context.working_on(home_and_project["id"]), session_context.a_turn():
+            workspace.write_file("a.py", "second\n")
 
         # Switch away entirely — base_dir() now resolves to his own folder, not project_a.
         other = repo.projects.add_project(db, "Elsewhere")
@@ -240,17 +243,21 @@ class TestTurnIndexCorrelation:
         conversation = conversations.start(db, "first")
         conversations.record(db, conversation["id"], "user", "make a file")
 
-        with session_context.working_in(conversation["id"]):
-            with session_context.working_on(home_and_project["id"]):
-                with session_context.a_turn():
-                    workspace.write_file("a.py", "x = 1\n")
+        with (
+            session_context.working_in(conversation["id"]),
+            session_context.working_on(home_and_project["id"]),
+            session_context.a_turn(),
+        ):
+            workspace.write_file("a.py", "x = 1\n")
 
         conversations.record(db, conversation["id"], "user", "make another")
 
-        with session_context.working_in(conversation["id"]):
-            with session_context.working_on(home_and_project["id"]):
-                with session_context.a_turn():
-                    workspace.write_file("b.py", "y = 2\n")
+        with (
+            session_context.working_in(conversation["id"]),
+            session_context.working_on(home_and_project["id"]),
+            session_context.a_turn(),
+        ):
+            workspace.write_file("b.py", "y = 2\n")
 
         listed = checkpoints.for_conversation(db, conversation["id"])
         assert [row["turnIndex"] for row in listed] == [0, 1]
@@ -271,9 +278,10 @@ def _all_checkpoints(db) -> list[dict]:
         return with_conv
     # `_checkpoint_before_change` records `conversation_id=None` when nothing is bound
     # (the ordinary case in most of this file) — read those rows directly.
+    from sqlalchemy import select
+
     from kith.infra.db.engine import as_dict, session
     from kith.infra.db.models import Checkpoint
-    from sqlalchemy import select
 
     with session(db) as conn:
         rows = conn.scalars(select(Checkpoint).order_by(Checkpoint.id.asc())).all()

@@ -7,8 +7,8 @@ import remarkGfm from "remark-gfm";
 import { BookOpenText, Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { CodeBlock, copyText } from "@/components/file-view";
-import { useFileViewer } from "@/lib/files";
+import { CodeBlock } from "@/components/files";
+import { copyText, useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
 /**
@@ -44,7 +44,7 @@ type Args = Record<string, unknown>;
  * means every renderer below sees what the tool actually returned, and `ok: false` stops being
  * invisible.
  */
-export function unwrap(result: unknown): { value: unknown; failed: boolean } {
+function unwrap(result: unknown): { value: unknown; failed: boolean } {
   if (result && typeof result === "object" && !Array.isArray(result)) {
     const outer = result as Record<string, unknown>;
     if ("ok" in outer && "result" in outer) {

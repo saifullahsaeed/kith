@@ -20,6 +20,7 @@ in the turn, once, and says where it is.
 
 from __future__ import annotations
 
+import itertools
 import json
 
 from kith.services import agent_loop
@@ -129,5 +130,5 @@ class TestTheHistoryStaysAppendOnly:
         for _ in range(10):
             _appended(convo, "read_file", BIG)
             seen.append([dict(m) for m in convo])
-        for earlier, later in zip(seen, seen[1:]):
+        for earlier, later in itertools.pairwise(seen):
             assert later[: len(earlier)] == earlier

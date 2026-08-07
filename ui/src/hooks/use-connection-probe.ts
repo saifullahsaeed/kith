@@ -11,7 +11,7 @@ import {
  *  short enough that it feels like a reaction rather than a wait. */
 const PROBE_DEBOUNCE_MS = 450;
 
-export const IDLE_PROBE: ProbeOutcome = {
+const IDLE_PROBE: ProbeOutcome = {
   reachable: false,
   usable: false,
   detail: "",

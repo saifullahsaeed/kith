@@ -27,7 +27,10 @@ def _turn(steps: int) -> list[dict]:
     ]
     for i in range(steps):
         convo.append(
-            {"role": "assistant", "tool_calls": [{"id": f"c{i}", "function": {"name": "read_file", "arguments": "{}"}}]}
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": f"c{i}", "function": {"name": "read_file", "arguments": "{}"}}],
+            }
         )
         convo.append({"role": "tool", "tool_name": "read_file", "content": f"contents {i}"})
     return convo
@@ -49,7 +52,8 @@ def _parallel_turn() -> list[dict]:
         {"role": "tool", "tool_name": "web_search", "content": "one"},
         {"role": "tool", "tool_name": "web_search", "content": "two"},
         {"role": "tool", "tool_name": "web_search", "content": "three"},
-    ] + _turn(10)[2:]
+        *_turn(10)[2:],
+    ]
 
 
 def _pairs_are_intact(convo: list[dict]) -> bool:

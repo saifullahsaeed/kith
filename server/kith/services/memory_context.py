@@ -84,9 +84,7 @@ def review_block(path: Path) -> str:
     tasks = [t for t in repo.tasks.list_tasks(path) if t.get("status") == "review"]
     if not tasks:
         return ""
-    lines = [
-        "[Finished, waiting for you to check it — this is yours to judge, no tick will touch it]"
-    ]
+    lines = ["[Finished, waiting for you to check it — this is yours to judge, no tick will touch it]"]
     for task in tasks[:8]:
         lines.append(f"- #{task['id']} ({task.get('priority', 'normal')}) {task['goal']}")
     lines.append(
