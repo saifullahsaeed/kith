@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select, update
 
 from kith.infra.db.engine import as_dict, session
-from kith.infra.db.models import Message, TickLog
+from kith.infra.db.models import Message, TurnLog
 from kith.infra.db.support import utc_now_iso
 
 # How many ticks the summary looks back over. Enough to see a trend, bounded so the
@@ -111,7 +111,7 @@ def delete_message(path: Path, message_id: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def add_tick_log(
+def add_turn_log(
     path: Path,
     at: str,
     mode: str,
@@ -132,7 +132,7 @@ def add_tick_log(
     """
     with session(path) as db:
         db.add(
-            TickLog(
+            TurnLog(
                 at=at,
                 mode=mode,
                 focus=focus,
@@ -146,10 +146,10 @@ def add_tick_log(
         )
 
 
-def list_tick_log(path: Path, limit: int = 100) -> list[dict]:
+def list_turn_log(path: Path, limit: int = 100) -> list[dict]:
     """Recent ticks, newest first, with `tools` parsed back to a list."""
     with session(path) as db:
-        rows = db.scalars(select(TickLog).order_by(TickLog.id.desc()).limit(limit)).all()
+        rows = db.scalars(select(TurnLog).order_by(TurnLog.id.desc()).limit(limit)).all()
         out = []
         for row in rows:
             record = as_dict(row)
@@ -174,8 +174,8 @@ def times_worked(path: Path, goal: str) -> int:
         return int(
             db.scalar(
                 select(func.count())
-                .select_from(TickLog)
-                .where(TickLog.mode == "start", TickLog.focus == wanted)
+                .select_from(TurnLog)
+                .where(TurnLog.mode == "start", TurnLog.focus == wanted)
             )
             or 0
         )
@@ -190,14 +190,14 @@ def _tools(raw: object) -> list[str]:
     return parsed if isinstance(parsed, list) else []
 
 
-def tick_log_summary(path: Path, limit: int = _SUMMARY_WINDOW) -> dict:
+def turn_log_summary(path: Path, limit: int = _SUMMARY_WINDOW) -> dict:
     """Aggregate the recent flight recorder — a quick read on how he's doing.
 
     Aggregated in Python rather than SQL on purpose: `tools` is a JSON array, and
     counting across it in SQLite would mean json_each and a far less readable query
     for a few hundred rows.
     """
-    rows = list_tick_log(path, limit)
+    rows = list_turn_log(path, limit)
     if not rows:
         return {"ticks": 0}
 

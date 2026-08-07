@@ -115,7 +115,7 @@ class TestTheFlightRecorder:
         watcher.saw({"type": "delta", "role": "text", "text": "Clean."})
         watcher.finish()
 
-        rows = repo.messages.list_tick_log(db, 10)
+        rows = repo.messages.list_turn_log(db, 10)
         assert len(rows) == 1
         assert rows[0]["mode"] == "chat"
         assert rows[0]["tools"] == ["check_code"]
@@ -137,7 +137,7 @@ class TestTheFlightRecorder:
         )
         watcher.finish()
 
-        row = repo.messages.list_tick_log(db, 1)[0]
+        row = repo.messages.list_turn_log(db, 1)[0]
         # Both numbers, because they answer different questions: what he was shown, and what
         # a provider actually had to read.
         assert (row["tokens_in"], row["tokens_out"], row["tokens_uncached"]) == (38_000, 900, 7_000)
@@ -146,7 +146,7 @@ class TestTheFlightRecorder:
         watcher = a_turn()
         watcher.saw({"type": "error", "message": "provider timed out"})
         watcher.finish()
-        assert repo.messages.list_tick_log(db, 1)[0]["outcome"] == "error: provider timed out"
+        assert repo.messages.list_turn_log(db, 1)[0]["outcome"] == "error: provider timed out"
 
     def test_a_turn_that_only_talked_still_gets_a_row(self, db, feed):
         """Answering a question is work. A row only for turns that used tools would make the
@@ -154,9 +154,9 @@ class TestTheFlightRecorder:
         watcher = a_turn(opening="how are you")
         watcher.saw({"type": "delta", "role": "text", "text": "Fine — quiet morning."})
         watcher.finish()
-        assert repo.messages.list_tick_log(db, 1)[0]["mode"] == "chat"
+        assert repo.messages.list_turn_log(db, 1)[0]["mode"] == "chat"
 
     def test_chat_shows_up_in_the_summary_alongside_the_ticks(self, db, feed):
         a_turn().finish()
-        summary = repo.messages.tick_log_summary(db)
+        summary = repo.messages.turn_log_summary(db)
         assert summary["ticks"] == 1

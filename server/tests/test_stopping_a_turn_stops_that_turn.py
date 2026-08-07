@@ -126,7 +126,7 @@ class TestWhatAStoppedTurnLeavesBehind:
 
         # Before, the worker returned out of its own loop and abandoned the generator, so
         # `_MindFeed.finish` never ran and the turn was absent from the log it should dominate.
-        rows = repo.messages.list_tick_log(db, 10)
+        rows = repo.messages.list_turn_log(db, 10)
         assert len(rows) == 1
         assert (rows[0]["mode"], rows[0]["tokens_out"]) == ("chat", 40)
 
@@ -174,7 +174,7 @@ class TestWhatAStoppedTurnLeavesBehind:
 
         said = [m["content"] for m in conversations.full_messages(conversation) if m["role"] == "assistant"]
         assert said == ["all done"]
-        assert len(repo.messages.list_tick_log(db, 10)) == 1
+        assert len(repo.messages.list_turn_log(db, 10)) == 1
 
 
 class TestATurnNobodyStops:
@@ -195,7 +195,7 @@ class TestATurnNobodyStops:
         assert seen[-1]["type"] == "done"
         timeline = conversations.timeline(conversation)
         assert not [entry for entry in timeline if entry.get("kind") == "stopped"]
-        assert len(repo.messages.list_tick_log(db, 10)) == 1
+        assert len(repo.messages.list_turn_log(db, 10)) == 1
 
     def test_a_turn_that_dies_says_so_rather_than_reading_as_answered(
         self, db: Path, conversation, feed, monkeypatch
@@ -214,7 +214,7 @@ class TestATurnNobodyStops:
         with pytest.raises(RuntimeError):
             list(route._turn(recorder, [], route.default_config(), conversation, "go"))
 
-        rows = repo.messages.list_tick_log(db, 10)
+        rows = repo.messages.list_turn_log(db, 10)
         assert len(rows) == 1
         assert rows[0]["outcome"] == "error: the provider hung up"
 
@@ -230,6 +230,6 @@ class TestATurnNobodyStops:
         ]
 
         assert seen[-1]["type"] == "error"  # no "done" after a turn that died
-        rows = repo.messages.list_tick_log(db, 10)
+        rows = repo.messages.list_turn_log(db, 10)
         assert len(rows) == 1
         assert rows[0]["outcome"] == "error: provider timed out"

@@ -564,7 +564,7 @@ class _MindFeed:
         self._publish("done", "turn complete")
         outcome = f"error: {self.error}" if self.error else (self.said.strip()[:280] or "answered")
         try:
-            repo.messages.add_tick_log(
+            repo.messages.add_turn_log(
                 AGENT_DB_PATH,
                 clock.now_iso(),
                 "chat",

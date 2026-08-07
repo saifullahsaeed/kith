@@ -459,6 +459,19 @@ def _migrations():
         conn.execute("UPDATE tasks SET status = 'planned' WHERE status = 'todo'")
         conn.execute("UPDATE tasks SET status = 'working' WHERE status = 'doing'")
 
+    def v29_turn_log(conn):
+        # `tick_log` was never about ticks. `add_tick_log(..., mode="chat", ...)` is called
+        # from the chat route, so this table is the flight recorder for *turns*: a
+        # conversation's cost lives here, and it is most of what the money dashboard reads.
+        # The loop it was named after is gone. The rows are not, and this is a rename rather
+        # than a rebuild precisely so that stays true — no copy, nothing to get wrong.
+        #
+        # `conversations.working` is dropped separately, in v30, and the order is not a
+        # preference. Dropping a column the SQLAlchemy model still maps breaks every query
+        # against that table at once, so the column outlives the code that reads it by exactly
+        # one migration.
+        conn.execute("ALTER TABLE tick_log RENAME TO turn_log")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -488,6 +501,7 @@ def _migrations():
         v26_checkpoints,
         v27_reminder_conversation,
         v28_task_planning_statuses,
+        v29_turn_log,
     ]
 
 

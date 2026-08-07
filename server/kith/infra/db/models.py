@@ -294,10 +294,14 @@ class Conversation(Base):
     messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-class TickLog(Base):
-    """One row per autonomy tick — the durable flight recorder."""
+class TurnLog(Base):
+    """One row per turn — the durable flight recorder.
 
-    __tablename__ = "tick_log"
+    Named for ticks once, and never only about them: a chat turn records what it cost here
+    too, which is most of what the money dashboard reads.
+    """
+
+    __tablename__ = "turn_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     at: Mapped[str] = mapped_column(Text, nullable=False)
