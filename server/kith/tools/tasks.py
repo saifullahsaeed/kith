@@ -223,7 +223,6 @@ def _update_task(path: Path, a: dict) -> dict | None:
     # go — rather than a button somewhere else that means the same thing.
     if (a.get("status") or "") in TASK_ACTIVE:
         reopened = _reopen_if_finished(path, (out or {}).get("project_id"))
-        _get_on_with_it(f"task ready: {str((out or {}).get('goal') or '')[:40]}")
         if reopened and out:
             return {**out, "note": reopened}
     # Handing a plan over for approval is worth showing in full, not just the status change —
@@ -322,24 +321,6 @@ def _plan_doc(path: Path, task_id: int | None, project_id: int | None) -> str:
         return doc.read_text(encoding="utf-8") if doc.is_file() else ""
     except Exception:
         return ""
-
-
-def _get_on_with_it(why: str) -> None:
-    """Wake the session this is happening in, if there is one.
-
-    Imported here rather than at module scope: `kith.autonomy.runner` imports the tool
-    registry, so a top-level import would be a cycle. Silent on failure — waking the loop is
-    a courtesy, and a task must still be filed on a machine where it does not work.
-    """
-    try:
-        from kith.autonomy import runner as loop
-        from kith.services import session_context
-
-        conversation = session_context.current()
-        if conversation:
-            loop.nudge(conversation, why)
-    except Exception:
-        pass
 
 
 @tool(
@@ -457,7 +438,6 @@ def add_task(path: Path, args: dict):
     # found the button — you asked for a thing, he wrote it down, and you both waited.
     if status in TASK_ACTIVE:
         reopened = _reopen_if_finished(path, made.get("project_id"))
-        _get_on_with_it(f"new task: {goal[:40]}")
         if reopened:
             return {**made, "note": reopened}
     return made

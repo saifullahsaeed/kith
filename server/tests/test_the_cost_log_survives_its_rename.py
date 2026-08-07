@@ -49,6 +49,25 @@ class TestTheRenameCarriesEveryRow:
         assert "turn_log" in names
         assert "tick_log" not in names
 
+    def test_the_working_column_is_gone_and_its_sibling_stays(self, tmp_path: Path):
+        """`working` meant "this session keeps going without being asked" — the idea removed
+        rather than renamed, so v30 drops it outright. `project_id`, added alongside it in
+        v25, stays: what a session is working on is read on every turn to pick the project
+        memory, and that question survives.
+
+        The two are separate migrations on purpose. Dropping a column the SQLAlchemy model
+        still maps breaks every query against that table at once, so the column had to outlive
+        its readers by exactly one version.
+        """
+        path = tmp_path / "agent.db"
+        conn = _at(path, len(_migrations()))
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
+        finally:
+            conn.close()
+        assert "working" not in cols
+        assert "project_id" in cols
+
     def test_a_fresh_database_lands_in_the_same_place(self, tmp_path: Path):
         """The migration has to be right for someone who never had `tick_log` at all."""
         path = tmp_path / "fresh.db"

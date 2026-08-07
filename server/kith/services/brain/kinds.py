@@ -88,30 +88,19 @@ def _make_schedule(path, data: dict) -> dict:
 
 
 def _person_commented(path: Path, data: dict) -> dict:
-    """Write a comment from the person on a task, and make sure he hears it.
+    """Write a comment from the person on a task.
 
-    Writing it was all this used to do, and the effect was that talking to him on a task he
-    was not already parked on went nowhere: `tasks_awaiting_kith` does find a task whose last
-    comment is the person's, but only a *running* session ever asks it. So a comment on a task
-    that was not `waiting` produced no reply, no acknowledgement, and no sign it had been read
-    — which reads as not being listened to, and is the worst thing this could feel like.
+    This used to also wake whichever session owned the task, because a comment on a task he
+    was not already parked on otherwise went nowhere: only a running session ever asked
+    `tasks_awaiting_kith`, so writing on any other task produced no reply and no sign it had
+    been read.
 
-    Waking whichever session owns the task, rather than "a" session: with several projects
-    going, the one that should answer is the one working that project.
+    Nothing runs unasked now, so there is nothing to wake and the problem it solved is gone
+    with it — a comment is read when you next say something in the conversation that owns the
+    work, which is also the only place a reply could usefully arrive.
     """
     task_id = int(data["task_id"])
-    saved = repo.tasks.add_task_comment(path, task_id, "user", data.get("body", ""))
-    try:
-        from kith.autonomy import runner as loop
-
-        task = repo.tasks.task_detail(path, task_id) or {}
-        owner = repo.conversations.session_for_project(path, task.get("project_id"))
-        loop.nudge(owner, f"you wrote on: {str(task.get('goal') or '')[:40]}")
-    except Exception:
-        # Bookkeeping. The comment is saved either way, and a failure to wake him must not
-        # turn writing a comment into an error.
-        pass
-    return saved
+    return repo.tasks.add_task_comment(path, task_id, "user", data.get("body", ""))
 
 
 def _milestone_add(path: Path, data: dict) -> dict:

@@ -1,1 +1,0 @@
-Your person has replied on a task you were waiting on. Read the task's latest comments, act on what they said, and move it forward: post your progress with comment_on_task, move the task to 'working' (or 'done' if it's finished), and attach a deliverable if you produced something. Journal one line about what you did.

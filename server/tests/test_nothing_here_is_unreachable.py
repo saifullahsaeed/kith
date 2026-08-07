@@ -26,44 +26,10 @@ import re
 import pytest
 
 import kith.tools  # noqa: F401  — importing registers every tool
-from kith.autonomy.toolsets import _ALLOW
 from kith.tools.registry import all_tools
 
 SERVER = pathlib.Path(__file__).resolve().parent.parent
 PACKAGE = SERVER / "kith"
-
-
-class TestEveryToolCanBeReached:
-    def test_no_tool_is_missing_from_every_allow_list(self):
-        registered = set(all_tools())
-        reachable: set[str] = set()
-        for allowed in _ALLOW.values():
-            reachable |= registered if allowed is None else set(allowed)
-        stranded = sorted(registered - reachable)
-        assert not stranded, (
-            f"{len(stranded)} tool(s) exist but no tick mode may call them: {stranded}. "
-            "He will be told about them and refused when he tries."
-        )
-
-    def test_no_allow_list_names_a_tool_that_does_not_exist(self):
-        registered = set(all_tools())
-        for mode, allowed in _ALLOW.items():
-            if allowed is None:
-                continue
-            ghosts = sorted(set(allowed) - registered)
-            assert not ghosts, f"mode {mode!r} permits tools that were removed: {ghosts}"
-
-    def test_every_allow_list_belongs_to_a_mode_the_runner_can_produce(self):
-        """An allow-list for a mode nothing emits is indistinguishable from one that works.
-
-        `reflect`, `consolidate` and `curious` sat here for a day after the scheduled inner
-        life was deleted, describing what he may do in states he could no longer enter.
-        """
-        source = (PACKAGE / "autonomy" / "runner.py").read_text(encoding="utf-8")
-        emitted = set(re.findall(r'mode, self\._current = "(\w+)"', source))
-        assert emitted, "could not find the mode assignments — this test needs rewriting"
-        orphans = sorted(set(_ALLOW) - emitted)
-        assert not orphans, f"allow-lists for modes the runner never enters: {orphans}"
 
 
 class TestNothingIsDefinedAndForgotten:

@@ -155,7 +155,7 @@ class Reminder(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     #: Which chat asked to be reminded, or None for one set outside any conversation. See
-    #: `kith.autonomy.runner._fire_conversation_reminders` — this is what lets firing report
+    #: `kith.services.scheduler.fire_due` — this is what lets firing report
     #: back to the actual chat instead of whichever session the tick happened to be on.
     conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -288,7 +288,6 @@ class Conversation(Base):
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: Whether he takes the next step on his own when this one finishes. What roaming used
     #: to be, scoped to the session instead of to the whole machine.
-    working: Mapped[bool] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

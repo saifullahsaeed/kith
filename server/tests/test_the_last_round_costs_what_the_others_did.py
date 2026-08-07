@@ -1,13 +1,15 @@
-"""Two bounds that were written down, believed, and silently doing nothing.
+"""A bound that was written down, believed, and silently doing nothing.
 
-Both were found by attacking a design rather than by anything failing, which is the point:
-a bound that never fires looks exactly like a bound that is never needed.
+Found by attacking a design rather than by anything failing, which is the point: a bound that
+never fires looks exactly like a bound that is never needed.
+
+This file held two. The other was `tick_max_tokens`, capping what a tick could write, and it
+went with the loop it bounded.
 """
 
 from __future__ import annotations
 
 import inspect
-import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,46 +17,6 @@ import pytest
 
 from kith.config import default_config
 from kith.services import agent_loop, tuning
-
-MODULE = sys.modules["kith.autonomy.runner"]
-
-
-class TestTheTickOutputCap:
-    """`tick_max_tokens` exists so a tick is a step rather than an essay — the knob's own
-    help text says bounding output is what keeps running all day affordable.
-
-    It was applied as `min(config.num_predict, tick_max_tokens)`. On this install
-    `num_predict` is -1, the sentinel for "no limit", so the min is -1 and every tick since
-    the knob was added has run uncapped. A sentinel that sorts below every real value wins
-    any comparison meant to bound it.
-    """
-
-    @staticmethod
-    def capped(num_predict: int) -> int:
-        """The runner's own arithmetic, read out of the source so this cannot drift."""
-        source = inspect.getsource(MODULE.AutonomyRunner._step)
-        assert "tick_cap if wanted <= 0 else min(wanted, tick_cap)" in source
-        tick_cap = tuning.value("tick_max_tokens")
-        return tick_cap if num_predict <= 0 else min(num_predict, tick_cap)
-
-    def test_no_limit_becomes_the_tick_limit(self):
-        """The case that was broken, and the default on this install."""
-        assert self.capped(-1) == tuning.value("tick_max_tokens")
-
-    def test_zero_is_treated_the_same_way(self):
-        """0 is the other spelling of "unset" a config can arrive with, and `min(0, 2000)`
-        would cap a tick at zero tokens — worse than uncapped."""
-        assert self.capped(0) == tuning.value("tick_max_tokens")
-
-    def test_a_smaller_explicit_limit_still_wins(self):
-        assert self.capped(500) == 500
-
-    def test_a_larger_explicit_limit_is_brought_down(self):
-        assert self.capped(999_999) == tuning.value("tick_max_tokens")
-
-    def test_the_knob_is_what_decides_it(self):
-        tuning.apply({"tick_max_tokens": 1234})
-        assert self.capped(-1) == 1234
 
 
 class TestTheForcedFinalAnswer:

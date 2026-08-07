@@ -496,6 +496,28 @@ cd server && git rm -r kith/autonomy
 
 - [ ] **Step 3: Fix the importers**
 
+Found during execution review; the plan as first written would have broken `import kith`.
+
+**`kith/api/routes/chat.py:18`** — `from kith.autonomy.prompts import _describe_call, _short_args`.
+These render a tool call into a line of feed prose and have nothing to do with the loop. Move
+both into `kith/services/activity.py` (Task 1's module) and import them from there. They are
+what makes the Mind panel say "read `notes.md`" instead of printing a JSON blob, so losing
+them is a visible regression rather than a crash.
+
+**`kith/__init__.py:19`** — `from kith.autonomy import runner`. A package-level import, which
+is how the singleton became reachable everywhere. Delete the line. Nothing replaces it: the
+feed is imported where it is used.
+
+**`kith/tools/tasks.py:335` and `kith/services/brain/kinds.py:105`** — both call
+`loop.nudge(...)` to wake the loop so it picks up a task or a comment now. There is no loop to
+wake, so delete the `_nudge` helper in `tasks.py`, the block in `kinds.py`, and their call
+sites. Both are already wrapped in `try/except Exception: pass` and documented as a courtesy,
+so nothing depends on them succeeding. Keep the surrounding writes.
+
+**`kith/infra/db/models.py:158`** — a comment naming
+`kith.autonomy.runner._fire_conversation_reminders`. Repoint it at
+`kith.services.scheduler.fire_due` in Task 11's scrub.
+
 `kith/services/agent_loop.py` imports the toolsets; the chat path uses `only=` narrowing that lives in `agent_loop` itself, so remove the autonomy toolset import and any branch reachable only from a tick. Do not change what chat is offered.
 
 - [ ] **Step 4: Run the whole suite and read the failures**
@@ -744,3 +766,27 @@ git commit -m "Scrub the vocabulary of a loop that no longer exists"
 **Type consistency.** `feed.publish(kind, text, *, tokens, tool, args, conversation)` in Task 1 matches the call in Task 1 Step 5 and Task 4. `charge_session(...) -> bool` in Task 1 matches Task 7. `scheduler.fire_due(now_iso)` and `_continue(conversation_id, notes)` in Task 2 match the tests that patch them.
 
 **Ordering.** The feed moves before anything is deleted, because chat publishes through it. The rename lands before the deletion, so cost tracking is proven while the old code is still present to compare against.
+
+---
+
+## Execution notes
+
+Recorded as they were found, because two of them changed the plan.
+
+**`test_instructions_name_real_tools.py` was deleted, not rewritten.** The plan had it in the
+rewrite bucket. Its guarantee was the gap between two different sets: the registry was every
+tool that existed, the per-mode allow-list every tool he was actually handed, and an
+instruction naming something in the first but not the second failed *silently* — he never
+reached for it and the result looked complete. That is a real and expensive bug, and it is
+also unrepresentable once the modes are gone: there is one set now, `_mentioned()` intersects
+against it, so every assertion in the file is true by construction. Rewriting it would have
+left five tautologies wearing the costume of a guarantee, which is worse than no test.
+
+**`test_nothing_here_is_unreachable.py` was kept, minus one class.** Its allow-list tests went
+for the same reason; its "no private helper is stranded" and tool-schema wellformedness tests
+have nothing to do with the loop and stay.
+
+**`kith/__init__.py` started the loop.** `_start_background()` called `runner.ensure_loop()`
+with the comment "keep the checker alive so reminders/schedules fire on time" — which is the
+scheduler's job in this design, so Task 8's boot step landed here in Task 5 rather than
+waiting.

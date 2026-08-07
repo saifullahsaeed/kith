@@ -16,10 +16,9 @@ from flask_cors import CORS
 from kith import settings
 from kith.api import auth, csp, spa
 from kith.api.routes import api
-from kith.autonomy import runner
 from kith.config import AGENT_DB_PATH, CONFIG_DB_PATH
 from kith.infra.db import config_store, migrations
-from kith.services import embeddings, tuning
+from kith.services import embeddings, scheduler, tuning
 
 # The functions, not the modules. `kith.services.connections` re-exports a ConnectionManager
 # *instance* under the name `manager`, so `from kith.services.connections import manager`
@@ -82,9 +81,11 @@ def _start_background() -> None:
     # downloads on first run, and that must not be what stands between launching and answering.
     connect_mcp_async(CONFIG_DB_PATH)
     if os.environ.get("KITH_NO_BACKGROUND") == "1":
-        print("[kith] background: autonomy loop off (KITH_NO_BACKGROUND); MCP still connecting")
+        print("[kith] background: scheduler off (KITH_NO_BACKGROUND); MCP still connecting")
         return
-    runner.ensure_loop()  # keep the checker alive so reminders/schedules fire on time
+    # The one thing that still runs unasked: checking whether a reminder or a schedule has
+    # come due. Started here rather than at import, so a test suite never inherits it.
+    scheduler.start()
 
 
 def create_app() -> APIFlask:
@@ -96,7 +97,7 @@ def create_app() -> APIFlask:
         spec_path="/openapi.json",
     )
     app.description = (
-        "Kith — a local, self-directed AI. Talks to Ollama, owns the persona "
+        "Kith — a local AI you work with. Talks to Ollama, owns the persona "
         "and chat config, and streams reasoning + answer as NDJSON."
     )
 

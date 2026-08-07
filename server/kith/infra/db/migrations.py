@@ -472,6 +472,14 @@ def _migrations():
         # one migration.
         conn.execute("ALTER TABLE tick_log RENAME TO turn_log")
 
+    def v30_no_roaming(conn):
+        # `working` meant "this session keeps going without being asked". Nothing keeps
+        # going without being asked any more, so the column is not renamed into something
+        # truer — there is no truer thing for it to say. Its sibling from v25,
+        # `project_id`, stays: what a session is working on is read on every turn to pick
+        # the project memory.
+        conn.execute("ALTER TABLE conversations DROP COLUMN working")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -502,6 +510,7 @@ def _migrations():
         v27_reminder_conversation,
         v28_task_planning_statuses,
         v29_turn_log,
+        v30_no_roaming,
     ]
 
 

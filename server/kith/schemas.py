@@ -5,7 +5,7 @@ APIFlask, are what the generated OpenAPI spec is built from.
 from __future__ import annotations
 
 from apiflask import Schema
-from apiflask.fields import Boolean, Dict, Float, Integer, List, Nested, String
+from apiflask.fields import Boolean, Dict, Integer, List, Nested, String
 from marshmallow import EXCLUDE
 
 
@@ -94,67 +94,3 @@ class ReviewItemSchema(Schema):
     goal = String(metadata={"description": "What the task was"})
 
 
-class AutonomyStatusSchema(Schema):
-    working = List(
-        String(),
-        metadata={"description": "Ids of the sessions taking steps right now"},
-    )
-    ticking = Boolean(metadata={"description": "A tick is running right now"})
-    stopping = Boolean(metadata={"description": "A stop was asked for and the running step is winding up"})
-    lastTick = String(allow_none=True)
-    current = String(allow_none=True, metadata={"description": "What it's doing right now"})
-    ticks = Integer(metadata={"description": "Total self-directed ticks run this session"})
-    tokensIn = Integer(metadata={"description": "Prompt tokens spent by autonomy this session"})
-    tokensOut = Integer(metadata={"description": "Response tokens spent by autonomy this session"})
-    # A field absent from this schema is dropped from the response, silently — which is
-    # how the two below shipped as zeros to a UI that was reading them correctly.
-    tokensUncached = Integer(
-        metadata={"description": "Prompt tokens with cache hits removed — what was actually read"}
-    )
-    lastTickTokens = Integer(metadata={"description": "Tokens spent on the most recent tick"})
-    lastTickUncached = Integer(
-        metadata={"description": "Tokens the most recent tick actually had to read plus write"}
-    )
-    costUsd = Float(
-        metadata={
-            "description": "What autonomy has actually cost this session, in dollars, as "
-            "billed by the provider rather than estimated from token counts"
-        }
-    )
-    # And this is the third field to learn that lesson the hard way. `status()` returned it, the
-    # panel read it, and the review bar rendered nothing at all — because the schema had no
-    # `toReview` and marshmallow dropped it on the way out without a word.
-    toReview = List(
-        Nested(ReviewItemSchema),
-        metadata={
-            "description": "Work a tick finished and handed over for checking — the 'review' "
-            "column. Chat is the reviewer: a tick verifying its own output wrote the brief, chose "
-            "the requirements and supplied the evidence."
-        },
-    )
-    toApprove = List(
-        Nested(ReviewItemSchema),
-        metadata={
-            "description": "Plans drafted with the planning-a-task skill and waiting for a look "
-            "before any implementation starts — the 'planning' column. Always entered from chat, "
-            "never a tick's own initiative."
-        },
-    )
-
-
-class AutonomyControlSchema(Schema):
-    class Meta:
-        unknown = EXCLUDE
-
-    action = String(
-        required=True,
-        metadata={
-            "description": "'start' (this session keeps working), 'stop' (it stops — all "
-            "sessions when no conversationId is given), 'tick' (one step now), or 'cancel' "
-            "(abandon the step in flight, leaving the session working)"
-        },
-    )
-    conversationId = String(
-        required=False,
-        metadata={"description": "Which session. Required to start working; optional to stop."},
-    )

@@ -1,1 +1,0 @@
-Your person has written to you and is waiting to hear back. Read what they said (below). If it needs something done — a search, reading a page, writing something — do that first with your tools, then answer them with reach_out: genuinely engage, give them the result or your honest take. Keep it real and to the point. Journal one line about what you did.

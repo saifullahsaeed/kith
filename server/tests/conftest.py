@@ -13,20 +13,9 @@ from pathlib import Path
 
 import pytest
 
-import kith.autonomy.runner  # imported for the side effect of registering the module
 import kith.settings
 from kith.infra.db import config_store
 from kith.infra.db.migrations import init
-
-#: The real `ensure_loop`, captured once at import — before any fixture has replaced it.
-#:
-#: `kith.autonomy.runner` as an *attribute* of its package is the singleton instance, not the
-#: module, so the class is only reachable through sys.modules. And it has to be grabbed here
-#: rather than inside a fixture: by the time the opt-in fixture below runs, the autouse one
-#: has already put a no-op on the class, and wrapping *that* would produce a fixture that
-#: silently starts nothing.
-_RUNNER_MODULE = sys.modules["kith.autonomy.runner"]
-_REAL_ENSURE_LOOP = _RUNNER_MODULE.AutonomyRunner.ensure_loop
 
 
 @pytest.fixture
@@ -129,61 +118,36 @@ def never_the_real_data_folder(_safe_data_dir, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_stray_autonomy_loops(monkeypatch):
-    """No test starts a real background loop unless it asks for one. None of them ask.
+def no_stray_background_threads(monkeypatch):
+    """No test starts a background thread unless it asks for one. None of them ask.
 
-    `keep_working` calls `ensure_loop`, which starts a daemon thread that wakes every second
-    for the rest of the process. Nothing stopped them, so a runner built in one test went on
-    ticking through the next — reading `AGENT_DB_PATH` out of the module, which the following
-    test monkeypatches at its own temp database. It duly began ticking someone else's
-    fixtures, which is how it was found: a test expecting two calls saw six, four of them
-    from a runner two files away.
+    `scheduler.start()` runs a daemon thread that wakes every thirty seconds for the rest of
+    the process. Nothing stops one, so a thread started in one test goes on firing through the
+    next — reading `AGENT_DB_PATH` out of the module, which the following test monkeypatches at
+    its own temp database. It would duly start firing someone else's fixtures.
 
-    The first attempt at this stopped the threads in teardown, and that was wrong in a way
-    worth recording, because it made things *worse* rather than merely slow:
+    This guarded the autonomy loop first, and the loop is gone; the hazard is not. It belonged
+    to *having a timer at all*, not to what the timer did, which is why this fixture outlived
+    the thing that earned it.
+
+    The first attempt stopped the threads in teardown, and that was wrong in a way worth
+    recording, because it made things *worse* rather than merely slow:
 
     * Autouse fixtures are set up first, so they tear down LAST — after `monkeypatch` has
-      already restored `AGENT_DB_PATH`. In that window a still-running loop is pointed at
-      the real `server/data/agent.db`, and `_tick` can reach `stream_agent`, which is a
-      real network call against the real board.
+      already restored `AGENT_DB_PATH`. In that window a still-running timer is pointed at
+      the real `server/data/agent.db`, and firing a reminder reaches `stream_agent`, which is
+      a real network call.
     * Measured: nine of thirteen joins hit the full two-second timeout with the thread still
       alive — because it was busy doing exactly that. It cost 4 seconds of teardown on every
       test in the file, and turned a twenty-second suite into one that did not finish.
 
     Stopping a thread you should never have started is the wrong end of the problem. Nothing
-    in the suite asserts the thread exists; every test that calls `keep_working` is checking
-    the database flag, not the loop. So the loop simply does not start. A test that genuinely
-    wants one can undo this with the `live_autonomy_loop` fixture below.
+    in the suite asserts the thread exists, so it simply does not start.
     """
-    monkeypatch.setattr(_RUNNER_MODULE.AutonomyRunner, "ensure_loop", lambda self: None)
+    from kith.services import scheduler
+
+    monkeypatch.setattr(scheduler, "start", lambda: None)
     yield
-
-
-@pytest.fixture
-def live_autonomy_loop(monkeypatch):
-    """Opt back in to a real background thread, and guarantee it is stopped.
-
-    Calls the function captured at import rather than whatever is on the class now, because
-    what is on the class now is the autouse no-op — wrapping that would give you a fixture
-    that looks like it starts a loop and starts nothing.
-
-    Every runner that starts one is remembered and stopped here, inside the *test's* own
-    fixture stack. That ordering is the point: it unwinds before any `monkeypatch` of
-    AGENT_DB_PATH does, so a loop can never be left running against the real database.
-    """
-    started: list = []
-
-    def remember(self):
-        _REAL_ENSURE_LOOP(self)
-        started.append(self)
-
-    monkeypatch.setattr(_RUNNER_MODULE.AutonomyRunner, "ensure_loop", remember)
-    yield started
-    for runner in started:
-        runner._stop.set()
-        thread = runner._thread
-        if thread is not None:
-            thread.join(timeout=5)
 
 
 @pytest.fixture(autouse=True)

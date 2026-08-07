@@ -143,34 +143,3 @@ def session_for_project(path: Path, project_id: int | None) -> str:
         return str(newest.id) if newest is not None else ""
 
 
-def set_working(path: Path, conversation_id: str, working: bool) -> None:
-    """Whether he takes the next step here without being asked again.
-
-    A property of the conversation rather than of the process, which is the whole difference
-    from roaming: two sessions can be working at once, and stopping one must not stop the
-    other.
-    """
-    with session(path) as db:
-        row = db.get(Conversation, conversation_id)
-        if row is not None:
-            row.working = 1 if working else 0
-            row.updated_at = utc_now_iso()
-
-
-def is_working(path: Path, conversation_id: str) -> bool:
-    with session(path) as db:
-        row = db.get(Conversation, conversation_id)
-        return bool(row is not None and row.working)
-
-
-def working_sessions(path: Path) -> list[dict]:
-    """Every session that should take another step, longest-waiting first.
-
-    Ordered by when each was last touched so a busy session cannot starve the others simply
-    by being busy.
-    """
-    with session(path) as db:
-        rows = db.scalars(
-            select(Conversation).where(Conversation.working == 1).order_by(Conversation.updated_at)
-        ).all()
-        return [{"id": r.id, "title": r.title, "project_id": r.project_id} for r in rows]

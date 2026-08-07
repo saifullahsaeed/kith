@@ -83,7 +83,7 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
     ``allow`` is the set of tools permitted in this context, and it is enforced *here*
     because here is where execution happens. It used to be enforced nowhere.
 
-    Every allow-list in the codebase — the per-mode sets in `autonomy/toolsets.py`, the
+    Every allow-list in the codebase — the
     landing reserve that takes work tools away for the last rounds, the narrower set after a
     delegation — was only ever passed to `tool_schemas(only=...)`, which decides what the
     model is *shown*. This function resolved any name against the whole registry and ran it.
