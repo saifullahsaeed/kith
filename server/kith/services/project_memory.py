@@ -114,7 +114,7 @@ def block(project_dir: str | Path, name: str = "") -> str:
     # it yet, and telling them apart is the whole point of this branch. Conflated, they read
     # as "no memory yet" — which is what actually happened: a project stayed linked to a
     # folder that had been deleted, so 3,068 characters of hard-won project memory sat unread
-    # on disk while every tick was told there was none and invited to start a fresh one. That
+    # on disk while every turn was told there was none and invited to start a fresh one. That
     # invitation is the dangerous part. He would have written the new file into a folder that
     # does not exist, or into his own, and the real one would have gone on being invisible.
     #

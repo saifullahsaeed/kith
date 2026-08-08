@@ -1,6 +1,6 @@
 """The live feed of what he is doing, and what a session has spent doing it.
 
-Both of these lived inside `AutonomyRunner`, which also contained a loop that chose work on
+Both of these lived inside one class that also contained a loop choosing work on
 its own. Only the loop was the idea being abandoned. The feed is not: chat publishes every
 turn through it, and a conversation was once the one kind of work that left no trace here.
 

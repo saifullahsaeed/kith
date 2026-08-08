@@ -1,14 +1,14 @@
 """Which conversation the work happening right now belongs to.
 
 A tool handler is called as ``run(path, args)`` and has always been told nothing about
-who asked. That was fine while everything was global — one board, one roam switch, one
+who asked. That was fine while everything was global — one board, one switch, one
 project — and stopped being fine the moment a session became the unit of work. When he
 starts a project mid-conversation, *that* conversation is the one now working on it, and
 there is no way to know that from ``(path, args)``.
 
 Threading a ``conversation_id`` parameter through fifty-nine handlers to be read by two of
 them would be the wrong trade. A context variable is: it is set once at the edge — the chat
-route, or the tick advancing a session — read by whoever cares, and empty everywhere else,
+route, or the scheduler continuing one — read by whoever cares, and empty everywhere else,
 which is the honest answer for a tool called from a test or a script.
 
 Per-thread by construction, so two chats streaming at once cannot see each other's session.
@@ -33,10 +33,10 @@ def current() -> str:
 def current_project() -> int | None:
     """The project this work is on, when it is narrower than the conversation's.
 
-    A tick picks a task, and that task belongs to a project — which is not necessarily the
+    He picks up a task, and that task belongs to a project — which is not necessarily the
     project its *session* is bound to, and for an unbound session is not any project at all.
     Everything downstream that asks "where am I working" used to resolve it through the
-    conversation, so a tick working a task in a folder-linked project got the folder of
+    conversation, so working a task in a folder-linked project got the folder of
     whatever the conversation happened to be bound to, which was usually nothing. See
     :func:`working_on`.
     """
@@ -96,14 +96,14 @@ def in_turn() -> bool:
 
 
 #: Whether this work is happening with nobody watching. False in chat, in a test, in a script —
-#: the honest default, since the only thing that can truthfully claim otherwise is the tick loop.
+#: the honest default, since the only thing that can truthfully claim otherwise is the scheduler.
 _unattended: ContextVar[bool] = ContextVar("kith_unattended", default=False)
 
 
 def unattended() -> bool:
-    """Is this a tick rather than a conversation?
+    """Is this running with nobody present — a reminder firing — rather than someone talking?
 
-    Exists for one decision: who may declare a task finished. A tick verifying its own work and
+    Exists for one decision: who may declare a task finished. Verifying its own work and
     then closing the task is marking its own homework — it wrote the brief, it wrote the evidence,
     and it graded itself. In a chat turn there is a person on the other side and a full context to
     judge from, so `done` there means what it says.
@@ -117,7 +117,7 @@ def unattended() -> bool:
 
 @contextmanager
 def nobody_watching() -> Iterator[None]:
-    """Run a block as unattended work. Opened by the tick loop, and nothing else."""
+    """Run a block as work nobody is watching. Opened by the scheduler, and nothing else."""
     token = _unattended.set(True)
     try:
         yield
@@ -129,7 +129,7 @@ def nobody_watching() -> Iterator[None]:
 def working_on(project_id: int | None) -> Iterator[None]:
     """Run a block as work on one project, whatever the conversation says.
 
-    Nests inside ``working_in``: the conversation is decided when the tick starts, the
+    Nests inside ``working_in``: the conversation is decided when the work starts, the
     project only once it has looked at the board and picked something. Deliberately *not*
     written to the database — binding a session to a project is a lasting decision with
     real consequences for what it may pick up next (see ``_in_scope``), and picking up one
@@ -168,7 +168,7 @@ def adopt(path: Path, project_id: int | None, deliberate: bool = False) -> None:
     refuses to move a binding either way. A conversation is stuck with the first project it
     picks, however that happened; wanting a different one is what a new conversation is for.
 
-    Silent when nothing is bound: a tool called from a test, a script, or a tick with no
+    Silent when nothing is bound: a tool called from a test, a script, or a turn with no
     session has no conversation to adopt anything, and that is not an error. Also silent
     when the binding is refused as already-locked — `deliberate=True` still asks, but asking
     is not the same as it being granted.

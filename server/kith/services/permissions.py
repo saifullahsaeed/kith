@@ -10,7 +10,7 @@ Three modes, and the shape of them is deliberate:
 
 * **ask** — inside the workspace he is unrestricted. Outside it, or anything destructive
   anywhere, needs a yes from you. This is the default because it is the only setting where
-  leaving him running unattended is a reasonable thing to do.
+  walking away from a running turn is a reasonable thing to do.
 * **auto** — the same boundary, minus the prompt for ordinary work outside the workspace.
   The genuinely dangerous set still asks, because "auto" should mean "stop interrupting
   me", not "stop protecting me".
@@ -20,7 +20,7 @@ Three modes, and the shape of them is deliberate:
 Approval does not block. A gated action fails with an explanation, records a pending
 request, and he is told to ask — so he says so in his own words, you click Allow, and he
 tries again. The alternative was holding a tool call open on a background thread waiting
-for a click that may never come, on a tick that may be running at 4am.
+for a click that may never come, on a turn you may have walked away from.
 """
 
 from __future__ import annotations

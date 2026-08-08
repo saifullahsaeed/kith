@@ -2,7 +2,7 @@
 
 Dropped into an unfamiliar repository, the only moves he had were `list_files` — which shows
 names and tells you nothing about what is in them — and a series of guesses at `grep`. Both
-are cheap individually and ruinous in aggregate: twenty rounds of orientation against a tick
+are cheap individually and ruinous in aggregate: twenty rounds of orientation against a turk
 that gets sixteen, and every file he opened along the way is still in the prompt at the end.
 The job dies during the reconnaissance.
 

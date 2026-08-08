@@ -112,7 +112,7 @@ class Group:
 # The order here is the order the settings page shows, top to bottom. Split so the two things a
 # person actually distinguishes — "when I'm talking to him" and "when he's working on his own" —
 # are separate sections rather than interleaved inside buckets named after mechanics. The old
-# groups mixed `max_rounds` (chat) with `tick_max_rounds` (a tick) under "A turn", and the
+# groups mixed knobs for different callers under "A turn", and the
 # conversation-history knobs with the tool-stubbing knobs under "What he holds", so nobody could
 # tell which lever touched which mode.
 GROUPS: tuple[Group, ...] = (

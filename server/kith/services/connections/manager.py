@@ -38,10 +38,10 @@ CAPABILITIES_KEY = "model_capabilities"
 KEPT_KEY = "api_key_kept"
 
 #: A model needs room to hold a multi-round turn. Below this he forgets his own
-#: earlier steps inside a single tick.
+#: earlier rounds inside a single turn.
 USABLE_CONTEXT = 32_000
 
-#: Suggestions aim higher than the bare minimum: a tick can run sixteen rounds, each
+#: Suggestions aim higher than the bare minimum: a turn can run forty rounds, each
 #: carrying tool output, so headroom is what keeps him coherent to the end of one.
 SUGGESTION_CONTEXT = 65_536
 

@@ -3,15 +3,15 @@
 Pure functions and thresholds — no database, no clock, no IO. That matters here more
 than elsewhere: this is the logic that decides whether Kith is stuck, it has been
 wrong twice in ways nobody spotted for weeks, and it is only trustworthy if it can
-be tested directly against real tick history. Living in ``domain`` is what makes
+be tested directly against real turn history. Living in ``domain`` is what makes
 that possible.
 
 Two signals, because prose alone does not work. He rephrases himself every time, so
 two ticks that rediscover the identical fact score ~0.21 on word overlap against a
-0.6 bar. What repeats is the *shape* of the tick — the same handful of tools reached
+0.6 bar. What repeats is the *shape* of the round — the same handful of tools reached
 for the same way — which scores ~0.8. But shape alone would punish honest work, since
 two solid rounds of writing-and-running code look alike too. So shape only counts
-when the tick moved nothing forward.
+when the round moved nothing forward.
 """
 
 from __future__ import annotations
@@ -30,10 +30,10 @@ PROSE_MATCH = 0.6
 # real ticks: 0.80 on a genuine rediscovery loop, 0.13 on real progress.
 SHAPE_MATCH = 0.7
 
-# Below this a tick is too small to fingerprint — one or two calls match by chance.
+# Below this a round is too small to fingerprint — one or two calls match by chance.
 SHAPE_MIN_TOOLS = 3
 
-# Tools that mean the tick actually moved the work forward.
+# Tools that mean the round actually moved the work forward.
 #
 # Deliberately excludes comment_on_task and journal, or he could escape detection
 # forever by narrating the loop instead of leaving it. Also excludes write_file:
@@ -68,7 +68,7 @@ def same_shape(a: frozenset[str], b: frozenset[str]) -> bool:
 
 
 def advanced(tools_used: frozenset[str]) -> bool:
-    """Did this tick leave the work further along than it found it?"""
+    """Did this round leave the work further along than it found it?"""
     return bool(tools_used & ADVANCE_TOOLS)
 
 

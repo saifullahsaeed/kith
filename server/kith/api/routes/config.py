@@ -24,7 +24,7 @@ _SETTING_KEYS = {
 @api.output(ConfigSchema)
 @api.doc(
     summary="Effective defaults",
-    description="The default model, context/output sizes, and the autonomous persona.",
+    description="The default model, context/output sizes, and the persona.",
 )
 def get_config():
     return to_wire(default_config())

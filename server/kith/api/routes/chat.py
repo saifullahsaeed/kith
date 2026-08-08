@@ -36,7 +36,7 @@ from kith.services.agent_loop import stream_agent
 #:
 #: This used to open with "CAPTURE, DON'T DO (most important)" — asked to build something, he
 #: was to file a task, refuse to touch a work tool, and say roughly when he would get to it.
-#: The intent was sound when he could only really work unattended: a conversation was the
+#: The intent was sound when a conversation could not carry a long job: it was the
 #: wrong place for a long job, so it became an intake desk.
 #:
 #: The cost was that everything consequential happened at the intake desk anyway. Laying out a
@@ -318,7 +318,7 @@ def _present_state(conversation_id: str = "") -> str:
         memory_context.messages_block(AGENT_DB_PATH),
         memory_context.projects_block(AGENT_DB_PATH),
         memory_context.work_block(AGENT_DB_PATH),
-        # Only ever in chat. A tick seeing this would be a tick reviewing its own work, which is
+        # Only ever shown to him with you present. Reviewing his own work unwatched is
         # the thing the review column exists to stop.
         memory_context.review_block(AGENT_DB_PATH),
     ]
@@ -492,8 +492,8 @@ class _MindFeed:
     Chat used to leave no trace anywhere except its own transcript: no line on the Mind
     feed, no row in the flight recorder. Every mode the runner has wrote both, and the one
     path where most of the real work happens wrote neither — so "what has he been doing"
-    could be answered for the unattended steps and not for the afternoon you spent together,
-    and a tick that cost 40k tokens was visible while a chat turn that cost 200k was not.
+    could be answered for some work and not for the afternoon you spent together — a 40k turn
+    visible in one place while a 200k one left no trace at all.
 
     It matters more now that the Mind panel is per session. A conversation you have never
     left working would otherwise show an empty panel forever, which reads as broken rather
@@ -679,7 +679,7 @@ def chat(payload):
                 # The switch is handed to `_turn` rather than checked out here. Checking it
                 # here meant returning out of this loop with the generator suspended mid-body,
                 # and an abandoned generator is not a finished one: everything after its last
-                # `yield` — the tick-log row saying what the turn spent, the feed's own "done" —
+                # `yield` — the turn-log row saying what the turn spent, the feed's own "done" —
                 # never ran. Stopping is the one case where you most want that row.
                 for line in _turn(recorder, messages, config, conversation_id, latest, stopping=stopping):
                     lines.put(line)
@@ -694,7 +694,7 @@ def chat(payload):
 
     # `copy_context().run` rather than a bare Thread target: everything else this request
     # established in ContextVars — the project, the turn's scratch notes, whether this is
-    # unattended — has to travel with it. `turn_notes` is what keeps a turn to one checkpoint
+    # the turn's scratch notes — has to travel with it. `turn_notes` keeps a turn to one checkpoint
     # per repo, so losing it would take the checkpoint chain with it.
     threading.Thread(
         target=contextvars.copy_context().run,
@@ -737,7 +737,7 @@ def _turn(
     Ends itself, on every path — that is what the `finally` is for. A turn can be over five
     ways: it finished, it reported an error, it died on the way out, someone stopped it, or the
     caller gave up on the generator. Two of them each used to close the books at their own site
-    and the rest closed nothing at all, which is why a stopped turn left no tick-log row and a
+    and the rest closed nothing at all, which is why a stopped turn left no turn-log row and a
     feed that never said "done". One exit means the recorder and the feed are finished exactly
     once, whoever decided the turn was over.
 
@@ -745,7 +745,7 @@ def _turn(
     without abandoning a tool call half-done. `agent_loop` has no cancellation hook of its own,
     so this is as fine-grained as stopping gets, and it is enough: the wait is one tool call,
     not the rest of the turn. None means nothing can stop this one — which is the reminder
-    path in `autonomy.runner`, where there is no one to click anything.
+    path in `services.scheduler`, where there is no one to click anything.
     """
     watcher = _MindFeed(conversation_id, opening, stopping=stopping)
     stopped = False
@@ -757,13 +757,11 @@ def _turn(
             ollama_host(),
             AGENT_DB_PATH,
             conversation_id=conversation_id,
-            # Rounds stay on the declared knob (max_rounds, 40) rather than the tick's
-            # hardcoded 16. A conversation genuinely wants more room than an unattended
-            # step: you are here, so a long turn is one you can watch and stop, and the
-            # tick's 16 exists because nobody is.
+            # Rounds stay on the declared knob (max_rounds, 40). A conversation wants real
+            # room: you are here, so a long turn is one you can watch and stop.
             #
             # `expect_durable` stays off, and that was learned the hard way an hour after
-            # turning it on. A tick that leaves nothing behind really is a failure — the
+            # turning it on. Work that leaves nothing behind really is a failure — the
             # whole point of one is to make progress nobody asked to watch. But a
             # conversation is not that, and cannot be told apart upfront: "what have you
             # been working on" is answered by answering it. With durability demanded, he
@@ -771,7 +769,7 @@ def _turn(
             # `session-findings-2026-07-31.md` to satisfy the rule — a file nobody wanted,
             # about nothing, because the harness insisted on an artefact.
             #
-            # The distinction that matters is not chat versus tick. It is "asked to do
+            # The distinction that matters is not which path the work came in on. It is "asked to do
             # something" versus "asked something", and the transport does not know which
             # it is carrying. So the directive above asks him to do the work, and nothing
             # forces him to manufacture evidence of having done it.

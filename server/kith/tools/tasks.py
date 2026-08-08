@@ -129,7 +129,7 @@ def _verify_done(path: Path, a: dict) -> dict | None:
     # it. On a real project that produced a finished, confident analysis document asserting the
     # system used SQLite when it had moved to Postgres — every box ticked.
     #
-    # So an unattended pass lands in `review`, where no tick can pick it up again and a chat turn
+    # So a pass with nobody watching lands in `review`, where he cannot pick it up again and a chat turn
     # is shown it. In a conversation there is a person present and the whole context to judge
     # from, so `done` there stays `done`.
     from kith.services import session_context
@@ -170,7 +170,7 @@ def _update_task(path: Path, a: dict) -> dict | None:
     #
     # Which is how four tasks came to sit in "Waiting on you" that nobody knew were waiting, and
     # how a task parked by the loop-breaker on a blocker that was not even real (see
-    # `_ALLOW["breakout"]`) stayed parked for three hours until someone read the tick log. A
+    # a narrowed toolset) stayed parked for three hours until someone read the turn log. A
     # stall he cannot get past is exactly the moment his person is the only one who can help;
     # not telling them makes it a stall that lasts until they happen to look.
     #
@@ -248,7 +248,7 @@ def _reopen_if_finished(path: Path, project_id: int | None) -> str:
 
     Whoever closed it — a person, always, now — nothing then stopped an actionable task being
     added underneath afterwards, where it was **invisible**: `active_tasks` excludes everything
-    under a done or paused project, so the board showed two `todo` tasks and every tick reported
+    under a done or paused project, so the board showed two `todo` tasks and every reportted
     "caught up — resting".
 
     Three symptoms, one cause, and none of them pointed here. The work never started. The
@@ -555,7 +555,7 @@ def add_checklist_item(path: Path, args: dict):
 
 @tool(
     "check_item",
-    "Tick a checklist item done (or undone) as you complete steps.",
+    "Check a checklist item off (or back on) as you complete steps.",
     {"item_id": INT, "done": {"type": "boolean", "description": "Defaults to true."}},
     required=("item_id",),
 )

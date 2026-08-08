@@ -167,36 +167,3 @@ class TestTheBriefFollowsTheBoard:
 
         registry.get("add_task").run(linked["db"], {"goal": "Buy milk"})
         assert not any("buy-milk" in name for name in self.briefs(linked["project"]))
-
-
-class TestNudgingHimToRecordWhatHeLearned:
-    def test_editing_code_without_touching_memory_is_noticed(self):
-        from kith.services import agent_loop
-
-        assert agent_loop._wrote_memory({"path": "frontend/src/App.tsx"}) is False
-        assert agent_loop._wrote_memory({"path": ".kith/memory.md"}) is True
-
-    def test_a_batch_that_includes_memory_counts(self):
-        """A batch updating the memory alongside three source files has plainly not
-        forgotten it."""
-        from kith.services import agent_loop
-
-        assert (
-            agent_loop._wrote_memory({"edits": [{"path": "src/a.ts"}, {"path": ".kith/memory.md"}]}) is True
-        )
-
-    def test_rubbish_arguments_do_not_raise(self):
-        from kith.services import agent_loop
-
-        assert agent_loop._wrote_memory(None) is False
-        assert agent_loop._wrote_memory({"edits": ["not a dict"]}) is False
-
-    def test_the_directive_asks_for_knowledge_not_a_summary(self):
-        """ "Leave something behind" reads as "file a comment", which he was already doing —
-        and a comment is about the task, not about the project."""
-        from kith.services import agent_loop
-
-        said = agent_loop._MEMORY_DIRECTIVE
-        assert "memory.md" in said
-        assert "not a summary" in said
-        assert "learned nothing durable" in said, "it has to be refusable, or he invents things"

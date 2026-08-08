@@ -68,9 +68,9 @@ def work_block(path: Path) -> str:
 
 
 def review_block(path: Path) -> str:
-    """Work a tick finished and nobody has checked. Chat's job, and only chat's.
+    """Work he finished with nobody watching. Yours to check, and only yours.
 
-    A tick used to verify its own work and close the task — it wrote the brief, chose the
+    He used to verify his own work and close the task — he wrote the brief, chose the
     requirements, supplied the evidence and graded itself, which is why a confident analysis
     document asserting the wrong database passed with every box ticked. `review` is where that
     submission lands instead, and this is what makes the column real: a queue nobody is shown is a
@@ -84,7 +84,7 @@ def review_block(path: Path) -> str:
     tasks = [t for t in repo.tasks.list_tasks(path) if t.get("status") == "review"]
     if not tasks:
         return ""
-    lines = ["[Finished, waiting for you to check it — this is yours to judge, no tick will touch it]"]
+    lines = ["[Finished, waiting for you to check it — this is yours to judge, nobody else will touch it]"]
     for task in tasks[:8]:
         lines.append(f"- #{task['id']} ({task.get('priority', 'normal')}) {task['goal']}")
     lines.append(

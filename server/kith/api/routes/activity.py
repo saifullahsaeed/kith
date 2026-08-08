@@ -21,7 +21,7 @@ def _waiting_on_you(status: str) -> list[dict]:
     other bit of accounting here is: a count that cannot be read is not a reason to make the
     status endpoint fail.
 
-    These were computed by the autonomy runner, which is why they read as a tick concern. They
+    These were computed by the loop that used to run unasked, which is why they read as its concern. They
     are not: `review` is work he believes is finished and nobody has checked, `planning` is a
     plan waiting for a look. Both are still true of work done in a conversation, and a queue
     nobody is shown is a queue nobody works.

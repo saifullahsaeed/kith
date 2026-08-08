@@ -17,18 +17,18 @@ SCHEDULE_STATUSES = ("active", "paused")
 #
 # The gate between 'planning' and 'planned' exists for the same reason the one below does,
 # one step earlier: a plan nobody but its author has seen is a guess wearing the clothes of a
-# decision. Entering 'planning' is always a person asking for one, in chat — never a tick's own
+# decision. Entering 'planning' is always a person asking for one, in chat — never his own
 # initiative — so a plan waiting for a look is always one somebody actually wanted looked at.
 #
-# 'review' exists because an unattended tick was the only judge of its own work. It ran
+# 'review' exists because he was the only judge of his own work. It ran
 # `_verify_done` on itself — enumerate the brief, answer per item — and then closed the task,
 # which is marking your own homework with the answer sheet you wrote. It is also the column that
-# stops a task being reopened and ground on: nothing in `review` is offered to a tick at all, so
+# stops a task being reopened and ground on: nothing in `review` is offered to him at all, so
 # work that is finished-pending-a-look cannot be picked up and reworked for another twelve hours.
 TASK_STATUSES = ("backlog", "planning", "planned", "working", "review", "waiting", "done", "dropped")
-#: What a tick may pick up on its own. Deliberately narrow — `backlog` and `planning` are not
-#: here because starting either is always a person's decision, made in chat, not a tick's; and
-#: `review`/`waiting` are both "someone else's turn", so a tick that could reach either would
+#: What he may pick up without being asked for it by name. Deliberately narrow — `backlog` and `planning` are not
+#: here because starting either is always a person's decision, made in chat, not his; and
+#: `review`/`waiting` are both "someone else's turn", so reaching either would
 #: take back work it had already handed over.
 TASK_ACTIVE = ("planned", "working")
 #: Closed, either way. The one set both `active_tasks` (repositories/tasks.py) and `add_task`'s

@@ -2,7 +2,7 @@
 
 The graph is not a picture of the work; it decides the work. A milestone whose predecessors
 are unfinished holds its own tasks back, so editing an edge here changes what he picks up on
-his next tick. That is the whole reason these endpoints exist rather than the roadmap being
+his next turn. That is the whole reason these endpoints exist rather than the roadmap being
 a read-only rendering of the milestone list.
 """
 

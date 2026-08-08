@@ -67,11 +67,11 @@ def _is_repeat(name: str, seen: int) -> bool:
 #
 # Landing is cheap — writing a file and ticking off checklist items is a couple of
 # rounds, and several calls fit in one round — so this stays small. It is also
-# capped at a third of the budget below, since a tick's budget varies (autonomy
+# capped at a third of the budget below, since a turn's budget varies (a caller
 # ticks get 16, not the full MAX_ROUNDS) and a fixed reserve could otherwise eat
 # most of a short turn.
 
-# What he may still do once he's landing: record, deliver, tick things off, hand
+# What he may still do once he's landing: record, deliver, check things off, hand
 # back. Notably *not* search or fetch — the point of the reserve is that gathering
 # is over. read_file stays because his working notes are where the answer lives.
 _LANDING_TOOLS = frozenset(
@@ -116,9 +116,9 @@ _LANDING_TOOLS = frozenset(
 )
 
 # Handing work to himself for later. Creating a task or a project is a decision that
-# the work happens *on a future tick* — so continuing to research it in the same turn
+# the work happens *later* — so continuing to research it in the same turn
 # is doing the thing he just decided to defer, and doing it with the rounds he has
-# left rather than the whole budget a tick would give it. He would file a task and then
+# left rather than the whole budget a fresh turn would give it. He would file a task and then
 # burn nineteen tool calls on it immediately, which is neither delegating nor finishing.
 _DELEGATION_TOOLS = frozenset({"add_task", "create_project"})
 
@@ -156,66 +156,15 @@ _PLANNING_TOOLS = frozenset(
 
 _DELEGATED_DIRECTIVE = (
     "(You've handed that to yourself as work for later, so stop working on it now — "
-    "that's what the task is for, and you'll have a whole tick's budget for it. "
+    "that's what the task is for, and you'll have a whole turn's budget for it. "
     "Finish describing the plan if it needs it, then tell them what you've set up and "
     "what you'll do first.)"
 )
 
-#: Tools that change a file. Used to tell "he edited code" from "he wrote down what he
-#: learned" — the same tool does both, so the path is what separates them.
-_EDITING_TOOLS = frozenset({"write_file", "edit_file", "edit_files"})
-
-
-def _wrote_memory(arguments: Any) -> bool:
-    """Did this edit touch a project's `.kith/memory.md`?
-
-    Reads every path an edit mentions, because `edit_files` carries a list of them and a batch
-    that updates the memory alongside three source files has plainly not forgotten it.
-    """
-    if not isinstance(arguments, dict):
-        return False
-    paths = [arguments.get("path")]
-    for one in arguments.get("edits") or []:
-        if isinstance(one, dict):
-            paths.append(one.get("path"))
-    return any("memory.md" in str(p or "") for p in paths)
-
-
-# Anything that leaves a trace behind after the turn ends. Broader than the loop
-# detector's notion of progress in autonomy.py — that one deliberately excludes
-# write_file (he "wrote files" while looping, but they were raw page dumps). Here
-# the question is only "did he record ANYTHING", so writing a file counts.
-_PERSISTED_TOOLS = frozenset(
-    {
-        "write_file",
-        "add_deliverable",
-        "check_item",
-        "add_checklist_item",
-        "update_task",
-        "comment_on_task",
-        "ask_on_task",
-        "take_note",
-        "journal",
-        "remember",
-        "reach_out",
-        "update_project",
-        "update_milestone",
-    }
-)
-
-#: Spent when a tick changed code and recorded nothing about the project. Deliberately not
+#: Spent when a turn changed code and recorded nothing about the project. Deliberately not
 #: the generic landing nudge: "leave something behind" reads as "file a comment", which he was
 #: already doing, and the comment is about the task rather than about the project. The thing
 #: missing is the sentence a session next week needs and cannot work out again cheaply.
-_MEMORY_DIRECTIVE = (
-    "(You changed files this step and did not write anything into this project's "
-    "`.kith/memory.md`. Before you finish: what did you learn just now that a session next "
-    "week would have to work out from scratch? The command that actually works, where the "
-    "real logic turned out to live, a decision worth not undoing, the thing that wasted "
-    "twenty minutes. Add it — a line or two, in the right section, not a summary of what you "
-    "did. If you genuinely learned nothing durable, say so in one sentence and stop.)"
-)
-
 _LANDING_DIRECTIVE = (
     "(You're near the end of this turn's tool budget, so stop gathering — you have enough. "
     "Spend what's left LANDING the work: write what you've found into your working file, "
@@ -238,7 +187,7 @@ def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = 
 # is the *payload each round carries* (see the grep/ranged-read/spill-to-file
 # tools and prompt-cache alignment). The thrash-guard stops genuine spinning.
 
-# Process-wide token meter. Every model call — chat and autonomy alike — flows
+# Process-wide token meter. Every model call flows
 # through stream_agent, so this is the one true tally of what Kith costs. Read it
 # with usage_snapshot(); it counts every round, not just final answers.
 _usage = {
@@ -277,7 +226,7 @@ def measured(stats: dict | None) -> dict | None:
 
 
 def usage_snapshot() -> dict:
-    """Total tokens spent since the server started (chat + autonomy).
+    """Total tokens spent since the server started.
 
     `cachedTokens` is the slice of prompt tokens the provider served from its prefix
     cache, and `cacheWriteTokens` is what it charged 1.25x to *put* there — the real,
@@ -592,7 +541,7 @@ def _compact_tool_history(convo: list[dict[str, Any]], offload=None) -> None:
     Tool output re-sends in full on every subsequent round, so a long research turn
     would balloon without pruning. The pruning has to be sized to the model actually
     in use: a hard "keep the last four" is ruinous on a 1M-context model, where he
-    forgets the six searches he ran two rounds ago and re-runs them, tick after tick.
+    forgets the six searches he ran two rounds ago and re-runs them, round after round.
 
     So the live set is bounded by characters rather than by count — keep the newest
     results whole until the budget is spent, and only then start stubbing. All three
@@ -649,7 +598,6 @@ def stream_agent(
     agent_db_path: Path,
     max_rounds: int | None = None,
     allow: set[str] | None = None,
-    expect_durable: bool = False,
     conversation_id: str = "",
 ) -> Iterator[dict]:
     """Run the tool loop for one turn.
@@ -673,7 +621,6 @@ def stream_agent(
             agent_db_path,
             max_rounds=max_rounds,
             allow=allow,
-            expect_durable=expect_durable,
             conversation_id=conversation_id,
         )
 
@@ -685,15 +632,9 @@ def _run_turn(
     agent_db_path: Path,
     max_rounds: int | None = None,
     allow: set[str] | None = None,
-    expect_durable: bool = False,
     conversation_id: str = "",
 ) -> Iterator[dict]:
     """Run the tool loop.
-
-    ``expect_durable`` says whether a turn that records nothing is a failure. For an
-    autonomy tick it is — the whole point of a tick is to leave something behind, and one
-    that finishes empty means the next tick redoes the work. For a chat turn it is the
-    normal outcome: answering a question is the deliverable, and there is nothing to file.
 
     ``conversation_id`` picks the OpenRouter stickiness id. A conversation is the right
     unit for it: every round in it shares a prompt prefix, and shares it with nothing else,
@@ -701,7 +642,7 @@ def _run_turn(
     """
     convo = list(messages)
     # Spills an aged-out tool result to a file this turn can read back, instead of trimming
-    # its tail away. None when there is no conversation to file it under (a bare tick), in
+    # its tail away. None when there is no conversation to file it under, in
     # which case the compactor falls back to the older in-place trim.
     offload_result = None
     if conversation_id:
@@ -756,24 +697,20 @@ def _run_turn(
     # How much room is left, learned from what the provider charges each round.
     #
     # `num_predict` is -1 on a default install — the sentinel for "no limit" — so it cannot
-    # be used as the answer reserve directly. Falling back to the tick cap gives a real
+    # be used as the answer reserve directly. Falling back to the answer cap gives a real
     # number, and a real number is the whole point: the threshold is absolute, because a
     # percentage of the window is wrong at both ends.
     wanted_out = config.num_predict if config.num_predict > 0 else tuning.value("max_answer_tokens")
     room = ContextBudget(window=config.context_window, reserve=int(wanted_out))
     # The tool list as the last round actually saw it, kept for the forced final answer.
     # That request used to build its own with `tool_schemas(agent_db_path)` and no `only`,
-    # so a breakout tick offering six tools ended by sending all fifty-nine — a different
+    # so a narrowed round offering six tools ended by sending all fifty-nine — a different
     # tools block from every other round in the turn, which on the providers that need an
     # explicit breakpoint sits ahead of the system prompt and rewrites the whole cached
     # prefix for the one request the turn cannot skip.
     schemas: list[dict] = []
     landing = False
-    delegated = False  # did he hand this to a future tick?
-    persisted = False  # did anything this turn leave a trace?
-    touched_code = False  # did it change a file that is not the memory file?
-    touched_memory = False  # did it write down what it learned?
-    nudged = False  # the "don't walk away empty-handed" nudge fires at most once
+    delegated = False  # did he hand this to himself for later?
 
     for round_index in range(budget):
         # Re-read tools each round so a tool Kith just built is usable right away.
@@ -927,7 +864,7 @@ def _run_turn(
             yield {"type": "stats", "stats": stats}
 
         if not tool_calls:
-            # He's finished talking. For a TICK, a turn that ends having recorded
+            # He's finished talking, so the turn is over. Work that ends having recorded
             # nothing is a turn that never happened: the next one starts from the same
             # blank slate and redoes the same work. Measured on real ticks — every one
             # that produced durable output was one that ran out of rounds and hit the
@@ -941,32 +878,20 @@ def _run_turn(
             # carrying the full persona and 51 tool schemas, ~18,500 tokens to answer
             # one word — and the second reply was him puzzling at a directive that made
             # no sense: "I haven't been researching anything this turn."
-            if landing or nudged or round_index >= budget - 1 or not expect_durable:
-                return
-            # Two reasons to spend the reserve, and they are different failures.
+            # He is finished talking, so the turn is over.
             #
-            # Nothing recorded at all: the tick will be repeated, so land it.
+            # There used to be a branch here that spent the landing reserve when a turn
+            # ended having recorded nothing — because for an unattended step that was a
+            # failure: the next one would start from the same blank slate and redo the
+            # work. In a conversation it is the ordinary outcome. Answering a question is
+            # the deliverable and there is nothing to file, and the one time this was
+            # turned on for chat it doubled the cost of every trivial message — two model
+            # requests each carrying the full persona and 51 tool schemas, ~18,500 tokens
+            # to answer one word — with the second reply him puzzling at a directive that
+            # made no sense: "I haven't been researching anything this turn."
             #
-            # Or: code changed and the project's memory did not. That one passed silently for
-            # a long time, because filing a comment is enough to count as durable — so a tick
-            # could rewrite nine files, learn how the build actually works, note none of it,
-            # and be considered a success. The person's own words: "he is not updating memories
-            # consistently, I have to ask him." He was never asked.
-            #
-            # Only when something was genuinely edited. A tick that read around and answered a
-            # question has nothing to record, and prompting it to invent something is how you
-            # get a memory file full of restated obvious.
-            owes_memory = touched_code and not touched_memory
-            if persisted and not owes_memory:
-                return
-            nudged = True
-            landing = True
-            if content:
-                convo.append({"role": "assistant", "content": content})
-            convo.append(
-                {"role": "user", "content": _MEMORY_DIRECTIVE if owes_memory else _LANDING_DIRECTIVE}
-            )
-            continue
+            # Nothing runs unattended now, so the case it existed for cannot occur.
+            return
 
         # Record the assistant's tool-calling turn so the model has context.
         #
@@ -1033,13 +958,6 @@ def _run_turn(
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
             for step, result in zip(batch, results, strict=True):
                 worked = isinstance(result, dict) and result.get("ok", True)
-                if step["name"] in _PERSISTED_TOOLS and worked:
-                    persisted = True
-                if step["name"] in _EDITING_TOOLS and worked:
-                    if _wrote_memory(step["arguments"]):
-                        touched_memory = True
-                    else:
-                        touched_code = True
                 if step["name"] in _DELEGATION_TOOLS and worked and not delegated:
                     delegated = True
                     if tuning.value("stop_after_delegating"):

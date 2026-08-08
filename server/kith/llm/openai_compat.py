@@ -142,7 +142,7 @@ def _routing_options(config: Config) -> dict[str, Any]:
     fallback = str(tuning.value("fallback_model")).strip()
     if fallback and fallback != config.model:
         # If the primary errors, rate-limits or is down, OpenRouter tries the next model;
-        # billing is by whichever actually served. This is what keeps an unattended tick
+        # billing is by whichever actually served. This is what keeps a long turn
         # alive through an outage instead of stalling it mid-task.
         out["models"] = [config.model, fallback]
 
@@ -223,7 +223,7 @@ def stream_once(
         # availability still falls back.
         #
         # Per conversation whenever we know which one, and that now covers a session's
-        # ticks as well as its chat turns. It used to cover only chat: a tick passed no
+        # every turn. It used to cover only some of them: one path passed no
         # conversation and fell through to the install-wide id below, so one session kept
         # two copies of the same cached persona warm on two different hosts. The fallback
         # is still there and still right — a step run with nobody working belongs to no

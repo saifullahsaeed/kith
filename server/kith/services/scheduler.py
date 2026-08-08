@@ -1,7 +1,7 @@
 """What is due, and the chat it belongs to.
 
-This ran inside the autonomy tick, which is the only reason it looked like part of it. It
-never chose work and never read a task: it asked whether a reminder or a schedule had come
+This ran inside the loop that used to run unasked, which is the only reason it looked like
+part of it. It never chose work and never read a task: it asked whether a reminder or a schedule had come
 due and continued the conversation that thing was set in. That question survives the loop
 that used to ask it.
 
