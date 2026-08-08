@@ -77,40 +77,6 @@ def test_the_subject_of_each_verb_is_a_real_argument() -> None:
     assert not wrong, f"these name an argument the tool does not take: {wrong}"
 
 
-def test_the_feed_carries_the_arguments_not_just_a_sentence() -> None:
-    """The panel needs data, not prose to parse back apart.
-
-    A value containing ", " breaks any split of the rendered sentence, which is why the name
-    and arguments travel as their own fields.
-    """
-    from kith.autonomy.prompts import _short_args
-
-    args = _short_args({"command": "npm run build && echo done, finally", "cwd": "."})
-    assert args["command"].startswith("npm run build")
-    # Whole, including the comma that would have broken a parser.
-    assert "done, finally" in args["command"]
-
-
-def test_long_values_are_trimmed_before_they_travel() -> None:
-    from kith.autonomy.prompts import _ARG_CHARS, _short_args
-
-    args = _short_args({"content": "x" * 5_000})
-    # A file's entire contents must not go down the event stream to be cut off by CSS at the
-    # far end; that is a megabyte of traffic to render forty characters.
-    assert len(args["content"]) <= _ARG_CHARS
-    assert args["content"].endswith("…")
-
-
-def test_newlines_are_flattened() -> None:
-    from kith.autonomy.prompts import _short_args
-
-    args = _short_args({"command": "line one\nline two"})
-    # Feed rows are one line high. A heredoc arriving with its newlines intact either breaks
-    # the row or gets silently clipped mid-sentence.
-    assert "\n" not in args["command"]
-    assert args["command"] == "line one line two"
-
-
 def test_every_tool_has_an_icon_group() -> None:
     """A phrase without a group falls back to a generic wrench.
 

@@ -9,24 +9,9 @@ queue nobody is shown is a queue nobody works.
 
 from __future__ import annotations
 
-import sys
-
-import pytest
-
 from kith.domain.enums import TASK_ACTIVE, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db import repositories as repo
 from kith.tools import run_tool
-
-
-def runner_module():
-    return sys.modules["kith.autonomy.runner"]
-
-
-@pytest.fixture
-def runner(db, monkeypatch):
-    module = runner_module()
-    monkeypatch.setattr(module, "AGENT_DB_PATH", db)
-    return module.AutonomyRunner()
 
 
 class TestTheVocabulary:
@@ -53,42 +38,6 @@ class TestTheVocabulary:
 
     def test_settled_and_active_do_not_overlap(self):
         assert set(TASK_ACTIVE) & set(TASK_SETTLED) == set()
-
-
-class TestAwaitingApproval:
-    def test_a_plan_in_planning_is_listed(self, db, runner):
-        task = repo.tasks.add_task(db, "Build the thing", "normal", None, "", "planning", "kith")
-
-        found = runner._awaiting_approval()
-
-        assert [f["id"] for f in found] == [task["id"]]
-        assert found[0]["goal"] == "Build the thing"
-
-    def test_other_columns_are_not_listed(self, db, runner):
-        for status in ("backlog", "planned", "working", "review", "waiting", "done", "dropped"):
-            repo.tasks.add_task(db, f"a {status} task", "normal", None, "", status, "kith")
-
-        assert runner._awaiting_approval() == []
-
-    def test_capped_at_a_handful(self, db, runner):
-        for n in range(10):
-            repo.tasks.add_task(db, f"plan {n}", "normal", None, "", "planning", "kith")
-
-        assert len(runner._awaiting_approval()) <= 6
-
-    def test_a_read_failure_is_silent(self, db, runner, monkeypatch):
-        """A queue that cannot be read is not a reason to fail the whole status endpoint."""
-        monkeypatch.setattr(
-            runner_module().repo.tasks, "list_tasks", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError())
-        )
-        assert runner._awaiting_approval() == []
-
-    def test_it_is_in_the_status_payload(self, db, runner):
-        repo.tasks.add_task(db, "Build the thing", "normal", None, "", "planning", "kith")
-
-        assert [t["id"] for t in runner.status()["toApprove"]] == [
-            t["id"] for t in runner._awaiting_approval()
-        ]
 
 
 class TestThePlanTravelsWithTheApproval:

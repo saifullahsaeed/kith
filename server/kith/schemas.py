@@ -92,5 +92,3 @@ class ReviewItemSchema(Schema):
 
     id = Integer(metadata={"description": "Task id"})
     goal = String(metadata={"description": "What the task was"})
-
-

@@ -17,11 +17,17 @@ from kith.infra.db.migrations import _migrations
 
 
 def _legacy_db(path: Path) -> None:
-    """A database migrated up through v27 — one short of the gate — with rows still
-    speaking the old 'todo'/'doing' vocabulary, the way a real install arrives at v28."""
+    """A database migrated up to just before the gate, with rows still speaking the old
+    'todo'/'doing' vocabulary — the way a real install arrives at it.
+
+    Located by name rather than by position. This said `[:-1]`, meaning "all but the last",
+    which was the same thing only while the gate happened to be the newest migration. Two
+    migrations later it silently ran the gate as part of the setup and then asserted the
+    gate had not run yet."""
     conn = connect(path)
     try:
-        apply_migrations(conn, _migrations()[:-1])
+        gate = next(i for i, fn in enumerate(_migrations()) if fn.__name__ == "v28_task_planning_statuses")
+        apply_migrations(conn, _migrations()[:gate])
         now = "2026-08-01T00:00:00Z"
         for goal, status in (
             ("An old actionable errand", "todo"),

@@ -42,6 +42,9 @@ def feed(db: Path, monkeypatch):
         def publish(self, kind, text, **fields):
             published.append({"kind": kind, "text": text, **fields})
 
+        def charge_session(self, conversation_id, uncached_in, cost_usd):
+            return False  # never over budget; the cap has its own tests
+
     monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": FakeFeed()})())
     return published
 

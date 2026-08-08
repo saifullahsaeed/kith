@@ -504,9 +504,15 @@ class _MindFeed:
     for the same events would have meant a second renderer.
     """
 
-    def __init__(self, conversation_id: str, opening: str = "") -> None:
+    def __init__(
+        self, conversation_id: str, opening: str = "", stopping: threading.Event | None = None
+    ) -> None:
         self.conversation_id = conversation_id
         self.opening = opening
+        #: The turn's own stop switch, so a session past its budget can be stopped the same
+        #: way a person stops one. The cap used to `rest` the session instead — tell it to
+        #: stop keeping going — and there is no keeping going to stop.
+        self.stopping = stopping
         self.tools: list[str] = []
         self.rounds = 0
         self.tokens_in = 0
@@ -556,6 +562,14 @@ class _MindFeed:
                     "out": out,
                 },
             )
+            # Meter the session, and stop the turn if this round took it past its budget. The
+            # message telling the person why is written by `charge_session`; what is left here
+            # is the acting on it.
+            from kith.services.activity import feed
+
+            if feed.charge_session(self.conversation_id, fresh, float(stats.get("costUsd") or 0.0)):
+                if self.stopping is not None:
+                    self.stopping.set()
         elif kind == "error":
             self.error = event.get("message")
             self._publish("error", str(self.error))
@@ -733,7 +747,7 @@ def _turn(
     not the rest of the turn. None means nothing can stop this one — which is the reminder
     path in `autonomy.runner`, where there is no one to click anything.
     """
-    watcher = _MindFeed(conversation_id, opening)
+    watcher = _MindFeed(conversation_id, opening, stopping=stopping)
     stopped = False
     error: str | None = None
     try:

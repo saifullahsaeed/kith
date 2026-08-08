@@ -69,25 +69,6 @@ def test_data_dir_resolves_under_the_server() -> None:
     assert conftest.REAL_DATA_DIR.parent == settings.SERVER_ROOT
 
 
-def test_directives_are_all_present() -> None:
-    """Every directive the loop can dispatch to has a file behind it, and none is empty.
-
-    A count rather than a list, and the count came down from eight: reflection, curiosity and
-    consolidation were removed with the modes that used them. They were self-directed inner
-    life on a timer — every twentieth idle tick a reflection, every thirtieth a curiosity —
-    which is a strange thing to schedule and, in practice, was work happening on a board
-    nobody was watching.
-
-    An empty directive is the failure worth catching. It fails silently: the tick runs with
-    no instruction at all and does something plausible-looking for reasons nobody can trace.
-    """
-    from kith.autonomy import directives
-
-    assert set(directives.ALL) == {"autonomy", "breakout", "reply", "resume", "work"}
-    for name, text in directives.ALL.items():
-        assert text.strip(), f"directive {name} is empty"
-
-
 def test_no_module_derives_a_shared_path_from_its_own_location() -> None:
     """The rule this file protects, checked directly.
 

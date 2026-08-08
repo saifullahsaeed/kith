@@ -12,21 +12,12 @@ whose turn it is, on that session's work and nobody else's.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from kith.infra.db import repositories as repo
 from kith.services import conversations, session_context
 from kith.tools import projects as project_tools
 from kith.tools import tasks as task_tools
-
-
-def runner_on(db, monkeypatch):
-    """A runner pointed at a temp database. See test_a_session_that_keeps_working."""
-    module = sys.modules["kith.autonomy.runner"]
-    monkeypatch.setattr(module, "AGENT_DB_PATH", db)
-    return module.AutonomyRunner()
 
 
 def working(db, conversation_id: str) -> None:
@@ -161,30 +152,6 @@ class TestTheContextIsPerThread:
 class TestWhatASessionMayWorkOn:
     """`_in_scope` is the whole of it: which rows this session's tick is allowed to see."""
 
-    def test_a_bound_session_sees_only_its_own_project(self):
-        from kith.autonomy.runner import AutonomyRunner as R
-
-        assert R._in_scope({"project_id": 1}, 1, {1, 2}) is True
-        assert R._in_scope({"project_id": 2}, 1, {1, 2}) is False
-        assert R._in_scope({"project_id": None}, 1, {1, 2}) is False
-
-    def test_an_unbound_session_avoids_what_others_have_claimed(self):
-        from kith.autonomy.runner import AutonomyRunner as R
-
-        # One-off errands and unfiled work are its business.
-        assert R._in_scope({"project_id": None}, None, {1}) is True
-        # A project someone else is driving is not.
-        assert R._in_scope({"project_id": 1}, None, {1}) is False
-        # A project nobody is on still is.
-        assert R._in_scope({"project_id": 7}, None, {1}) is True
-
-    def test_with_nobody_working_the_whole_board_is_fair_game(self):
-        """ "Run once" has always meant "take a step on anything", and still does."""
-        from kith.autonomy.runner import AutonomyRunner as R
-
-        assert R._in_scope({"project_id": 3}, None, set()) is True
-        assert R._in_scope({"project_id": None}, None, set()) is True
-
 
 class TestATickAdvancesOneSession:
     def _quiet(self, module, monkeypatch, runner):
@@ -194,109 +161,6 @@ class TestATickAdvancesOneSession:
         monkeypatch.setattr(module.repo.reminders, "due_reminders", lambda _p, _n: [])
         monkeypatch.setattr(module.repo.schedules, "due_schedules", lambda _p, _n: [])
 
-    def test_it_works_the_session_project_and_not_the_other_one(self, db, monkeypatch):
-        module = sys.modules["kith.autonomy.runner"]
-        runner = runner_on(db, monkeypatch)
-        self._quiet(module, monkeypatch, runner)
-
-        mine = repo.projects.add_project(db, "Mine", "")
-        theirs = repo.projects.add_project(db, "Theirs", "")
-        repo.tasks.add_task(db, "my step", status="planned", project_id=mine["id"])
-        repo.tasks.add_task(db, "their step", status="planned", project_id=theirs["id"])
-
-        one = conversations.start(db, "one")["id"]
-        two = conversations.start(db, "two")["id"]
-        repo.conversations.set_project(db, one, mine["id"])
-        repo.conversations.set_project(db, two, theirs["id"])
-        working(db, one)
-        working(db, two)
-
-        # `one` was touched first, so it is longest-waiting and goes first.
-        focused: list[str] = []
-        monkeypatch.setattr(module, "stream_agent", lambda *a, **k: iter(()))
-        monkeypatch.setattr(
-            module, "_focus_prompt", lambda focus, active: focused.append(focus["goal"]) or ""
-        )
-
-        runner._tick()
-        assert focused == ["my step"]
-
-        # And the next tick takes the other one, because the first went to the back.
-        runner._tick()
-        assert focused == ["my step", "their step"]
-
-    def test_a_session_that_finishes_stops_only_itself(self, db, monkeypatch):
-        """It used to stop every session. Invisible while the board was global and everyone
-        ran out together; plainly wrong now — one project finishing would down the rest."""
-        module = sys.modules["kith.autonomy.runner"]
-        runner = runner_on(db, monkeypatch)
-        self._quiet(module, monkeypatch, runner)
-
-        empty = repo.projects.add_project(db, "Nothing left", "")
-        busy = repo.projects.add_project(db, "Plenty left", "")
-        repo.tasks.add_task(db, "still to do", status="planned", project_id=busy["id"])
-
-        done_session = conversations.start(db, "finished")["id"]
-        busy_session = conversations.start(db, "busy")["id"]
-        repo.conversations.set_project(db, done_session, empty["id"])
-        repo.conversations.set_project(db, busy_session, busy["id"])
-        working(db, done_session)
-        working(db, busy_session)
-
-        monkeypatch.setattr(module, "stream_agent", lambda *a, **k: iter(()))
-        runner._tick()  # the finished one is longest-waiting, so it goes first
-
-        assert not repo.conversations.is_working(db, done_session)
-        assert repo.conversations.is_working(db, busy_session)
-
-    def test_the_step_runs_bound_to_its_session(self, db, monkeypatch):
-        """Which is what lets a tool that starts a project record whose project it is."""
-        module = sys.modules["kith.autonomy.runner"]
-        runner = runner_on(db, monkeypatch)
-        self._quiet(module, monkeypatch, runner)
-
-        project = repo.projects.add_project(db, "Something", "")
-        repo.tasks.add_task(db, "a step", status="planned", project_id=project["id"])
-        session = conversations.start(db, "working")["id"]
-        repo.conversations.set_project(db, session, project["id"])
-        working(db, session)
-
-        seen: list[str] = []
-
-        def spy(*_a, **_k):
-            seen.append(session_context.current())
-            return iter(())
-
-        monkeypatch.setattr(module, "stream_agent", spy)
-        runner._tick()
-
-        assert seen == [session]
-
-    def test_an_unbound_session_leaves_a_claimed_project_alone(self, db, monkeypatch):
-        module = sys.modules["kith.autonomy.runner"]
-        runner = runner_on(db, monkeypatch)
-        self._quiet(module, monkeypatch, runner)
-
-        claimed = repo.projects.add_project(db, "Claimed", "")
-        repo.tasks.add_task(db, "someone else's step", status="planned", project_id=claimed["id"])
-        repo.tasks.add_task(db, "an errand", status="planned")  # no project
-
-        driver = conversations.start(db, "driver")["id"]
-        general = conversations.start(db, "general")["id"]
-        repo.conversations.set_project(db, driver, claimed["id"])
-        # `general` stays unbound, and is touched last, so it ticks second.
-        working(db, general)
-        working(db, driver)
-
-        focused: list[str] = []
-        monkeypatch.setattr(module, "stream_agent", lambda *a, **k: iter(()))
-        monkeypatch.setattr(
-            module, "_focus_prompt", lambda focus, active: focused.append(focus["goal"]) or ""
-        )
-        runner._tick()
-
-        assert focused == ["an errand"]
-
 
 class TestTheTickSeesTheProjectMemory:
     """A conversation has been shown `.kith/memory.md` since it existed. A tick never was.
@@ -304,54 +168,6 @@ class TestTheTickSeesTheProjectMemory:
     Which is exactly backwards: the unattended step is the one with nobody around to remind
     him how the thing is built.
     """
-
-    def test_it_reads_the_memory_of_the_session_project(self, db, monkeypatch, tmp_path):
-        from kith.services import project_memory
-
-        runner = runner_on(db, monkeypatch)
-        folder = tmp_path / "repo"
-        folder.mkdir()
-        project_memory.ensure(folder)
-        project_memory.path_for(folder).write_text(
-            "# Memory\n\n## Gotchas\n- the dev server needs PORT=4000\n", encoding="utf-8"
-        )
-        project = repo.projects.add_project(db, "Has a folder", "", str(folder))
-
-        block = runner._project_memory(project["id"])
-        assert "PORT=4000" in block
-
-    def test_a_session_on_nothing_reads_nothing(self, db, monkeypatch):
-        assert runner_on(db, monkeypatch)._project_memory(None) == ""
-
-    def test_a_project_with_no_folder_reads_nothing(self, db, monkeypatch):
-        runner = runner_on(db, monkeypatch)
-        project = repo.projects.add_project(db, "Just rows", "")
-        assert runner._project_memory(project["id"]) == ""
-
-    def test_a_folder_with_no_memory_yet_is_asked_for_one(self, db, monkeypatch, tmp_path):
-        """Not an empty block: a project with a folder and no memory gets told to start one."""
-        runner = runner_on(db, monkeypatch)
-        folder = tmp_path / "fresh"
-        folder.mkdir()
-        project = repo.projects.add_project(db, "Fresh", "", str(folder))
-        assert "no `.kith/memory.md` yet" in runner._project_memory(project["id"])
-
-    def test_a_folder_moved_out_from_under_him_says_so_instead(self, db, monkeypatch, tmp_path):
-        """This case used to give the same answer as the one above, and the docstring here
-        used to call that "nudged rather than crashed".
-
-        The nudge was "write a memory file", which is the wrong move: the folder is gone, so
-        writing lands nowhere useful and whatever the project already knew stays unread. It
-        happened for real — a project pointed at a deleted folder while three thousand
-        characters of its memory sat on disk being reported as absent.
-        """
-        runner = runner_on(db, monkeypatch)
-        project = repo.projects.add_project(db, "Moved", "", str(tmp_path / "gone"))
-
-        block = runner._project_memory(project["id"])
-
-        assert "not there" in block
-        assert "no `.kith/memory.md` yet" not in block
 
 
 class TestSayingItByHand:

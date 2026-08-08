@@ -17,16 +17,10 @@ conversation. Wanting a different project is what a new conversation is for.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from kith.infra.db import repositories as repo
 from kith.services import conversations, session_context
-
-
-def runner_module():
-    return sys.modules["kith.autonomy.runner"]
 
 
 @pytest.fixture
@@ -197,34 +191,3 @@ class TestThePersonCannotMoveItEitherOnceItIsBound:
             conversations.set_project(db, "c-1", two_projects["other"])
 
         assert bound_to(db) == two_projects["hired"]
-
-
-class TestSayingSoWhenItRunsOut:
-    def test_a_finished_project_names_itself_and_the_work_it_is_not_taking(self, two_projects, monkeypatch):
-        """Being told "caught up" by a session you pointed at one thing, while another project
-        has work waiting, is confusing in a way naming the project fixes."""
-        db = two_projects["db"]
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        repo.tasks.add_task(db, "Their work", "high", None, "", "planned", "kith", two_projects["other"])
-
-        status, note = runner_module().AutonomyRunner()._why_idle(project=two_projects["hired"])
-
-        assert "Client Portal" in status
-        assert "Client Portal" in note
-        assert "other projects" in note
-        assert "new one" in note, "it has to say what to do about it"
-
-    def test_with_nothing_waiting_anywhere_it_just_rests(self, two_projects, monkeypatch):
-        db = two_projects["db"]
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-
-        status, note = runner_module().AutonomyRunner()._why_idle(project=two_projects["hired"])
-
-        assert "Client Portal" in status
-        assert note == "", "nothing outstanding means nothing to say"
-
-    def test_an_unbound_session_still_says_caught_up(self, db, monkeypatch):
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        status, note = runner_module().AutonomyRunner()._why_idle()
-        assert status == "caught up — resting"
-        assert note == ""

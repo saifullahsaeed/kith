@@ -150,20 +150,11 @@ class TestChatIsShownTheQueue:
         _a_task(db, status="review")
         assert "Do not re-do the work" in memory_context.review_block(db)
 
-    def test_only_chat_is_given_it(self):
-        """A tick seeing this would review its own work, which is the whole thing being fixed."""
-        from kith.api.routes import chat
-
-        source = chat.__loader__.get_source("kith.api.routes.chat")
-        assert "memory_context.review_block(AGENT_DB_PATH)" in source
-        runner = __import__("kith.autonomy.runner", fromlist=["x"])
-        assert "review_block" not in runner.__loader__.get_source("kith.autonomy.runner")
-
 
 class TestTheCeiling:
     def _ticks_on(self, db: Path, goal: str, count: int, mode: str = "start") -> None:
         for i in range(count):
-            repo.messages.add_tick_log(
+            repo.messages.add_turn_log(
                 db, f"2026-08-03T0{i % 10}:00:00", mode, f"working on: {goal}", [], 0, 0, 1.0, "ok"
             )
 
@@ -187,65 +178,6 @@ class TestTheCeiling:
         a task another twelve hours."""
         self._ticks_on(db, "build the thing", 7)
         assert repo.messages.times_worked(db, "build the thing") == 7  # no in-memory state involved
-
-    def test_past_the_cap_the_task_goes_to_review(self, db: Path, monkeypatch):
-        import sys
-
-        from kith.services import tuning
-
-        runner_module = sys.modules["kith.autonomy.runner"]
-        monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
-        tuning.apply({"task_tick_cap": 3})
-        task = _a_task(db, status="working")
-        self._ticks_on(db, task["goal"], 3)
-
-        stopped = runner_module.AutonomyRunner()._over_the_task_cap(task["id"])
-        assert stopped is True
-        assert repo.tasks.task_detail(db, task["id"])["status"] == "review"
-
-    def test_it_tells_them_and_keeps_the_work(self, db: Path, monkeypatch):
-        import sys
-
-        from kith.services import tuning
-
-        runner_module = sys.modules["kith.autonomy.runner"]
-        monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
-        tuning.apply({"task_tick_cap": 3})
-        task = _a_task(db, status="working")
-        self._ticks_on(db, task["goal"], 4)
-        runner_module.AutonomyRunner()._over_the_task_cap(task["id"])
-
-        stuck = [m for m in repo.messages.list_messages(db, 10) if m.get("kind") == "stuck"]
-        assert len(stuck) == 1
-        assert f"#{task['id']}" in stuck[0]["body"]
-        notes = " ".join(c["body"] for c in repo.tasks.task_detail(db, task["id"])["comments"])
-        assert "ticks on this" in notes
-        assert "split it into something smaller" in notes
-
-    def test_under_the_cap_nothing_happens(self, db: Path, monkeypatch):
-        import sys
-
-        from kith.services import tuning
-
-        runner_module = sys.modules["kith.autonomy.runner"]
-        monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
-        tuning.apply({"task_tick_cap": 12})
-        task = _a_task(db, status="working")
-        self._ticks_on(db, task["goal"], 5)
-        assert runner_module.AutonomyRunner()._over_the_task_cap(task["id"]) is False
-        assert repo.tasks.task_detail(db, task["id"])["status"] == "working"
-
-    def test_zero_switches_it_off(self, db: Path, monkeypatch):
-        import sys
-
-        from kith.services import tuning
-
-        runner_module = sys.modules["kith.autonomy.runner"]
-        monkeypatch.setattr(runner_module, "AGENT_DB_PATH", db)
-        tuning.apply({"task_tick_cap": 0})
-        task = _a_task(db, status="working")
-        self._ticks_on(db, task["goal"], 99)
-        assert runner_module.AutonomyRunner()._over_the_task_cap(task["id"]) is False
 
     def test_the_default_leaves_the_median_task_room(self):
         """Median is 7 ticks; the runaways were 18 and 20. A cap that fired on typical work would

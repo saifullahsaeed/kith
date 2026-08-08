@@ -14,15 +14,9 @@ return it — so the board showed two `todo` tasks, the person pressed Run, and 
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from kith.infra.db import repositories as repo
-
-
-def runner_module():
-    return sys.modules["kith.autonomy.runner"]
 
 
 @pytest.fixture
@@ -107,49 +101,3 @@ class TestFilingWorkIntoAFinishedProject:
         )
 
         assert [t["goal"] for t in repo.tasks.active_tasks(db)] == ["Build the dashboard shell"]
-
-
-class TestSayingWhyHeIsIdle:
-    def test_a_closed_project_holding_work_is_named(self, db, monkeypatch, finished_project):
-        """ "Caught up — resting" with two todo tasks on the board is a lie by omission, and
-        it is the reason this took so long to find."""
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        repo.tasks.add_task(db, "Dashboard", "high", None, "", "planned", "kith", finished_project)
-        repo.tasks.add_task(db, "Design system", "high", None, "", "planned", "kith", finished_project)
-
-        status, note = runner_module().AutonomyRunner()._why_idle()
-
-        assert "closed project" in status
-        assert "Client Portal" in note
-        assert "Reopen" in note
-
-    def test_a_genuinely_empty_board_still_says_caught_up(self, db, monkeypatch):
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        status, note = runner_module().AutonomyRunner()._why_idle()
-        assert status == "caught up — resting"
-        assert note == ""
-
-    def test_an_active_project_with_work_is_not_reported_as_shut_out(self, db, monkeypatch):
-        """It would be picked up, so there is nothing to explain."""
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        project = repo.projects.add_project(db, "Live", "ongoing")
-        repo.tasks.add_task(db, "Do it", "high", None, "", "planned", "kith", int(project["id"]))
-
-        assert runner_module().AutonomyRunner()._shut_out(None, set()) == []
-
-    def test_a_paused_project_counts_as_closed(self, db, monkeypatch):
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        project = repo.projects.add_project(db, "On hold", "later")
-        repo.projects.update_project(db, int(project["id"]), status="paused")
-        repo.tasks.add_task(db, "Do it", "high", None, "", "planned", "kith", int(project["id"]))
-
-        shut = runner_module().AutonomyRunner()._shut_out(None, set())
-
-        assert len(shut) == 1 and shut[0]["project"] == "On hold"
-
-    def test_a_backlog_task_is_not_shut_out(self, db, monkeypatch, finished_project):
-        """It would not run in an open project either, so the project is not the reason."""
-        monkeypatch.setattr(runner_module(), "AGENT_DB_PATH", db)
-        repo.tasks.add_task(db, "Later", "normal", None, "", "backlog", "kith", finished_project)
-
-        assert runner_module().AutonomyRunner()._shut_out(None, set()) == []

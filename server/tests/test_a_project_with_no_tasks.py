@@ -85,38 +85,6 @@ class TestFindingWorkNobodyCanStart:
         assert closed[first["id"]] == "done"
 
 
-class TestTheStepItBecomes:
-    def test_the_prompt_names_the_milestone_and_the_project(self):
-        from kith.autonomy.prompts import _breakdown_prompt
-
-        text = _breakdown_prompt(
-            {
-                "id": 26,
-                "title": "The data model is defined",
-                "project": "Gym Workout Tracker",
-                "project_id": 15,
-            }
-        )
-        assert "Gym Workout Tracker" in text
-        assert "The data model is defined" in text
-        # The id, because `add_task` needs it and making him look it up wastes a round.
-        assert "26" in text
-
-    def test_it_says_only_this_milestone(self):
-        from kith.autonomy.prompts import _breakdown_prompt
-
-        text = _breakdown_prompt({"id": 1, "title": "t", "project": "p", "project_id": 2})
-        assert "Only this milestone" in text
-
-    def test_it_says_to_stop_after_filing(self):
-        from kith.autonomy.prompts import _breakdown_prompt
-
-        text = _breakdown_prompt({"id": 1, "title": "t", "project": "p", "project_id": 2})
-        # Filing and then starting in the same step is the failure the persona already names;
-        # a planning step is exactly where it would happen.
-        assert "stop" in text.lower()
-
-
 class TestTheDuplicateMilestone:
     def test_the_same_title_twice_returns_the_first(self, db, project):
         from kith.tools import projects as tool

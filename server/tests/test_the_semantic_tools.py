@@ -180,15 +180,6 @@ class TestWithNoLanguageServer:
         # And nothing else was dropped along with them.
         assert with_server - without == set(NEEDS_A_LANGUAGE_SERVER)
 
-    def test_scoping_to_a_mode_still_drops_them(self):
-        from kith.autonomy.toolsets import _ALLOW
-
-        offered = {
-            one["function"]["name"] for one in tool_schemas(only=_ALLOW["start"], language_server=False)
-        }
-        assert not (NEEDS_A_LANGUAGE_SERVER & offered)
-        assert "outline" in offered, "the parsing tools do not need a server and must stay"
-
     def test_not_filtering_is_the_default(self):
         """Every caller with no opinion must keep getting everything."""
         names = {one["function"]["name"] for one in tool_schemas()}

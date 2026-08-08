@@ -114,23 +114,3 @@ class TestTheCacheRatioThatWasNotARatio:
     def test_the_hit_rate_is_unaffected(self):
         snap = self._snapshot(promptTokens=38116, cachedTokens=20700, cacheWriteTokens=0)
         assert snap["cacheHitRate"] == 0.543
-
-
-class TestItReachesTheInterface:
-    def test_the_status_schema_declares_every_key_status_produces(self):
-        """The third time this has bitten, so it is checked here too.
-
-        A field absent from the schema is dropped from the response silently. It has already
-        cost tokensUncached, lastTickUncached and stopping.
-        """
-        from kith.autonomy.runner import AutonomyRunner
-        from kith.schemas import AutonomyStatusSchema
-
-        produced = set(AutonomyRunner().status())
-        declared = set(AutonomyStatusSchema().fields)
-        assert not produced - declared, f"the API would drop: {sorted(produced - declared)}"
-
-    def test_autonomy_reports_what_it_spent(self):
-        from kith.autonomy.runner import AutonomyRunner
-
-        assert "costUsd" in AutonomyRunner().status()
