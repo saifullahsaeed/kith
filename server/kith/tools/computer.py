@@ -69,7 +69,10 @@ def read_file(path: Path, args: dict):
 
 @tool(
     "write_file",
-    "Write (or overwrite) a file on your computer, creating parent folders as needed.",
+    "Write (or overwrite) a file on your computer, creating parent folders as needed. For a "
+    "file that already exists, use edit_file instead: rewriting a whole file to alter one "
+    "line costs you the file again in output, silently loses anything you did not retype, "
+    "and flattens its formatting a little more each time.",
     {"path": STR, "content": STR},
     required=("path", "content"),
 )
@@ -167,7 +170,8 @@ def delete_file(path: Path, args: dict):
     "check_code",
     "Run whatever this project is checked with — TypeScript, ruff, or its build — and get back "
     "only what is wrong. Do this before you say something is done. It works out what to run "
-    "from what is in the folder, so you do not have to know.",
+    "from what is in the folder, so you do not have to know. If you changed something "
+    'visual, look at a screenshot of it too — you can see images, and "the build passed" is not the same as "it looks right".',
     {"path": {**STR, "description": "The project folder (default: your whole folder)."}},
     required=(),
 )

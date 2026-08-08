@@ -6,7 +6,7 @@ turns that opened **eight skills each** before doing any work. At a median 2,171
 skill that is roughly seventeen thousand tokens of instructions loaded speculatively and then
 carried on every remaining round.
 
-The persona already says not to: "reading one speculatively wastes the context you would need
+The persona says not to: "the reading costs you the context you would have needed
 to do the job." That was advice, and advice loses to the pull of being thorough.
 """
 
