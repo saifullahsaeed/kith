@@ -13,6 +13,8 @@ Yields the same delta/stats/error events as a plain chat, plus:
 from __future__ import annotations
 
 import json
+import re
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -40,6 +42,43 @@ _PARALLEL_SAFE = frozenset({"web_search", "fetch_url", "browse_page", "search_so
 # the same thing again with nothing to show for the last attempt; for these two, calling
 # again *is* what showing something for it looks like, not a sign of being stuck.
 _POLL_TOOLS = frozenset({"run_tests", "check_process"})
+
+
+#: How many times one round's model call is attempted before the turn gives up on it.
+#:
+#: Three, and the reason it is not more is that the fallback is not "die" — it is landing, which
+#: is itself a request. A provider still refusing after three tries spread over seven seconds is
+#: not going to be talked round by a fourth, and every attempt costs the person wall-clock while
+#: they watch nothing happen.
+_ROUND_ATTEMPTS = 3
+
+
+#: 1s, 2s, 4s. Short, because the failures this catches are transient by definition — a dropped
+#: connection, an upstream briefly out of instances — and a long wait on a turn someone is
+#: watching is indistinguishable from a hang.
+def _backoff(attempt: int) -> float:
+    return 1.0 * (2 ** (attempt - 1))
+
+
+#: A failure worth sending the same request into again. Matched on the message because that is
+#: what the transport gives us: `_stream_once` flattens every provider failure into
+#: `{"type": "error", "message": str}`, and re-plumbing a code through both providers to serve
+#: one decision is a larger change than the decision is worth.
+#:
+#: Transport failures and 5xx/429 are the whole retryable set. A 400 or a 401 is the server
+#: saying the request is wrong or unpaid, and it will say it again — only slower. Context
+#: overflow has its own path (`kind == "context_overflow"`), which compacts and is not this.
+_RETRYABLE = re.compile(
+    r"could not reach|connection aborted|connection reset|timed out|timeout"
+    r"|\b(429|500|502|503|504)\b",
+    re.I,
+)
+
+
+def _worth_retrying(event: dict) -> bool:
+    if event.get("kind") == "context_overflow":
+        return False
+    return bool(_RETRYABLE.search(str(event.get("message") or "")))
 
 
 def _is_repeat(name: str, seen: int) -> bool:
@@ -837,17 +876,54 @@ def _run_turn(
         # this one call.
         round_config = replace(config, effort=landing_effort) if landing and landing_effort else config
 
-        for event in _stream_once(convo, round_config, host, tools=schemas):
-            kind = event["type"]
-            if kind == "delta":
-                yield event  # forward reasoning/answer tokens
-            elif kind == "error":
-                yield event
+        # One round, attempted up to `_ROUND_ATTEMPTS` times.
+        #
+        # Retrying *here* is safe in a way retrying the turn is not, and the difference is the
+        # whole design. The tools of every previous round have already run and their results are
+        # already in `convo`; repeating this call repeats a model request and nothing else. The
+        # client's own retry deliberately stops the moment a response body exists, because by
+        # then he may have written files and committed — that reasoning applies to the turn, not
+        # to one round inside it.
+        #
+        # What is *not* retried is a round that already emitted. A second attempt may answer
+        # differently, and the person would watch half of one answer followed by all of another.
+        # That round is over; the turn recovers by landing instead — see below.
+        failure: dict | None = None
+        for attempt in range(1, _ROUND_ATTEMPTS + 1):
+            failure = None
+            spoke = False
+            content, tool_calls, stats = "", [], None
+            for event in _stream_once(convo, round_config, host, tools=schemas):
+                kind = event["type"]
+                if kind == "delta":
+                    spoke = True
+                    yield event  # forward reasoning/answer tokens
+                elif kind == "error":
+                    failure = event
+                    break
+                elif kind == "turn":
+                    content = event["content"]
+                    tool_calls = event["tool_calls"]
+                    stats = event["stats"]
+            if failure is None:
+                break
+            if spoke or not _worth_retrying(failure) or attempt == _ROUND_ATTEMPTS:
+                break
+            yield {"type": "retrying", "attempt": attempt, "message": str(failure.get("message") or "")}
+            time.sleep(_backoff(attempt))
+
+        if failure is not None:
+            # Out of attempts, or a failure not worth repeating. Dying here is what threw away
+            # five rounds of finished work on a sixth-round timeout — so instead, hand the rest
+            # of the turn to landing, where the reserve exists precisely to write down what has
+            # been found. Only once: `landing` is already set means the landing round itself
+            # failed, and a provider still refusing then is not going to be talked round.
+            if landing:
+                yield failure
                 return
-            elif kind == "turn":
-                content = event["content"]
-                tool_calls = event["tool_calls"]
-                stats = event["stats"]
+            landing = True
+            convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
+            continue
 
         # What that request actually cost, against how big it was — the one measurement the
         # budget is built on. Taken from `sent`, captured before the call, because `convo`
