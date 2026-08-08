@@ -31,7 +31,16 @@ export interface ActivityItem {
   /** Every kind the server emits, and no more. `reflect`, `curious` and `consolidate` were
    *  here until the scheduled inner life was removed; `start` and `breakout` went with the
    *  self-directed loop. */
-  kind: "reply" | "tool" | "thought" | "reminder" | "done" | "error" | "status" | "tokens";
+  kind:
+    | "reply"
+    | "tool"
+    | "thought"
+    | "reminder"
+    | "done"
+    | "error"
+    | "status"
+    | "tokens"
+    | "retrying";
   text: string;
   at: string;
   tokens?: { round: number; uncached: number; cached: number; out: number };

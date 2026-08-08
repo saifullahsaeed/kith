@@ -571,6 +571,14 @@ class _MindFeed:
             if feed.charge_session(self.conversation_id, fresh, float(stats.get("costUsd") or 0.0)):
                 if self.stopping is not None:
                     self.stopping.set()
+        elif kind == "retrying":
+            # The one event in a turn that is otherwise write-only. In the message it is a live
+            # line that the error then replaces, so afterwards there is no evidence the retry
+            # ran — and against a dead network the whole sequence is over in about six seconds,
+            # because name resolution fails in hundredths rather than timing out. So "is the
+            # retry working" was unanswerable from the screen while the loop was, in fact,
+            # trying six times. Here it is timestamped and it stays.
+            self._publish("retrying", f"reconnecting — attempt {int(event.get('attempt') or 0) + 1}")
         elif kind == "error":
             self.error = event.get("message")
             self._publish("error", str(self.error))

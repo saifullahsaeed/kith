@@ -5,6 +5,7 @@ import {
   ClipboardCheck,
   FileCheck2,
   PanelRightClose,
+  RotateCw,
   TriangleAlert,
   Undo2,
   type LucideIcon,
@@ -43,6 +44,11 @@ const KIND: Record<
   // footer row per block, because a sentence per model request would bury the thinking.
   tokens: { icon: null, tone: "" },
   error: { icon: TriangleAlert, tone: "text-destructive" },
+  // The round that dropped and is being sent again. It reads as a warning rather than a note
+  // because it is one — the turn is still alive, but it is losing time — and unlike the live
+  // line in the message, this one is timestamped and stays, which is the only place afterwards
+  // that says the retry happened at all.
+  retrying: { icon: RotateCw, tone: "text-amber-500" },
   status: { icon: null, tone: "text-muted-foreground/60" },
 };
 

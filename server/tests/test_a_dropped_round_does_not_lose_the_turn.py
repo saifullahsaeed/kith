@@ -179,3 +179,120 @@ class TestGivingUpMeansLandingNotDying:
         events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
 
         assert [e for e in events if e["type"] == "error"], "it must surface the failure eventually"
+
+
+#: Wifi off, verbatim. The retry matched it and retried it correctly — it was what happened
+#: *after* the three attempts that was wrong.
+_WIFI_OFF = (
+    "Could not reach the cloud model at https://openrouter.ai/api/v1/chat/completions: "
+    "HTTPSConnectionPool(host='openrouter.ai', port=443): Max retries exceeded with url: "
+    '/api/v1/chat/completions (Caused by NameResolutionError("HTTPSConnectionPool('
+    "host='openrouter.ai', port=443): Failed to resolve 'openrouter.ai' "
+    '([Errno 8] nodename nor servname provided, or not known)"))'
+)
+
+
+class TestNothingToLandOnWhenTheNetworkIsDown:
+    """Landing is a model call. With no route to the provider it is three more doomed attempts.
+
+    The failures landing was built for — a write timeout on round six, a 502 — are the opposite
+    case: the network is up and the provider is merely unwell, so the reserve is worth spending
+    on writing down what the earlier rounds found.
+
+    Worth knowing while reading this: with wifi off, `getaddrinfo` returns EAI_NONAME in 0.02s
+    rather than timing out, so all six attempts and both backoffs are over in about six seconds.
+    The saving here is three of those six. The rest of why the failure felt so opaque is that
+    three seconds of a live status line is not evidence anybody can be asked to have caught —
+    hence the count on the error, below.
+    """
+
+    def test_an_unreachable_provider_does_not_get_a_landing_round(self, db: Path, monkeypatch):
+        calls: list[int] = []
+
+        def unreachable(convo, config, host, tools=None, tool_choice="auto"):
+            calls.append(1)
+            yield {"type": "error", "message": _WIFI_OFF}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", unreachable)
+        monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
+
+        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+
+        assert len(calls) == 3, f"three attempts and no landing round, got {len(calls)}"
+        assert [e for e in events if e["type"] == "error"], "it must still surface the failure"
+
+    def test_a_provider_that_is_merely_unwell_still_gets_one(self, db: Path, monkeypatch):
+        """The distinction has to hold in both directions, or this is just a disabled retry."""
+        calls: list[int] = []
+
+        def flaky(convo, config, host, tools=None, tool_choice="auto"):
+            calls.append(1)
+            yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", flaky)
+        monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
+
+        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+
+        assert len(calls) > 3, "a 502 is still worth landing after"
+
+
+class TestTheErrorSaysWhatWasTried:
+    """The "reconnecting" line is live, and the error replaces it.
+
+    So a turn that tried six times over 57 seconds showed, afterwards, exactly what a turn that
+    tried once shows — which is why "is the retry even running" could not be answered by looking
+    at it. The count goes in the message that stays.
+    """
+
+    def test_the_failure_carries_the_attempt_count(self, db: Path, monkeypatch):
+        def unreachable(convo, config, host, tools=None, tool_choice="auto"):
+            yield {"type": "error", "message": _WIFI_OFF}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", unreachable)
+        monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
+
+        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+
+        errors = [e for e in events if e["type"] == "error"]
+        assert errors, "it must surface the failure"
+        assert "tried 3 times" in errors[0]["message"], errors[0]["message"]
+        assert _WIFI_OFF in errors[0]["message"], "the original cause must survive"
+
+    def test_it_counts_calls_actually_made_not_attempts_allowed(self, db: Path, monkeypatch):
+        """A 401 is never re-sent, so it must not claim three.
+
+        It does say two, and that is right rather than generous: the round failed and then the
+        landing round failed, which is two model calls the person waited through. The count is
+        of what was spent, not of what the retry policy would have permitted.
+        """
+
+        def refused(convo, config, host, tools=None, tool_choice="auto"):
+            yield {"type": "error", "message": "Cloud model returned 401: no credit"}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", refused)
+        monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
+
+        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+
+        errors = [e for e in events if e["type"] == "error"]
+        assert errors and "tried 2 times" in errors[0]["message"], errors[0]["message"]
+        assert not [e for e in events if e["type"] == "retrying"], "a 401 is not retried"
+
+
+class TestTheAttemptNumberCountsUp:
+    def test_it_does_not_restart_at_one_for_the_landing_round(self, db: Path, monkeypatch):
+        """It read "attempt 2, attempt 3, attempt 2, attempt 3" — which looks like going
+        backwards, not persisting. One count for the turn."""
+
+        def flaky(convo, config, host, tools=None, tool_choice="auto"):
+            yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", flaky)
+        monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
+
+        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+
+        attempts = [e["attempt"] for e in events if e["type"] == "retrying"]
+        assert attempts == sorted(attempts), f"the count went backwards: {attempts}"
+        assert len(set(attempts)) == len(attempts), f"the count repeated itself: {attempts}"

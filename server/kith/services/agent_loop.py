@@ -81,6 +81,49 @@ def _worth_retrying(event: dict) -> bool:
     return bool(_RETRYABLE.search(str(event.get("message") or "")))
 
 
+#: The machine has no route to the provider at all — DNS did not resolve, the connection was
+#: refused, the interface is down. Distinguished from the rest of `_RETRYABLE` because it is the
+#: one class of failure where *landing* is pointless: landing is itself a model call, so with the
+#: network down it cannot do anything but fail three more times. A timeout or a 502 is the
+#: opposite case — the network is up and the provider is merely unwell, so the reserve is worth
+#: spending on writing down what was found.
+#:
+#: These fail *instantly*, which is the thing to know about them. `getaddrinfo` with no network
+#: returns EAI_NONAME in 0.02s — measured — rather than waiting out a timeout, so the whole
+#: six-attempt sequence takes about six seconds and nearly all of it is our own backoff. Half of
+#: those six are the doomed landing round, which is what this saves; the other half is why the
+#: retry has to leave a written record, since three seconds of a status line is not something a
+#: person can be expected to have seen.
+_NETWORK_DOWN = re.compile(
+    r"nameresolutionerror|failed to resolve|name or service not known"
+    r"|nodename nor servname|temporary failure in name resolution"
+    r"|connection refused|network is unreachable|no route to host",
+    re.I,
+)
+
+
+def _unreachable(event: dict) -> bool:
+    return bool(_NETWORK_DOWN.search(str(event.get("message") or "")))
+
+
+def _gave_up(event: dict, attempts: int, since: float) -> str:
+    """The failure, plus what was done about it before giving up.
+
+    The retry is otherwise invisible in hindsight: the "reconnecting" line is a live thing that
+    the error then replaces, so a turn that tried six times ends up showing exactly what a turn
+    that tried once shows. That is survivable when the failures are slow. It is not when they are
+    a dead network — those return in hundredths of a second, so the entire sequence is over in
+    about six, and asking afterwards whether the retry ran at all is a question the screen
+    genuinely cannot answer. It was a reporting failure, not a retry one.
+    """
+    message = str(event.get("message") or "")
+    if attempts <= 1:
+        return message
+    seconds = time.time() - since if since else 0.0
+    waited = f" over {seconds:.0f}s" if seconds >= 1 else ""
+    return f"{message}\n\n(tried {attempts} times{waited} before giving up)"
+
+
 def _is_repeat(name: str, seen: int) -> bool:
     """Has this exact call been made enough times already to be a stall, not progress?
 
@@ -750,6 +793,12 @@ def _run_turn(
     schemas: list[dict] = []
     landing = False
     delegated = False  # did he hand this to himself for later?
+    #: Model calls made and lost across the whole turn, and when the first one was lost. Kept at
+    #: turn level rather than per round so the count a person sees runs 1,2,3,4 instead of
+    #: restarting at 1 for the landing round — "attempt 2, attempt 3, attempt 2, attempt 3" reads
+    #: like the retry is going backwards. It is also what the final error says it tried.
+    attempts = 0
+    first_failed_at = 0.0
 
     for round_index in range(budget):
         # Re-read tools each round so a tool Kith just built is usable right away.
@@ -907,9 +956,16 @@ def _run_turn(
                     stats = event["stats"]
             if failure is None:
                 break
+            attempts += 1
+            first_failed_at = first_failed_at or time.time()
             if spoke or not _worth_retrying(failure) or attempt == _ROUND_ATTEMPTS:
                 break
-            yield {"type": "retrying", "attempt": attempt, "message": str(failure.get("message") or "")}
+            yield {
+                "type": "retrying",
+                # What is about to be tried, counted across the turn — see `attempts`.
+                "attempt": attempts,
+                "message": str(failure.get("message") or ""),
+            }
             time.sleep(_backoff(attempt))
 
         if failure is not None:
@@ -918,8 +974,12 @@ def _run_turn(
             # of the turn to landing, where the reserve exists precisely to write down what has
             # been found. Only once: `landing` is already set means the landing round itself
             # failed, and a provider still refusing then is not going to be talked round.
-            if landing:
-                yield failure
+            #
+            # And not at all when the machine has no route to the provider, because landing is a
+            # model call and there is nothing to land it on — three more failures and three more
+            # seconds of backoff, spent proving what the last three already established.
+            if landing or _unreachable(failure):
+                yield {**failure, "message": _gave_up(failure, attempts, first_failed_at)}
                 return
             landing = True
             convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
