@@ -22,7 +22,7 @@ def _set_reminder(path: Path, a: dict) -> dict:
     # Captured, not asked for: the model has no reason to think about which conversation it
     # is in, and a required argument it has to remember is one it will eventually forget.
     # This is what lets firing report back to the actual chat instead of whichever session
-    # the tick's round-robin happens to be on at the time.
+    # whichever conversation happens to be open at the time.
     reminder = repo.reminders.add_reminder(path, fire_at, note, conversation_id=session_context.current())
     return {**reminder, "fires": clock.humanize_until(fire_at)}
 

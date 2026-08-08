@@ -80,7 +80,7 @@ def delete(path: Path, conversation_id: str) -> None:
 # Two things a session carries beyond its words: what it is working on, and whether it keeps
 # going. Both used to be global, and both were wrong for the same reason. The project came
 # from "the only active project with a folder" — a guess that breaks the moment there are
-# two, and two at once is the entire point of sessions. Continuing came from one roam switch
+# two, and two at once is the entire point of sessions. Continuing came from one switch
 # over one board, which could only be on for everything or off for everything.
 
 

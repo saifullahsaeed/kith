@@ -14,6 +14,40 @@ from kith.services.activity import feed
 from kith.services.agent_loop import usage_snapshot
 
 
+def _waiting_on_you(status: str) -> list[dict]:
+    """Tasks in one status, capped at a handful, newest first.
+
+    A nudge with a button on it, not the board. Silent on failure for the same reason every
+    other bit of accounting here is: a count that cannot be read is not a reason to make the
+    status endpoint fail.
+
+    These were computed by the autonomy runner, which is why they read as a tick concern. They
+    are not: `review` is work he believes is finished and nobody has checked, `planning` is a
+    plan waiting for a look. Both are still true of work done in a conversation, and a queue
+    nobody is shown is a queue nobody works.
+    """
+    try:
+        waiting = [t for t in repo.tasks.list_tasks(AGENT_DB_PATH) if t.get("status") == status]
+        return [{"id": t["id"], "goal": t.get("goal") or ""} for t in waiting[:6]]
+    except Exception:
+        return []
+
+
+@api.get("/activity/status")
+@api.doc(
+    summary="What is waiting on you",
+    description="Work he has finished and plans he has drafted, both awaiting your look.",
+)
+def activity_status():
+    return jsonify(
+        {
+            **feed.status(),
+            "toReview": _waiting_on_you("review"),
+            "toApprove": _waiting_on_you("planning"),
+        }
+    )
+
+
 @api.get("/activity/stream")
 @api.doc(summary="Activity stream", description="Server-sent events of what Kith is doing.")
 def activity_stream():

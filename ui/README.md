@@ -33,6 +33,6 @@ folder, that is a sign it is two things.
 | `src/components/settings/` | Settings, one module per tab |
 | `src/components/onboarding/` | First-run setup, one module per step |
 | `src/components/ui/` | shadcn/ui primitives |
-| `src/hooks/` | `use-backend-config` (server config + connection status), `use-autonomy` (status + live activity over SSE), and the rest |
-| `src/lib/backend/` | Server client: `types`, `config`, `stream`, `adapter`, `autonomy`, … |
+| `src/hooks/` | `use-backend-config` (server config + connection status), `use-activity` (the live feed over SSE), and the rest |
+| `src/lib/backend/` | Server client: `types`, `config`, `stream`, `adapter`, `activity`, … |
 | `src/lib/` | Everything else shared: files and the clipboard, routing, theme, token accounting, tool vocabulary |

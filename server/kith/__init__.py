@@ -1,6 +1,6 @@
 """Kith — a small, independent Flask service.
 
-It talks to a local Ollama, owns the autonomous persona and chat parameters,
+It talks to a local Ollama, owns the persona and chat parameters,
 splits reasoning from the answer, and streams both. The web UI is just one
 client; the API is documented with OpenAPI (Swagger UI at /docs) so anything can
 drive it.
@@ -43,7 +43,7 @@ def _owns_background() -> bool:
     existed, and then they stopped being: `flask run --reload` re-executes the module, so
     `app = create_app()` happens in *two* processes — the watcher that never serves a request,
     and the child that does. Nothing here is idempotent across processes. `runner.ensure_loop`
-    guards on `self._thread`, which is per-process, so two processes means two autonomy loops
+    guards on `self._thread`, which is per-process, so two processes means two schedulers
     firing the same reminders and taking the same steps twice. `connect_async` spawns MCP
     servers under `npx`, so it means two sets of those, and there is no `atexit` anywhere to
     reap the ones the previous child left behind.
@@ -59,12 +59,12 @@ def _owns_background() -> bool:
 
 def _start_background() -> None:
     """The work that outlives a request: embeddings, the context-window probe, MCP servers,
-    and the autonomy loop.
+    and the scheduler.
 
     All off the request path deliberately — each one is either a network call or a subprocess
     that downloads on first run, and none of them may stand between launching and answering.
 
-    `KITH_NO_BACKGROUND` skips the autonomy loop only — the one thing a reloader restart can do
+    `KITH_NO_BACKGROUND` skips the scheduler only — the one thing a reloader restart can do
     real damage with, since it restarts mid-step and can re-fire a reminder that already fired.
 
     It deliberately does *not* skip MCP any more. It did at first, on the grounds that a reload

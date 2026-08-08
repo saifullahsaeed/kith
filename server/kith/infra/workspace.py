@@ -110,7 +110,7 @@ class ExecResult:
 #
 # None of his four projects had any. He would say "I redesigned the UI" and there was no way
 # for him to check what he had actually changed, and no way for anyone else to review a night
-# of unattended edits. For an agent that rewrites files while you sleep, that is the gap worth
+# of edits nobody watched land. For an agent that rewrites files a page at a time, that is the gap worth
 # closing before any of the others.
 #
 # One repository at the workspace root rather than one per project. His projects are database
@@ -244,7 +244,7 @@ def commit_all(message: str) -> str:
     """Commit whatever changed, and say what. Empty string when there was nothing.
 
     Called by him, deliberately, and never on a timer. The first version committed at the end
-    of every tick, which was wrong twice over: a tick is not a unit of work — a task takes many,
+    of every turn, which was wrong twice over: a turn is not a unit of work — a task takes many,
     so most of those commits would be mid-edit states that do not build — and a commit is a
     claim that something is a coherent step, which is a judgement, not something a clock can
     make. A history committed on a schedule is a keystroke log, and the point of having one is
@@ -299,7 +299,7 @@ def log(limit: int = 20) -> str:
 #
 # `commit_all` is deliberate, by design — a commit is a claim that something is a
 # coherent step, and that has to stay a judgement, not a reflex. But "deliberate" also
-# means there is no safety net between commits, and he edits files unattended. This is
+# means there is no safety net between commits, and he edits files in bulk. This is
 # that net: a snapshot taken automatically before every change, that never touches the
 # real index, HEAD, or a branch, so it can run on every mutating call without any risk
 # of disturbing a commit someone is deliberately building toward.
@@ -563,12 +563,12 @@ def root() -> Path:
 def base_dir() -> Path:
     """Where the current work should happen: the active session's linked project folder, or root().
 
-    Both a tick and a chat run inside ``session_context.working_in(...)``, so a tool called deep in
+    Every turn runs inside ``session_context.working_in(...)``, so a tool called deep in
     the loop can find out which project it is on without every caller threading a directory down. A
     project with a linked folder makes that folder the working base — his relative paths and a
     command's cwd land in your project rather than in his own scratch space, which is what "work in
     ~/Desktop/my-app" is supposed to mean. Everything else — a project with no folder, a chat with
-    no project, a tick that claimed nothing, a test, a script — falls back to ``root()``.
+    no project, a test, a script — falls back to ``root()``.
 
     The permission model is unchanged by this: a linked folder was already a free zone
     (``permissions._inside_linked_project``), so this only decides *where paths land*, never *what
@@ -582,10 +582,10 @@ def base_dir() -> Path:
 
         # The task in hand first, the conversation second. Only the conversation was
         # consulted for a long time, and that made linking a folder work in chat and do
-        # nothing at all in a tick: an unbound session picks up a task in a folder-linked
+        # nothing at all: an unbound session picks up a task in a folder-linked
         # project, the *session* is bound to no project, so this returned `root()` and every
         # relative path he wrote landed in ~/Kith instead of the project he was working on.
-        # The unattended case — the whole point — was the one that did not work.
+        # The unbound case — the common one — was the one that did not work.
         project_id = session_context.current_project()
         if not project_id:
             conversation = session_context.current()
@@ -1254,7 +1254,7 @@ def edit_files(edits: list[dict]) -> dict:
 
     One edit per model round is the wrong unit for the work that actually happens. Renaming a
     helper used in eight places is eight rounds, and a round is not cheap: the whole prompt
-    goes back over the wire each time, against a tick that gets sixteen of them. Batching a
+    goes back over the wire each time, against a turn that gets forty of them. Batching a
     refactor into one call is the difference between finishing it and running out of room
     halfway through, which is a failure mode this project has watched happen.
 
@@ -1390,7 +1390,7 @@ def _diff(path: str, before: str, after: str, old: str, replacements: int) -> st
 
     Returned rather than "ok" on purpose: the diff is the only way he can see that what he
     changed is what he meant to change, and it is the thing worth putting in front of a person
-    reviewing an unattended edit. Three lines of context — enough to place the change, not
+    reviewing an edit you did not watch. Three lines of context — enough to place the change, not
     enough to re-send the file he already has.
     """
     import difflib
@@ -1432,7 +1432,7 @@ def check_code(path: str = ".") -> dict:
 
     He *could* shell out for this, and mostly did — he ran `npm run build` before claiming
     things, which is better discipline than most. But "mostly" is the problem: a check he has
-    to remember is a check that is skipped on the tick where it mattered. Detected from the
+    to remember is a check that is skipped on the round where it mattered. Detected from the
     directory so there is nothing to configure and nothing to get wrong.
     """
     target = Path(resolve(path))

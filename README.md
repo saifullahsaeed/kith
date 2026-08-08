@@ -1,24 +1,24 @@
 # Kith
 
-A local, self-directed AI you live with — *kith and kin*: a peer, not a servant.
-It runs entirely on your machine through [Ollama](https://ollama.com) (Qwen3),
-reasons before it answers, and holds its own persona: free to disagree, decline,
-and follow its own curiosity.
+A local AI you work with — *kith and kin*: a peer, not a servant. It runs
+entirely on your machine through [Ollama](https://ollama.com) (Qwen3), reasons
+before it answers, and holds its own persona: free to disagree, decline, and
+follow its own curiosity.
 
 It has a **persistent brain** (a SQLite database of memories, notes, a journal,
 and its own goals) that it reads and writes through tools — so it remembers you
 across conversations. It has **its own computer** — an isolated Docker sandbox
-where it can run a shell, read and write files, and browse the web. And it can
-**run on its own**: turn on autonomy and it takes self-directed steps in the
-background — working its tasks, journaling, setting new goals — while deferring
-to you whenever you're around.
+where it can run a shell, read and write files, and browse the web. A turn is
+**its own thread**: it keeps going whether or not you are watching, so closing
+the tab costs you the live view rather than the work. And a **reminder** you set
+mid-conversation comes back and says so, in that conversation.
 
 Two independent parts:
 
 ```
 kith/
 ├── server/   Flask service — the brain: Ollama, persona, tools, memory (SQLite),
-│             the agent loop, and autonomy. OpenAPI docs at /docs. Runs on its own.
+│             and the agent loop. OpenAPI docs at /docs.
 └── ui/       React + assistant-ui client — chat, tool activity, and the Mind panel.
 ```
 

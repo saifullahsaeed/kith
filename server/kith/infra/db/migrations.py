@@ -68,7 +68,7 @@ def _migrations():
         conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB")
 
     def v5_reminders(conn):
-        # Notes to his future self, tied to a moment. The autonomy loop surfaces
+        # Notes to his future self, tied to a moment. The scheduler surfaces
         # them when they come due. Times are stored UTC ISO 8601.
         conn.execute(
             """
@@ -307,7 +307,7 @@ def _migrations():
         conn.execute("ALTER TABLE messages ADD COLUMN link TEXT")
 
     def v19_tick_log(conn):
-        # A durable flight recorder: one row per autonomy tick, so you can judge
+        # A durable flight recorder: one row per turn, so you can judge
         # how he's doing over time (mode, what he focused on, tools used, tokens,
         # duration, outcome) even across restarts — the live Mind feed is ephemeral.
         conn.execute(

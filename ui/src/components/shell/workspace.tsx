@@ -19,7 +19,7 @@ import { HistoryPanel } from "@/components/chat/history-panel";
 import { SessionBar } from "@/components/chat/session-bar";
 import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
-import { useAutonomy } from "@/hooks/use-autonomy";
+import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
@@ -73,7 +73,7 @@ const LAST_CONVERSATION = "kith-conversation";
  * mounting and markdown-parsing the tail is what you are waiting for. */
 const WINDOW = 40;
 
-/** The ready-state app: chat runtime, header, and the autonomy ("Work") panel.
+/** The ready-state app: chat runtime, header, and the activity ("Work") panel.
  * Split out so its hooks only run once the backend is reachable. */
 export function Workspace({
   config,
@@ -248,7 +248,7 @@ export function Workspace({
     refreshSession();
   }, [conversationId, refreshSession]);
 
-  const autonomy = useAutonomy();
+  const activity = useActivity();
   const inbox = useMessages();
   const { mood } = useMood();
   // Home is two windows — Chat and Mind — side by side. Mind can be collapsed to
@@ -357,19 +357,16 @@ export function Workspace({
     };
   }, [navigate]);
 
-  // Any session mid-work. Was a single `running` flag called `roaming` all the way up the
-  // tree; work belongs to sessions now, so the question is plural and the glow means
-  // "something is happening" rather than "the roam switch is on".
-  const working = (autonomy.status?.working ?? []).length > 0;
-  // Whether *this* session is one of them. Derived rather than kept in state: the server is
-  // the only thing that knows — he stops himself when the work runs out — and a local copy
-  // would keep saying "working" after that, which is the exact lie the button exists to
-  // prevent.
-  const sessionWorking = (autonomy.status?.working ?? []).includes(conversationId);
+  // Nothing works on its own, so nothing is mid-work between turns. The green wash and the
+  // session bar's "working" state both wait on the reliability work, which gives them one
+  // honest meaning: a session is busy if and only if a turn is live in it. Until then they
+  // are off rather than lying — see docs/superpowers/specs/2026-08-08-remove-the-self-
+  // directed-loop-design.md.
+  const working = false;
   // He adopts a project by working on one, so what the session is bound to can change
   // part-way through a turn. One re-read per completed step or turn, which is the cheapest
   // signal that anything could have changed at all.
-  const finished = autonomy.activity.filter((item) => item.kind === "done").length;
+  const finished = activity.activity.filter((item) => item.kind === "done").length;
   useEffect(refreshSession, [finished, refreshSession]);
   // The room glows green while he is working, otherwise the colour of his mood.
   const wash = working ? "var(--roam)" : moodHue(mood?.label);
@@ -383,7 +380,7 @@ export function Workspace({
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             <AppHeader
               working={working}
-              status={autonomy.status?.current ?? null}
+              status={null}
               mood={mood}
               model={config.model}
               effort={config.effort}
@@ -454,9 +451,7 @@ export function Workspace({
                 <SessionBar
                   conversationId={conversationId}
                   projectId={projectId}
-                  working={sessionWorking}
                   onProject={setProjectId}
-                  onStop={() => void autonomy.stop(conversationId)}
                 />
                 {/* The thread gets its own box with a definite height rather than sitting
                     straight in the column. Without one, the thread root's `h-full` resolved
@@ -513,7 +508,7 @@ export function Workspace({
                 <div style={{ width: mindRoom }} className="shrink-0">
                   <ErrorBoundary where="Work" compact>
                     <WorkPanel
-                      autonomy={autonomy}
+                      activity={activity}
                       conversationId={conversationId}
                       width={mindRoom}
                       onClose={() => setMindOpen(false)}
@@ -590,7 +585,7 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
   // id. `${turnIndex}-${part.id}` was the earlier fix and is still right for the ordinary
   // case, but it assumes the backend's per-turn ids are actually unique within whatever
   // `timeline()` groups as one turn — true for a turn that is one `stream_agent` call, and
-  // false for older conversations where an autonomy tick continued the same conversation_id
+  // false for older conversations where an activity tick continued the same conversation_id
   // with no new user message in between: two separate turns, each restarting its own ids at
   // c1, land in the transcript with nothing to tell `timeline()` to split them, so "c9" can
   // appear twice *inside* one rendered turn. No amount of scoping by turn index fixes a
@@ -627,7 +622,7 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
           // reopening it: two different messages both offering a tool call keyed "c9" collided
           // in assistant-ui's own resource cache. A counter rather than the backend's id or
           // even `${turnIndex}-${part.id}`: those still collide on a turn that is really two
-          // autonomy ticks glued together with no user message between them (older
+          // activity ticks glued together with no user message between them (older
           // conversations, from before ticks stopped continuing a conversation on their own) —
           // both ticks restart their own ids at c1, landing two "c9"s inside what `timeline()`
           // reads as one turn. This never repeats, by construction, regardless of what the

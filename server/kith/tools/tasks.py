@@ -122,7 +122,7 @@ def _verify_done(path: Path, a: dict) -> dict | None:
         )
         return None
 
-    # Every requirement met — by his own account, in a tick, with nobody to check it. That is not
+    # Every requirement met — by his own account, with nobody having checked it. That is not
     # a close, it is a submission. `_verify_done` is genuinely good at catching work he knows is
     # incomplete, and structurally incapable of catching work he believes is complete and is not:
     # he wrote the brief, he chose the requirements, he supplied the evidence, and then he graded

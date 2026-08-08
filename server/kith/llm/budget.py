@@ -78,7 +78,7 @@ class ContextBudget:
     """What the last round actually cost, and what the next one probably will.
 
     One instance per turn, held as a local in `stream_agent`. Deliberately not process-wide:
-    a tick and a chat turn, and two concurrent conversations, have different prompts and
+    two concurrent conversations have different prompts and
     would each drag the other's calibration around with no lock and no way to notice.
     """
 

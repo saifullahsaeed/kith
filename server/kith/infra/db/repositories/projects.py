@@ -324,7 +324,7 @@ def blocked_milestone_ids(path: Path) -> set[int]:
     """Every milestone that is waiting on an unfinished predecessor, across all projects.
 
     Used to decide what he may work on, which is why it is one query for everything rather
-    than per project: a tick asks this once and then filters its whole task list.
+    than per project: a caller asks this once and then filters its whole task list.
     """
     milestones = list_milestones(path)
     status = {m["id"]: m["status"] for m in milestones}
@@ -360,7 +360,7 @@ def milestones_needing_tasks(path: Path) -> list[dict]:
     could ever move it.
 
     Telling him to file tasks did not work twice, so this is machinery instead: an available
-    milestone with no open tasks IS work — the work of breaking it down — and a tick can be
+    milestone with no open tasks IS work — the work of breaking it down — and a turn can be
     handed it the same way it is handed a task.
 
     Only the milestones he could actually act on: an unfinished one, in an active project,

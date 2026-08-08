@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderKanban, Search, Square } from "lucide-react";
+import { FolderKanban, Search } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ThreadFind } from "@/components/chat/thread-find";
@@ -12,7 +11,7 @@ import { cn } from "@/lib/utils";
 const NONE = "none";
 
 /**
- * What this conversation is working on, and whether he keeps going in it.
+ * What this conversation is working on.
  *
  * Both used to be global and both were the same bug. A session's project was guessed as "the
  * only active project with a folder" — right until there were two, and two at once is the
@@ -20,7 +19,7 @@ const NONE = "none";
  * anywhere was fair game, off meant nothing happened at all.
  *
  * So this bar is the session, made visible. Switch conversations and the project switches
- * with you; leave one working and the other stays where you left it. It sits above the thread
+ * with you; each stays where you left it. It sits above the thread
  * rather than in the app header deliberately — the header is about Kith, and this is about
  * the piece of work in front of you.
  *
@@ -30,15 +29,11 @@ const NONE = "none";
 export function SessionBar({
   conversationId,
   projectId,
-  working,
   onProject,
-  onStop,
 }: {
   conversationId: string;
   projectId: number | null;
-  working: boolean;
   onProject: (projectId: number | null) => void;
-  onStop: () => void;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [busy, setBusy] = useState(false);
@@ -190,22 +185,6 @@ export function SessionBar({
         <Search className="size-3.5" />
       </TooltipIconButton>
 
-      {/* Per session, which is the thing roaming could never say. Stopping this one leaves
-          every other session exactly as it was. No manual start here any more — a session
-          becomes `working` on its own (filing a task, a reminder coming due), and this is
-          only ever the way to turn that back off. */}
-      {working ? (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-6 gap-1 px-2 text-[11px]"
-          onClick={onStop}
-          title="Stop taking steps in this conversation. Other sessions keep going."
-        >
-          <Square className="size-3" />
-          Stop
-        </Button>
-      ) : null}
     </div>
   );
 }

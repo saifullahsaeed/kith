@@ -10,7 +10,7 @@ can coexist while the conversion is in flight.
 
 Pragmas match ``connection.connect``: WAL so a reader never blocks the writer,
 and a busy timeout so a second process waits its turn instead of failing. That
-matters more than it looks — the autonomy loop and the API write concurrently.
+matters more than it looks — the scheduler and the API write concurrently.
 """
 
 from __future__ import annotations

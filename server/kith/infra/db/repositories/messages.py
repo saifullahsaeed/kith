@@ -1,4 +1,4 @@
-"""The notification channel, and the per-tick flight recorder."""
+"""The notification channel, and the per-turn flight recorder."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import Message, TurnLog
 from kith.infra.db.support import utc_now_iso
 
-# How many ticks the summary looks back over. Enough to see a trend, bounded so the
+# How many turns the summary looks back over. Enough to see a trend, bounded so the
 # aggregate stays cheap on a database that has been running for months.
 _SUMMARY_WINDOW = 500
 _TOP_TOOLS = 10
@@ -107,7 +107,7 @@ def delete_message(path: Path, message_id: int) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Tick log (the durable flight recorder — one row per autonomy tick)
+# Turn log (the durable flight recorder — one row per turn)
 # --------------------------------------------------------------------------- #
 
 
@@ -123,7 +123,7 @@ def add_turn_log(
     outcome: str | None,
     tokens_uncached: int | None = None,
 ) -> None:
-    """Record one autonomy tick to the durable flight recorder.
+    """Record one turn to the durable flight recorder.
 
     ``tokens_uncached`` comes last with a default deliberately: both callers pass every
     other argument positionally, so a parameter inserted mid-signature would slide
@@ -147,7 +147,7 @@ def add_turn_log(
 
 
 def list_turn_log(path: Path, limit: int = 100) -> list[dict]:
-    """Recent ticks, newest first, with `tools` parsed back to a list."""
+    """Recent turns, newest first, with `tools` parsed back to a list."""
     with session(path) as db:
         rows = db.scalars(select(TurnLog).order_by(TurnLog.id.desc()).limit(limit)).all()
         out = []
@@ -159,13 +159,13 @@ def list_turn_log(path: Path, limit: int = 100) -> list[dict]:
 
 
 def times_worked(path: Path, goal: str) -> int:
-    """How many unattended ticks have actually *worked* this task.
+    """How many turns have actually *worked* this task.
 
     Read from the recorder rather than counted in memory, so restarting the process cannot hand a
     task a fresh budget — which would quietly make "restart the app" the way to keep grinding.
 
     Matched on the focus line the runner writes, ``working on: <goal>``, and only for ``start``
-    mode, so planning ticks and replies do not spend a task's allowance. Matching on the goal text
+    mode, so planning turns and replies do not spend a task's allowance. Matching on the goal text
     rather than an id is what the recorder makes possible: it stores the focus line, not a foreign
     key, and a log that survives the task being edited is worth more here than a tidy join.
     """
@@ -221,7 +221,7 @@ def turn_log_summary(path: Path, limit: int = _SUMMARY_WINDOW) -> dict:
         "topTools": dict(sorted(tools.items(), key=lambda kv: -kv[1])[:_TOP_TOOLS]),
         "tokensIn": tokens_in,
         "tokensOut": tokens_out,
-        # Cache hits removed — what these ticks actually made a provider read. Rows from
+        # Cache hits removed — what these turns actually made a provider read. Rows from
         # before v20 contribute nothing, so a window spanning the upgrade reads low.
         "tokensUncached": tokens_uncached,
         "errors": errors,

@@ -2,14 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlarmClock,
-  CircleDot,
   ClipboardCheck,
   FileCheck2,
   PanelRightClose,
-  Square,
   TriangleAlert,
   Undo2,
-  Unlock,
   type LucideIcon,
 } from "lucide-react";
 
@@ -17,10 +14,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatTokens, realTokens, sumUsage, usageTitle, type Usage } from "@/lib/tokens";
 import { describeCall, type DescribedCall } from "@/lib/tool-language";
-import type { useAutonomy } from "@/hooks/use-autonomy";
-import type { ActivityItem } from "@/lib/backend/autonomy";
+import type { useActivity } from "@/hooks/use-activity";
+import type { ActivityItem } from "@/lib/backend/activity";
 
-type Autonomy = ReturnType<typeof useAutonomy>;
+type Activity = ReturnType<typeof useActivity>;
 
 const KIND: Record<
   ActivityItem["kind"],
@@ -33,9 +30,7 @@ const KIND: Record<
   // whatever weight and baseline the system font felt like, so the column never lined up and
   // the feed read as typographic debris beside the rest of an app that uses lucide
   // throughout. An icon also survives being small, which every one of these is.
-  start: { icon: CircleDot, tone: "text-blue-400", head: true },
   reply: { icon: Undo2, tone: "text-pink-400", head: true },
-  breakout: { icon: Unlock, tone: "text-orange-400", head: true },
   // `reflect`, `curious` and `consolidate` had entries here too. Nothing has emitted them
   // since the scheduled inner life was removed, and an icon for a kind that never arrives is
   // a promise the feed cannot keep. The server's live set is start / reply / breakout /
@@ -122,14 +117,14 @@ function groupTicks(activity: ActivityItem[]): Tick[] {
 /** The Work panel: what he is doing when nobody is talking to him, in the session you
  *  are looking at. Named for what it shows — his memory lives in the control panel. */
 export function WorkPanel({
-  autonomy,
+  activity,
   conversationId = "",
   width,
   onClose,
   onReview,
   onApprove,
 }: {
-  autonomy: Autonomy;
+  activity: Activity;
   /** The conversation on screen. The feed narrows to it, so switching sessions switches
    *  what the panel is about — it used to show every session's work at once, which with two
    *  projects going was one stream of interleaved steps belonging to neither. */
@@ -143,16 +138,11 @@ export function WorkPanel({
    *  approval — a real conversation about it, not a bare yes/no button. */
   onApprove: (taskIds: number[]) => void;
 }) {
-  const { status, activity, stop, cancel } = autonomy;
+  const { status, activity: lines } = activity;
   const toReview = status?.toReview ?? [];
   const toApprove = status?.toApprove ?? [];
-  // How many sessions are carrying on by themselves. The panel's header speaks for the
-  // machine, so it asks the plural question; stopping *one* lives on the session bar above
-  // the thread, next to the session it belongs to.
-  const sessions = (status?.working ?? []).length;
-  const working = sessions > 0;
-  const ticking = status?.ticking ?? false;
-  const stopping = status?.stopping ?? false;
+  // Nothing carries on by itself any more, so the header has no running state to speak
+  // for. What it still shows is the feed and what is waiting on you.
   // "Everything" is still available, because watching two projects advance at once is a
   // real thing to want — it is just the wrong default when you are reading one of them.
   const [everything, setEverything] = useState(false);
@@ -160,12 +150,12 @@ export function WorkPanel({
   const feedRef = useRef<HTMLDivElement>(null);
 
   const shown = useMemo(() => {
-    if (everything || !conversationId) return activity;
+    if (everything || !conversationId) return lines;
     // A line with no conversation is about the machine rather than about one piece of work
     // — a status change, a step run from "Run" with nobody working — so every session
     // shows it. Dropping those would make an idle panel look broken.
-    return activity.filter((item) => !item.conversation || item.conversation === conversationId);
-  }, [activity, conversationId, everything]);
+    return lines.filter((item) => !item.conversation || item.conversation === conversationId);
+  }, [lines, conversationId, everything]);
 
   useEffect(() => {
     const el = feedRef.current;
@@ -177,7 +167,7 @@ export function WorkPanel({
   // it made a session that woke up and went straight back to sleep read as thirteen steps.
   const steps = ticks.filter((one) => !one.control).length;
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
-  const hidden = activity.length - shown.length;
+  const hidden = lines.length - shown.length;
 
   return (
     <aside
@@ -194,20 +184,9 @@ export function WorkPanel({
               does when nobody is talking to him. His actual mind (memories, notes, journal)
               is the group of that name in the control panel, and having both called Mind
               meant the word told you nothing about which one you were looking at. */}
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            Work
-            {working ? (
-              <span className="text-roam inline-flex items-center gap-1 text-[11px] font-normal">
-                <span className="bg-roam size-1.5 animate-pulse rounded-full" />
-                working
-              </span>
-            ) : null}
-          </div>
+          <div className="flex items-center gap-2 text-sm font-semibold">Work</div>
           <div className="truncate text-[11px] text-muted-foreground">
-            {status?.current ||
-              (working
-                ? `working — ${(status?.working ?? []).length} session${(status?.working ?? []).length === 1 ? "" : "s"}`
-                : "idle — resting")}
+            {steps > 0 ? `${steps} round${steps === 1 ? "" : "s"} this session` : "nothing yet"}
           </div>
         </div>
         <Button
@@ -288,40 +267,9 @@ export function WorkPanel({
 
       {/* controls */}
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
-        {/* Interrupt only, and only while a step is actually running — chat has no manual
-            "run one now" trigger anymore, so this slot has nothing to show the rest of the
-            time. "Interrupt" rather than "Stop", because it already shares a screen with two
-            things called Stop: this session's, on the session bar, and every session's, next
-            to it. Stopping is about whether he continues; interrupting is about the step he
-            is inside, which a session already working may well follow with another. */}
-        {ticking ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void cancel()}
-            disabled={stopping}
-            // Never disabled while a step runs, which it used to be — so watching him start
-            // down a wrong path meant watching him finish it, up to sixteen rounds later.
-            title="Cut short the step he is taking now. A session carrying on takes another."
-          >
-            <Square className={cn("size-3.5", stopping && "animate-pulse")} />
-            {stopping ? "Stopping…" : "Interrupt"}
-          </Button>
-        ) : null}
-        {/* The other scope, and deliberately not a second button competing with the first.
-            Stopping one session lives on the session bar above the thread, where the session
-            is; this is the "all of them" one, so it names how many and stays out of the way
-            until there is something to stop. */}
-        {sessions > 0 ? (
-          <button
-            type="button"
-            onClick={() => void stop()}
-            className="text-muted-foreground/70 hover:text-destructive text-[11px] underline-offset-2 transition-colors hover:underline"
-            title="Stop every session from carrying on by itself. A step already running finishes."
-          >
-            Stop {sessions === 1 ? "the session" : `all ${sessions} sessions`}
-          </button>
-        ) : null}
+        {/* Interrupt and "stop every session" both lived here. Neither has anything to act
+            on: a turn is stopped from the thread it is in, which is where you are already
+            looking when you want it stopped. */}
         <div className="flex-1" />
         {/* Only offered when narrowing is actually hiding something, so it is a way out of
             a filter rather than a switch to reason about on an empty feed. */}

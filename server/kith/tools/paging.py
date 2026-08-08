@@ -7,7 +7,7 @@ limit at all, so there was no way to ask for less.
 
 That cost is not paid once. A tool result stays in the conversation for the rest of the
 turn and is re-sent on every subsequent round, so one ``read_journal`` early in a
-sixteen-round tick is eight thousand tokens carried sixteen times. It also crowds out the
+forty-round turn is eight thousand tokens carried forty times. It also crowds out the
 thing it was fetched for: the round after a big dump has less room to think in.
 
 Three guards, in the order they bite:
@@ -51,7 +51,7 @@ MIN_ITEMS = 1
 #: Drop these into a tool's parameter schema. Described, because the model has to
 #: understand it is being handed a page in order to ask for the next one — but tersely:
 #: these three ride on ten tools, and the schemas are re-sent on every single round, so a
-#: sentence of explanation here costs more over a tick than the paging saves. Measured at
+#: sentence of explanation here costs more over a turn than the paging saves. Measured at
 #: 601 tokens per round when they were written out in full.
 LIMIT: dict = {**INT, "description": f"How many (default {DEFAULT_LIMIT}, max {MAX_LIMIT})."}
 OFFSET: dict = {**INT, "description": "Skip this many; see next_offset."}

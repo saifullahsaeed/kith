@@ -99,7 +99,8 @@ def all_tools() -> dict[str, Tool]:
 def schemas(only: set[str] | None = None) -> list[dict]:
     """Tool declarations to hand the model.
 
-    ``only`` scopes the set to one tick-mode's relevant tools. That is a real
+    ``only`` scopes the set to the tools a phase may use — the landing reserve is the
+    one caller left. That is a real
     saving, not tidiness: every schema is prompt tokens on every round.
 
     Declaration order is preserved rather than sorted — related tools stay adjacent

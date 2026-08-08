@@ -66,7 +66,7 @@ _PROVIDER = settings.SEARCH_PROVIDER
 
 # Probing a blocked SearXNG costs ~2s (a docker exec into the sandbox plus the
 # request) and it is blocked for hours at a time, so paying that on *every* search
-# is pure waste — a research tick fires dozens. Remember the verdict for a while
+# is pure waste — a research turn fires dozens. Remember the verdict for a while
 # and skip straight to the fallback; the TTL means it still self-heals on its own
 # once the upstream engines recover.
 _SEARX_BLOCKED_TTL = 600.0

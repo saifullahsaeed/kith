@@ -208,7 +208,7 @@ def merge_overrides(base: Config, overrides: dict) -> Config:
         api_key=base.api_key,
         # Carried deliberately. This function rebuilds the object field by field, so a field
         # left out here is not inherited — it silently resets to the dataclass default on
-        # every chat request. The window would then be right for a tick and zero for chat,
+        # every chat request. The window would then be right for one caller and zero for another,
         # which is the harder of the two to notice.
         #
         # On the local path it tracks the *merged* num_ctx rather than the base one, because

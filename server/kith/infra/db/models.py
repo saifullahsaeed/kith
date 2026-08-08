@@ -156,7 +156,7 @@ class Reminder(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     #: Which chat asked to be reminded, or None for one set outside any conversation. See
     #: `kith.services.scheduler.fire_due` — this is what lets firing report
-    #: back to the actual chat instead of whichever session the tick happened to be on.
+    #: back to the actual chat rather than to whichever session happened to be open.
     conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -188,7 +188,7 @@ class Person(Base):
 
 
 # `Curiosity` was mapped here — the last piece of the scheduled inner life still standing.
-# The tools, the repository, the brain kind and the tick mode all went; the ORM class stayed,
+# The tools, the repository and the brain kind all went; the ORM class stayed,
 # referenced by nothing, still declaring `curiosities` to SQLAlchemy's metadata.
 #
 # The migration that creates the table stays where it is, and must: migrations are history,
@@ -296,7 +296,7 @@ class Conversation(Base):
 class TurnLog(Base):
     """One row per turn — the durable flight recorder.
 
-    Named for ticks once, and never only about them: a chat turn records what it cost here
+    Named for a background loop once, and never only about it: a chat turn records its cost here
     too, which is most of what the money dashboard reads.
     """
 

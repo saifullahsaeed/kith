@@ -1,7 +1,7 @@
 # Kith · server
 
 The **independent** Flask service behind Kith. It owns all the chat logic: it
-talks to a local [Ollama](https://ollama.com), holds the autonomous persona and
+talks to a local [Ollama](https://ollama.com), holds the persona and
 chat parameters, separates the model's reasoning from its answer, and streams
 both. The web UI is just one client — the API is documented with **OpenAPI** so
 anything can drive it.
@@ -37,9 +37,10 @@ OpenAPI spec: **http://127.0.0.1:8611/openapi.json**
 | GET | `/api/config` | Effective defaults (model, sizes, persona) |
 | PATCH | `/api/config` | Persist config changes to the config database |
 | POST | `/api/chat` | Stream an agent turn (`application/x-ndjson`) |
-| GET | `/api/autonomy` | Autonomy status |
-| POST | `/api/autonomy` | Control autonomy (`start` / `stop` / `tick`) |
-| GET | `/api/autonomy/stream` | Server-sent activity feed |
+| POST | `/api/chat/<id>/stop` | Ask the turn running in a conversation to stop |
+| GET | `/api/activity` | The flight recorder — what each turn cost |
+| GET | `/api/activity/status` | Work and plans waiting on you |
+| GET | `/api/activity/stream` | Server-sent activity feed |
 
 `POST /api/chat` body:
 
@@ -68,7 +69,7 @@ curl -N -X POST http://127.0.0.1:8611/api/chat \
   -d '{"messages":[{"role":"user","content":"say hi in one word"}]}'
 ```
 
-## Agent & autonomy
+## The agent loop
 
 `/api/chat` runs an **agentic loop**: the model is given tools, and when it calls
 one the server runs it and feeds the result back, looping until it answers.
@@ -93,12 +94,15 @@ The image is built on first use; requires **Docker running**. See
 `kith/sandbox.py` and `sandbox/Dockerfile`. Wipe it for a fresh machine with
 `sandbox.reset()` (removes the container and its volume).
 
-**Autonomy** lets Kith run on its own. When enabled, a background loop takes a
-self-directed step every `intervalSeconds` — *provided you've been quiet for
-`quietSeconds`* (it defers to you while you're active). Each tick it picks an
-open task (or reflects and sets a goal), acts through its tools, and journals.
-Drive it with `POST /api/autonomy {"action":"start"|"stop"|"tick"}` and watch it
-over `GET /api/autonomy/stream`.
+**A turn runs on its own thread.** `POST /api/chat` starts it and streams it back, but
+the stream is only a reader: closing the tab or switching conversations costs you the
+live view, not the work. Stopping is therefore said rather than inferred —
+`POST /api/chat/<id>/stop`.
+
+**A scheduler** (`services/scheduler.py`) is the one thing that runs unasked, and it does
+one thing: every thirty seconds it asks whether a reminder or a schedule has come due,
+and if so continues the conversation that thing was set in.
+
 
 ## Persona
 
@@ -141,7 +145,8 @@ Env overrides (see `.env.example`): `PORT`, `OLLAMA_HOST`, `KITH_DATA_DIR`,
 | `kith/ollama_client.py` | Single-turn streaming client for Ollama |
 | `kith/tools.py` | The agent's tools (schemas + handlers over the agent DB) |
 | `kith/agent.py` | The agentic loop (call model → run tools → repeat) |
-| `kith/autonomy.py` | The self-directed background loop + activity feed |
+| `kith/services/activity.py` | The live feed, and what a session has spent |
+| `kith/services/scheduler.py` | Due reminders and schedules, waking their own chat |
 | `kith/sandbox.py` | Manages Kith's Docker computer (shell, files, internet) |
 | `kith/think_splitter.py` | Splits inline `<think>` reasoning from the answer |
 | `kith/schemas.py` | Request/response schemas (drive the OpenAPI spec) |
