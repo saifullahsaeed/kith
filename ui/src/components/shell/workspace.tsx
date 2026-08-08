@@ -459,8 +459,20 @@ export function Workspace({
                     conversation existed the composer's bottom edge sat 37px past the window
                     and the send button was clipped clean off it. An empty chat looked fine
                     because the session bar draws nothing, which is what made it read as
-                    random rather than as a layout bug. */}
-                <div className="relative min-h-0 flex-1">
+                    random rather than as a layout bug.
+
+                    A flex column, not a block, and that is the same bug a second time. `Thread`
+                    is `h-full`, so in block layout it takes the whole box *and* the "Load
+                    earlier" button above it takes its own height on top — the thread's bottom
+                    ends up past the box by exactly the height of that button. It only shows on
+                    a conversation long enough to be windowed, because that is the only time the
+                    button is rendered, so it reads as "big chats are broken" rather than as a
+                    layout bug. The bottom-most thing in the thread falls off first, which is
+                    the context meter under the composer.
+
+                    Anything added beside `Thread` in here has to go in the flow, not on top of
+                    it. */}
+                <div className="relative flex min-h-0 flex-1 flex-col">
                   <ErrorBoundary where="The conversation">
                     <CheckpointsProvider
                       conversationId={conversationId}
@@ -486,7 +498,9 @@ export function Workspace({
                           </button>
                         </div>
                       ) : null}
-                      <Thread />
+                      <div className="relative min-h-0 flex-1">
+                        <Thread />
+                      </div>
                     </CheckpointsProvider>
                   </ErrorBoundary>
                 </div>
