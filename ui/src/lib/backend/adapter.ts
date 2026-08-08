@@ -156,6 +156,9 @@ export function createBackendAdapter(conversation?: {
       // not `context`, is the headline number.
       let baseline: ContextLedger | undefined;
       let folded = false;
+  /** How much prose the pre-turn fold removed, when it said. Rendered while it runs, which
+   *  is the point — before this the wait was a dead composer with nothing on it. */
+  let foldedChars: { from: number; to: number } | undefined;
 
       /** Append to the piece being written, or start a new one when the channel
        *  changed — which is what keeps consecutive deltas from each becoming a part. */
@@ -192,8 +195,10 @@ export function createBackendAdapter(conversation?: {
           return [{ type: piece.kind === "reasoning" ? "reasoning" : "text", text: piece.text }];
         });
         // Last, so it reads as the message's footer and stays put as rounds arrive.
-        if (rounds.length > 0 || context) {
-          const usage: TurnUsage = { rounds, context, baseline, folded };
+        // `folded` joins the gate: a fold before the first round is exactly the case where
+        // there is nothing else to render and the person is staring at an empty message.
+        if (rounds.length > 0 || context || folded) {
+          const usage: TurnUsage = { rounds, context, baseline, folded, foldedChars };
           parts.push({ type: "data", name: USAGE_PART, data: usage });
         }
         return parts;
@@ -233,9 +238,14 @@ export function createBackendAdapter(conversation?: {
             if (!baseline) baseline = event.context;
             context = event.context;
           } else if (event.type === "compacting") {
-            // He is about to fold the middle of this turn into notes. Worth showing because it
-            // costs a model call and takes a moment, so an unexplained pause looks like a hang.
+            // He is folding to make room. Worth showing because it costs a model call and takes
+            // a moment, so an unexplained pause looks like a hang — and when it happens before
+            // the turn starts, that pause is the entire time between hitting send and seeing
+            // anything at all.
             folded = true;
+            if (event.foldedFrom != null && event.foldedTo != null) {
+              foldedChars = { from: event.foldedFrom, to: event.foldedTo };
+            }
           } else {
             continue; // done
           }

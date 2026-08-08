@@ -54,7 +54,20 @@ export type BackendEvent =
   | { type: "tool_result"; id: string; name: string; result: JsonValue }
   | { type: "stats"; stats: Record<string, number> }
   | { type: "context"; context: ContextLedger }
-  | { type: "compacting"; used: number; window: number }
+  /* Two things emit this, with different things to say about it.
+   *
+   * Before the turn starts, the prompt build folds the conversation — and on a long one that
+   * is a summarisation call large enough to be the whole perceived wait, so it reports how
+   * much prose it removed. Mid-turn, the loop folds to make room and reports the window it
+   * was up against. Both mean "making room, this will take a moment"; neither field is
+   * present in both cases. */
+  | {
+      type: "compacting";
+      used?: number;
+      window?: number;
+      foldedFrom?: number;
+      foldedTo?: number;
+    }
   | { type: "conversation"; id: string }
   | { type: "error"; message: string }
   | { type: "done" };

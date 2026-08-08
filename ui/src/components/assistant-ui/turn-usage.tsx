@@ -13,8 +13,13 @@ export interface TurnUsage {
    *  with any one turn's tool use, and is what the meter shows. Absent on a turn recorded
    *  before this field existed; falls back to `context`. */
   baseline?: ContextLedger;
-  /** Whether this turn had to fold its middle into notes to keep going. */
+  /** Whether this turn had to fold to keep going. */
   folded?: boolean;
+  /** How much prose the fold removed, when the fold happened before the turn started.
+   *  That one is the whole perceived wait on a long conversation — a summarisation call
+   *  big enough to be measured in millions of characters — so it is worth naming rather
+   *  than leaving as an unexplained pause. */
+  foldedChars?: { from: number; to: number };
 }
 
 /**
@@ -36,7 +41,28 @@ export interface TurnUsage {
  */
 export function TurnTokens({ usage }: { usage: TurnUsage }) {
   const rounds = usage.rounds ?? [];
-  if (rounds.length === 0) return null;
+  // Before the first round lands there is nothing else on the message, and on a long
+  // conversation that gap is a summarisation call several hundred thousand tokens wide. Saying
+  // what it is doing is the difference between a wait and a hang.
+  if (rounds.length === 0) {
+    if (!usage.folded) return null;
+    const removed = usage.foldedChars
+      ? ` — ${formatTokens(Math.round((usage.foldedChars.from - usage.foldedChars.to) / 4))} of history`
+      : "";
+    return (
+      <div
+        data-slot="kith_turn-usage"
+        className="text-muted-foreground/60 flex items-center gap-1.5 font-mono text-[10px] tabular-nums select-none"
+        title={
+          "This conversation is past what the model can hold, so he is summarising the older " +
+          "part before answering. It costs a model call, which is why it takes a moment."
+        }
+      >
+        <span className="bg-muted-foreground/50 size-1.5 animate-pulse rounded-full" />
+        making room{removed}
+      </div>
+    );
+  }
   const total = rounds.reduce((sum, one) => sum + realTokens(one), 0);
   const each = rounds.map((one, i) => `${i + 1}. ${formatTokens(realTokens(one))}`).join("   ");
   return (
