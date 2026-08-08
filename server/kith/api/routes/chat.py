@@ -130,7 +130,12 @@ def stop_turn(conversation_id: str):
     return jsonify({"stopping": _stop(conversation_id)})
 
 
-def _build_messages(messages, config, conversation_id: str = ""):
+def _conversation_chars(messages) -> int:
+    """How much prose a message list carries — the number the fold is deciding about."""
+    return sum(len(str(m.get("content") or "")) for m in messages)
+
+
+def _build_messages(messages, config, conversation_id: str = "", _folded: dict | None = None):
     """The persona, then the turns, then the state he is in right now.
 
     The order is a caching decision, and it is worth more than it looks. Everything a
@@ -164,6 +169,15 @@ def _build_messages(messages, config, conversation_id: str = ""):
     )
     if fresh is not None and conversation_id:
         conversations.record_summary(conversation_id, fresh["through"], fresh["text"])
+    # Reported rather than inferred by the caller. Comparing what went in against what comes
+    # out cannot see a fold: this function also prepends the persona and appends the present
+    # state, so a heavily folded turn can still produce a longer list than it was given.
+    if _folded is not None:
+        _folded.update(
+            happened=fresh is not None or len(folded) < len(messages),
+            fromChars=_conversation_chars(messages),
+            toChars=_conversation_chars(folded),
+        )
     for message in folded:
         role = message.get("role")
         if role == "system":
@@ -611,20 +625,9 @@ def chat(payload):
     conversation_id = str(payload.get("conversationId") or "").strip()
     latest_message = next((m for m in reversed(client_history) if m.get("role") == "user"), None)
     latest = (latest_message or {}).get("content", "") or ""
-    if conversation_id:
-        # The client's own copy is prose-only by design (it strips tool calls before ever
-        # sending them) and everything in it but the message just typed is now ignored —
-        # the transcript rebuilds the real thing, tool history included. Taken whole rather
-        # than just its text, so an attachment riding on it isn't dropped now that it's no
-        # longer simply "the tail of the list we were using anyway".
-        history_messages = [
-            *conversations.full_messages(conversation_id),
-            latest_message or {"role": "user", "content": latest},
-        ]
-    else:
+    resumed = bool(conversation_id)
+    if not conversation_id:
         conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
-        history_messages = client_history
-    messages = _build_messages(history_messages, config, conversation_id)
     conversations.record(AGENT_DB_PATH, conversation_id, "user", latest)
 
     # A turn is a loop, and the transcript keeps its shape: what he reasoned, what he said,
@@ -663,6 +666,48 @@ def chat(payload):
             # rather than loud: files still get written, and nothing records whose turn wrote
             # them. See `copy_context` below for the other half of that.
             with session_context.working_in(conversation_id):
+                # Reading the transcript and building the prompt happen *here*, not on the
+                # request path, because building it can fold — and a fold is a summarisation
+                # call to the model. On a long conversation it is a large one: measured on a
+                # real transcript, a 1.57M-character backlog, about 390k tokens, a full
+                # round-trip before the actual request was even sent.
+                #
+                # It also said nothing while it did it. The `compacting` event is emitted from
+                # inside the turn, and the turn had not started — so the one thing that could
+                # have explained the wait was structurally unable to fire. It reads as "he
+                # takes ages before he answers", and every explanation you reach for first —
+                # the reasoning effort, a slow provider — is wrong, because those come after.
+                #
+                # The client's own copy is prose-only by design (it strips tool calls before
+                # ever sending them), so on a resumed conversation everything in it but the
+                # message just typed is ignored and the transcript rebuilds the real thing,
+                # tool history included. Taken whole rather than just its text, so an
+                # attachment riding on it isn't dropped.
+                if resumed:
+                    history_messages = [
+                        *conversations.full_messages(conversation_id),
+                        latest_message or {"role": "user", "content": latest},
+                    ]
+                else:
+                    history_messages = client_history
+                folded: dict = {}
+                messages = _build_messages(history_messages, config, conversation_id, folded)
+                if folded.get("happened"):
+                    # Say so, and say how much went. The context reading the meter shows is
+                    # taken *after* this, so a conversation several times over its window reads
+                    # as comfortable and the fold looks gratuitous — the one number a person
+                    # checks is the one number that cannot show the problem.
+                    lines.put(
+                        json.dumps(
+                            {
+                                "type": "compacting",
+                                "foldedFrom": folded["fromChars"],
+                                "foldedTo": folded["toChars"],
+                            }
+                        )
+                        + "\n"
+                    )
+
                 # The switch is handed to `_turn` rather than checked out here. Checking it
                 # here meant returning out of this loop with the generator suspended mid-body,
                 # and an abandoned generator is not a finished one: everything after its last
