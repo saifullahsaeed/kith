@@ -139,9 +139,9 @@ export function Workspace({
   });
 
   /**
-   * Ask him — here, in the thread — to check work a tick handed over.
+   * Ask him — here, in the thread — to check work he handed over.
    *
-   * A chat message rather than a step, and that is the whole design of the `review` column: a tick
+   * A chat message rather than a task comment, and that is the whole design of the `review` column: a tick
    * verifying its own output is marking its own homework, since it wrote the brief, chose the
    * requirements and supplied the evidence. Chat has the conversation the work came out of, forty
    * rounds, and a person in it.
@@ -585,7 +585,7 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
   // id. `${turnIndex}-${part.id}` was the earlier fix and is still right for the ordinary
   // case, but it assumes the backend's per-turn ids are actually unique within whatever
   // `timeline()` groups as one turn — true for a turn that is one `stream_agent` call, and
-  // false for older conversations where an activity tick continued the same conversation_id
+  // false for older conversations where a reminder continued the same conversation_id
   // with no new user message in between: two separate turns, each restarting its own ids at
   // c1, land in the transcript with nothing to tell `timeline()` to split them, so "c9" can
   // appear twice *inside* one rendered turn. No amount of scoping by turn index fixes a
@@ -622,9 +622,9 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
           // reopening it: two different messages both offering a tool call keyed "c9" collided
           // in assistant-ui's own resource cache. A counter rather than the backend's id or
           // even `${turnIndex}-${part.id}`: those still collide on a turn that is really two
-          // activity ticks glued together with no user message between them (older
-          // conversations, from before ticks stopped continuing a conversation on their own) —
-          // both ticks restart their own ids at c1, landing two "c9"s inside what `timeline()`
+          // continuations glued together with no user message between them (older
+          // conversations, from before this stopped happening unaskedsation on their own) —
+          // both restart their own ids at c1, landing two "c9"s inside what `timeline()`
           // reads as one turn. This never repeats, by construction, regardless of what the
           // backend assigned or how the transcript is shaped.
           toolCallId: `call-${callSeq++}`,

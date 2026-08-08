@@ -21,7 +21,7 @@ export async function fetchServerConfig(signal?: AbortSignal): Promise<ServerCon
   return (await response.json()) as ServerConfig;
 }
 
-/** Persist settings to the SERVER (so autonomy uses them too, not just chat).
+/** Persist settings to the SERVER, so every turn reads the same values.
  * `apiKey` is write-only — send it to set/change the cloud key; omit to leave it. */
 export async function patchServerConfig(
   patch: Partial<

@@ -52,9 +52,9 @@ export function TaskLane({
     Stable, and that is the whole point of the second key.
 
     The server returns tasks by priority then **most-recently-updated** (`_newest_first`), which is
-    right for picking what to work on next — it is how a tick stays on the task it just touched —
+    right for picking what to work on next — it is how he stays on the task it just touched —
     and wrong for a board you are trying to read. Every comment he posts and every checklist item
-    he ticks changes `updated_at`, so while he works, tasks leap up the list on each poll and the
+    he checks off changes `updated_at`, so while he works, tasks leap up the list on each poll and the
     board reshuffles under the cursor every few seconds.
 
     Ranking alone did not fix it: `sort` is stable, so equal ranks kept whatever order the server

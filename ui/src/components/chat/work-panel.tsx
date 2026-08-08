@@ -23,7 +23,7 @@ const KIND: Record<
   ActivityItem["kind"],
   { icon: LucideIcon | null; tone: string; head?: boolean }
 > = {
-  // "head" kinds begin a tick — each becomes a titled block so you can see every
+  // "head" kinds begin a block — each becomes a titled block so you can see every
   // distinct thing he set out to do, and why.
   //
   // Real icons rather than the unicode glyphs that were here (▸ ❋ ✦ ☾ ⎋). Those rendered at
@@ -40,7 +40,7 @@ const KIND: Record<
   reminder: { icon: AlarmClock, tone: "text-orange-400" },
   done: { icon: null, tone: "text-muted-foreground/40" },
   // Never rendered as a feed line — pulled out in groupTicks and shown as one quiet
-  // footer row per tick, because a sentence per model request would bury the thinking.
+  // footer row per block, because a sentence per model request would bury the thinking.
   tokens: { icon: null, tone: "" },
   error: { icon: TriangleAlert, tone: "text-destructive" },
   status: { icon: null, tone: "text-muted-foreground/60" },
@@ -64,7 +64,7 @@ function describeTool(item: ActivityItem): DescribedCall {
   return describeCall(item.tool ?? item.text.split("(")[0], item.args);
 }
 
-type Tick = {
+type Block = {
   head: ActivityItem;
   items: ActivityItem[];
   usage: Usage[];
@@ -75,7 +75,7 @@ type Tick = {
 /** A status is never a step, so it is never inside one.
  *
  * "working", "resting", "stopping this step" from the controls; "caught up — resting" from a
- * tick that found nothing to do; "stopped" from one you interrupted. None of them is work,
+ * turn that produced nothing; "stopped" from one you interrupted. None of them is work,
  * and every one of them used to fall through to "append to whichever block came last" — so
  * two bare `working` rows appeared inside a chat turn that had nothing to do with them,
  * making the turn look like it did something it did not.
@@ -87,31 +87,31 @@ function isControlLine(item: ActivityItem): boolean {
   return item.kind === "status";
 }
 
-/** Group the flat activity stream into ticks — one titled block per self-directed
+/** Group the flat activity stream into blocks — one titled block per
  * step, with its tool calls and thoughts nested beneath.
  *
  * Token counts are collected separately rather than left in the item list: one arrives
  * per model request, and a step that took twelve rounds would otherwise read as twelve
  * lines about tokens interleaved with what he was actually doing. */
-function groupTicks(activity: ActivityItem[]): Tick[] {
-  const ticks: Tick[] = [];
+function groupBlocks(activity: ActivityItem[]): Block[] {
+  const blocks: Block[] = [];
   for (const item of activity) {
-    if (item.kind === "done") continue; // end-of-tick marker; the next head is the divider
+    if (item.kind === "done") continue; // end-of-block marker; the next head is the divider
     const meta = KIND[item.kind] ?? KIND.status;
     if (isControlLine(item)) {
-      ticks.push({ head: item, items: [], usage: [], control: true });
+      blocks.push({ head: item, items: [], usage: [], control: true });
       continue;
     }
-    const last = ticks[ticks.length - 1];
+    const last = blocks[blocks.length - 1];
     // `!last?.control` matters as much as the head check: without it the first real item
     // after a control line would be nested inside it, which is the same bug pointing the
     // other way.
-    if (meta.head || !last || last.control) ticks.push({ head: item, items: [], usage: [] });
+    if (meta.head || !last || last.control) blocks.push({ head: item, items: [], usage: [] });
     else if (item.kind === "tokens") {
       if (item.tokens) last.usage.push(item.tokens);
     } else last.items.push(item);
   }
-  return ticks;
+  return blocks;
 }
 
 /** The Work panel: what he is doing when nobody is talking to him, in the session you
@@ -131,8 +131,8 @@ export function WorkPanel({
   conversationId?: string;
   width: number;
   onClose: () => void;
-  /** Ask him, in the thread, to check the work a tick handed over. A message rather than a step,
-   *  because the point of the review column is that the reviewer is not the tick. */
+  /** Ask him, in the thread, to check the work he handed over. A message rather than a step,
+   *  because the point of the review column is that the reviewer is not the author. */
   onReview: (taskIds: number[]) => void;
   /** Same shape, one step earlier: ask him, in the thread, to walk through a plan waiting for
    *  approval — a real conversation about it, not a bare yes/no button. */
@@ -162,10 +162,10 @@ export function WorkPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [shown.length]);
 
-  const ticks = groupTicks(shown);
+  const blocks = groupBlocks(shown);
   // Steps, not blocks. A control line is drawn in this list but is not work, and counting
   // it made a session that woke up and went straight back to sleep read as thirteen steps.
-  const steps = ticks.filter((one) => !one.control).length;
+  const steps = blocks.filter((one) => !one.control).length;
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
   const hidden = lines.length - shown.length;
 
@@ -180,7 +180,7 @@ export function WorkPanel({
           <Activity className="size-4" />
         </span>
         <div className="min-w-0 flex-1 leading-tight">
-          {/* "Work", not "Mind". This panel is ticks, tool calls and token spend — what he
+          {/* "Work", not "Mind". This panel is rounds, tool calls and token spend — what he
               does when nobody is talking to him. His actual mind (memories, notes, journal)
               is the group of that name in the control panel, and having both called Mind
               meant the word told you nothing about which one you were looking at. */}
@@ -204,14 +204,14 @@ export function WorkPanel({
         Finished work waiting to be checked, with the button that gets it checked.
 
         The `review` column and the instruction telling him how to judge it both existed already —
-        and neither was visible anywhere. A tick would finish a task, hand it over, and the only way
+        and neither was visible anywhere. He would finish a task, hand it over, and the only way
         to find out was to open the control panel and go looking. That is the same failure as the
         silently parked tasks: a queue nobody is shown is a queue nobody works.
 
         It goes here, above Run, because this panel is already the thing beside the chat that says
         what he is doing — and because reviewing is *chat's* job. Chat has the conversation the work
-        came out of; a tick reviewing its own output is what the column exists to prevent. So the
-        button sends a message into the thread rather than starting a step.
+        came out of; him reviewing his own output is what the column exists to prevent. So the
+        button sends a message into the thread.
       */}
       {toReview.length > 0 ? (
         <div className="border-border/60 bg-kith-soft/40 flex items-start gap-2.5 border-b px-4 py-2.5">
@@ -229,7 +229,7 @@ export function WorkPanel({
             variant="outline"
             className="shrink-0"
             onClick={() => onReview(toReview.map((t) => t.id))}
-            title="Have him check it here, where the conversation is — not in a step marking its own homework."
+            title="Have him check it here, where the conversation is — rather than him marking his own homework."
           >
             Review
           </Button>
@@ -240,7 +240,7 @@ export function WorkPanel({
         Same pattern, one step earlier: a plan drafted with the planning-a-task skill, waiting
         for a look before any implementation starts. Always entered from chat — see
         `TASK_STATUSES` in domain/enums.py — so anything showing up here is a plan somebody
-        actually asked to see, never a tick's own initiative.
+        actually asked to see.
       */}
       {toApprove.length > 0 ? (
         <div className="border-border/60 bg-kith-soft/40 flex items-start gap-2.5 border-b px-4 py-2.5">
@@ -315,7 +315,7 @@ export function WorkPanel({
 
       {/* feed */}
       <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {ticks.length === 0 ? (
+        {blocks.length === 0 ? (
           /* Everything in the middle, together.
              This panel is four hundred pixels wide and it is open by default, so an idle feed
              was most of a column of nothing with one sentence adrift in it. The way out of the
@@ -326,14 +326,13 @@ export function WorkPanel({
             <span className="flex size-11 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
               <Activity className="size-5" />
             </span>
-            {/* No button here — there is no manual trigger to point at any more. This fills
-                in on its own: filing a task or a reminder coming due is what starts a
-                session, not anything pressed in this panel. */}
+            {/* No button here, and nothing to press. This fills in as a turn runs — yours,
+                or one a due reminder started in this conversation. */}
             <p className="max-w-[17rem] text-sm text-muted-foreground">
               {conversationId ? (
                 <>Nothing here yet in this conversation. Talk to him, or file a task.</>
               ) : (
-                <>Quiet for now. This fills in once something sets a session working.</>
+                <>Quiet for now. This fills in while he works.</>
               )}
             </p>
             {hidden > 0 && !everything ? (
@@ -348,8 +347,8 @@ export function WorkPanel({
           </div>
         ) : (
           <div className="space-y-3">
-            {ticks.map((t, i) =>
-              t.control ? <ControlLine key={i} item={t.head} /> : <TickBlock key={i} tick={t} />,
+            {blocks.map((t, i) =>
+              t.control ? <ControlLine key={i} item={t.head} /> : <WorkBlock key={i} block={t} />,
             )}
           </div>
         )}
@@ -373,14 +372,14 @@ function ControlLine({ item }: { item: ActivityItem }) {
   );
 }
 
-function TickBlock({ tick }: { tick: Tick }) {
-  const meta = KIND[tick.head.kind] ?? KIND.status;
+function WorkBlock({ block }: { block: Block }) {
+  const meta = KIND[block.head.kind] ?? KIND.status;
   return (
     <div className="rounded-xl border border-border/60 bg-card/40 p-3 shadow-sm">
       <div className="flex items-start gap-2.5">
         <span
           className={cn(
-            // A tick is the unit you scan for, so its mark is the heaviest thing in
+            // A block is the unit you scan for, so its mark is the heaviest thing in
             // the block and readable from the colour alone — blue for work, amber for
             // reflection, indigo for settling.
             "bg-muted/60 ring-border/50 mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md ring-1",
@@ -391,17 +390,17 @@ function TickBlock({ tick }: { tick: Tick }) {
         </span>
         <div className="min-w-0 flex-1">
           <span className="break-words text-sm font-medium leading-snug whitespace-pre-wrap">
-            {tick.head.text}
+            {block.head.text}
           </span>
           <span className="ml-1.5 align-middle text-[10px] tabular-nums text-muted-foreground/70">
-            {time(tick.head.at)}
+            {time(block.head.at)}
           </span>
         </div>
-        {tick.usage.length ? <TickTokens usage={tick.usage} /> : null}
+        {block.usage.length ? <BlockTokens usage={block.usage} /> : null}
       </div>
-      {tick.items.length ? (
+      {block.items.length ? (
         <ul className="mt-2.5 ml-[11px] space-y-2 border-l border-border/60 pl-3.5">
-          {tick.items.map((item, i) => {
+          {block.items.map((item, i) => {
             const m = KIND[item.kind] ?? KIND.status;
             const call = item.kind === "tool" ? describeTool(item) : null;
             const Icon = call?.icon ?? m.icon;
@@ -473,13 +472,13 @@ function TickBlock({ tick }: { tick: Tick }) {
 /** What a step cost, on its heading.
  *
  * It climbs while the step runs — one model request reports in per round — so this
- * doubles as a sign of life on a tick that is between tool calls and otherwise silent.
+ * doubles as a sign of life on a turn that is between tool calls and otherwise silent.
  *
  * The per-request numbers are on hover rather than on screen. They were feed lines for
  * one build and it was immediately wrong: a twelve-round step became twelve entries about
  * tokens threaded through what he was actually doing, which is the opposite of the point.
  * The heading is where a total belongs, and the detail is there for whoever wants it. */
-function TickTokens({ usage }: { usage: Usage[] }) {
+function BlockTokens({ usage }: { usage: Usage[] }) {
   const total = usage.reduce((sum, one) => sum + realTokens(one), 0);
   const each = usage.map((one, i) => `${i + 1}. ${formatTokens(realTokens(one))}`).join("  ");
   return (

@@ -61,7 +61,7 @@ export function HeaderControls({
         })
         .catch(() => {});
     load();
-    // Polled rather than pushed: a request can appear from an autonomy tick with nobody
+    // Polled rather than pushed: a request can appear mid-turn with nothomy tick with nobody
     // watching, and the count in the header is how you find out.
     const timer = setInterval(load, 4_000);
     return () => {

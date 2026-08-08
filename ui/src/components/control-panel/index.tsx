@@ -110,27 +110,11 @@ export function ControlPanel({
   // make it current is an admission that it might not be. The reason a toggle existed at all
   // was cost — polling the whole snapshot every six seconds forever — and the fix for that
   // is to poll at the rate the situation deserves rather than to make someone manage it.
-  // "Is anything happening" — a task in progress, or a tick running at all. The first version
-  // only looked at `working`, so between picking a task up and marking it working he was working
-  // and the panel was refreshing every twenty seconds.
-  const [ticking, setTicking] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    const check = () =>
-      fetch("/api/autonomy")
-        .then((response) => response.json())
-        .then((status: { running?: boolean; ticking?: boolean }) => {
-          if (alive) setTicking(Boolean(status.running || status.ticking));
-        })
-        .catch(() => {});
-    check();
-    const timer = window.setInterval(check, 5_000);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-  const busy = ticking || Boolean(snap?.tasks?.some((task) => task.status === "working"));
+  // "Is anything happening" — which is now only ever a task someone is working. This used
+  // to also poll /api/autonomy every five seconds to ask whether a step was running; that
+  // route is gone, so the request was a 404 on a timer and the answer it fed was always
+  // false.
+  const busy = Boolean(snap?.tasks?.some((task) => task.status === "working"));
   useEffect(() => {
     const id = window.setInterval(load, busy ? 3_000 : 20_000);
     return () => window.clearInterval(id);

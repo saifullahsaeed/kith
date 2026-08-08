@@ -85,7 +85,7 @@ export function ChatTab({
           <p className="text-muted-foreground text-xs">
             {local
               ? "Ollama picks a small window unless you set one, then truncates without " +
-                "saying so. A tick can run sixteen rounds carrying tool output, so this is " +
+                "saying so. A turn can run forty rounds carrying tool output, so this is " +
                 "what keeps him coherent to the end of one."
               : "His context window comes from the model itself — see the Model tab. " +
                 "There's nothing to set here."}

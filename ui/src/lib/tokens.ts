@@ -10,7 +10,7 @@
  * `uncached` is the prompt with the cache hits removed, computed once on the server
  * (`agent_loop.measured`) so nothing here has to know how a provider spells its usage
  * fields. This module exists so the two places that show the number — a chat round and
- * an autonomy tick — cannot drift apart on what it means.
+ * a turn — cannot drift apart on what it means.
  */
 
 export interface Usage {
@@ -44,7 +44,7 @@ export function formatCompact(count: number): string {
   return `${(count / 1_000_000).toFixed(2)}M`;
 }
 
-/** Roll a tick's requests into one figure. Summing is right for all three fields:
+/** Roll a turn's requests into one figure. Summing is right for all three fields:
  *  each round is a separate request that read, hit cache and wrote independently. */
 export function sumUsage(all: Usage[]): Usage {
   return all.reduce(

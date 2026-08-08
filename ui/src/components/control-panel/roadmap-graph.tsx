@@ -36,7 +36,7 @@ import { cn } from "@/lib/utils";
  *
  * This is not a diagram of the work — it decides the work. A milestone whose predecessors
  * are unfinished holds its own tasks back, so dragging an edge here changes what he picks up
- * on his next tick. Before dependencies existed the roadmap was a progress bar: it described
+ * on his next turn. Before dependencies existed the roadmap was a progress bar: it described
  * order after the fact while raw task priority decided it, which is why milestones felt
  * pointless. On his Flappy Bird project, chaining the five milestones took the available
  * work from seven tasks to two — he can no longer package a release before the gameplay
@@ -142,7 +142,7 @@ function Canvas({
   }, [roadmap, onRoadmap]);
 
   // Always re-read, faster while something is in progress. It only polled *while* working
-  // before, which meant a milestone he finished on a tick — the exact moment the graph
+  // before, which meant a milestone he finished mid-turn — the exact moment the graph
   // changes shape — never appeared until something else happened to refetch it.
   const working = roadmap?.milestones.some((one) => one.tasks_doing > 0) ?? false;
   useEffect(() => {

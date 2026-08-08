@@ -216,7 +216,7 @@ export function AppHeader({
   );
 }
 
-/** Turn the raw autonomy status ("working on: practice cello") into a short,
+/** Turn the raw status line ("working on: practice cello") into a short,
  * lowercase phrase for the presence line. */
 function cleanStatus(status: string | null): string {
   if (!status) return "";

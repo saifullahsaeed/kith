@@ -5,7 +5,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /* "Presence" — a warm room where Kith lives. Amber is his colour; green means
-   he's roaming. Light is warm paper (for bright rooms); .dark is the warm night.
+   he's working. Light is warm paper (for bright rooms); .dark is the warm night.
    A head script sets the .dark class before paint, so there's no flash. */
 :root {
   --radius: 0.9rem;
@@ -200,7 +200,7 @@
 /* ── Presence primitives ─────────────────────────────────────────────── */
 
 /* The breathing orb that stands in for Kith. Colour is set inline via --orb
-   (amber when awake, green when roaming). */
+   (amber when awake, green while he works). */
 .kith-orb {
   position: relative;
   border-radius: 9999px;
@@ -234,7 +234,7 @@
 }
 
 /* Ambient wash behind the whole room — leans amber when awake, green while
-   he roams. */
+   he works. */
 /* ─────────────────────────────────────────────────────────────────────────────
    Desktop window chrome
 
