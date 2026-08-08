@@ -159,6 +159,9 @@ export function createBackendAdapter(conversation?: {
   /** How much prose the pre-turn fold removed, when it said. Rendered while it runs, which
    *  is the point — before this the wait was a dead composer with nothing on it. */
   let foldedChars: { from: number; to: number } | undefined;
+  /** The round being retried, while it is being retried. Cleared the moment anything else
+   *  arrives, because by then the retry has plainly worked. */
+  let retrying: { attempt: number; message: string } | undefined;
 
       /** Append to the piece being written, or start a new one when the channel
        *  changed — which is what keeps consecutive deltas from each becoming a part. */
@@ -197,8 +200,8 @@ export function createBackendAdapter(conversation?: {
         // Last, so it reads as the message's footer and stays put as rounds arrive.
         // `folded` joins the gate: a fold before the first round is exactly the case where
         // there is nothing else to render and the person is staring at an empty message.
-        if (rounds.length > 0 || context || folded) {
-          const usage: TurnUsage = { rounds, context, baseline, folded, foldedChars };
+        if (rounds.length > 0 || context || folded || retrying) {
+          const usage: TurnUsage = { rounds, context, baseline, folded, foldedChars, retrying };
           parts.push({ type: "data", name: USAGE_PART, data: usage });
         }
         return parts;
@@ -212,6 +215,14 @@ export function createBackendAdapter(conversation?: {
             conversation?.set(event.id);
             continue;
           }
+
+          if (event.type === "retrying") {
+            retrying = { attempt: event.attempt, message: event.message };
+            yield { content: snapshot() };
+            continue;
+          }
+          // Anything else arriving means the round got through.
+          retrying = undefined;
 
           if (event.type === "delta") {
             append(event.role === "reasoning" ? "reasoning" : "text", event.text);

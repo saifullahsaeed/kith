@@ -20,6 +20,10 @@ export interface TurnUsage {
    *  big enough to be measured in millions of characters — so it is worth naming rather
    *  than leaving as an unexplained pause. */
   foldedChars?: { from: number; to: number };
+  /** Set while a failed round is waiting to be tried again. A dropped connection used to
+   *  end the whole turn; it now costs a pause, and a pause with nothing in it looks exactly
+   *  like the hang it is recovering from. */
+  retrying?: { attempt: number; message: string };
 }
 
 /**
@@ -41,6 +45,21 @@ export interface TurnUsage {
  */
 export function TurnTokens({ usage }: { usage: TurnUsage }) {
   const rounds = usage.rounds ?? [];
+  // A round is being retried. Said wherever the turn is up to, because it is the reason
+  // nothing is moving and it is temporary — the alternative is a silent stall that used to
+  // be a lost turn.
+  if (usage.retrying) {
+    return (
+      <div
+        data-slot="kith_turn-usage"
+        className="text-amber-600/80 dark:text-amber-400/80 flex items-center gap-1.5 font-mono text-[10px] tabular-nums select-none"
+        title={`${usage.retrying.message}\n\nThe round is being sent again. His earlier rounds are kept either way — if it keeps failing he will write down what he found rather than lose it.`}
+      >
+        <span className="bg-amber-500/60 size-1.5 animate-pulse rounded-full" />
+        retrying (attempt {usage.retrying.attempt + 1})
+      </div>
+    );
+  }
   // Before the first round lands there is nothing else on the message, and on a long
   // conversation that gap is a summarisation call several hundred thousand tokens wide. Saying
   // what it is doing is the difference between a wait and a hang.

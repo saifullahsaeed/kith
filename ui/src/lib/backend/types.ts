@@ -61,6 +61,10 @@ export type BackendEvent =
    * much prose it removed. Mid-turn, the loop folds to make room and reports the window it
    * was up against. Both mean "making room, this will take a moment"; neither field is
    * present in both cases. */
+  /* A round failed in a way worth trying again — a dropped connection, a 502, a rate limit —
+   * and the loop is waiting before it does. Shown because the wait is otherwise a pause with
+   * nothing in it, which is indistinguishable from the hang it is recovering from. */
+  | { type: "retrying"; attempt: number; message: string }
   | {
       type: "compacting";
       used?: number;
