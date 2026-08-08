@@ -43,35 +43,38 @@ export interface TurnUsage {
  * check. It now lives once, under the composer — see `ComposerMeter` in thread.tsx — so
  * this only reports what this specific turn actually cost.
  */
-export function TurnTokens({ usage }: { usage: TurnUsage }) {
-  const rounds = usage.rounds ?? [];
-  // A round is being retried. Said wherever the turn is up to, because it is the reason
-  // nothing is moving and it is temporary — the alternative is a silent stall that used to
-  // be a lost turn.
+/**
+ * What the turn is doing right now, when it is doing something other than talking.
+ *
+ * Rendered inline with the message rather than in the footer beside the token count, and the
+ * distinction is not cosmetic: the footer is right-aligned metadata about what a finished turn
+ * cost. A live status put there ends up a thousand pixels from the working indicator it is
+ * explaining, so the two read as unrelated — a lone pulsing dot on the left and an orphaned
+ * sentence on the right. It belongs next to the thing it is about.
+ */
+export function TurnStatus({ usage }: { usage: TurnUsage }) {
   if (usage.retrying) {
     return (
       <div
-        data-slot="kith_turn-usage"
-        className="text-amber-600/80 dark:text-amber-400/80 flex items-center gap-1.5 font-mono text-[10px] tabular-nums select-none"
+        data-slot="kith_turn-status"
+        className="flex items-center gap-1.5 font-mono text-[11px] text-amber-600/80 select-none dark:text-amber-400/80"
         title={`${usage.retrying.message}\n\nThe round is being sent again. His earlier rounds are kept either way — if it keeps failing he will write down what he found rather than lose it.`}
       >
-        <span className="bg-amber-500/60 size-1.5 animate-pulse rounded-full" />
-        retrying (attempt {usage.retrying.attempt + 1})
+        <span className="size-1.5 animate-pulse rounded-full bg-amber-500/60" />
+        reconnecting — attempt {usage.retrying.attempt + 1}
       </div>
     );
   }
-  // Before the first round lands there is nothing else on the message, and on a long
-  // conversation that gap is a summarisation call several hundred thousand tokens wide. Saying
-  // what it is doing is the difference between a wait and a hang.
-  if (rounds.length === 0) {
-    if (!usage.folded) return null;
+  // Only while nothing else has arrived. Once he is talking, the fold is over and saying so
+  // would be a stale line sitting above a live answer.
+  if (usage.folded && (usage.rounds ?? []).length === 0) {
     const removed = usage.foldedChars
-      ? ` — ${formatTokens(Math.round((usage.foldedChars.from - usage.foldedChars.to) / 4))} of history`
+      ? ` — summarising ${formatTokens(Math.round((usage.foldedChars.from - usage.foldedChars.to) / 4))}`
       : "";
     return (
       <div
-        data-slot="kith_turn-usage"
-        className="text-muted-foreground/60 flex items-center gap-1.5 font-mono text-[10px] tabular-nums select-none"
+        data-slot="kith_turn-status"
+        className="text-muted-foreground/70 flex items-center gap-1.5 font-mono text-[11px] select-none"
         title={
           "This conversation is past what the model can hold, so he is summarising the older " +
           "part before answering. It costs a model call, which is why it takes a moment."
@@ -82,6 +85,15 @@ export function TurnTokens({ usage }: { usage: TurnUsage }) {
       </div>
     );
   }
+  return null;
+}
+
+
+export function TurnTokens({ usage }: { usage: TurnUsage }) {
+  const rounds = usage.rounds ?? [];
+  // The footer is what the turn *cost*, and a turn with no rounds has cost nothing yet. What
+  // it is doing meanwhile is `TurnStatus`, inline with the message.
+  if (rounds.length === 0) return null;
   const total = rounds.reduce((sum, one) => sum + realTokens(one), 0);
   const each = rounds.map((one, i) => `${i + 1}. ${formatTokens(realTokens(one))}`).join("   ");
   return (

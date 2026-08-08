@@ -4,7 +4,7 @@ import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
-import { TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
+import { TurnStatus, TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
 import { ContextMeter } from "@/components/assistant-ui/context-meter";
 import {
   Reasoning,
@@ -660,15 +660,11 @@ const AssistantMessage: FC = () => {
                 if (part.name === USAGE_PART) return null;
                 return part.dataRendererUI;
               case "indicator":
-                return (
-                  <span
-                    data-slot="aui_assistant-message-indicator"
-                    className="animate-pulse font-sans"
-                    aria-label="Assistant is working"
-                  >
-                    {"●"}
-                  </span>
-                );
+                // The bare dot means "working". When the turn can say *what* it is working on
+                // — folding to make room, retrying a dropped round — that line replaces it
+                // rather than sitting under it: two pulsing dots one above the other is one
+                // signal too many, and the specific one is strictly better than the generic.
+                return <WorkingIndicator />;
               default:
                 return null;
             }
@@ -779,21 +775,45 @@ const ReasoningRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group
  * The rounds are folded into one part on the way in now (see `toThreadMessages`); this is where
  * the one figure lands.
  */
-const TurnUsageFooter: FC = () => {
-  // Serialised for the same reason as the run above: the selector compares by identity.
+/** This turn's usage part, or undefined. Serialised because the selector compares by identity. */
+const useTurnUsage = (): TurnUsage | undefined => {
   const encoded = useAuiState((s) => {
-    const part = s.message.parts.find(
-      (one) => one.type === "data" && one.name === USAGE_PART,
-    ) as { data?: unknown } | undefined;
+    const part = s.message.parts.find((one) => one.type === "data" && one.name === USAGE_PART) as
+      | { data?: unknown }
+      | undefined;
     return part?.data ? JSON.stringify(part.data) : "";
   });
-  if (!encoded) return null;
-  let usage: TurnUsage;
+  if (!encoded) return undefined;
   try {
-    usage = JSON.parse(encoded) as TurnUsage;
+    return JSON.parse(encoded) as TurnUsage;
   } catch {
-    return null;
+    return undefined;
   }
+};
+
+/** The working indicator, upgraded to a reason whenever the turn has one.
+ *
+ *  Decided on the usage itself rather than on whether `<TurnStatus>` would render something:
+ *  an element is truthy even when the component returns null, so `status ?? dot` would have
+ *  silently removed the working indicator in every ordinary turn. */
+const WorkingIndicator: FC = () => {
+  const usage = useTurnUsage();
+  const explained = Boolean(usage?.retrying || (usage?.folded && (usage.rounds ?? []).length === 0));
+  if (explained && usage) return <TurnStatus usage={usage} />;
+  return (
+    <span
+      data-slot="aui_assistant-message-indicator"
+      className="animate-pulse font-sans"
+      aria-label="Assistant is working"
+    >
+      {"\u25CF"}
+    </span>
+  );
+};
+
+const TurnUsageFooter: FC = () => {
+  const usage = useTurnUsage();
+  if (!usage) return null;
   return <TurnTokens usage={usage} />;
 };
 
