@@ -759,7 +759,7 @@ def _run_turn(
     # be used as the answer reserve directly. Falling back to the tick cap gives a real
     # number, and a real number is the whole point: the threshold is absolute, because a
     # percentage of the window is wrong at both ends.
-    wanted_out = config.num_predict if config.num_predict > 0 else tuning.value("tick_max_tokens")
+    wanted_out = config.num_predict if config.num_predict > 0 else tuning.value("max_answer_tokens")
     room = ContextBudget(window=config.context_window, reserve=int(wanted_out))
     # The tool list as the last round actually saw it, kept for the forced final answer.
     # That request used to build its own with `tool_schemas(agent_db_path)` and no `only`,

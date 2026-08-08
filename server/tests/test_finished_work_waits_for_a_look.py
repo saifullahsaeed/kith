@@ -178,10 +178,3 @@ class TestTheCeiling:
         a task another twelve hours."""
         self._ticks_on(db, "build the thing", 7)
         assert repo.messages.times_worked(db, "build the thing") == 7  # no in-memory state involved
-
-    def test_the_default_leaves_the_median_task_room(self):
-        """Median is 7 ticks; the runaways were 18 and 20. A cap that fired on typical work would
-        turn every task into a review round-trip."""
-        from kith.services import tuning
-
-        assert 7 < tuning.value("task_tick_cap") < 18

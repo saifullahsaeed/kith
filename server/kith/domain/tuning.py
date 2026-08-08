@@ -123,28 +123,23 @@ GROUPS: tuple[Group, ...] = (
         "of the conversation he keeps in front of him.",
     ),
     Group(
-        "ticks",
-        "When he works on his own",
-        "Each step he takes between conversations, unattended. How long a step runs, how often, "
-        "and when he stops and hands a finished task back for you to check.",
-    ),
-    Group(
         "stuck",
-        "When he's going in circles",
-        "Only ever fires on unattended work. He can loop — the same two searches, forever — and "
-        "these decide how fast that is caught, against interrupting work that was progressing.",
+        "Recognising work you already have",
+        "How alike two tasks have to be before he treats them as the same one. Too loose and he "
+        "refuses to file something genuinely new; too strict and the board fills with four "
+        "wordings of one job.",
     ),
     Group(
         "context",
-        "What stays in front of him — messages and steps alike",
-        "The model re-reads its whole context every step, so this is what he still has about page "
-        "three by the time he reaches page nine. Applies to both.",
+        "What stays in front of him",
+        "The model re-reads its whole context every round, so this is what he still has about "
+        "page three by the time he reaches page nine.",
     ),
     Group(
         "limits",
         "Spending limits",
-        "The ceilings that stop unattended work costing more than you meant. This is the section "
-        "to set if you are worried about the bill.",
+        "The ceilings that stop a long turn costing more than you meant. This is the section to "
+        "set if you are worried about the bill.",
     ),
     Group(
         "connections",
@@ -171,28 +166,6 @@ TUNABLES: tuple[Tunable, ...] = (
         "can run for many minutes and cost accordingly.",
         default=40,
         group="chat",
-        minimum=2,
-        maximum=200,
-        unit="rounds",
-    ),
-    Tunable(
-        key="tick_max_rounds",
-        env="KITH_TICK_MAX_ROUNDS",
-        label="Tool rounds per unattended step",
-        help="The same budget as a chat message, for a step nobody is watching. Low, and a task is "
-        "cut into pieces that each start from nothing and re-read the codebase to work out where "
-        "they are; high, and one step runs long and spends accordingly.",
-        # Was hardcoded at 16 in the runner while chat read `max_rounds` (40) — so a tick got 12
-        # working rounds after the landing reserve, against chat's 36, and a task that needed more
-        # was chopped into as many pieces as it took. Measured: a median task took 7 ticks and one
-        # took 20, each re-reading the same files because each began with an empty context. Eight
-        # consecutive ticks on one piece of work burned ~2M prompt tokens and ended with the
-        # loop-breaker stepping in to stop him re-verifying what was already done.
-        #
-        # Now a knob, and set above chat's 40: an unattended step has nobody to nudge it, so
-        # running out of rounds costs a whole cold restart rather than a follow-up message.
-        default=50,
-        group="ticks",
         minimum=2,
         maximum=200,
         unit="rounds",
@@ -231,7 +204,7 @@ TUNABLES: tuple[Tunable, ...] = (
         "and he files a task and then immediately spends the rest of the step on it, "
         "which is neither delegating nor finishing.",
         default=True,
-        group="ticks",
+        group="chat",
         kind="bool",
     ),
     Tunable(
@@ -243,7 +216,7 @@ TUNABLES: tuple[Tunable, ...] = (
         "the whole roadmap at once — which is how nine overlapping tasks piled under one "
         "milestone in the run this fixes.",
         default=6,
-        group="ticks",
+        group="chat",
         minimum=2,
         maximum=20,
         unit="tasks",
@@ -355,39 +328,14 @@ TUNABLES: tuple[Tunable, ...] = (
         maximum=20,
         unit="messages",
     ),
-    Tunable(
-        key="handoff_steps",
-        env="KITH_HANDOFF_STEPS",
-        label="Recent steps shown when resuming",
-        help="How many of his own last steps he is shown when he starts the next one, so he can "
-        "tell he has already tried this and change course instead of repeating. Too few and a "
-        "long loop is invisible to him; too many and the resume prompt gets expensive.",
-        default=8,
-        group="ticks",
-        minimum=1,
-        maximum=30,
-        unit="steps",
-    ),
     # -- rhythm ------------------------------------------------------------- #
     Tunable(
-        key="min_gap",
-        env="KITH_MIN_GAP",
-        label="Shortest gap between steps",
-        help="A floor that survives everything else, so a bug or a very fast model "
-        "can't spend without limit.",
-        default=3.0,
-        group="ticks",
-        kind="float",
-        minimum=0.5,
-        maximum=120,
-        unit="seconds",
-    ),
-    Tunable(
-        key="tick_max_tokens",
-        env="KITH_TICK_MAX_TOKENS",
-        label="Longest self-directed step",
-        help="Output tokens one unattended step may produce. It bounds a step's written "
-        "output only; the real ceiling on what a session costs is 'session_token_cap'.",
+        key="max_answer_tokens",
+        env="KITH_MAX_ANSWER_TOKENS",
+        label="Longest single answer",
+        help="Output tokens one round may produce, and the room a turn reserves for its "
+        "answer when the model states no limit of its own. It bounds what is written, not "
+        "what a session costs — that ceiling is 'session_cost_cents'.",
         # 2,000 was a gag on the half of the work that produces something. It is *per response*, so
         # any single round that needed to write a file or a multi-hunk edit was truncated — and
         # giving a step fifty rounds while capping each one at 2,000 tokens would have left it just
@@ -396,7 +344,7 @@ TUNABLES: tuple[Tunable, ...] = (
         # Cheap to lift, measured: output is 4.2% of the billable tokens on this install (0.34M out
         # against 7.8M uncached in). The thing being rationed was costing almost nothing.
         default=8_000,
-        group="ticks",
+        group="chat",
         minimum=200,
         maximum=32_000,
         unit="tokens",
@@ -430,44 +378,6 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="tokens",
     ),
     # -- stalls ------------------------------------------------------------- #
-    Tunable(
-        key="stall_break",
-        env="KITH_STALL_BREAK",
-        label="Repeats before a nudge",
-        help="Consecutive near-identical steps before he's told he's going in circles. "
-        "Two is deliberately impatient — a third identical step is money for nothing.",
-        default=2,
-        group="stuck",
-        minimum=1,
-        maximum=20,
-        unit="steps",
-    ),
-    Tunable(
-        key="stall_giveup",
-        env="KITH_STALL_GIVEUP",
-        label="Repeats before dropping the task",
-        help="When the nudge doesn't work either, he sets the task aside rather than "
-        "grinding. Set high and a stuck task can absorb an entire budget.",
-        default=4,
-        group="stuck",
-        minimum=2,
-        maximum=50,
-        unit="steps",
-    ),
-    Tunable(
-        key="focus_grind_limit",
-        env="KITH_FOCUS_GRIND_LIMIT",
-        label="No-progress steps before setting a task aside",
-        help="How many steps the same task may be worked with nothing newly ticked off or "
-        "delivered before he stops and hands it back. The backstop for a loop that rewords "
-        "itself each step so the prose and shape detectors miss it — measured on the task's "
-        "own progress, not its wording.",
-        default=6,
-        group="stuck",
-        minimum=2,
-        maximum=50,
-        unit="steps",
-    ),
     Tunable(
         key="prose_match",
         env="KITH_PROSE_MATCH",
@@ -552,30 +462,11 @@ TUNABLES: tuple[Tunable, ...] = (
         env="KITH_FALLBACK_MODEL",
         label="Fallback model",
         help="A second model to try if the main one errors, rate-limits or goes down. Blank "
-        "means no fallback — then one provider outage stalls an unattended session mid-task. "
+        "means no fallback — then one provider outage ends a turn mid-task. "
         "Point it at a different-family model so an outage that takes one out doesn't take both.",
         default="",
         group="connections",
         kind="text",
-    ),
-    Tunable(
-        key="task_tick_cap",
-        env="KITH_TASK_TICK_CAP",
-        label="Most steps one task may take",
-        help="A ceiling on unattended effort per task. Past it he stops and puts the task in "
-        "review instead of carrying on — what is done is kept. The no-progress detector only "
-        "fires when nothing moved at all, so without this a task that checks off one item every "
-        "few steps can run all day. 0 switches it off; too low and real work gets interrupted "
-        "mid-flight and needs sending back.",
-        # Measured: a median task takes 7 steps, but one took 20 and another 18 — at roughly four
-        # minutes and a quarter-million prompt tokens each, that is most of a working day on a
-        # single item nobody had looked at. 12 leaves the median comfortable room and catches the
-        # runaways.
-        default=12,
-        group="ticks",
-        minimum=0,
-        maximum=200,
-        unit="steps",
     ),
     Tunable(
         key="require_provider_parameters",

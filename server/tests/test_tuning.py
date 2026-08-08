@@ -119,10 +119,10 @@ class TestWriting:
         # Was idle_interval, which no longer exists: it was the 600-second backoff for
         # roaming over an empty board, and roaming is gone. min_gap is the same kind of knob
         # — a live-read number the loop consults every second — so it tests the same thing.
-        before = tuning.value("min_gap")
-        tuning.apply({"min_gap": 7})
+        before = tuning.value("history_keep_recent")
+        tuning.apply({"history_keep_recent": 7})
         # The whole reason these are read live rather than snapshotted at import.
-        assert tuning.value("min_gap") == 7 != before
+        assert tuning.value("history_keep_recent") == 7 != before
 
     def test_a_batch_saves_together(self):
         tuning.apply({"max_rounds": 60, "landing_reserve": 8})
@@ -151,10 +151,10 @@ class TestWriting:
         assert tuning.PREFIX + "max_rounds" not in config_store.load_settings(isolated_tuning)
 
     def test_reset_with_no_argument_clears_everything(self):
-        tuning.apply({"max_rounds": 12, "min_gap": 9.0})
+        tuning.apply({"max_rounds": 12, "history_keep_recent": 9.0})
         tuning.reset()
         assert tuning.value("max_rounds") == for_key("max_rounds").default
-        assert tuning.value("min_gap") == for_key("min_gap").default
+        assert tuning.value("history_keep_recent") == for_key("history_keep_recent").default
 
 
 class TestSnapshot:
@@ -267,88 +267,38 @@ _SHARED_TURN_OK = {"landing_reserve", "live_tool_chars", "mcp_call_timeout"}
 
 
 class TestOneWordPerConcept:
-    """Two concepts, each with one name — checked so a future entry can't drift back apart.
+    """One concept, one name — checked so a future entry cannot drift.
 
-    The settings page used "turn" and "chat message" for the same thing depending which
+    The settings page used to say "turn" and "chat message" for the same thing depending which
     tunable you were reading (`max_rounds` said "Tool rounds per **turn**", right next to
-    `history_keep_recent` saying "Recent messages kept verbatim" with help text that already
-    said "messages" — the label and its own help text disagreed within one entry). And it
-    used "tick" and "step" for the unattended unit depending which tunable you were reading —
-    `task_tick_cap` said "Most **ticks** one task may take" while `tick_max_rounds` right above
-    it said "Tool rounds per unattended **step**". The Work Panel — the surface a person looks
-    at every session — only ever says "step", never "tick", so that is the word that won.
+    `history_keep_recent` saying "Recent messages kept verbatim" — the label and its own help
+    text disagreeing inside one entry). It also used "tick" and "step" for the unattended unit,
+    and that whole second unit is now gone.
 
-    "Turn" survives in a few places on purpose: `landing_reserve`, `live_tool_chars` and
-    `mcp_call_timeout` describe something genuinely shared between a chat message and an
-    unattended step, and "turn" is the correct umbrella word for that — swapping it for
-    "message" or "step" there would make the text specific to one mode when it is not. What
-    is checked here is the failure that actually happened: the *same concept* wearing two
-    names depending which entry you happened to be reading.
+    So the rule inverted. There used to be two units needing two words kept apart, with "turn"
+    reserved as the umbrella for the few knobs that genuinely spanned both. There is one unit
+    now, and "turn" is its name — what has to be caught is a knob still describing a mode that
+    does not exist.
     """
 
-    #: `tick`/`ticks` as a plain-English noun for the autonomous unit. Excludes the checkbox
-    #: sense ("ticked off") and the verb sense ("turn into") by requiring the exact plural or
-    #: bare noun forms that only ever meant the unit in this file.
-    _NOUN_TICK = re.compile(r"\bticks?\b(?!\s+off)")
-    #: `turn`/`turns` as a noun for one exchange. Excludes "turn into", "turn on/off", "in turn" —
-    #: but only when the next word is literally "into"/"on"/"off"; "turn his loop into a spiral"
-    #: still matches, because English lets the object sit between the verb and its particle. That
-    #: false positive is a feature, not a gap: it happened once (`min_gap`), and the fix was to
-    #: reword the help text away from the phrasal verb rather than chase every shape a sentence
-    #: can take. A test that fails loudly on an ambiguous case is doing its job.
-    _NOUN_TURN = re.compile(r"\bturns?\b(?!\s+(?:into|on|off))")
+    #: `tick`/`step` as a noun for a unit of unattended work. Nothing runs unattended, so a
+    #: knob still using either word is describing a mode that was removed. Excludes the
+    #: checkbox sense ("ticked off") and the ordinary sense of a step in a procedure.
+    _GONE = re.compile(r"\bticks?\b(?!\s+off)|\bunattended\b|\broam", re.I)
 
     @pytest.mark.parametrize("knob", TUNABLES, ids=lambda k: k.key)
-    def test_no_label_says_tick_for_the_unattended_unit(self, knob):
-        assert not self._NOUN_TICK.search(knob.label), (
-            f"{knob.key}: label {knob.label!r} says 'tick' — the established word is 'step'"
+    def test_no_label_describes_a_mode_that_is_gone(self, knob):
+        assert not self._GONE.search(knob.label), (
+            f"{knob.key}: label {knob.label!r} describes unattended work, which no longer exists"
         )
 
     @pytest.mark.parametrize("knob", TUNABLES, ids=lambda k: k.key)
-    def test_no_help_text_says_tick_for_the_unattended_unit(self, knob):
-        assert not self._NOUN_TICK.search(knob.help), (
-            f"{knob.key}: help text says 'tick(s)' — the established word is 'step'"
-        )
-
-    @pytest.mark.parametrize("knob", TUNABLES, ids=lambda k: k.key)
-    def test_no_unit_says_ticks(self, knob):
-        assert knob.unit != "ticks", f"{knob.key}: unit is 'ticks' — should be 'steps'"
-
-    @pytest.mark.parametrize(
-        "knob",
-        [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
-        ids=lambda k: k.key,
-    )
-    def test_no_label_says_turn_outside_the_shared_cases(self, knob):
-        assert not self._NOUN_TURN.search(knob.label), (
-            f"{knob.key}: label {knob.label!r} says 'turn' — say 'message' (chat) or 'step' (a "
-            "tick), or add this key to _SHARED_TURN_OK if it is genuinely about both"
-        )
-
-    @pytest.mark.parametrize(
-        "knob",
-        [k for k in TUNABLES if k.key not in _SHARED_TURN_OK],
-        ids=lambda k: k.key,
-    )
-    def test_no_help_text_says_turn_outside_the_shared_cases(self, knob):
-        assert not self._NOUN_TURN.search(knob.help), (
-            f"{knob.key}: help text says 'turn' — say 'message' (chat) or 'step' (a tick), or "
-            "add this key to _SHARED_TURN_OK if it is genuinely about both"
+    def test_no_help_text_describes_a_mode_that_is_gone(self, knob):
+        assert not self._GONE.search(knob.help), (
+            f"{knob.key}: help text describes unattended work, which no longer exists:\n{knob.help}"
         )
 
     def test_the_group_blurbs_agree_too(self):
-        # The section headings a person actually reads first — same rule, same two exceptions
-        # don't apply here since no group is chat-and-tick-shared in name only.
         for group in GROUPS:
             text = f"{group.label} {group.blurb}"
-            assert not self._NOUN_TICK.search(text), f"{group.key}: {text!r} says 'tick'"
-            assert not self._NOUN_TURN.search(text), f"{group.key}: {text!r} says 'turn'"
-
-    def test_the_shared_exception_list_is_still_accurate(self):
-        # If one of these three ever loses its "turn", the exception is stale and should shrink —
-        # this fails loudly instead of the set silently protecting a label that no longer needs it.
-        for key in _SHARED_TURN_OK:
-            knob = for_key(key)
-            assert self._NOUN_TURN.search(knob.label) or self._NOUN_TURN.search(knob.help), (
-                f"{key} no longer says 'turn' anywhere — remove it from _SHARED_TURN_OK"
-            )
+            assert not self._GONE.search(text), f"{group.key}: {text!r} describes work that is gone"

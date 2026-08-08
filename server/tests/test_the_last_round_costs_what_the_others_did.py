@@ -77,9 +77,9 @@ class TestTheForcedFinalAnswer:
 
 class TestTheTwoBoundsTogether:
     @pytest.mark.parametrize("num_predict", [-1, 0, 100, 100_000])
-    def test_a_tick_config_is_always_bounded(self, num_predict: int):
+    def test_a_config_is_always_bounded(self, num_predict: int):
         """Whatever the config says, a tick's output has a ceiling."""
-        cap = tuning.value("tick_max_tokens")
+        cap = tuning.value("max_answer_tokens")
         config = replace(default_config(), num_predict=num_predict)
         wanted = config.num_predict
         effective = cap if wanted <= 0 else min(wanted, cap)
