@@ -264,6 +264,20 @@ def stream_once(
         yield {"type": "error", "message": f"Could not reach the cloud model at {url}: {exc}"}
         return
 
+    # Only a failed request has a body worth reading, and this `if` is the whole reason
+    # streaming works.
+    #
+    # `_body` is `response.text`, and `.text` on a streamed response downloads all of it. It was
+    # called unconditionally, so every 200 had its entire answer pulled down here — and then
+    # handed to `looks_like_overflow`, which returns False on the first line because the status
+    # is not 400. The reply was fetched in full, discarded, and only then replayed to the loop
+    # that thought it was streaming.
+    #
+    # What that looks like from a chair: ten seconds of nothing, then the whole answer at once,
+    # which reads as a slow model rather than as a bug. Measured against a provider stub sending
+    # eighteen tokens 150ms apart, every one of them arrived in the same millisecond.
+    failed_body = _body(response) if response.status_code != 200 else ""
+
     # Some models cannot have reasoning turned off — "Reasoning is mandatory for this
     # endpoint and cannot be disabled", HTTP 400. Asking for it is still right, because
     # on every other model it saves real tokens; being refused just means dropping the
@@ -272,8 +286,8 @@ def stream_once(
     # 400 whose body merely *contains* "reasoning" — and an overflow message often does, since
     # providers list a reasoning-token breakdown in it. Left second, an over-budget request
     # would be sent a whole second time before anything noticed the real cause.
-    if budget.looks_like_overflow(response.status_code, _body(response)):
-        detail = _body(response)[:200]
+    if budget.looks_like_overflow(response.status_code, failed_body):
+        detail = failed_body[:200]
         response.close()
         yield {
             "type": "error",
