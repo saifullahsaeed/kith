@@ -17,7 +17,7 @@ from kith.services import agent_loop, offload, tuning
 
 class TestSpillingToDisk:
     def test_a_saved_result_reads_back_whole(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path))
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path))
         body = "R" * 5000
 
         path = offload.save("conv1", "web_search", body)
@@ -26,14 +26,14 @@ class TestSpillingToDisk:
 
     def test_the_file_lives_inside_the_workspace_so_a_read_is_never_gated(self, tmp_path, monkeypatch):
         # Outside the root every read prompts; the whole point is that this one never does.
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path))
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path))
 
         path = Path(offload.save("conv1", "shell", "x" * 3000))
 
         assert str(path).startswith(str(tmp_path))
 
     def test_clearing_a_conversation_removes_its_spill(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path))
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path))
         path = Path(offload.save("conv1", "shell", "x" * 3000))
         assert path.exists()
 

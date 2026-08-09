@@ -28,7 +28,7 @@ def workspace_root(tmp_path, monkeypatch):
 
     home = tmp_path / "kith-home"
     home.mkdir()
-    monkeypatch.setattr(workspace, "configured_root", lambda: home)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: home)
     return home
 
 

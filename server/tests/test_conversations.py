@@ -29,11 +29,11 @@ def workspace(tmp_path, monkeypatch):
 
     for target in ("kith.settings.WORKSPACE_DIR", "kith.settings.DATA_DIR"):
         monkeypatch.setattr(target, str(tmp_path))
-    monkeypatch.setattr(module.settings, "WORKSPACE_DIR", str(tmp_path))
-    monkeypatch.setattr(module.settings, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(module.paths.settings, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(module.paths.settings, "DATA_DIR", str(tmp_path))
     # The migration from the old location runs once per process; reset it so each test
     # starts with nothing carried in from a previous one's temp folder.
-    monkeypatch.setattr(module, "_migrated", False, raising=False)
+    monkeypatch.setattr(module.paths, "_migrated", False, raising=False)
     yield tmp_path
 
 

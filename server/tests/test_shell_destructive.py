@@ -183,14 +183,14 @@ class TestDeletingRecoverably:
         db = tmp_path / "config.db"
         config_store.init(db)
         monkeypatch.setattr("kith.config.CONFIG_DB_PATH", db, raising=False)
-        monkeypatch.setattr(ws.settings, "WORKSPACE_DIR", "", raising=False)
+        monkeypatch.setattr(ws.paths.settings, "WORKSPACE_DIR", "", raising=False)
         root = tmp_path / "Kith"
         root.mkdir()
         config_store.update_settings(db, {ws.ROOT_KEY: str(root)})
         # A Trash of our own, so the suite never puts anything in the real one.
         home = tmp_path / "home"
         (home / ".Trash").mkdir(parents=True)
-        monkeypatch.setattr(ws.Path, "home", staticmethod(lambda: home), raising=False)
+        monkeypatch.setattr(ws.paths.Path, "home", staticmethod(lambda: home), raising=False)
         return ws, root, home
 
     def test_a_file_goes_to_the_trash_and_still_exists(self, workspace):

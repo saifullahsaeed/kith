@@ -25,7 +25,7 @@ from kith.infra.db import repositories as repo
 def workspace_root(tmp_path, monkeypatch):
     """The fallback these tests check *against* is a real folder — the global default
     workspace — so it has to be a throwaway one, not whatever `~/Kith` holds on this machine."""
-    monkeypatch.setattr(ws.settings, "WORKSPACE_DIR", str(tmp_path / "kith-home"), raising=False)
+    monkeypatch.setattr(ws.paths.settings, "WORKSPACE_DIR", str(tmp_path / "kith-home"), raising=False)
 
 
 def _get(monkeypatch, db, path, project_id=None):

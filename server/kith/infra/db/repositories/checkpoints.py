@@ -1,7 +1,7 @@
 """Bookkeeping for the checkpoint chain the UI browses and restores from.
 
 The chain's own integrity lives entirely in git — see
-:func:`kith.infra.workspace._take_checkpoint`. This table exists only so the UI can list a
+:func:`kith.infra.workspace.checkpoints._take_checkpoint`. This table exists only so the UI can list a
 conversation's checkpoints and correlate each with the turn it happened during without
 walking every repo's ref history to do it.
 """

@@ -36,7 +36,7 @@ class TestNothingReturnsWithoutABound:
     BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|glob|grep|requests\.")
     # `MAX_` rather than `_MAX_`: a bound is a bound whether the constant naming it is private
     # to its module or exported. `outline.MAX_BYTES` and `repomap.MAX_BUDGET_TOKENS` are as
-    # real as `sandbox._MAX_WRITE`, and only the underscore told them apart.
+    # real as `sandbox.files._MAX_WRITE`, and only the underscore told them apart.
     GUARD = re.compile(r"paging\.page|_clip|_bounded|\[:\s*\d|MAX_|_OUTPUT_LIMIT|\[:limit\]|hits\[:")
 
     @staticmethod
@@ -112,7 +112,7 @@ class TestFetchingAPage:
         markup = f"<html>{head}<body><p>The actual article text.</p></body></html>"
         assert len(head) > 8_000, "the fixture has to be bigger than the old clip to prove anything"
 
-        text = sandbox._html_to_text(markup)
+        text = sandbox.web._html_to_text(markup)
 
         assert "The actual article text." in text
         assert "dns-prefetch" not in text
@@ -122,14 +122,14 @@ class TestFetchingAPage:
         body = " ".join(f"sentence number {n} of the article." for n in range(4_000))
         markup = f"<html><head>{'<meta>' * 3_000}</head><body><p>{body}</p></body></html>"
 
-        text = sandbox._html_to_text(markup)
+        text = sandbox.web._html_to_text(markup)
 
         # The old behaviour returned a few dozen characters here. The clip is 8,000.
         assert len(text) > 7_000
         assert "sentence number 1 of the article." in text
 
     def test_a_page_smaller_than_the_budget_arrives_whole(self):
-        text = sandbox._html_to_text("<html><body><h1>Short</h1><p>All of it.</p></body></html>")
+        text = sandbox.web._html_to_text("<html><body><h1>Short</h1><p>All of it.</p></body></html>")
         assert "Short" in text and "All of it." in text
         assert "truncated" not in text
 
@@ -138,7 +138,7 @@ class TestFetchingAPage:
         still a bad afternoon."""
         source = inspect.getsource(sandbox.fetch_url)
         assert "--max-filesize" in source
-        assert sandbox._MAX_FETCH_BYTES > 0
+        assert sandbox.web._MAX_FETCH_BYTES > 0
 
     def test_a_command_still_has_its_output_clipped(self):
         """Splitting `_capture` out must not have taken the clip off `shell`, whose output
@@ -150,7 +150,7 @@ class TestFetchingAPage:
     def test_a_command_is_still_permission_checked(self):
         """`_capture` holds the gate now. If the split had left it behind, every shell call
         would run unchecked and nothing would say so."""
-        assert "permissions.require_command" in inspect.getsource(sandbox._capture)
+        assert "permissions.require_command" in inspect.getsource(sandbox.shell._capture)
 
 
 class TestReadingASkill:

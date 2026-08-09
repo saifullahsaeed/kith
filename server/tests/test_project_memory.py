@@ -127,7 +127,7 @@ class TestCreatingAProjectWithAFolder:
         from kith.infra import workspace as ws
         from kith.tools import projects as tool
 
-        monkeypatch.setattr(ws.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+        monkeypatch.setattr(ws.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
         made = tool.create_project(db, {"name": "Gym Tracker", "directory": "gym-tracker"})
 
         assert made["directory"] == str(tmp_path / "gym-tracker")
@@ -148,9 +148,9 @@ class TestHisRecordsAreNoLongerInsideHisWork:
     def test_internals_live_beside_the_databases(self, tmp_path, monkeypatch):
         from kith.infra import workspace as ws
 
-        monkeypatch.setattr(ws.settings, "DATA_DIR", str(tmp_path / "data"), raising=False)
-        monkeypatch.setattr(ws.settings, "WORKSPACE_DIR", str(tmp_path / "work"), raising=False)
-        monkeypatch.setattr(ws, "_migrated", False, raising=False)
+        monkeypatch.setattr(ws.paths.settings, "DATA_DIR", str(tmp_path / "data"), raising=False)
+        monkeypatch.setattr(ws.paths.settings, "WORKSPACE_DIR", str(tmp_path / "work"), raising=False)
+        monkeypatch.setattr(ws.paths, "_migrated", False, raising=False)
 
         # `.kith` inside a folder means that project's memory now, so it cannot also mean the
         # transcript of every conversation he has ever had.

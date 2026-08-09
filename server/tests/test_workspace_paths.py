@@ -123,7 +123,7 @@ class TestReadingIsWindowedAndAlwaysContinuable:
     def test_a_short_file_over_the_byte_budget_says_how_to_continue(self, tmp_path, monkeypatch):
         from kith.infra import workspace
 
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
         # 200 lines of 300 characters: far inside the line window, far outside the byte
         # budget. It was 60, which stopped being outside the byte budget when `read_file`
         # got its own limit — sixty lines of CSS is the size of file that should arrive in
@@ -140,7 +140,7 @@ class TestReadingIsWindowedAndAlwaysContinuable:
 
         from kith.infra import workspace
 
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
         (tmp_path / "big.css").write_text("\n".join(f"line-{n} {'x' * 290}" for n in range(200)))
 
         seen: set[int] = set()
@@ -160,7 +160,7 @@ class TestReadingIsWindowedAndAlwaysContinuable:
     def test_it_stops_on_a_line_boundary(self, tmp_path, monkeypatch):
         from kith.infra import workspace
 
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
         source = [f"{n}:{'y' * 290}" for n in range(60)]
         (tmp_path / "big.txt").write_text("\n".join(source))
 
@@ -178,7 +178,7 @@ class TestReadingIsWindowedAndAlwaysContinuable:
     def test_a_file_that_fits_gets_no_footer(self, tmp_path, monkeypatch):
         from kith.infra import workspace
 
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
         (tmp_path / "small.txt").write_text("one\ntwo\nthree\n")
 
         body = workspace.read_file("small.txt")
@@ -189,7 +189,7 @@ class TestReadingIsWindowedAndAlwaysContinuable:
     def test_the_line_window_still_reports_itself(self, tmp_path, monkeypatch):
         from kith.infra import workspace
 
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
         (tmp_path / "many.txt").write_text("\n".join(f"line {n}" for n in range(1000)))
 
         body = workspace.read_file("many.txt", limit=10)

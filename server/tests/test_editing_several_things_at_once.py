@@ -22,7 +22,7 @@ from kith.infra.workspace import WorkspaceError
 @pytest.fixture
 def workspace_root(tmp_path, monkeypatch):
     """A real folder on disk that `resolve` treats as his own, so writes are permitted."""
-    monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
     return tmp_path
 
 

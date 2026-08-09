@@ -24,7 +24,7 @@ from kith.infra import workspace as ws
 
 @pytest.fixture(autouse=True)
 def workspace_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(ws.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(ws.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
     return tmp_path
 
 

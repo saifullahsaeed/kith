@@ -29,7 +29,7 @@ from kith.infra.workspace import WorkspaceError
 
 @pytest.fixture
 def workspace_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
     return tmp_path
 
 
@@ -96,9 +96,9 @@ class TestNothingWaitsForAPersonWhoIsNotThere:
     def test_the_environment_says_nobody_is_watching(self):
         """The settings that turn a question into a failure. A failure he can read and work
         around; a block just eats the turn."""
-        assert workspace._NON_INTERACTIVE["GIT_TERMINAL_PROMPT"] == "0"
-        assert workspace._NON_INTERACTIVE["PAGER"] == "cat"
-        assert workspace._NON_INTERACTIVE["GIT_PAGER"] == "cat"
+        assert workspace.shell._NON_INTERACTIVE["GIT_TERMINAL_PROMPT"] == "0"
+        assert workspace.shell._NON_INTERACTIVE["PAGER"] == "cat"
+        assert workspace.shell._NON_INTERACTIVE["GIT_PAGER"] == "cat"
 
     def test_it_reaches_the_command(self, workspace_root):
         result = workspace.run_command("echo $PAGER-$GIT_TERMINAL_PROMPT-$NO_COLOR")
@@ -118,7 +118,7 @@ class TestWhenItGenuinelyTakesTooLong:
     def test_the_default_is_minutes_not_a_quarter_of_an_hour(self):
         """Long enough for an npm install on a cold cache; short enough that a stuck command
         is something you see rather than something you abandon the conversation over."""
-        assert workspace._EXEC_TIMEOUT <= 300
+        assert workspace.base._EXEC_TIMEOUT <= 300
 
 
 class TestTheAdviceMatchesTheTools:

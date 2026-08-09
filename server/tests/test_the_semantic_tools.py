@@ -32,7 +32,7 @@ HAVE_PYRIGHT = Path(PYRIGHT).is_file()
 def workspace_root(tmp_path, monkeypatch):
     from kith.infra import workspace
 
-    monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
     return tmp_path
 
 
@@ -285,7 +285,7 @@ class TestAgainstRealPyright:
             "# greet is mentioned in this comment\n"
             "TEXT = 'greet appears in a string too'\n"
         )
-        monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+        monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
         return tmp_path
 
     def test_diagnostics_find_the_type_error(self, project, fresh_manager, tmp_path):

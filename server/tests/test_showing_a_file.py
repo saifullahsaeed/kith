@@ -24,7 +24,7 @@ from kith.services import handoff
 
 @pytest.fixture(autouse=True)
 def workspace_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(ws.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(ws.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
     return tmp_path
 
 
@@ -75,7 +75,7 @@ class TestServingTheBytes:
             ws.media_file("shots")
 
     def test_something_too_big_says_what_to_do_instead(self, workspace_root, monkeypatch):
-        monkeypatch.setattr(ws, "_MAX_MEDIA_BYTES", 100)
+        monkeypatch.setattr(ws.files, "_MAX_MEDIA_BYTES", 100)
         (workspace_root / "huge.png").write_bytes(b"x" * 500)
         with pytest.raises(ws.WorkspaceError) as caught:
             ws.media_file("huge.png")
@@ -86,7 +86,7 @@ class TestServingTheBytes:
     def test_the_limit_is_generous_enough_for_a_screenshot(self):
         # He takes full-page Playwright captures at 1440 and 390 wide. Several megabytes is
         # ordinary, and a limit tuned for text would refuse the exact files this is for.
-        assert ws._MAX_MEDIA_BYTES >= 20_000_000
+        assert ws.files._MAX_MEDIA_BYTES >= 20_000_000
 
     def test_it_is_gated_like_every_other_read(self, workspace_root, tmp_path, monkeypatch):
         """Serving raw bytes over HTTP is how a file viewer becomes "read any file"."""

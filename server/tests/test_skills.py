@@ -369,7 +369,7 @@ class TestRemoving:
 
         home = tmp_path / "home"
         (home / ".Trash").mkdir(parents=True)
-        monkeypatch.setattr(workspace.Path, "home", staticmethod(lambda: home), raising=False)
+        monkeypatch.setattr(workspace.paths.Path, "home", staticmethod(lambda: home), raising=False)
         write(skills_dir, "goodbye", "name: goodbye\ndescription: Leaving. Use when testing.")
 
         skills.remove("goodbye")

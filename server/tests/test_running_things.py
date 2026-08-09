@@ -29,7 +29,7 @@ from kith.services.code.processes import ProcessError, Processes, processes
 def workspace_root(tmp_path, monkeypatch):
     from kith.infra import workspace
 
-    monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
     return tmp_path
 
 
@@ -308,7 +308,7 @@ class TestALongPollWaitsLongerEachTimeInsteadOfEveryTwentySeconds:
         before, unaffected by the schedule existing at all."""
         from kith.infra import workspace
 
-        monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+        monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
         # The current interpreter, not the project's — a fresh `tmp_path` has no venv of its
         # own, and this test only needs *some* pytest to run one trivial test, fast.
         monkeypatch.setattr(testing, "python_for", lambda root: sys.executable)

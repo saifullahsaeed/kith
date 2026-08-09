@@ -34,7 +34,7 @@ def isolated(tmp_path, monkeypatch):
     config_store.init(db)
     # The module imports kith.config inside the call, so patching the attribute is enough.
     monkeypatch.setattr("kith.config.CONFIG_DB_PATH", db, raising=False)
-    monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", "", raising=False)
+    monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", "", raising=False)
     current = tmp_path / "current"
     current.mkdir()
     config_store.update_settings(db, {workspace.ROOT_KEY: str(current)})
@@ -119,7 +119,7 @@ class TestChoosingOne:
         stored = tmp_path / "picked-in-the-app"
         workspace.set_root(str(stored))
         pinned = tmp_path / "from-the-environment"
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(pinned), raising=False)
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(pinned), raising=False)
 
         # Someone who launched the process pointing at a folder meant it, and a stored
         # value quietly overriding them is how you get a support thread about a setting
@@ -141,7 +141,7 @@ class TestChoosingOne:
 
 class TestFallingBack:
     def test_no_config_database_means_the_default(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", "", raising=False)
+        monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", "", raising=False)
         monkeypatch.setattr("kith.config.CONFIG_DB_PATH", tmp_path / "absent.db", raising=False)
         # First run, or a migration in flight. Answering with the default beats taking the
         # whole app down over a folder setting.
@@ -209,7 +209,7 @@ class TestHisRecordsComeWithHim:
         def boom(*_args, **_kwargs):
             raise OSError("disk full")
 
-        monkeypatch.setattr(workspace.shutil, "copytree", boom)
+        monkeypatch.setattr(workspace.paths.shutil, "copytree", boom)
         with pytest.raises(workspace.WorkspaceError) as caught:
             workspace.set_root(str(tmp_path / "two"))
 

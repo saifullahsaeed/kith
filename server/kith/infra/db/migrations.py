@@ -417,7 +417,7 @@ def _migrations():
 
     def v26_checkpoints(conn):
         # A safety net under every file change he makes. See
-        # kith.infra.workspace._take_checkpoint/_checkpoint_before_change — this table is
+        # kith.infra.workspace.checkpoints._take_checkpoint/_checkpoint_before_change — this table is
         # bookkeeping for the UI, not the source of truth for the chain itself, which lives
         # entirely in git as refs/kith/checkpoint and its own parent links.
         conn.executescript(

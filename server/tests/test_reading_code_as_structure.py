@@ -292,7 +292,7 @@ class TestTheTools:
     def workspace_root(self, tmp_path, monkeypatch):
         from kith.infra import workspace
 
-        monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+        monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
         return tmp_path
 
     def test_outline_runs_through_the_registry(self, workspace_root, tmp_path):

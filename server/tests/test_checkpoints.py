@@ -27,7 +27,7 @@ def home_and_project(tmp_path, monkeypatch, db):
     home.mkdir()
     project = tmp_path / "Desktop" / "the-app"
     project.mkdir(parents=True)
-    monkeypatch.setattr(workspace, "configured_root", lambda: home)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: home)
     monkeypatch.setattr("kith.config.AGENT_DB_PATH", db)
 
     row = repo.projects.add_project(db, "The App", "an app", directory=str(project))
@@ -44,7 +44,9 @@ def on_project(home_and_project):
 
 
 def _checkpoint_ref_log(project) -> str:
-    return workspace._git("log", "--format=%H %P", workspace._CHECKPOINT_REF, cwd=project).output
+    return workspace.git._git(
+        "log", "--format=%H %P", workspace.checkpoints._CHECKPOINT_REF, cwd=project
+    ).output
 
 
 class TestACheckpointIsTakenAutomatically:
@@ -57,17 +59,17 @@ class TestACheckpointIsTakenAutomatically:
     def test_the_real_index_head_and_branch_are_untouched(self, on_project):
         project = on_project["project"]
         (project / "a.py").write_text("x = 1\n")
-        before_status = workspace._git("status", "--porcelain", cwd=project).output
-        before_head = workspace._git("symbolic-ref", "-q", "HEAD", cwd=project).output
+        before_status = workspace.git._git("status", "--porcelain", cwd=project).output
+        before_head = workspace.git._git("symbolic-ref", "-q", "HEAD", cwd=project).output
 
         workspace.write_file("a.py", "x = 2\n")
 
-        after_status = workspace._git("status", "--porcelain", cwd=project).output
-        after_head = workspace._git("symbolic-ref", "-q", "HEAD", cwd=project).output
+        after_status = workspace.git._git("status", "--porcelain", cwd=project).output
+        after_head = workspace.git._git("symbolic-ref", "-q", "HEAD", cwd=project).output
         assert after_status == before_status
         assert after_head == before_head
         # And no real commit exists — HEAD has nothing to point at yet.
-        assert workspace._git("log", cwd=project).exit_code != 0
+        assert workspace.git._git("log", cwd=project).exit_code != 0
 
     def test_several_mutations_in_one_turn_still_make_only_one(self, on_project):
         project = on_project["project"]
@@ -141,15 +143,19 @@ class TestACheckpointIsTakenAutomatically:
             workspace.write_file("a.py", "x = 1\n")
 
         assert (
-            workspace._git(
-                "rev-parse", "--verify", "-q", workspace._CHECKPOINT_REF, cwd=home_and_project["project"]
+            workspace.git._git(
+                "rev-parse",
+                "--verify",
+                "-q",
+                workspace.checkpoints._CHECKPOINT_REF,
+                cwd=home_and_project["project"],
             ).exit_code
             != 0
         )
         assert repo.checkpoints.list_for_conversation(home_and_project["db"], "") == []
 
     def test_a_machine_with_no_git_is_a_clean_no_op(self, on_project, monkeypatch):
-        monkeypatch.setattr(workspace, "has_git", lambda: False)
+        monkeypatch.setattr(workspace.checkpoints, "has_git", lambda: False)
         (on_project["project"] / "a.py").write_text("x = 1\n")
         workspace.write_file("a.py", "x = 2\n")  # must not raise
 
@@ -224,7 +230,7 @@ class TestRestoring:
         project = on_project["project"]
         workspace.write_file("a.py", "first\n")
         checkpoint = _all_checkpoints(on_project["db"])[0]
-        (workspace._repo_root(project) / ".git" / "MERGE_HEAD").write_text("deadbeef\n")
+        (workspace.git._repo_root(project) / ".git" / "MERGE_HEAD").write_text("deadbeef\n")
 
         with pytest.raises(workspace.WorkspaceError, match="merge"):
             checkpoints.restore(on_project["db"], checkpoint["id"])
@@ -232,7 +238,7 @@ class TestRestoring:
     def test_a_machine_with_no_git_raises_rather_than_pretending_to_restore(self, on_project, monkeypatch):
         workspace.write_file("a.py", "first\n")
         checkpoint = _all_checkpoints(on_project["db"])[0]
-        monkeypatch.setattr(workspace, "has_git", lambda: False)
+        monkeypatch.setattr(workspace.checkpoints, "has_git", lambda: False)
 
         with pytest.raises(workspace.WorkspaceError):
             checkpoints.restore(on_project["db"], checkpoint["id"])

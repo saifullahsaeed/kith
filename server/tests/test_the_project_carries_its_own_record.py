@@ -121,7 +121,7 @@ class TestTheBriefFollowsTheBoard:
         home.mkdir()
         project = tmp_path / "the-app"
         project.mkdir()
-        monkeypatch.setattr(workspace, "configured_root", lambda: home)
+        monkeypatch.setattr(workspace.paths, "configured_root", lambda: home)
         row = repo.projects.add_project(db, "The App", "an app", directory=str(project))
         return {"db": db, "id": int(row["id"]), "project": project}
 

@@ -318,7 +318,7 @@ class TurnLog(Base):
 class Checkpoint(Base):
     """Bookkeeping for the UI only. The chain's own integrity lives in git, as
     ``refs/kith/checkpoint`` and each commit's own parent link — see
-    ``kith.infra.workspace._take_checkpoint``. Losing this table would only cost the UI's
+    ``kith.infra.workspace.checkpoints._take_checkpoint``. Losing this table would only cost the UI's
     ability to list/correlate checkpoints; git would still have every one of them."""
 
     __tablename__ = "checkpoints"

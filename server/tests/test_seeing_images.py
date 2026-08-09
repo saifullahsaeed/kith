@@ -45,7 +45,7 @@ def tiny_png(path, size=(4, 4)):
 
 @pytest.fixture(autouse=True)
 def workspace_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(ws.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(ws.paths.settings, "WORKSPACE_DIR", str(tmp_path), raising=False)
     return tmp_path
 
 
@@ -58,10 +58,10 @@ class TestReadingAnImage:
 
     @pytest.mark.parametrize("name", ["a.png", "b.jpg", "c.jpeg", "d.gif", "e.webp"])
     def test_the_types_worth_showing(self, workspace_root, name):
-        assert ws.Path(name).suffix.lower() in ws._IMAGE_SUFFIXES
+        assert ws.paths.Path(name).suffix.lower() in ws.files._IMAGE_SUFFIXES
 
     def test_something_enormous_is_refused_with_advice(self, workspace_root, monkeypatch):
-        monkeypatch.setattr(ws, "_MAX_IMAGE_BYTES", 100, raising=False)
+        monkeypatch.setattr(ws.files, "_MAX_IMAGE_BYTES", 100, raising=False)
         tiny_png(workspace_root / "big.png", size=(40, 40))
         with pytest.raises(ws.WorkspaceError) as caught:
             ws.read_image("big.png")

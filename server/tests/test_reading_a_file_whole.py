@@ -21,7 +21,7 @@ from kith.infra import workspace
 
 @pytest.fixture
 def workspace_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(workspace, "configured_root", lambda: tmp_path)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: tmp_path)
     return tmp_path
 
 
@@ -57,7 +57,7 @@ class TestFinishingRatherThanComingBack:
         out = workspace.read_file("huge.ts")
 
         assert "read with offset=" in out
-        assert len(out) < workspace._READ_LIMIT + workspace._READ_OVERSHOOT + 500
+        assert len(out) < workspace.files._READ_LIMIT + workspace.files._READ_OVERSHOOT + 500
 
     def test_a_truncated_read_still_says_where_to_continue(self, workspace_root):
         a_file(workspace_root, "huge.ts", 2_000)
@@ -81,7 +81,7 @@ class TestFinishingRatherThanComingBack:
 
 class TestTheLimitsAreSeparate:
     def test_reading_is_allowed_more_than_a_command_prints(self):
-        assert workspace._READ_LIMIT > workspace._OUTPUT_LIMIT
+        assert workspace.files._READ_LIMIT > workspace.base._OUTPUT_LIMIT
 
     def test_an_explicit_window_is_still_honoured(self, workspace_root):
         a_file(workspace_root, "f.ts", 500)
@@ -92,4 +92,4 @@ class TestTheLimitsAreSeparate:
     def test_shell_output_is_still_clipped_at_its_own_limit(self, workspace_root):
         """Raising the read budget must not raise what a command may dump."""
         result = workspace.run_command("for i in $(seq 1 4000); do echo 'a line of output'; done")
-        assert len(result.output) <= workspace._OUTPUT_LIMIT + 200
+        assert len(result.output) <= workspace.base._OUTPUT_LIMIT + 200

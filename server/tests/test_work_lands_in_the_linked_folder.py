@@ -14,7 +14,7 @@ from kith.services import conversations, session_context
 def _link(db, tmp_path, monkeypatch):
     """A project linked to a real external folder, with a session working on it."""
     monkeypatch.setattr("kith.config.AGENT_DB_PATH", db)
-    monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path / "kith-home"), raising=False)
+    monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path / "kith-home"), raising=False)
     proj_dir = tmp_path / "external-project"
     proj_dir.mkdir()
     proj = repo.projects.add_project(db, "App", "", str(proj_dir))
@@ -51,7 +51,7 @@ def test_absolute_paths_are_still_left_alone(db, tmp_path, monkeypatch):
 
 def test_a_project_with_no_folder_keeps_the_workspace_root(db, tmp_path, monkeypatch):
     monkeypatch.setattr("kith.config.AGENT_DB_PATH", db)
-    monkeypatch.setattr(workspace.settings, "WORKSPACE_DIR", str(tmp_path / "kith-home"), raising=False)
+    monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", str(tmp_path / "kith-home"), raising=False)
     proj = repo.projects.add_project(db, "Research", "", None)  # a project with rows, no folder
     conv = conversations.start(db, "work")["id"]
     repo.conversations.set_project(db, conv, proj["id"])

@@ -28,7 +28,7 @@ def home_and_project(tmp_path, monkeypatch, db):
     home.mkdir()
     project = tmp_path / "Desktop" / "the-app"
     project.mkdir(parents=True)
-    monkeypatch.setattr(workspace, "configured_root", lambda: home)
+    monkeypatch.setattr(workspace.paths, "configured_root", lambda: home)
     monkeypatch.setattr("kith.config.AGENT_DB_PATH", db)
 
     row = repo.projects.add_project(db, "The App", "an app", directory=str(project))
@@ -38,12 +38,12 @@ def home_and_project(tmp_path, monkeypatch, db):
 class TestWhereGitRuns:
     def test_with_no_project_it_is_his_own_folder(self, home_and_project):
         workspace.ensure_repo()
-        assert workspace._repo_root(workspace.base_dir()) == home_and_project["home"]
+        assert workspace.git._repo_root(workspace.base_dir()) == home_and_project["home"]
 
     def test_on_a_project_it_is_the_project(self, home_and_project):
         with session_context.working_on(home_and_project["id"]):
             workspace.ensure_repo()
-            assert workspace._repo_root(workspace.base_dir()) == home_and_project["project"]
+            assert workspace.git._repo_root(workspace.base_dir()) == home_and_project["project"]
 
     def test_changes_shows_the_projects_diff_not_an_empty_one(self, home_and_project):
         """The symptom that made the tools look broken: he asked what he had changed, in a
@@ -124,8 +124,8 @@ class TestNotMakingAMessOfSomebodyElsesRepo:
         """The whole folder used to be ignored, which was right when it held only private
         bookkeeping and is wrong now it holds the project's memory and task briefs — those are
         the things that are supposed to reach somebody else's clone."""
-        assert ".kith/scratch/" in workspace._GITIGNORE
-        assert "\n.kith/\n" not in workspace._GITIGNORE
+        assert ".kith/scratch/" in workspace.git._GITIGNORE
+        assert "\n.kith/\n" not in workspace.git._GITIGNORE
 
     def test_commits_are_authored_as_kith(self, home_and_project):
         """So it is obvious in the log which points he made and which the person did."""
@@ -134,7 +134,7 @@ class TestNotMakingAMessOfSomebodyElsesRepo:
             workspace.ensure_repo()
             (project / "a.py").write_text("x = 1\n")
             workspace.commit_all("his own work")
-            authors = workspace._git("log", "--format=%an").output
+            authors = workspace.git._git("log", "--format=%an").output
 
         assert "Kith" in authors
 
@@ -149,6 +149,6 @@ class TestWhenThereIsNothingToDo:
             assert workspace.commit_all("nothing new") == ""
 
     def test_a_machine_with_no_git_is_not_an_error(self, home_and_project, monkeypatch):
-        monkeypatch.setattr(workspace, "has_git", lambda: False)
+        monkeypatch.setattr(workspace.git, "has_git", lambda: False)
         assert workspace.ensure_repo() is False
         assert workspace.commit_all("anything") == ""
