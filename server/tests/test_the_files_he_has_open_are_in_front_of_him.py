@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from kith import tools
 from kith.api.routes.chat import _build_messages
 from kith.config import default_config
 from kith.infra import workspace
@@ -61,6 +62,36 @@ class TestWhatTheBlockSays:
         _touch(db, "made.md", tool="write_file")
 
         assert "wrote" in touched.manifest(db, "conv1")
+
+    def test_a_file_he_deleted_reads_as_deleted_not_as_missing(self, db, workspace_root):
+        # It is gone because he removed it, and "not there when you looked" describes a failed
+        # read. Told that about his own delete he may well go looking for it again.
+        # Through the real tool, so the ordering is the real one: the file is gone by the time
+        # the touch is recorded, which is exactly why it looked like a failed read.
+        (workspace_root / "gone.md").write_text("x")
+        with session_context.working_in("conv1"):
+            answer = tools.run_tool("delete_file", {"path": "gone.md"}, db)
+        assert answer["ok"] is True
+
+        block = touched.manifest(db, "conv1")
+
+        assert "deleted" in block.lower()
+        assert "not there when you looked" not in block
+
+    def test_a_file_under_his_own_folder_is_shortened_too(self, db, workspace_root, monkeypatch):
+        # `resolve` anchors relative paths in the *base*, which is a linked project folder when
+        # there is one — so a file under his own workspace root arrives absolute and stays that
+        # way. Two roots, both his, and only one of them was being shortened.
+        elsewhere = workspace_root / "linked"
+        elsewhere.mkdir()
+        monkeypatch.setattr(workspace.paths, "base_dir", lambda: elsewhere)
+        (workspace_root / "mine.md").write_text("x")
+        _touch(db, str(workspace_root / "mine.md"))
+
+        block = touched.manifest(db, "conv1")
+
+        assert "- mine.md" in block
+        assert str(workspace_root) not in block
 
     def test_he_is_told_not_to_reopen_what_is_current(self, db, workspace_root):
         # The block exists to stop the repeat reads, so it has to actually say so. Listing the

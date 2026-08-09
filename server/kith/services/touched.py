@@ -29,6 +29,7 @@ today and forgotten by the sixth.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from kith.infra import workspace
@@ -43,7 +44,10 @@ _ACTIONS = {
     "write_file": "wrote",
     "edit_file": "wrote",
     "edit_files": "wrote",
-    "delete_file": "wrote",
+    # Its own word, not "wrote". A delete leaves nothing to stat, so it lands in the same
+    # no-version state as a read of a file that was never there — and told "not there when you
+    # looked" about a file he deliberately removed, he may reasonably go looking for it again.
+    "delete_file": "deleted",
 }
 
 #: How many files the manifest names before it starts dropping the oldest. This is the one
@@ -53,8 +57,13 @@ _ACTIONS = {
 MANIFEST_LIMIT = 40
 
 
-def record(path: Path, tool_name: str, arguments: dict) -> None:
+def record(path: Path, tool_name: str, arguments: dict, result: object = None) -> None:
     """Note that this conversation touched whatever files this call touched.
+
+    ``result`` is what the tool returned, and it is needed for one reason: only the result
+    knows how much of the file he saw. ``read_file`` windows to 400 lines by default and says
+    so in its own output; the arguments cannot distinguish a default read that finished from
+    one that stopped a quarter of the way in.
 
     Silent about everything it cannot answer: a tool that touches no file, work belonging to
     no conversation (a tick, a script, a test), an argument shaped in a way this does not
@@ -65,10 +74,11 @@ def record(path: Path, tool_name: str, arguments: dict) -> None:
     conversation_id = session_context.current()
     if not action or not conversation_id:
         return
+    extent = _extent(result) if action == "read" else ""
     for wanted in _paths(tool_name, arguments or {}):
         try:
             resolved = workspace.resolve(wanted)
-            repo.touches.touch(path, conversation_id, resolved, action, _version(resolved))
+            repo.touches.touch(path, conversation_id, resolved, action, _version(resolved), extent)
         except Exception:
             # Bookkeeping must never fail the call it describes. The tool has already run and
             # its result is already the answer; a database that would not take a row about it
@@ -76,14 +86,20 @@ def record(path: Path, tool_name: str, arguments: dict) -> None:
             continue
 
 
-def seen(path: Path, conversation_id: str) -> list[dict]:
-    """Every file this conversation has touched, each with whether it has moved since.
+def seen(path: Path, conversation_id: str, limit: int | None = None) -> list[dict]:
+    """Files this conversation has touched, each with whether it has moved since.
 
     ``stale`` is the whole point: it is False when what he last saw is what is there now, and
     True when the file has changed under him — including when it changed with no tool call
     involved.
+
+    ``limit`` keeps the newest that many. It exists because every row costs a `stat`, and this
+    runs while the prompt is being assembled: the manifest shows forty, so loading four hundred
+    would be four hundred syscalls a turn spent on rows nobody will read.
     """
-    rows = repo.touches.touched_files(path, conversation_id) if conversation_id else []
+    if not conversation_id:
+        return []
+    rows = repo.touches.touched_files(path, conversation_id, limit)
     return [{**row, "stale": _version(row["path"]) != row["version"]} for row in rows]
 
 
@@ -98,41 +114,61 @@ def manifest(path: Path, conversation_id: str) -> str:
     silent: a truncated list that looks complete is how he concludes he has never opened a
     file he opened forty reads ago.
     """
-    rows = seen(path, conversation_id)
+    rows = seen(path, conversation_id, MANIFEST_LIMIT)
     if not rows:
         return ""
 
-    dropped = max(0, len(rows) - MANIFEST_LIMIT)
+    dropped = max(0, repo.touches.count_touched(path, conversation_id) - len(rows))
     lines = ["[Files you have already opened in this conversation]"]
     if dropped:
         lines.append(f"({dropped} older file(s) not listed — you have touched more than this.)")
-    lines += [f"- {_short(row['path'])} — {_state(row)}" for row in rows[dropped:]]
+    lines += [f"- {_short(row['path'])} — {_state(row)}" for row in rows]
     lines.append(
-        "Anything unchanged is still exactly what you saw — do not open it again. Anything "
-        "changed or not there, look before you rely on it."
+        "A file marked whole and unchanged is still exactly what you saw — do not open it "
+        "again. Where a line names only part of a file, that is all you have seen of it, so "
+        "read the rest before answering about the rest. Anything changed or not there, look "
+        "again before you rely on it."
     )
     return "\n".join(lines)
 
 
 def _state(row: dict) -> str:
-    """The one useful sentence about a file: what he did, and whether it still holds."""
+    """The one useful sentence about a file: what he did, how much of it, and whether it holds.
+
+    The extent is not decoration. ``read_file`` returns 400 lines by default, so without it
+    this line said "read, unchanged" of a 3,000-line file he had seen an eighth of — and the
+    closing instruction then told him not to open it again. That converts a wasted round into
+    a confident answer drawn from a fragment, which is worse than the repeat reads the whole
+    manifest exists to prevent.
+    """
+    if row["action"] == "deleted":
+        return "deleted by you"
     if not row["version"]:
         return "not there when you looked"
+    extent = row.get("extent") or ""
+    what = f"{row['action']} only part of it (lines {extent})" if extent else f"{row['action']} whole"
     if row["stale"]:
-        return f"{row['action']}, but CHANGED SINCE you looked"
-    return f"{row['action']}, unchanged since"
+        return f"{what}, but CHANGED SINCE you looked"
+    return f"{what}, unchanged since"
 
 
 def _short(resolved: str) -> str:
-    """The path as he would type it — relative to where he is working, when it is under it.
+    """The path as he would type it — relative to whichever of his roots contains it.
 
     An absolute path is most of a line and none of the meaning, and every line here is carried
     on every turn for the rest of the conversation.
+
+    Two roots, both his, and they are not the same one: ``resolve`` anchors relative paths in
+    the *base*, which is a linked project folder whenever a session has one, so a file under
+    his own workspace root arrives absolute and would have stayed that way. Tried in that
+    order because the base is the narrower answer when both apply.
     """
-    try:
-        return str(Path(resolved).relative_to(workspace.paths.base_dir()))
-    except ValueError:
-        return resolved
+    for root in (workspace.paths.base_dir(), workspace.root()):
+        try:
+            return str(Path(resolved).relative_to(root))
+        except ValueError:
+            continue
+    return resolved
 
 
 def _paths(tool_name: str, arguments: dict) -> list[str]:
@@ -149,6 +185,30 @@ def _paths(tool_name: str, arguments: dict) -> list[str]:
         return [str(edit["path"]) for edit in edits if isinstance(edit, dict) and edit.get("path")]
     wanted = arguments.get("path")
     return [str(wanted)] if wanted else []
+
+
+#: How ``workspace.read_file`` announces that it stopped early. Matched rather than
+#: reconstructed, because the two limits it can stop at — the line window and the output
+#: budget — produce different reasons and the same sentence, and only that sentence knows
+#: which lines actually came back.
+_WINDOW = re.compile(r"showing lines (\d+)-(\d+) of (\d+)")
+
+
+def _extent(result: object) -> str:
+    """The window a read returned, or ``''`` when it returned the whole file.
+
+    Parsed out of the result because nothing else knows. A read with no ``offset`` or ``limit``
+    is a complete read of a short file and a first-quarter read of a long one, and the arguments
+    are identical in both cases.
+
+    Anything unparseable is treated as whole, which is the dangerous direction — so the tests
+    for this drive the real ``read_file`` against a real long file rather than a hand-written
+    string, and reworded output fails them instead of quietly degrading to the old behaviour.
+    """
+    if not isinstance(result, str):
+        return ""
+    found = _WINDOW.search(result)
+    return f"{found[1]}-{found[2]} of {found[3]}" if found else ""
 
 
 def _version(resolved: str) -> str:

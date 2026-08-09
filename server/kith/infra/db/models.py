@@ -339,7 +339,8 @@ class FileTouch(Base):
     Unique on ``(conversation_id, path)`` — the latest touch replaces the earlier one,
     because the question asked of this table is what state he believes a file to be in,
     not how many times he looked. ``version`` is ``size:mtime_ns`` at the moment of the
-    touch, or ``''`` when the file was not there.
+    touch, or ``''`` when the file was not there. ``extent`` is the window he saw
+    (``"1-400 of 3000"``), or ``''`` when he has the whole file.
     """
 
     __tablename__ = "file_touches"
@@ -349,4 +350,5 @@ class FileTouch(Base):
     path: Mapped[str] = mapped_column(Text, nullable=False)
     action: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    extent: Mapped[str] = mapped_column(Text, nullable=False, default="")
     at: Mapped[str] = mapped_column(Text, nullable=False)

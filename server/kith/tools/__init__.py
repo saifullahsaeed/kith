@@ -132,7 +132,11 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
         # After the call rather than before, so a write stamps the version it produced instead
         # of the one it replaced. A failure is recorded too — that he tried to open something
         # that is not there is the reason not to try again.
-        touched.record(agent_db_path, name, arguments or {})
+        #
+        # The result goes with it because only the result knows how much of a file came back:
+        # `read_file` windows to 400 lines by default, and the arguments of a complete read of
+        # a short file are identical to those of a quarter read of a long one.
+        touched.record(agent_db_path, name, arguments or {}, answer.get("result"))
         return answer
 
     if custom_tools.exists(agent_db_path, name):

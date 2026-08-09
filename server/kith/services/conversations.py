@@ -467,6 +467,10 @@ def delete(agent_db: Path, conversation_id: str, keep_file: bool = True) -> None
     should not be the same click.
     """
     repo.conversations.delete(agent_db, conversation_id)
+    # Anything keyed to the conversation goes with it. These rows are only ever read by way of
+    # the conversation, so left behind they are unreachable rather than merely stale — a table
+    # that grows for the life of the install and that nothing will ever look at again.
+    repo.touches.forget_conversation(agent_db, conversation_id)
     if not keep_file:
         transcript_path(conversation_id).unlink(missing_ok=True)
 

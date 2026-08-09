@@ -505,6 +505,13 @@ def _migrations():
             """
         )
 
+    def v32_file_touch_extent(conn):
+        # How much of the file he actually saw. `read_file` windows to 400 lines by default,
+        # so "he has read this" was true of a 3,000-line file he had seen an eighth of — and
+        # the manifest went on to tell him not to open it again. '' means the whole thing:
+        # a short read that finished, or a write, where he supplied every byte himself.
+        conn.execute("ALTER TABLE file_touches ADD COLUMN extent TEXT NOT NULL DEFAULT ''")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -537,6 +544,7 @@ def _migrations():
         v29_turn_log,
         v30_no_roaming,
         v31_file_touches,
+        v32_file_touch_extent,
     ]
 
 

@@ -25,7 +25,7 @@ import pytest
 
 from kith import tools
 from kith.infra import workspace
-from kith.services import session_context, touched
+from kith.services import conversations, session_context, touched
 
 
 @pytest.fixture
@@ -135,6 +135,65 @@ class TestItHappensOnEveryRealToolCall:
         assert touched.seen(db, "conv1") == []
 
 
+class TestHowMuchOfItHeActuallySaw:
+    """The defect this class exists to stop.
+
+    ``read_file`` returns the first 400 lines by default and says so in its own output. A
+    manifest that records "read, unchanged" for a 3,000-line file he has seen 400 lines of,
+    and then tells him not to open it again, is worse than the repeat reads it was built to
+    prevent: it turns a wasted round into a confident answer drawn from an eighth of a file.
+
+    Deliberately driven through the real ``run_tool`` against a real long file rather than a
+    hand-written result string. The extent is parsed out of what ``workspace.read_file``
+    actually emits, so if that sentence is ever reworded this test fails instead of the
+    parser silently deciding every read is complete — which is the dangerous direction.
+    """
+
+    def test_a_windowed_read_records_the_window_it_saw(self, db, workspace_root):
+        (workspace_root / "big.py").write_text("\n".join(f"line {n}" for n in range(1, 1001)))
+
+        with session_context.working_in("conv1"):
+            tools.run_tool("read_file", {"path": "big.py", "offset": 1, "limit": 100}, db)
+
+        assert touched.seen(db, "conv1")[0]["extent"] == "1-100 of 1000"
+
+    def test_a_default_read_of_a_long_file_is_not_recorded_as_whole(self, db, workspace_root):
+        # No offset, no limit — the case he takes by default, and the one that was wrong.
+        (workspace_root / "big.py").write_text("\n".join(f"line {n}" for n in range(1, 1001)))
+
+        with session_context.working_in("conv1"):
+            tools.run_tool("read_file", {"path": "big.py"}, db)
+
+        assert touched.seen(db, "conv1")[0]["extent"] != ""
+
+    def test_reading_a_short_file_whole_records_no_window(self, db, workspace_root):
+        (workspace_root / "small.md").write_text("one\ntwo\nthree")
+
+        with session_context.working_in("conv1"):
+            tools.run_tool("read_file", {"path": "small.md"}, db)
+
+        assert touched.seen(db, "conv1")[0]["extent"] == ""
+
+    def test_writing_a_file_is_always_whole(self, db, workspace_root):
+        # He supplied every byte, so there is no window to qualify.
+        with session_context.working_in("conv1"):
+            tools.run_tool("write_file", {"path": "made.md", "content": "x" * 50_000}, db)
+
+        assert touched.seen(db, "conv1")[0]["extent"] == ""
+
+    def test_a_windowed_read_is_not_told_to_skip_the_file(self, db, workspace_root):
+        # The instruction is the dangerous half. Listing the window is no use if the block
+        # still says "you have this one, move on".
+        (workspace_root / "big.py").write_text("\n".join(f"line {n}" for n in range(1, 1001)))
+
+        with session_context.working_in("conv1"):
+            tools.run_tool("read_file", {"path": "big.py", "offset": 1, "limit": 100}, db)
+
+        block = touched.manifest(db, "conv1")
+        assert "1-100 of 1000" in block
+        assert "only part" in block.lower()
+
+
 class TestOneCallCanTouchSeveralFiles:
     def test_an_edit_across_files_records_every_one(self, db, workspace_root):
         # `edit_files` is what he is told to reach for the moment a change touches more than
@@ -164,6 +223,37 @@ class TestOneCallCanTouchSeveralFiles:
             touched.record(db, "edit_files", {"edits": "not a list"})
 
         assert touched.seen(db, "conv1") == []
+
+
+class TestRowsDoNotOutliveTheirConversation:
+    """Deleting a conversation removes its index row and nothing else.
+
+    So without this these rows survive the thing they describe — forever, and invisibly, since
+    no manifest will ever ask for them again. One row per file per conversation is small; the
+    point is that nothing ever collects it, which is how a table becomes a slow leak rather
+    than a bug anybody notices.
+    """
+
+    def test_deleting_a_conversation_drops_its_files(self, db, workspace_root):
+        (workspace_root / "a.md").write_text("a")
+        with session_context.working_in("conv1"):
+            touched.record(db, "read_file", {"path": "a.md"})
+
+        conversations.delete(db, "conv1")
+
+        assert touched.seen(db, "conv1") == []
+
+    def test_it_leaves_every_other_conversation_alone(self, db, workspace_root):
+        (workspace_root / "a.md").write_text("a")
+        (workspace_root / "b.md").write_text("b")
+        with session_context.working_in("conv1"):
+            touched.record(db, "read_file", {"path": "a.md"})
+        with session_context.working_in("conv2"):
+            touched.record(db, "read_file", {"path": "b.md"})
+
+        conversations.delete(db, "conv1")
+
+        assert [row["path"] for row in touched.seen(db, "conv2")] == [str(workspace_root / "b.md")]
 
 
 class TestOneRowPerFile:
