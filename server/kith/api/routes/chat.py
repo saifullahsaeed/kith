@@ -6,7 +6,6 @@ import base64
 import contextvars
 import itertools
 import json
-import queue
 import re
 import threading
 import time
@@ -28,7 +27,14 @@ from kith.infra.db import repositories as repo
 from kith.schemas import (
     ChatRequestSchema,
 )
-from kith.services import conversations, history, memory_context, session_context, touched
+from kith.services import (
+    conversations,
+    history,
+    live_turns,
+    memory_context,
+    session_context,
+    touched,
+)
 from kith.services.activity import describe_call, short_args
 from kith.services.agent_loop import stream_agent
 
@@ -128,6 +134,38 @@ def _stop(conversation_id: str) -> bool:
 )
 def stop_turn(conversation_id: str):
     return jsonify({"stopping": _stop(conversation_id)})
+
+
+@api.get("/chat/<conversation_id>/attach")
+@api.doc(
+    summary="Watch the turn already running in a conversation",
+    description=(
+        "The same stream the request that started it is reading: everything said so far, then "
+        "the rest as it happens. 204 when nothing is running. Opening this does not start a "
+        "turn and closing it does not stop one."
+    ),
+)
+def attach_turn(conversation_id: str):
+    """Join a turn in progress.
+
+    A turn survives you leaving — it has run on its own thread since stopping became something
+    said rather than inferred — but until now everything it said while you were away was
+    unreadable, because the only reader was the request that began it. Switching conversations
+    mid-answer therefore looked exactly like the turn being killed and restarted: silence, then
+    the finished reply in one piece.
+
+    Nothing here is a special case. It hands back `live_turns.watch`, which is the same call the
+    original request makes; the difference between starting and attaching is only what the
+    backlog contains when you arrive.
+    """
+    live = live_turns.current(conversation_id)
+    if live is None:
+        return Response(status=204)
+    return Response(
+        live_turns.watch(live),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _conversation_chars(messages) -> int:
@@ -664,7 +702,10 @@ def chat(payload):
     # what he called and what came back, in the order it happened. Anything less and a resumed
     # conversation is a summary of itself.
     recorder = _Recorder(conversation_id)
-    lines: queue.Queue = queue.Queue()
+    # Not a queue owned by this request any more — see `services/live_turns`. The turn's output
+    # outlives the connection that asked for it, so leaving mid-answer and coming back attaches
+    # to the same stream instead of finding a finished wall of text.
+    live = live_turns.begin(conversation_id)
 
     # Held as a local for the life of this turn, not re-read from `_RUNNING` between events.
     # See `_arm`: the dict says which turn is current, and a turn asking that question about
@@ -727,7 +768,8 @@ def chat(payload):
                     # taken *after* this, so a conversation several times over its window reads
                     # as comfortable and the fold looks gratuitous — the one number a person
                     # checks is the one number that cannot show the problem.
-                    lines.put(
+                    live_turns.publish(
+                        live,
                         json.dumps(
                             {
                                 "type": "compacting",
@@ -735,7 +777,7 @@ def chat(payload):
                                 "foldedTo": folded["toChars"],
                             }
                         )
-                        + "\n"
+                        + "\n",
                     )
 
                 # The switch is handed to `_turn` rather than checked out here. Checking it
@@ -744,15 +786,15 @@ def chat(payload):
                 # `yield` — the turn-log row saying what the turn spent, the feed's own "done" —
                 # never ran. Stopping is the one case where you most want that row.
                 for line in _turn(recorder, messages, config, conversation_id, latest, stopping=stopping):
-                    lines.put(line)
+                    live_turns.publish(live, line)
         except Exception as exc:
-            # Broad on purpose: this thread is the only one running the turn, and the reader
-            # below cannot see an exception raised here — an uncaught one would leave it
-            # waiting on a queue nothing will ever put an end marker in.
-            lines.put(json.dumps({"type": "error", "message": str(exc)}) + "\n")
+            # Broad on purpose: this thread is the only one running the turn, and no reader can
+            # see an exception raised here — an uncaught one would leave every watcher waiting
+            # for an end that never comes.
+            live_turns.publish(live, json.dumps({"type": "error", "message": str(exc)}) + "\n")
         finally:
             _disarm(conversation_id, stopping)
-            lines.put(None)  # the reader's only end-of-turn signal
+            live_turns.finish(live)  # releases every reader, now and later
 
     # `copy_context().run` rather than a bare Thread target: everything else this request
     # established in ContextVars — the project, the turn's scratch notes, whether this is
@@ -769,11 +811,9 @@ def chat(payload):
         # Tell the client which conversation it is in before anything else, so a chat
         # started without an id can attach itself and reload into the same place.
         yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
-        while True:
-            line = lines.get()
-            if line is None:
-                return
-            yield line
+        # Just the first reader. Identical to what `/attach` does for one arriving later —
+        # which is the point: there is no separate "resume" path to keep in step.
+        yield from live_turns.watch(live)
 
     return Response(
         generate(),
