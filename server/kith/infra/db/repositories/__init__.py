@@ -21,6 +21,7 @@ from kith.infra.db.repositories import (
     self_model,
     sources,
     tasks,
+    touches,
 )
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "self_model",
     "sources",
     "tasks",
+    "touches",
 ]

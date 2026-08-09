@@ -331,3 +331,22 @@ class Checkpoint(Base):
     conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     trigger: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class FileTouch(Base):
+    """One file a conversation has opened or changed, and the version of it he saw.
+
+    Unique on ``(conversation_id, path)`` — the latest touch replaces the earlier one,
+    because the question asked of this table is what state he believes a file to be in,
+    not how many times he looked. ``version`` is ``size:mtime_ns`` at the moment of the
+    touch, or ``''`` when the file was not there.
+    """
+
+    __tablename__ = "file_touches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    at: Mapped[str] = mapped_column(Text, nullable=False)

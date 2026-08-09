@@ -28,7 +28,7 @@ from kith.infra.db import repositories as repo
 from kith.schemas import (
     ChatRequestSchema,
 )
-from kith.services import conversations, history, memory_context, session_context
+from kith.services import conversations, history, memory_context, session_context, touched
 from kith.services.activity import describe_call, short_args
 from kith.services.agent_loop import stream_agent
 
@@ -215,7 +215,13 @@ def _build_messages(messages, config, conversation_id: str = "", _folded: dict |
         out.append(_with_attachments(message))
     now = _present_state(conversation_id)
     if now:
-        out.append({"role": "system", "content": now})
+        # `_live` is for the ledger, not the provider — `openai_compat._to_openai` rebuilds
+        # every message from role and content alone, so nothing internal can reach a host.
+        # It earns its own line because this block is the one region rewritten every turn,
+        # and therefore the one place where new context is nearly free to add: everything
+        # ahead of it stays cached. Counted inside "System prompt", a block that has grown
+        # to ten thousand tokens is indistinguishable from a large persona.
+        out.append({"role": "system", "content": now, "_live": True})
     return out
 
 
@@ -330,6 +336,10 @@ def _present_state(conversation_id: str = "") -> str:
     # a file he has to remember to open is a file he will not open, which is the shape of
     # nearly every failure this codebase has a comment about.
     blocks.append(_project_memory_block(conversation_id))
+    # Last, so it is the closest thing to what was just asked. Everything above is about him;
+    # this is the only part that is about the conversation, and it is the part that stops him
+    # opening a file he has already read — measured at 54% of every read he makes.
+    blocks.append(touched.manifest(AGENT_DB_PATH, conversation_id))
     return "\n\n".join(block for block in blocks if block).strip()
 
 

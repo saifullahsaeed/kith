@@ -480,6 +480,31 @@ def _migrations():
         # the project memory.
         conn.execute("ALTER TABLE conversations DROP COLUMN working")
 
+    def v31_file_touches(conn):
+        # Which files a conversation has opened or changed, and the version of each he saw.
+        # One row per (conversation, path) rather than one per touch: the question asked of
+        # this table is "what is the state of what he has seen", which only the latest touch
+        # answers, and a history of every read would grow without bound on a long session.
+        #
+        # `version` is `size:mtime_ns` as of the touch, or '' when the file was not there.
+        # Staleness is not stored — it is the comparison between this and the file now, so
+        # a change made outside Kith's own tools is caught without anything having written
+        # a row for it.
+        conn.executescript(
+            """
+            CREATE TABLE file_touches (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                path            TEXT NOT NULL,
+                action          TEXT NOT NULL,   -- read | wrote
+                version         TEXT NOT NULL DEFAULT '',
+                at              TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX file_touches_one_per_path
+                ON file_touches (conversation_id, path);
+            """
+        )
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -511,6 +536,7 @@ def _migrations():
         v28_task_planning_statuses,
         v29_turn_log,
         v30_no_roaming,
+        v31_file_touches,
     ]
 
 

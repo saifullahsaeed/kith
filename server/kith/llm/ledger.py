@@ -149,13 +149,21 @@ def take(
     mcp = frozenset(mcp_names)
     custom = frozenset(custom_names)
 
-    system_chars = persona_chars = 0
+    system_chars = persona_chars = live_chars = 0
     said_chars = tool_chars = skill_chars = code_chars = image_chars = 0
 
     for message in convo:
         role = message.get("role")
         size = message_chars(message)
-        if role == "system":
+        if role == "system" and message.get("_live"):
+            # The block at the tail — what is true only right now. Its own line because it is
+            # the one region rewritten on every single turn, and therefore the one place where
+            # adding context is nearly free: everything ahead of it stays cached, so this is
+            # where anything new will go. Inside "System prompt" a block that has grown to ten
+            # thousand tokens is indistinguishable from a large persona, and the number a
+            # person checks would not be able to show it.
+            live_chars += size
+        elif role == "system":
             text = str(message.get("content") or "") if isinstance(message.get("content"), str) else ""
             # The persona sits at the head of the system prompt, so its cost comes out of that
             # message rather than being counted twice.
@@ -198,6 +206,7 @@ def take(
         Line("built_in_tools", "System tools", _tokens(built_in_chars, ratio)),
         Line("mcp_tools", "MCP tools", _tokens(mcp_chars, ratio)),
         Line("custom_tools", "His own tools", _tokens(custom_chars, ratio)),
+        Line("live", "Where he is right now", _tokens(live_chars, ratio)),
         Line("messages", "Messages", _tokens(said_chars, ratio)),
         Line("code", "Code he has read", _tokens(code_chars, ratio)),
         Line("tool_results", "Other tool results", _tokens(tool_chars, ratio)),

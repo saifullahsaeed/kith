@@ -16,7 +16,7 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-from kith.services import custom_tools, permissions, tuning
+from kith.services import custom_tools, permissions, touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
     code,
     computer,
@@ -112,11 +112,15 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
     entry = get(name)
     if entry is not None:
         try:
-            return {"ok": True, "result": entry.run(agent_db_path, arguments or {})}
+            answer = {"ok": True, "result": entry.run(agent_db_path, arguments or {})}
         except permissions.Denied as denied:
             # Not a failure — a question. The request rides along so the interface can put
             # an Allow button on this very tool result, instead of making someone hunt for
             # a settings page while he waits.
+            #
+            # Returns before the bookkeeping below on purpose: the call did not happen, so
+            # recording that he has seen a version of the file would be a lie, and a lie that
+            # actively suppresses the read he still needs to make.
             request = denied.decision.request
             return {
                 "ok": False,
@@ -124,7 +128,12 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
                 "permission": request.public() if request else None,
             }
         except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            answer = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        # After the call rather than before, so a write stamps the version it produced instead
+        # of the one it replaced. A failure is recorded too — that he tried to open something
+        # that is not there is the reason not to try again.
+        touched.record(agent_db_path, name, arguments or {})
+        return answer
 
     if custom_tools.exists(agent_db_path, name):
         return custom_tools.run(agent_db_path, name, arguments or {})

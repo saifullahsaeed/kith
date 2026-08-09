@@ -115,6 +115,41 @@ class TestTheCategoriesAreRight:
         assert book.of("images") > 0
 
 
+class TestTheLiveBlockIsCostedOnItsOwn:
+    """The block at the tail of the request is the one part of the prompt that is rewritten
+    every single turn, and the one place new context is cheap to add — so it is the place
+    things will be added. Counted inside "System prompt" it is invisible: a block that has
+    quietly grown to ten thousand tokens looks exactly like a large system prompt."""
+
+    def _with_live_block(self, body: str) -> list[dict]:
+        return [*_turn(), {"role": "system", "content": body, "_live": True}]
+
+    def test_it_does_not_land_in_the_system_prompt(self):
+        body = "[Files you have already opened]\n" + "- src/app.py — read, unchanged since\n" * 50
+        plain = ledger.take(_turn(), persona=PERSONA, window=1_000_000)
+        with_block = ledger.take(self._with_live_block(body), persona=PERSONA, window=1_000_000)
+
+        assert with_block.of("live") > 0
+        assert with_block.of("system") == plain.of("system")
+
+    def test_it_is_counted_at_all(self):
+        body = "x" * 4_000
+        with_block = ledger.take(self._with_live_block(body), persona=PERSONA, window=1_000_000)
+        plain = ledger.take(_turn(), persona=PERSONA, window=1_000_000)
+
+        assert with_block.used > plain.used
+
+    def test_an_unmarked_system_message_still_counts_as_the_system_prompt(self):
+        # The marker is what makes it the live block. Nothing else may claim the line — a
+        # positional rule ("the last system message") would silently reclassify the folded
+        # brief the moment message order changed.
+        unmarked = [*_turn(), {"role": "system", "content": "y" * 4_000}]
+        book = ledger.take(unmarked, persona=PERSONA, window=1_000_000)
+
+        assert book.of("live") == 0
+        assert book.of("system") > 0
+
+
 class TestTheArithmetic:
     def test_it_costs_with_the_calibrated_ratio(self):
         """`ContextBudget` learns the real chars-per-token from what the provider charged. A
