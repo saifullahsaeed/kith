@@ -171,11 +171,28 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              "aui-thread-viewport-footer flex flex-col overflow-visible pb-4 md:pb-6",
-              // Full width, so the sticky backdrop covers the whole scroller. Constraining the
-              // footer itself would leave the messages visible down either side of it as they
-              // scrolled underneath.
-              !isEmpty && "sticky bottom-0 mt-auto rounded-t-(--composer-radius) bg-background",
+              "aui-thread-viewport-footer flex flex-col overflow-visible pt-6 pb-4 md:pb-6",
+              // A fade, not a fill.
+              //
+              // This was `bg-background` with a rounded top, which worked while the footer was
+              // the composer's own width: a small panel behind the input, obviously deliberate.
+              // Now the column is the full pane it became a white slab across the window —
+              // white because the app's ambient wash is painted *under* the content layer
+              // (`z-10` in workspace.tsx), so any opaque fill above it is the one rectangle on
+              // screen with no warmth in it.
+              //
+              // A gradient covers what it needs to — the text sliding underneath — without a
+              // hard edge: the reply dissolves as it reaches the composer instead of being
+              // guillotined by it, which is what `kith-fade-top` already does where the thread
+              // meets the session bar.
+              //
+              // And never fully opaque, which is the part that matters here. A few percent of
+              // translucency lets the wash through, so the strip reads as the same surface as
+              // the rest of the page rather than as a panel laid over it; the blur is what
+              // makes that safe, since the messages now run the full width and there is real
+              // text passing behind the composer on either side of it.
+              !isEmpty &&
+                "sticky bottom-0 mt-auto bg-gradient-to-t from-background/95 via-background/85 to-transparent backdrop-blur-md",
             )}
           >
             <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
