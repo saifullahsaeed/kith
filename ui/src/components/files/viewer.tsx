@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Download, FileCode2, FileImage, FileText, FileType2, X } from "lucide-react";
+import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
 import { copyText } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import { Code } from "./code-block";
@@ -56,7 +57,8 @@ export function FileViewer({
   const media = kind.type === "image" || kind.type === "pdf";
   // An SVG is a picture and a document at once, so it gets the toggle: the markup is
   // frequently the thing being checked. A PNG has no source to show.
-  const hasSource = kind.type === "markdown" || kind.label === "SVG";
+  const hasSource =
+    kind.type === "markdown" || kind.type === "diagram" || kind.label === "SVG";
 
   const base = name.split("/").pop() || name;
   const heading = title || base;
@@ -220,6 +222,19 @@ function FileBody({
     );
   }
   if (kind.type === "markdown") return <Code code={content} language="markdown" numbered />;
+  // A .mmd is a picture written down, so the picture is the default and the source is the
+  // toggle — the same call the SVG beside it already makes.
+  if (kind.type === "diagram" && view === "rendered") {
+    return (
+      <div className="mx-auto max-w-[68rem] px-6 py-6">
+        <MermaidDiagram
+          code={content}
+          fallback={<Code code={content} language="markdown" numbered />}
+        />
+      </div>
+    );
+  }
+  if (kind.type === "diagram") return <Code code={content} language="markdown" numbered />;
   if (kind.type === "code") return <Code code={content} language={kind.lang} numbered />;
   return (
     <pre className="mx-auto max-w-[80rem] overflow-x-auto whitespace-pre-wrap break-words p-5 font-mono text-[13px] leading-relaxed">

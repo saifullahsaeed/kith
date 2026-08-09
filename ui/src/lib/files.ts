@@ -61,6 +61,11 @@ const KNOWN_SUFFIXES = [
   "gz",
   "log",
   "ipynb",
+  // Mermaid source. He reaches for a file when a diagram is something to keep rather than
+  // something to show, and until this was here the path he wrote was not even recognised as
+  // one of his files — so the link he put it behind did nothing at all.
+  "mmd",
+  "mermaid",
 ];
 
 const FILE_PATTERN = new RegExp(

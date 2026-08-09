@@ -92,8 +92,12 @@ const IMAGES: Record<string, string> = {
   svg: "SVG",
 };
 
+/** Mermaid source, which is a picture written down — same argument as SVG, one step earlier. */
+const DIAGRAMS = new Set(["mmd", "mermaid"]);
+
 export type Kind =
   | { type: "markdown"; label: string }
+  | { type: "diagram"; label: string }
   | { type: "code"; lang: string; label: string }
   | { type: "plain"; label: string }
   | { type: "image"; label: string }
@@ -105,6 +109,7 @@ export function classify(name: string): Kind {
   // Before the language tables, because `svg` is in both: it is a picture first and its
   // markup second, and the source toggle is how you get to the markup.
   if (IMAGES[ext]) return { type: "image", label: IMAGES[ext] };
+  if (DIAGRAMS.has(ext)) return { type: "diagram", label: "Diagram" };
   if (ext === "pdf") return { type: "pdf", label: "PDF" };
   if (MARKDOWN.has(ext)) return { type: "markdown", label: "Markdown" };
   const named = BY_NAME[base];
