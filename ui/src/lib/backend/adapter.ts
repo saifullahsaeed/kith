@@ -162,6 +162,9 @@ export function createBackendAdapter(conversation?: {
   /** The round being retried, while it is being retried. Cleared the moment anything else
    *  arrives, because by then the retry has plainly worked. */
   let retrying: { attempt: number; message: string } | undefined;
+  /** How many rounds were sent again over the whole turn. Never cleared — see `retried` in
+   *  TurnUsage for why the live one above is not enough on its own. */
+  let retried = 0;
 
       /** Append to the piece being written, or start a new one when the channel
        *  changed — which is what keeps consecutive deltas from each becoming a part. */
@@ -200,8 +203,16 @@ export function createBackendAdapter(conversation?: {
         // Last, so it reads as the message's footer and stays put as rounds arrive.
         // `folded` joins the gate: a fold before the first round is exactly the case where
         // there is nothing else to render and the person is staring at an empty message.
-        if (rounds.length > 0 || context || folded || retrying) {
-          const usage: TurnUsage = { rounds, context, baseline, folded, foldedChars, retrying };
+        if (rounds.length > 0 || context || folded || retrying || retried) {
+          const usage: TurnUsage = {
+            rounds,
+            context,
+            baseline,
+            folded,
+            foldedChars,
+            retrying,
+            retried,
+          };
           parts.push({ type: "data", name: USAGE_PART, data: usage });
         }
         return parts;
@@ -218,6 +229,7 @@ export function createBackendAdapter(conversation?: {
 
           if (event.type === "retrying") {
             retrying = { attempt: event.attempt, message: event.message };
+            retried += 1;
             yield { content: snapshot() };
             continue;
           }

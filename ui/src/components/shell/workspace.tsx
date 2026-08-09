@@ -624,6 +624,7 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     let context: ContextLedger | undefined;
     let baseline: ContextLedger | undefined;
     let folded = false;
+    let retried = 0;
     for (const part of turn.parts) {
       if (part.kind === "text") content.push({ type: "text", text: part.text });
       else if (part.kind === "reasoning") content.push({ type: "reasoning", text: part.text });
@@ -654,6 +655,7 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
         // falls back to `context` when this is undefined.
         baseline = part.baseline?.window ? (part.baseline as ContextLedger) : undefined;
         folded = part.folded;
+        retried = part.retried ?? 0;
       } else {
         rounds.push({ uncached: part.uncached, cached: part.cached, out: part.out });
       }
@@ -662,7 +664,11 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     // Token counts ride back as the same data part the live stream uses, so the footer reads
     // the same on a resumed turn as it did on a fresh one.
     if (rounds.length || context) {
-      content.push({ type: "data", name: USAGE_PART, data: { rounds, context, baseline, folded } });
+      content.push({
+        type: "data",
+        name: USAGE_PART,
+        data: { rounds, context, baseline, folded, retried },
+      });
     }
     if (content.length) out.push({ role: turn.role, content });
   }

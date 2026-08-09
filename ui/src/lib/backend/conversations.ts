@@ -49,7 +49,14 @@ export type StoredPart =
   | { kind: "usage"; uncached: number; cached: number; out: number }
   // `baseline` is `{}` — not absent — on a turn recorded before this field existed; a
   // structurally real-but-empty reading, not a real one, which is why it's `Partial`.
-  | { kind: "context"; context: ContextLedger; baseline: Partial<ContextLedger>; folded: boolean };
+  | {
+      kind: "context";
+      context: ContextLedger;
+      baseline: Partial<ContextLedger>;
+      folded: boolean;
+      /** Rounds this turn had to send again. Absent on turns recorded before it was written. */
+      retried?: number;
+    };
 
 export interface StoredTurn {
   role: "user" | "assistant";

@@ -328,6 +328,9 @@ def timeline(conversation_id: str) -> list[dict]:
                     # the UI falls back to `context` for those.
                     "baseline": entry.get("baseline") or {},
                     "folded": bool(entry.get("folded")),
+                    # Zero on every turn recorded before this existed, which reads correctly:
+                    # nothing was sent again.
+                    "retried": int(entry.get("retried") or 0),
                 }
             )
     # A turn with nothing in it is a turn that failed before it said anything.

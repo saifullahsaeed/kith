@@ -24,6 +24,13 @@ export interface TurnUsage {
    *  end the whole turn; it now costs a pause, and a pause with nothing in it looks exactly
    *  like the hang it is recovering from. */
   retrying?: { attempt: number; message: string };
+  /** How many rounds this turn had to send again, counted for the whole turn and never
+   *  cleared. `retrying` above is live and the answer replaces it — which is fine when a
+   *  failure is slow, and useless when it is not: a dead network fails name resolution in
+   *  hundredths of a second, so the status line comes and goes inside three seconds and a
+   *  turn that fought its way through six attempts finishes looking exactly like one that
+   *  sailed. This is the part that stays, in the footer with the rest of what the turn cost. */
+  retried?: number;
 }
 
 /**
@@ -91,9 +98,15 @@ export function TurnStatus({ usage }: { usage: TurnUsage }) {
 
 export function TurnTokens({ usage }: { usage: TurnUsage }) {
   const rounds = usage.rounds ?? [];
+  const retried = usage.retried ?? 0;
   // The footer is what the turn *cost*, and a turn with no rounds has cost nothing yet. What
   // it is doing meanwhile is `TurnStatus`, inline with the message.
-  if (rounds.length === 0) return null;
+  //
+  // Retries are the exception to "cost nothing yet", and the exception matters: the turn most
+  // worth telling someone about is the one where the first round never landed, which has no
+  // rounds at all. Gating the whole footer on `rounds` would have hidden the marker in exactly
+  // the case it was added for.
+  if (rounds.length === 0 && !retried) return null;
   const total = rounds.reduce((sum, one) => sum + realTokens(one), 0);
   const each = rounds.map((one, i) => `${i + 1}. ${formatTokens(realTokens(one))}`).join("   ");
   return (
@@ -101,10 +114,27 @@ export function TurnTokens({ usage }: { usage: TurnUsage }) {
       data-slot="kith_turn-usage"
       // No top margin: it sits on the message's footer row now, beside the action bar,
       // rather than as a line of its own at the end of the body.
-      className="text-muted-foreground/45 me-1 font-mono text-[10px] tabular-nums select-none"
-      title={`${rounds.length} request${rounds.length === 1 ? "" : "s"} · ${usageTitle(sumUsage(rounds))}\n${each}`}
+      className="text-muted-foreground/45 me-1 flex items-center gap-2 font-mono text-[10px] tabular-nums select-none"
     >
-      {formatTokens(total)} tokens
+      {retried > 0 ? (
+        <span
+          className="text-amber-600/70 dark:text-amber-400/70"
+          title={
+            `A round failed and was sent again ${retried} time${retried === 1 ? "" : "s"}. ` +
+            "The tools of the rounds before it had already run, so only the model request " +
+            "repeated — nothing was done twice."
+          }
+        >
+          sent again ×{retried}
+        </span>
+      ) : null}
+      {rounds.length > 0 ? (
+        <span
+          title={`${rounds.length} request${rounds.length === 1 ? "" : "s"} · ${usageTitle(sumUsage(rounds))}\n${each}`}
+        >
+          {formatTokens(total)} tokens
+        </span>
+      ) : null}
     </div>
   );
 }

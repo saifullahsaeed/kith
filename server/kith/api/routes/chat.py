@@ -397,6 +397,10 @@ class _Recorder:
         #: and is what a meter meant to answer "how much of my history is in here" should show.
         self.baseline_context: dict = {}
         self.folded = False
+        #: Rounds sent again. Rides home on the same record as `folded` — both are facts about
+        #: how the turn went rather than things it said, and a reopened conversation should read
+        #: the same as the live one did.
+        self.retried = 0
 
     def saw(self, event: dict) -> None:
         kind = event.get("type")
@@ -424,6 +428,9 @@ class _Recorder:
             # is notes rather than the original steps.
             self.folded = True
             return
+        if kind == "retrying":
+            self.retried += 1
+            return
         if kind in ("tool_call", "tool_result", "stats"):
             conversations.record_event(self.conversation_id, kind, _readable(event))
 
@@ -436,7 +443,12 @@ class _Recorder:
             conversations.record_event(
                 self.conversation_id,
                 "context",
-                {"context": self.context, "baseline": self.baseline_context, "folded": self.folded},
+                {
+                    "context": self.context,
+                    "baseline": self.baseline_context,
+                    "folded": self.folded,
+                    "retried": self.retried,
+                },
             )
         if error:
             conversations.record_event(self.conversation_id, "error", {"message": error})
