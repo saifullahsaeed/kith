@@ -679,23 +679,38 @@ function formatBytes(count: number): string {
 }
 
 /**
- * The result, minus whatever it only repeated back from the call.
+ * The result, minus the parts that are bookkeeping rather than news.
  *
- * A tool that echoes its arguments is being helpful to the model — the reply has to stand on
- * its own in the transcript — and redundant to a person, who has the arguments in view two
- * rows above. `read` on an image showed `path` twice, one directly beneath the other, which
- * makes the interface look like it does not know what it already said.
+ * `ask_on_task` was the case that made this general. It rendered as `asked true`, `comment id
+ * 495`, `note Moved to Waiting on you`, `task id 82` — under arguments that already said `id
+ * 82`. One line of that is worth reading. The rest is the storage layer showing through, and a
+ * panel of it under every call teaches you to stop opening them.
  *
- * Only exact matches go. A result that *changed* something it was given — a path it resolved,
- * a name it normalised — is a fact about what happened and stays.
+ * Three rules, none of them about a particular tool:
+ *
+ * **What the call already said.** A tool that echoes its arguments is being helpful to the
+ * model, whose reply has to stand alone in the transcript, and redundant to a person looking
+ * at those arguments directly above. Only exact matches: a path it *resolved* or a name it
+ * *normalised* is a fact about what happened and stays.
+ *
+ * **A `true` that restates success.** `asked: true` under a call that plainly succeeded is not
+ * information. `false` is kept, always — that one is news, and it is the case a person needs
+ * (`committed: false` is the difference between a commit and nothing having changed).
+ *
+ * **Row pointers.** The identity of the thing a result is about is `id`. Everything else ending
+ * in `_id` is a handle into storage that nobody outside the program can use — you reach a
+ * comment through its task, not through `comment_id: 495`.
  */
-function withoutEchoedArgs(value: Record<string, unknown>, args: Args): Record<string, unknown> {
+function readableResult(value: Record<string, unknown>, args: Args): Record<string, unknown> {
+  const sentAs = (key: string) => (args as Record<string, unknown>)[key];
   const kept = Object.entries(value).filter(([key, raw]) => {
-    const sent = (args as Record<string, unknown>)[key];
-    return sent === undefined || String(sent) !== String(raw);
+    if (sentAs(key) !== undefined && String(sentAs(key)) === String(raw)) return false;
+    if (raw === true) return false;
+    if (/_id$|Id$/.test(key)) return false;
+    return true;
   });
-  // Unless that empties it. "It returned exactly what you asked" is still a result, and a
-  // blank panel under a tool call reads as something having gone wrong.
+  // Unless that empties it. "It did what you asked and had nothing to add" is still a result,
+  // and a blank space under a tool call reads as something having gone wrong.
   return kept.length ? Object.fromEntries(kept) : value;
 }
 
@@ -1148,7 +1163,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
       const only = String(object[keys[0]]);
       if (looksLikeDiff(only)) return <Diff text={only} />;
     }
-    return <Fields value={withoutEchoedArgs(object, args)} />;
+    return <Fields value={readableResult(object, args)} />;
   },
 );
 ToolResultBody.displayName = "ToolResultBody";
