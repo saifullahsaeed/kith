@@ -151,12 +151,16 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
           !isEmpty && "kith-fade-top",
         )}
       >
-        <div
-          className={cn(
-            "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4",
-            isEmpty && "justify-center",
-          )}
-        >
+        {/* The measure moved off this wrapper and onto the composer alone.
+
+            Both used to share one 44rem column, so anything wide a turn produced — a rendered
+            diagram, a table, a long command — was drawn inside a reading measure and had to be
+            legible at 700px or not at all. A flowchart of thirty nodes is not. The column was
+            the right constraint for prose and the wrong one for pictures, and it was being
+            applied to the container rather than to the prose.
+
+            The composer keeps it, because an input that grows to 1900px is a worse input. */}
+        <div className={cn("flex w-full flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
           <AuiIf condition={isNewChatView}>
             <Welcome />
           </AuiIf>
@@ -167,17 +171,22 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              "aui-thread-viewport-footer flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
+              "aui-thread-viewport-footer flex flex-col overflow-visible pb-4 md:pb-6",
+              // Full width, so the sticky backdrop covers the whole scroller. Constraining the
+              // footer itself would leave the messages visible down either side of it as they
+              // scrolled underneath.
               !isEmpty && "sticky bottom-0 mt-auto rounded-t-(--composer-radius) bg-background",
             )}
           >
-            <ThreadScrollToBottom />
-            <ThreadFollowupSuggestions />
-            <PermissionPrompt />
-            <Composer />
-            <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-              <ThreadSuggestions />
-            </AuiIf>
+            <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
+              <ThreadScrollToBottom />
+              <ThreadFollowupSuggestions />
+              <PermissionPrompt />
+              <Composer />
+              <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
+                <ThreadSuggestions />
+              </AuiIf>
+            </div>
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>

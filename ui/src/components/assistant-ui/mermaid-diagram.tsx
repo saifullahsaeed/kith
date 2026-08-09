@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Check, Copy, Maximize2, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { AlertTriangle, Check, Copy, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from "lucide-react";
 
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 
+import { naturalSize, toPng } from "@/lib/diagram";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -185,6 +187,7 @@ function themeVariables(dark: boolean) {
  *  which shows up as every edge after the first losing its arrow. */
 let seq = 0;
 
+
 /** The assistant-ui contract: a fenced block in a streaming message.
  *
  *  Thin on purpose. What it supplies is the fallback — the ordinary code block, built from the
@@ -229,7 +232,13 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
           securityLevel: "loose",
           theme: "base",
           themeVariables: themeVariables(dark),
-          flowchart: { curve: "basis", padding: 14, useMaxWidth: true },
+          // `htmlLabels: false` makes every label a real `<text>` rather than a `<foreignObject>`
+          // wrapping HTML. That is what makes the drawing *portable*: Chromium refuses to
+          // rasterise a foreignObject inside an SVG image, so with HTML labels the copied PNG
+          // comes out as a picture of the arrows with every word missing. The cost is mermaid's
+          // cleverer label wrapping, which is a fair trade for a diagram you can paste.
+          htmlLabels: false,
+          flowchart: { curve: "basis", padding: 14, useMaxWidth: true, htmlLabels: false },
           sequence: { useMaxWidth: true, actorMargin: 40 },
           gantt: { useMaxWidth: true },
         });
@@ -275,7 +284,7 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
               // shown as text is the thing this component exists to stop doing.
               dangerouslySetInnerHTML={{ __html: svg }}
             />
-            <Toolbar code={code} onZoom={() => setZoomed(true)} />
+            <Toolbar svg={svg} dark={dark} onZoom={() => setZoomed(true)} />
           </>
         ) : (
           <Drawing />
@@ -297,26 +306,43 @@ function Drawing() {
   );
 }
 
-function Toolbar({ code, onZoom }: { code: string; onZoom: () => void }) {
-  const [copied, setCopied] = useState(false);
-  const copy = useCallback(() => {
-    void navigator.clipboard?.writeText(code).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      },
-      () => {},
-    );
-  }, [code]);
+function Toolbar({ svg, dark, onZoom }: { svg: string; dark: boolean; onZoom: () => void }) {
+  /** Deliberately three-valued. A copy that silently failed and showed a tick is a lie the
+   *  person only discovers when they paste — this app has made that mistake before. */
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+
+  const copy = useCallback(async () => {
+    const settle = (next: "done" | "failed") => {
+      setState(next);
+      setTimeout(() => setState("idle"), 2200);
+    };
+    try {
+      const png = await toPng(svg, PALETTE[dark ? "dark" : "light"].background);
+      if (!png) return settle("failed");
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      settle("done");
+    } catch {
+      settle("failed");
+    }
+  }, [svg, dark]);
 
   return (
     // Hidden until the diagram is hovered — two buttons parked on every picture is clutter,
     // and clutter is the thing being fixed here. Kept reachable by keyboard regardless.
     <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-      <IconButton label="Copy the diagram source" onClick={copy}>
-        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      <IconButton
+        label={state === "failed" ? "Could not copy the diagram" : "Copy the diagram as an image"}
+        onClick={() => void copy()}
+      >
+        {state === "done" ? (
+          <Check className="size-3.5" />
+        ) : state === "failed" ? (
+          <AlertTriangle className="text-destructive size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
       </IconButton>
-      <IconButton label="Open the diagram larger" onClick={onZoom}>
+      <IconButton label="Open the diagram full screen" onClick={onZoom}>
         <Maximize2 className="size-3.5" />
       </IconButton>
     </div>
@@ -345,48 +371,141 @@ function IconButton({
   );
 }
 
-/** The same drawing, given the window.
+const ZOOM_RANGE = [0.1, 8] as const;
+const clamp = (k: number) => Math.min(ZOOM_RANGE[1], Math.max(ZOOM_RANGE[0], k));
+
+/** The whole window, and you can move around in it.
  *
- *  A flowchart with twenty nodes is legible at conversation width or it is not, and when it is
- *  not there is nothing to be done inside a 700px column. Scrollable rather than zoomable: the
- *  SVG is vector, so the browser's own zoom is sharper than anything a transform would do here,
- *  and a pan-and-zoom surface is a lot of interaction to maintain for "let me see the corner". */
+ *  A thirty-node flowchart is not legible at any single scale on any screen: fitted to the
+ *  window the labels are four pixels tall, and at reading size it is three screens wide. So the
+ *  answer is not a bigger box, it is being able to go and look — fit to start, then wheel to
+ *  zoom about the pointer and drag to pan, which is what every other diagram surface does and
+ *  therefore the thing nobody has to be taught. */
 function Lightbox({ svg, onClose }: { svg: string; onClose: () => void }) {
+  const { html, width, height } = useMemo(() => naturalSize(svg), [svg]);
+  const surface = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState({ k: 1, x: 0, y: 0 });
+  const [grabbing, setGrabbing] = useState(false);
+  const pan = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+
+  /** Centred, and scaled so the whole thing is on screen. Never magnified past 1: a four-node
+   *  diagram blown up to fill a 27" display looks like a mistake. */
+  const fit = useCallback(() => {
+    const el = surface.current;
+    if (!el || !width || !height) return;
+    const pad = 56;
+    const k = clamp(
+      Math.min((el.clientWidth - pad * 2) / width, (el.clientHeight - pad * 2) / height, 1),
+    );
+    setView({ k, x: (el.clientWidth - width * k) / 2, y: (el.clientHeight - height * k) / 2 });
+  }, [width, height]);
+
+  useLayoutEffect(fit, [fit]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
+      if (event.key === "0") fit();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, fit]);
 
-  return (
+  // Attached by hand because React registers `wheel` passively, and a passive listener cannot
+  // call `preventDefault` — so the trackpad would zoom the diagram *and* scroll whatever is
+  // behind the overlay at the same time.
+  useEffect(() => {
+    const el = surface.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const px = event.clientX - rect.left;
+      const py = event.clientY - rect.top;
+      setView((v) => {
+        const k = clamp(v.k * Math.exp(-event.deltaY / 400));
+        // Hold the point under the cursor still. Scaling about the origin instead is what makes
+        // a zoom feel like the diagram is running away from you.
+        const ratio = k / v.k;
+        return { k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio };
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const nudge = (factor: number) =>
+    setView((v) => {
+      const el = surface.current;
+      if (!el) return v;
+      const px = el.clientWidth / 2;
+      const py = el.clientHeight / 2;
+      const k = clamp(v.k * factor);
+      const ratio = k / v.k;
+      return { k, x: px - (px - v.x) * ratio, y: py - (py - v.y) * ratio };
+    });
+
+  // Through a portal to `<body>`, and that is not tidiness — it is the only way this covers the
+  // window. The assistant message it lives inside carries `content-visibility: auto`, which
+  // implies `contain: paint`, and a painted-contained element is a containing block for
+  // `position: fixed` descendants. So `inset-0` resolved against the *message* rather than the
+  // viewport: "full screen" came out the size of the message body, clipped, with three pages of
+  // reply to scroll through to find it.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Diagram"
-      onClick={onClose}
-      className="bg-background/80 fixed inset-0 z-50 flex items-center justify-center p-8 backdrop-blur-sm"
+      className="bg-background fixed inset-0 z-50 overflow-hidden"
     >
       <div
-        onClick={(event) => event.stopPropagation()}
-        className={cn(
-          "border-border/60 bg-card relative max-h-full max-w-full overflow-auto rounded-2xl border p-8 shadow-2xl",
-        )}
+        ref={surface}
+        onPointerDown={(event) => {
+          pan.current = { px: event.clientX, py: event.clientY, x: view.x, y: view.y };
+          setGrabbing(true);
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const from = pan.current;
+          if (!from) return;
+          setView((v) => ({
+            ...v,
+            x: from.x + (event.clientX - from.px),
+            y: from.y + (event.clientY - from.py),
+          }));
+        }}
+        onPointerUp={() => {
+          pan.current = null;
+          setGrabbing(false);
+        }}
+        onDoubleClick={fit}
+        className={cn("absolute inset-0 touch-none", grabbing ? "cursor-grabbing" : "cursor-grab")}
       >
         <div
-          className="[&_svg]:h-auto [&_svg]:max-w-none"
-          dangerouslySetInnerHTML={{ __html: svg }}
+          className="absolute top-0 left-0 origin-top-left will-change-transform"
+          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
+          dangerouslySetInnerHTML={{ __html: html }}
         />
       </div>
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close"
-        className="border-border/60 bg-card/80 text-muted-foreground hover:text-foreground absolute end-4 top-4 flex size-8 items-center justify-center rounded-lg border"
-      >
-        <X className="size-4" />
-      </button>
-    </div>
+
+      <div className="absolute end-4 top-4 flex items-center gap-1">
+        <span className="text-muted-foreground/60 me-1 font-mono text-[11px] tabular-nums">
+          {Math.round(view.k * 100)}%
+        </span>
+        <IconButton label="Zoom out" onClick={() => nudge(1 / 1.3)}>
+          <ZoomOut className="size-3.5" />
+        </IconButton>
+        <IconButton label="Zoom in" onClick={() => nudge(1.3)}>
+          <ZoomIn className="size-3.5" />
+        </IconButton>
+        <IconButton label="Fit to the window" onClick={fit}>
+          <Minimize2 className="size-3.5" />
+        </IconButton>
+        <IconButton label="Close" onClick={onClose}>
+          <X className="size-3.5" />
+        </IconButton>
+      </div>
+    </div>,
+    document.body,
   );
 }
