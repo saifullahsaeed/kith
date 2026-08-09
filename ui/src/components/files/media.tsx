@@ -18,7 +18,12 @@ import { IconAction } from "./icon-action";
  * Revoked on the way out. A blob URL pins its bytes in memory until it is released, and a
  * few full-page screenshots is tens of megabytes held by a viewer that has been closed.
  */
-function useMedia(
+/** The bytes of one of his files, as a URL an `<img>` can use.
+ *
+ *  A fetch and a blob rather than pointing `src` straight at the endpoint: every API call
+ *  carries a token header, and an `<img>` cannot send one. Exported because the tool-result
+ *  card for "he looked at a picture" needs exactly this and there is no second way to do it. */
+export function useMedia(
   path: string,
   projectId?: number | null,
 ): { url: string; error: string; loading: boolean } {

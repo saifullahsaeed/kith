@@ -8,6 +8,7 @@ import { BookOpenText, Check, Copy } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/files";
+import { useMedia } from "@/components/files/media";
 import { copyText, useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
@@ -86,8 +87,12 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
     case "write_file":
       return `${short(args.path)} · ${s(args.content).length.toLocaleString()} chars`;
     case "read_file": {
-      if (r.note) return `${short(args.path)} · ${short(r.note, 40)}`;
+      // Image first, and the order is the whole point. A picture comes back with a `note`
+      // reading "Look at the image below and describe or judge what you actually see" — a
+      // sentence written to him — and with `note` tested first that was the summary line
+      // every image read collapsed to.
       if (r.image || r.data) return `${short(args.path)} · looked at it`;
+      if (r.note) return `${short(args.path)} · ${short(r.note, 40)}`;
       return `${short(args.path)} · ${lines(result).toLocaleString()} lines`;
     }
     case "delete_file":
@@ -666,6 +671,86 @@ const Row: FC<{ value: Record<string, unknown> }> = ({ value }) => {
   );
 };
 
+/** Bytes, as a person would say them. */
+function formatBytes(count: number): string {
+  if (count < 1024) return `${count} B`;
+  if (count < 1024 * 1024) return `${Math.round(count / 1024)} KB`;
+  return `${(count / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * The result, minus whatever it only repeated back from the call.
+ *
+ * A tool that echoes its arguments is being helpful to the model — the reply has to stand on
+ * its own in the transcript — and redundant to a person, who has the arguments in view two
+ * rows above. `read` on an image showed `path` twice, one directly beneath the other, which
+ * makes the interface look like it does not know what it already said.
+ *
+ * Only exact matches go. A result that *changed* something it was given — a path it resolved,
+ * a name it normalised — is a fact about what happened and stays.
+ */
+function withoutEchoedArgs(value: Record<string, unknown>, args: Args): Record<string, unknown> {
+  const kept = Object.entries(value).filter(([key, raw]) => {
+    const sent = (args as Record<string, unknown>)[key];
+    return sent === undefined || String(sent) !== String(raw);
+  });
+  // Unless that empties it. "It returned exactly what you asked" is still a result, and a
+  // blank panel under a tool call reads as something having gone wrong.
+  return kept.length ? Object.fromEntries(kept) : value;
+}
+
+/** He looked at a picture. Show the picture.
+ *
+ * `read_file` on an image returns `{path, bytes, image, note}`, and every one of those fields
+ * was being printed as a labelled row — including two that are addressed to him rather than to
+ * you. `image` read "(shown to you as a picture below)" with no picture below it, because the
+ * data URI is stripped from the stream by design (44KB of base64 per image, and a generic
+ * renderer that printed the whole thing was how it looked when the image leak was live). And
+ * `note` read "Look at the image below and describe or judge what you actually see", which is
+ * an instruction to a model sitting in the middle of the interface.
+ *
+ * So: the actual picture, from the same endpoint the file viewer uses, and the two facts worth
+ * having — what it was and how big. The rest was never for you.
+ */
+function looksLikePicture(value: Record<string, unknown>): boolean {
+  return typeof value.image === "string" && typeof value.path === "string";
+}
+
+const Picture: FC<{ value: Record<string, unknown> }> = ({ value }) => {
+  const path = String(value.path);
+  const open = useFileViewer((state) => state.open);
+  const { url, error, loading } = useMedia(path);
+  const name = path.split("/").pop() || path;
+  const size = typeof value.bytes === "number" ? formatBytes(value.bytes) : "";
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button
+        type="button"
+        onClick={() => open(path)}
+        title={`Open ${name}`}
+        className="border-border/60 bg-muted/20 hover:border-kith/40 max-w-full self-start overflow-hidden rounded-lg border p-1 transition-colors"
+      >
+        {loading ? (
+          <span className="text-muted-foreground/60 block px-3 py-6 text-[11px]">loading…</span>
+        ) : error || !url ? (
+          // The read succeeded — he saw it — so this is about *our* second fetch, not about
+          // the tool. Saying "failed" would blame the wrong thing.
+          <span className="text-muted-foreground/60 block px-3 py-6 text-[11px]">
+            can't preview it here
+          </span>
+        ) : (
+          <img src={url} alt={name} className="max-h-64 max-w-full rounded object-contain" />
+        )}
+      </button>
+      <span className="text-muted-foreground/70 font-mono text-[11px]">
+        {name}
+        {size ? ` · ${size}` : ""}
+      </span>
+    </div>
+  );
+};
+
 /** Anything else: labelled rows rather than braces. */
 const Fields: FC<{ value: Record<string, unknown> }> = ({ value }) => (
   <div className="flex flex-col gap-1.5">
@@ -1051,6 +1136,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     }
 
     const object = result as Record<string, unknown>;
+    if (looksLikePicture(object)) return <Picture value={object} />;
     if (looksLikeTask(object)) return <Task value={object} />;
     if (looksLikeMilestone(object)) return <Milestone value={object} />;
     if (looksLikeProject(object)) return <Project value={object} />;
@@ -1062,7 +1148,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
       const only = String(object[keys[0]]);
       if (looksLikeDiff(only)) return <Diff text={only} />;
     }
-    return <Fields value={object} />;
+    return <Fields value={withoutEchoedArgs(object, args)} />;
   },
 );
 ToolResultBody.displayName = "ToolResultBody";
