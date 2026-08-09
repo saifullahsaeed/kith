@@ -12,9 +12,20 @@ import remarkGfm from "remark-gfm";
 import { type FC, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
+import { MermaidBlock } from "@/components/assistant-ui/mermaid-diagram";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { looksLikeHisFile, useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
+
+/** A ```mermaid fence is a picture, not a listing — see `mermaid-diagram.tsx`.
+ *
+ *  `CodeHeader: null` goes with it. The header is the bar that says "mermaid" with a copy
+ *  button, which is right above a block of source and wrong above a drawing: it labels the
+ *  picture with the name of the language it is not showing you. Copy lives on the diagram's
+ *  own hover toolbar instead, next to the control for making it bigger. */
+const byLanguage = {
+  mermaid: { SyntaxHighlighter: MermaidBlock, CodeHeader: () => null },
+};
 
 const MarkdownTextImpl = () => {
   return (
@@ -22,6 +33,7 @@ const MarkdownTextImpl = () => {
       remarkPlugins={[remarkGfm]}
       className="aui-md"
       components={defaultComponents}
+      componentsByLanguage={byLanguage}
       defer
     />
   );

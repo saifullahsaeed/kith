@@ -3,6 +3,7 @@ import type { ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
 import { CodeBlock } from "./code-block";
 
 /* ── Markdown renderer (react-markdown + gfm + highlighted code) ─────────── */
@@ -130,10 +131,15 @@ const MD: Components = {
       );
     }
     const lang = match?.[1];
-    return (
+    const source = (
       <div className="my-4 overflow-hidden rounded-xl border border-border/60 bg-muted/15">
         <CodeBlock code={text} language={lang} label={lang} />
       </div>
     );
+    // The same drawing chat gets. He writes design notes and plans as markdown files, and a
+    // diagram that renders in the conversation but not in the document it was written into is
+    // the sort of inconsistency you notice immediately and cannot explain.
+    if (lang === "mermaid") return <MermaidDiagram code={text} fallback={source} />;
+    return source;
   },
 };
