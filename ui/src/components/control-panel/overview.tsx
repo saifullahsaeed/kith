@@ -17,7 +17,8 @@ import { Markdown, MarkdownInline } from "@/components/files";
 import type { BrainSnapshot, TimelineEvent, TimelineKind } from "@/lib/backend/brain";
 import { cn } from "@/lib/utils";
 import { EmptyState, PageHeader, SectionLabel } from "./chrome";
-import { clamp, groupByDay, matches, time } from "./format";
+import { groupByDay, time } from "@/lib/dates";
+import { clamp, matches } from "./format";
 import { CHIP, TAB_FOR } from "./types";
 import type { Tab } from "./types";
 

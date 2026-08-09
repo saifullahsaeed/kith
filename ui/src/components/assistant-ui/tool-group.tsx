@@ -11,6 +11,8 @@ import {
 import { ChevronDownIcon, LoaderIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
+
+import { ANIMATION_DURATION } from "./disclosure";
 import {
   Collapsible,
   CollapsibleContent,
@@ -18,7 +20,6 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
-const ANIMATION_DURATION = 200;
 
 const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
   variants: {

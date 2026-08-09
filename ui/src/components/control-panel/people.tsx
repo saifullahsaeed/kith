@@ -4,7 +4,8 @@ import { EditableText } from "@/components/ui/editable-text";
 import { ItemMenu } from "@/components/ui/item-menu";
 import type { BrainSnapshot } from "@/lib/backend/brain";
 import { DeleteButton, EmptyState, PageHeader } from "./chrome";
-import { initials, matches, when } from "./format";
+import { when } from "@/lib/dates";
+import { initials, matches } from "./format";
 import type { Handlers } from "./types";
 
 /* ── Messages (chat bubbles from Kith) ──────────────────────────────────── */

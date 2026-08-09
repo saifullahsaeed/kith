@@ -13,6 +13,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/files";
+import { groupByDay, time } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { useMessages } from "@/hooks/use-messages";
 
@@ -66,7 +67,7 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
     : messages.filter((one) => one.sender !== "user");
   const wanting = messages.filter((one) => KINDS[one.kind]?.wants).length;
 
-  const days = useMemo(() => groupByDay(shown), [shown]);
+  const days = useMemo(() => groupByDay(shown, (one) => one.created_at), [shown]);
 
   return (
     <aside className="bg-background fixed top-0 right-0 z-20 flex h-dvh w-[26rem] max-w-full flex-col border-s shadow-xl">
@@ -188,36 +189,3 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
   );
 }
 
-/** Newest day first, each with its messages. "Today"/"Yesterday" rather than a date, because
- *  a date is something you have to work out. */
-function groupByDay<T extends { created_at: string }>(messages: T[]): [string, T[]][] {
-  const out = new Map<string, T[]>();
-  for (const message of messages) {
-    const label = dayLabel(message.created_at);
-    out.set(label, [...(out.get(label) ?? []), message]);
-  }
-  return [...out.entries()];
-}
-
-function dayLabel(iso: string): string {
-  try {
-    const when = new Date(iso);
-    const day = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dayMs = 86_400_000;
-    if (day === today) return "Today";
-    if (day === today - dayMs) return "Yesterday";
-    return when.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
-  } catch {
-    return "Earlier";
-  }
-}
-
-function time(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-}

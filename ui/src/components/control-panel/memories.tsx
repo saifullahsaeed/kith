@@ -8,7 +8,8 @@ import { ItemMenu } from "@/components/ui/item-menu";
 import type { BrainSnapshot } from "@/lib/backend/brain";
 import { cn } from "@/lib/utils";
 import { Badge, Composer, DeleteButton, EmptyState, PageHeader, SectionLabel } from "./chrome";
-import { matches, when } from "./format";
+import { when } from "@/lib/dates";
+import { matches } from "./format";
 import { FIELD } from "./types";
 import type { Handlers } from "./types";
 

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { time } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { formatTokens, realTokens, sumUsage, usageTitle, type Usage } from "@/lib/tokens";
 import { describeCall, type DescribedCall } from "@/lib/tool-language";
@@ -497,10 +498,3 @@ function BlockTokens({ usage }: { usage: Usage[] }) {
   );
 }
 
-function time(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-}

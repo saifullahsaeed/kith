@@ -18,6 +18,7 @@ import {
   type ReasoningMessagePartComponent,
   type ReasoningGroupComponent,
 } from "@assistant-ui/react";
+import { ANIMATION_DURATION } from "./disclosure";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import {
   Collapsible,
@@ -26,7 +27,6 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
-const ANIMATION_DURATION = 200;
 
 const ReasoningPreviewContext = createContext(false);
 

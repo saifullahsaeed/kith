@@ -3,6 +3,7 @@ import { ChevronDown, FolderOpen, Loader2, RotateCcw, Search, TerminalSquare } f
 
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
+import { numericInputClass as inputClass } from "@/components/ui/input";
 import { openOnHost } from "@/lib/files";
 import { StandingGrants } from "./standing-grants";
 import {
@@ -15,8 +16,6 @@ import {
   type TuningSnapshot,
 } from "@/lib/backend";
 
-const inputClass =
-  "w-full rounded-md border bg-transparent px-3 py-1.5 text-right font-mono text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
  * Everything else, with the consequences written down.

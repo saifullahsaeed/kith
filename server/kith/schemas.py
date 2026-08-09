@@ -85,10 +85,3 @@ class ChatRequestSchema(Schema):
 class HealthSchema(Schema):
     ok = Boolean(metadata={"description": "The backend is up"})
     ollamaReachable = Boolean(metadata={"description": "Ollama answered a probe"})
-
-
-class ReviewItemSchema(Schema):
-    """One piece of finished work waiting to be checked."""
-
-    id = Integer(metadata={"description": "Task id"})
-    goal = String(metadata={"description": "What the task was"})

@@ -1,4 +1,8 @@
-/** How the Control Panel renders values: paths, dates, search matching. */
+/** How the Control Panel renders values: paths, names, search matching.
+ *
+ *  Dates are not here. They were, and having them here is what let two other panels grow their
+ *  own — a chat panel is not going to reach into `control-panel/` for a timestamp. They live in
+ *  `@/lib/dates` now, where anything can ask for them. */
 import type { BrainSnapshot } from "@/lib/backend/brain";
 
 import { LOOSE } from "./types";
@@ -51,54 +55,6 @@ export function matches(query: string, ...fields: (string | undefined)[]): boole
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return fields.some((f) => (f ?? "").toLowerCase().includes(q));
-}
-
-/** Group timestamped items into [dayLabel, items][] preserving input order. */
-export function groupByDay<T>(items: T[], getIso: (item: T) => string): [string, T[]][] {
-  const groups = new Map<string, T[]>();
-  for (const item of items) {
-    const key = dayLabel(getIso(item));
-    const list = groups.get(key);
-    if (list) list.push(item);
-    else groups.set(key, [item]);
-  }
-  return [...groups.entries()];
-}
-
-function dayLabel(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const today = new Date();
-    const y = new Date();
-    y.setDate(today.getDate() - 1);
-    const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-    if (same(d, today)) return "Today";
-    if (same(d, y)) return "Yesterday";
-    return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
-  } catch {
-    return "Earlier";
-  }
-}
-
-export function when(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return "";
-  }
-}
-
-export function time(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
 }
 
 /** How a project (or the loose tray) reads in a breadcrumb. */

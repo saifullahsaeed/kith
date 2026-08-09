@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Bell, Check, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { inputClass } from "@/components/ui/input";
 import {
   fetchNotifyLevel,
   patchServerConfig,
@@ -12,8 +13,6 @@ import {
   type ServerConfig,
 } from "@/lib/backend";
 
-const inputClass =
-  "w-full rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40";
 
 /**
  * How he thinks, as opposed to where — reply length, reasoning, and who he is.

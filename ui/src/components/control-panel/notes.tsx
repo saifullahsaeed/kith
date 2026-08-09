@@ -6,7 +6,8 @@ import { EditableText } from "@/components/ui/editable-text";
 import { ItemMenu } from "@/components/ui/item-menu";
 import type { BrainSnapshot } from "@/lib/backend/brain";
 import { Composer, DeleteButton, EmptyState, PageHeader } from "./chrome";
-import { matches, when } from "./format";
+import { when } from "@/lib/dates";
+import { matches } from "./format";
 import { FIELD } from "./types";
 import type { Handlers } from "./types";
 

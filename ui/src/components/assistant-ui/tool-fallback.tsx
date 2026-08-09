@@ -11,6 +11,7 @@ import {
   type ToolCallMessagePartStatus,
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
+import { ANIMATION_DURATION } from "./disclosure";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { callText, describeCall } from "@/lib/tool-language";
@@ -22,7 +23,6 @@ import {
 } from "@/components/assistant-ui/tool-result";
 import { Button } from "@/components/ui/button";
 
-const ANIMATION_DURATION = 200;
 
 const pressable = "active:scale-[0.98]";
 

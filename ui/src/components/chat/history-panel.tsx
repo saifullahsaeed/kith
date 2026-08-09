@@ -13,6 +13,7 @@ import {
   type TranscriptHit,
 } from "@/lib/backend";
 import { fetchBrain, type Project } from "@/lib/backend/brain";
+import { dayLabel, time } from "@/lib/dates";
 import { openOnHost } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
@@ -292,7 +293,7 @@ export function HistoryPanel({
                               ) : null}
                             </span>
                             <span className="text-muted-foreground/60 text-[10px] tabular-nums">
-                              {item.messages} msg · {dayLabel(item.updatedAt)} {clock(item.updatedAt)}
+                              {item.messages} msg · {dayLabel(item.updatedAt)} {time(item.updatedAt)}
                             </span>
                           </button>
                         </ItemMenu>
@@ -379,35 +380,6 @@ function groupByProject(items: ConversationSummary[], projects: Project[]): Grou
   return [...all.filter((g) => g.key !== "none"), ...all.filter((g) => g.key === "none")];
 }
 
-/** "Today", "Yesterday", a weekday inside the last week, then a date. Never a bare time —
- *  the time of day is on the row, and a heading's whole job is to say which day that is. */
-function dayLabel(iso: string): string {
-  try {
-    const at = new Date(iso);
-    if (Number.isNaN(at.getTime())) return "Undated";
-    const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    const now = new Date();
-    const days = Math.round((midnight(now) - midnight(at)) / 86_400_000);
-    if (days <= 0) return "Today";
-    if (days === 1) return "Yesterday";
-    if (days < 7) return at.toLocaleDateString(undefined, { weekday: "long" });
-    if (at.getFullYear() === now.getFullYear())
-      return at.toLocaleDateString(undefined, { day: "numeric", month: "long" });
-    return at.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
-  } catch {
-    return "Undated";
-  }
-}
-
-/** The time of day only. Which day it was is the heading's job now, so a row no longer has to
- *  carry a date that meant one thing above the fold and another below it. */
-function clock(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-}
 
 function bytes(count: number): string {
   if (count < 1024) return `${count} B`;

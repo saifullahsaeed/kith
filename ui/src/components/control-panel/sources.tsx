@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import type { BrainSnapshot } from "@/lib/backend/brain";
 import { cn } from "@/lib/utils";
 import { Composer, DeleteButton, EmptyState, PageHeader } from "./chrome";
-import { matches, when } from "./format";
+import { when } from "@/lib/dates";
+import { matches } from "./format";
 import { CHIP, FIELD } from "./types";
 import type { Handlers } from "./types";
 

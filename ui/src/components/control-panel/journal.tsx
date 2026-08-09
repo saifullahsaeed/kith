@@ -3,7 +3,8 @@ import { Markdown } from "@/components/files";
 import { ItemMenu } from "@/components/ui/item-menu";
 import type { BrainSnapshot } from "@/lib/backend/brain";
 import { DeleteButton, EmptyState, PageHeader } from "./chrome";
-import { groupByDay, matches, time } from "./format";
+import { groupByDay, time } from "@/lib/dates";
+import { matches } from "./format";
 import type { Handlers } from "./types";
 
 /* ── Journal (day-grouped reading column) ───────────────────────────────── */
