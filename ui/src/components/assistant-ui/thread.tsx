@@ -181,18 +181,17 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
               // (`z-10` in workspace.tsx), so any opaque fill above it is the one rectangle on
               // screen with no warmth in it.
               //
-              // A gradient covers what it needs to — the text sliding underneath — without a
-              // hard edge: the reply dissolves as it reaches the composer instead of being
-              // guillotined by it, which is what `kith-fade-top` already does where the thread
-              // meets the session bar.
+              // Almost nothing, on purpose. Enough that a line of reply does not collide with
+              // the input as it scrolls past — the messages run the full width now, so there is
+              // text moving behind the composer on both sides of it — and not enough to be a
+              // surface. Mostly the blur does that work; the tint only keeps the last few
+              // pixels from touching the composer's own edge.
               //
-              // And never fully opaque, which is the part that matters here. A few percent of
-              // translucency lets the wash through, so the strip reads as the same surface as
-              // the rest of the page rather than as a panel laid over it; the blur is what
-              // makes that safe, since the messages now run the full width and there is real
-              // text passing behind the composer on either side of it.
+              // To remove it altogether, delete this line. Nothing else depends on it: the
+              // composer carries its own background and border, so it stays legible over
+              // whatever passes underneath.
               !isEmpty &&
-                "sticky bottom-0 mt-auto bg-gradient-to-t from-background/95 via-background/85 to-transparent backdrop-blur-md",
+                "sticky bottom-0 mt-auto bg-gradient-to-t from-background/45 to-transparent backdrop-blur-sm",
             )}
           >
             <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
