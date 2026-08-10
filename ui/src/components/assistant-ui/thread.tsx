@@ -3,6 +3,7 @@
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { AskPrompt } from "@/components/assistant-ui/ask-prompt";
+import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { TurnStatus, TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
@@ -201,6 +202,7 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
             <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
               <ThreadScrollToBottom />
               <ThreadFollowupSuggestions />
+              <WorkingOn conversationId={conversationId} />
               <AskPrompt conversationId={conversationId} />
               <PermissionPrompt />
               <Composer />

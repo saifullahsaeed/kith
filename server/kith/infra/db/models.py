@@ -63,6 +63,10 @@ class Task(Base):
     priority: Mapped[str] = mapped_column(Text, nullable=False, default="normal")
     due_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: The conversation working this task, while it is being worked. Set when the status
+    #: becomes `working`, cleared when it leaves — see `update_task`. Null for everything
+    #: started before there was anywhere to record it, and for a reminder firing unattended.
+    conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(Text, nullable=False, default="kith")
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     milestone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

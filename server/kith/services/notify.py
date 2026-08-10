@@ -21,6 +21,7 @@ distinction matters — "quieter" should never mean "you did not find out".
 
 from __future__ import annotations
 
+import threading
 from enum import StrEnum
 
 LEVEL_KEY = "notify_level"
@@ -112,9 +113,33 @@ def announce(kind: str, body: str, link: str | None = None) -> bool:
         summary = body.strip().replace("\n", " ")
         if len(summary) > 160:
             summary = summary[:157].rstrip() + "…"
-        return renderer.notify(title, summary, link)
+        # On its own thread, because this is a doorbell and the caller is a tool call.
+        #
+        # `renderer.notify` posts to the desktop shell over HTTP with a 55-second timeout, so a
+        # shell that is slow, busy or wedged stalls whatever produced the message — and what
+        # produces messages now includes a permission gate and a question, both of which the
+        # turn is already waiting on. The docstring above says a notification must never take
+        # down the call that produced it; it must not hold it up either, and 55 seconds is
+        # holding it up.
+        #
+        # The return value stops being "it arrived" and becomes "it was sent", which is the
+        # honest thing to promise about a notification anyway.
+        threading.Thread(
+            target=lambda: _post(renderer, title, summary, link),
+            name="kith-notify",
+            daemon=True,
+        ).start()
+        return True
     except Exception:
         return False
+
+
+def _post(renderer, title: str, summary: str, link: str | None) -> None:
+    try:
+        renderer.notify(title, summary, link)
+    except Exception:
+        # Nobody is waiting on this. There is no caller left to tell.
+        pass
 
 
 def snapshot() -> dict:

@@ -190,6 +190,10 @@ def update_task(
             return None
         if status is not None:
             row.status = status
+            # Which conversation is on it. Stamped when it starts and cleared the moment it
+            # stops being worked, because a stale link is worse than none: it would put a task
+            # somebody finished yesterday at the top of the chat you are in now.
+            row.conversation_id = _who_is_working() if status == "working" else None
         if goal is not None:
             row.goal = goal
         if priority is not None:
@@ -207,6 +211,18 @@ def update_task(
             _roll_up(db, row)
             db.flush()
         return as_dict(row)
+
+
+def _who_is_working() -> str | None:
+    """The conversation this call is happening in, or None outside one.
+
+    Imported here rather than at module scope: this package is storage and that is a service,
+    and the cycle is real. None is the honest answer for a reminder firing at four in the
+    morning — it is working the task, but there is no session for anyone to watch it in.
+    """
+    from kith.services import session_context
+
+    return session_context.current() or None
 
 
 def _roll_up(db: Session, task: Task) -> None:
@@ -391,3 +407,26 @@ def tasks_awaiting_kith(path: Path) -> list[dict]:
         if comments and comments[-1]["author"] == "user":
             waiting_on_him.append(task)
     return waiting_on_him
+
+
+def working_in(path: Path, conversation_id: str) -> dict | None:
+    """The task this conversation is working, with its checklist. None when it is not on one.
+
+    One task at a time by construction: `update_task` clears the link the moment a task stops
+    being `working`, so the newest stamp is the only live one. Ordered anyway, because "newest
+    wins" is a cheaper thing to be right about than "there is exactly one".
+    """
+    if not conversation_id:
+        return None
+    query = (
+        select(Task)
+        .where(Task.conversation_id == conversation_id, Task.status == "working")
+        .order_by(Task.updated_at.desc())
+        .limit(1)
+    )
+    with session(path) as db:
+        row = db.scalars(query).first()
+        if row is None:
+            return None
+        task = as_dict(row)
+    return {**task, "checklist": list_checklist(path, int(task["id"]))}

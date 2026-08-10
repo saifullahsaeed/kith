@@ -512,6 +512,16 @@ def _migrations():
         # a short read that finished, or a write, where he supplied every byte himself.
         conn.execute("ALTER TABLE file_touches ADD COLUMN extent TEXT NOT NULL DEFAULT ''")
 
+    def v33_task_conversation(conn):
+        # Which conversation is working a task, so a session can say what it is on.
+        #
+        # Stamped when a task moves to `working` and cleared when it leaves — a task is worked
+        # in one place at a time, and a stale link would put someone else's work at the top of
+        # your chat. Nullable and unset for every task that already exists: none of them were
+        # started in a conversation that knew to record it, and inventing a link would be worse
+        # than having none.
+        conn.execute("ALTER TABLE tasks ADD COLUMN conversation_id TEXT")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -545,6 +555,7 @@ def _migrations():
         v30_no_roaming,
         v31_file_touches,
         v32_file_touch_extent,
+        v33_task_conversation,
     ]
 
 

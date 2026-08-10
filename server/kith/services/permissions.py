@@ -475,10 +475,21 @@ def _wait_for(decision: Decision) -> None:
     # immediately as they always did, because waiting would park a thread on a prompt drawn on
     # nobody's screen. The whole suite hung on this before the guard existed, which is the same
     # failure a background job would have hit in the small hours.
-    from kith.services import session_context
+    from kith.services import live_turns, session_context
 
-    if not session_context.current():
+    # A live turn, not merely a conversation id. The id says which chat this belongs to; it
+    # does not say that anything is streaming it to a screen. A checkpoint taken by a test, a
+    # reminder firing, a background continuation — all of them have a conversation and none of
+    # them has anybody looking, so waiting would park the thread on a prompt that is drawn
+    # nowhere. `live_turns.current` is exactly "a turn is running and can be watched", which is
+    # the condition under which the card actually appears.
+    if not live_turns.current(session_context.current()):
         raise Denied(decision)
+
+    # Announced only now. A refusal nobody is waiting on is not an interruption worth making,
+    # and firing one from every unattended refusal put a database write and a desktop
+    # notification on paths that had neither before.
+    _tell_them(request)
 
     if not request.settled.wait(timeout=_DEADLINE_SECONDS):
         raise Denied(decision)

@@ -154,6 +154,15 @@ def answer_question(question_id: str, payload: dict):
     return jsonify({"answered": questions.answer(question_id, payload.get("answers") or [])})
 
 
+@api.get("/chat/<conversation_id>/working-on")
+@api.doc(
+    summary="The task this conversation is working, with its checklist",
+    description="`{}` when it is not on one. Polled, so the checklist ticks as he goes.",
+)
+def working_on(conversation_id: str):
+    return jsonify(repo.tasks.working_in(AGENT_DB_PATH, conversation_id) or {})
+
+
 @api.post("/chat/<conversation_id>/stop")
 @api.doc(
     summary="Stop the turn running in a conversation",
