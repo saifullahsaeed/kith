@@ -175,7 +175,7 @@ export function HistoryPanel({
             </p>
           ) : (
             <>
-              <p className="text-muted-foreground/60 px-2.5 pt-1 pb-2 text-[10px] tracking-wider uppercase">
+              <p className="text-muted-foreground/60 px-2.5 pt-1 pb-2 text-[10px] font-semibold tracking-[0.12em] uppercase">
                 {hits.length} {hits.length === 1 ? "mention" : "mentions"}
               </p>
               <ul className="space-y-0.5">
@@ -222,10 +222,23 @@ export function HistoryPanel({
                   {/* Sticky, so the day you are looking at is named while you are inside it.
                       It needs the panel's own backdrop to sit on, which is why the aside has
                       a background now rather than letting the room show straight through. */}
-                  <h3 className="bg-sidebar/80 text-muted-foreground/70 sticky top-0 z-10 px-2.5 py-1.5 text-[10px] font-medium tracking-wider uppercase backdrop-blur-sm">
-                    {group.label}
+                  {/* The app's own label treatment — `SectionLabel` in the control panel uses
+                      `tracking-[0.12em]`, and this used `tracking-wider`, which is a different
+                      letterspacing on the same uppercase. Small differences in the one element
+                      that repeats down a whole panel are what make a panel look like it came
+                      from somewhere else.
+                      
+                      And one line, always. "SADEEF CAPITAL SERVICES PUBLIC WEBSITE" wrapped to
+                      two, which turned a quiet divider into the loudest thing in the sidebar
+                      and pushed the conversations it was labelling down the screen. */}
+                  <h3 className="bg-sidebar/80 text-muted-foreground/70 sticky top-0 z-10 flex items-baseline gap-1.5 px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase backdrop-blur-sm">
+                    <span className="min-w-0 truncate" title={group.label}>
+                      {group.label}
+                    </span>
                     {group.status ? (
-                      <span className="text-muted-foreground/45 normal-case"> · {group.status}</span>
+                      <span className="text-muted-foreground/45 shrink-0 font-normal tracking-normal normal-case">
+                        {group.status}
+                      </span>
                     ) : null}
                   </h3>
                   <ul className="space-y-0.5 pb-1">
@@ -292,7 +305,7 @@ export function HistoryPanel({
                                 />
                               ) : null}
                             </span>
-                            <span className="text-muted-foreground/60 text-[10px] tabular-nums">
+                            <span className="text-muted-foreground/55 text-[11px] tabular-nums">
                               {item.messages} msg · {dayLabel(item.updatedAt)} {time(item.updatedAt)}
                             </span>
                           </button>
