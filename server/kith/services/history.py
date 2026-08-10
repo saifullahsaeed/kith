@@ -124,6 +124,7 @@ def fold(
     conversation_id: str,
     host: str = "",
     agent_db_path: Path | None = None,
+    force: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Compact ``history`` using the settings' thresholds and the conversation's stored brief.
 
@@ -133,7 +134,19 @@ def fold(
     """
     from kith.services import conversations, tuning
 
-    max_chars = _budget_chars(config, agent_db_path)
+    # `force` is what makes a fold something you can ask for.
+    #
+    # The budget is the right test for a turn defending itself: fold only when the window is
+    # actually tight, because a fold costs a model call. It is the wrong test for a person who
+    # has just asked, and it is the whole reason `/fold` looked broken — the command ran, the
+    # endpoint answered, and the fold declined with "not enough here to be worth folding" on a
+    # conversation of six hundred thousand tokens, because six hundred thousand is still inside
+    # a 1.05M window.
+    #
+    # Asked for, the budget becomes one character: everything but `keep_recent` is old enough to
+    # summarise. Nothing else about the fold changes — same summariser, same brief, same
+    # accumulation onto the previous one.
+    max_chars = 1 if force else _budget_chars(config, agent_db_path)
     keep_recent = int(tuning.value("history_keep_recent"))
     prior = conversations.latest_summary(conversation_id) if conversation_id else {}
     window = int(getattr(config, "context_window", 0) or 0)

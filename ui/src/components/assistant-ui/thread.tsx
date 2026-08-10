@@ -48,6 +48,7 @@ import {
   useAuiState,
   useComposerRuntime,
   unstable_useSlashCommandAdapter,
+  unstable_useTriggerPopoverScopeContext,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
@@ -380,6 +381,46 @@ function SlashItem({
   );
 }
 
+/** Everything in the menu that is chrome rather than behaviour — mounted only while it is open.
+ *
+ *  `TriggerPopover` renders `open ? <div {...props}>{children}</div> : children`: closed, the
+ *  children are still there, just stripped of the container that positions and paints them. It
+ *  has to be that way — the `Action` child registers the behaviour, and a trigger with no
+ *  registered behaviour never opens, so the behaviour child cannot be conditional on being open.
+ *
+ *  The items look after themselves (`TriggerPopoverItems` returns null when closed). Nothing else
+ *  did, so the hint strip and the scroll box rendered in normal flow *inside* the composer with
+ *  none of the popover's styling: "↑↓ move ↵ run esc dismiss" and a hairline sitting on top of an
+ *  empty input, after every dismiss and after every command that ran.
+ */
+function SlashPanel({ children }: { children: ReactNode }) {
+  const { open } = unstable_useTriggerPopoverScopeContext();
+  return open ? <>{children}</> : null;
+}
+
+/** The highlighted command's description in full, in a band of its own under the list.
+ *
+ *  This was a `title` on the row — a native tooltip, which is the OS's to place and the OS's to
+ *  paint. Grey, square, its own font, and on a menu anchored to the bottom of the window there is
+ *  no room beneath the pointer, so it flipped upwards and covered the six commands above the one
+ *  you were reading about. You could not see the list while learning what was on it.
+ *
+ *  Below the list it covers nothing, and it follows the *highlight* rather than the pointer, so
+ *  arrowing through the commands reads them out too — the keyboard path had no description at all.
+ *  Three lines: a skill description is written to tell a model when to reach for the thing, and
+ *  the sentence that says so is always the first one.
+ */
+function SlashDetail() {
+  const { items, highlightedIndex } = unstable_useTriggerPopoverScopeContext();
+  const description = items[highlightedIndex]?.description;
+  if (!description) return null;
+  return (
+    <p className="border-border/50 text-muted-foreground/80 line-clamp-3 shrink-0 border-t px-2.5 py-1.5 text-[11px] leading-relaxed">
+      {description}
+    </p>
+  );
+}
+
 const Composer: FC = () => {
   const composer = useComposerRuntime();
   const { commands, note } = useSlashCommands();
@@ -414,18 +455,29 @@ const Composer: FC = () => {
             <ComposerPrimitive.Unstable_TriggerPopover
               char="/"
               adapter={slash.adapter}
-              // Attached, not floating. It was a `bg-popover` card of its own width, with its
-              // own radius and a drop shadow, hovering two rems above the input — a second
-              // object that happened to appear near the composer rather than part of it.
+              // Inside the box, not on top of it.
               //
-              // So: the composer's own fill and border, the composer's width, the composer's
-              // radius on the top corners and square on the bottom, and a two-pixel overlap so
-              // its fill covers the input's rounded top edge and the seam disappears. It reads
-              // as the composer having grown upwards, which is what it is.
-              className="border-border dark:border-muted-foreground/25 bg-(--composer-bg) absolute inset-x-0 bottom-full -mb-0.5 z-20 flex max-h-72 flex-col overflow-hidden rounded-t-(--composer-radius) border border-b-0 shadow-[0_-8px_28px_-14px_rgba(0,0,0,0.18)] dark:shadow-none"
+              // Twice now this has been a card of its own: first floating two rems above the
+              // input, then flush against it wearing a copy of the composer's fill, border and
+              // radius. Copying the box is not being the box. Two borders still met at the seam,
+              // the composer's rounded top corners still cut their notches out of it, the focus
+              // ring still drew a line straight through the middle, and the whole thing still sat
+              // in its own layer — so it read, correctly, as a second object bolted on top.
+              //
+              // No fill, no border, no radius, no shadow, no `absolute`: an ordinary flex child
+              // of the composer shell, above the input, inheriting the one background and the one
+              // border that were already there. A single hairline divides it from the input. The
+              // box grows upward because there is more inside it, which is the whole idea — and
+              // the composer sits in a `sticky bottom-0` footer, so upward is where it grows.
+              className="border-border/50 flex max-h-72 shrink-0 flex-col overflow-hidden border-b"
             >
             <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
-              <div className="min-h-0 flex-1 overflow-y-auto p-(--composer-padding)">
+            <SlashPanel>
+              {/* No padding of its own any more — the shell already pads, and a second inset
+                  inside the first is what made this look like a panel sitting in a box. The rows
+                  carry `px-2.5`, the same as the input, so a command name starts exactly where
+                  the placeholder does. */}
+              <div className="min-h-0 flex-1 overflow-y-auto py-0.5">
                 <ComposerPrimitive.Unstable_TriggerPopoverItems>
                   {(items) =>
                     items.map((item) => (
@@ -437,11 +489,8 @@ const Composer: FC = () => {
                           // Clamped to one line. A skill's description is written for him — it
                           // tells a model when to reach for the thing, at paragraph length — and
                           // `/code-refactor` rendered eleven lines of it, which pushed every
-                          // other command off the screen. The full text is on hover.
-                          <span
-                            className="text-muted-foreground/80 min-w-0 flex-1 truncate text-[11px]"
-                            title={item.description}
-                          >
+                          // other command off the screen. The rest is in `SlashDetail`, below.
+                          <span className="text-muted-foreground/80 min-w-0 flex-1 truncate text-[11px]">
                             {item.description}
                           </span>
                         ) : null}
@@ -450,13 +499,15 @@ const Composer: FC = () => {
                   }
                 </ComposerPrimitive.Unstable_TriggerPopoverItems>
               </div>
+              <SlashDetail />
               {/* The keys, said out loud. They already worked — the library binds them — but a
                   menu that does not mention them is a menu people click. */}
-              <p className="border-border/50 text-muted-foreground/50 flex shrink-0 gap-3 border-t px-3 py-1.5 font-mono text-[10px]">
+              <p className="border-border/50 text-muted-foreground/50 flex shrink-0 gap-3 border-t px-2.5 py-1.5 font-mono text-[10px]">
                 <span>↑↓ move</span>
                 <span>↵ run</span>
                 <span>esc dismiss</span>
               </p>
+            </SlashPanel>
             </ComposerPrimitive.Unstable_TriggerPopover>
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"

@@ -182,10 +182,26 @@ def fold_now(conversation_id: str):
     messages = conversations.full_messages(conversation_id)
     before = _conversation_chars(messages)
     folded, brief = history.fold(
-        messages, default_config(), conversation_id, ollama_host(), AGENT_DB_PATH
+        messages, default_config(), conversation_id, ollama_host(), AGENT_DB_PATH, force=True
     )
     if brief is None:
-        return jsonify({"folded": False, "note": "There is not enough here to be worth folding."})
+        # Two different answers, and telling them apart is the point. `fold` declines either
+        # because there is barely anything here, or because everything but the recent turns is
+        # already a brief — and reporting both as "not enough here to be worth folding" on a
+        # conversation of six hundred thousand tokens reads as the command being broken. It was
+        # not; it had nothing left to do and said so in the wrong words.
+        already = bool(conversations.latest_summary(conversation_id).get("text"))
+        return jsonify(
+            {
+                "folded": False,
+                "note": (
+                    "Already folded — only the recent turns are left, and those are the ones "
+                    "worth keeping whole."
+                    if already
+                    else "There is not enough here yet to be worth folding."
+                ),
+            }
+        )
     after = _conversation_chars(folded)
     return jsonify({"folded": True, "fromChars": before, "toChars": after})
 
