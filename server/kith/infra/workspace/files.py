@@ -193,6 +193,42 @@ def read_raw(path: str, max_bytes: int = _MAX_UI_READ) -> str:
         raise WorkspaceError(f"cannot read {path}: {exc}") from None
 
 
+#: What ripgrep skips for free, and plain grep does not.
+#:
+#: This is the difference between the fallback being correct and being usable. ripgrep reads
+#: `.gitignore`; `grep -r` walks everything, and everything is mostly dependencies — measured on
+#: this repository, 444 files tracked against 52,753 on disk, a factor of 119. With a 60-match
+#: cap that is not merely slower: the first sixty hits come out of `node_modules` and the line
+#: he was looking for is never reached, so the tool answers confidently with the wrong sixty
+#: lines. Worse than empty, because empty at least reads as "look elsewhere".
+#:
+#: Anyone who installs ripgrep never sees this list. Anyone who downloads a build and does not
+#: have it does, which is most people, so the list is what they get instead of `.gitignore`.
+_SKIP = tuple(
+    f"--exclude-dir={name}"
+    for name in (
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        "out",
+        "release",
+        "coverage",
+        ".next",
+        ".turbo",
+        "target",
+        "vendor",
+        ".cache",
+    )
+)
+
+
 def grep(pattern: str, path: str = ".", glob: str | None = None, max_matches: int = 60) -> str:
     """Search with ripgrep if it is installed, grep if it is not.
 
@@ -219,7 +255,7 @@ def grep(pattern: str, path: str = ".", glob: str | None = None, max_matches: in
         # searched for as that whole string, found nothing, and reported "No matches". The same
         # pattern on the same file gave opposite answers depending on which binary happened to
         # be installed, and ripgrep is not installed here.
-        args = ["grep", "-rInE", "--color=never"]
+        args = ["grep", "-rInE", "--color=never", *_SKIP]
         if glob:
             args += [f"--include={glob}"]
         args += ["-e", pattern, str(target)]
