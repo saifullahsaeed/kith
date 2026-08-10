@@ -2,6 +2,7 @@
 
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
+import { AskPrompt } from "@/components/assistant-ui/ask-prompt";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { TurnStatus, TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
@@ -91,6 +92,9 @@ export type ThreadComponents = {
 
 export type ThreadProps = {
   components?: ThreadComponents | undefined;
+  /** Which conversation is on screen, for the things that have to ask the server about *this*
+   *  one — currently the question he is waiting on. */
+  conversationId?: string | undefined;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
@@ -102,17 +106,17 @@ const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS
 const isNewChatView = (s: AssistantState) =>
   s.thread.messages.length === 0 && (!s.thread.isLoading || s.threads.isLoading);
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, conversationId = "" }) => {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} />
+      <ThreadRoot isEmpty={isEmpty} conversationId={conversationId} />
     </ThreadComponentsContext.Provider>
   );
 };
 
-const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
+const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty, conversationId }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
 
   return (
@@ -197,6 +201,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
             <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
               <ThreadScrollToBottom />
               <ThreadFollowupSuggestions />
+              <AskPrompt conversationId={conversationId} />
               <PermissionPrompt />
               <Composer />
               <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>

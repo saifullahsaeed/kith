@@ -499,7 +499,7 @@ export function Workspace({
                         </div>
                       ) : null}
                       <div className="relative min-h-0 flex-1">
-                        <Thread />
+                        <Thread conversationId={conversationId} />
                       </div>
                     </CheckpointsProvider>
                   </ErrorBoundary>

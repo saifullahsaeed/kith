@@ -133,3 +133,67 @@ class TestWhatHeAsks:
 
     def test_answering_something_that_is_no_longer_open_says_so(self):
         assert questions.answer("nope", [{"skipped": True}]) is False
+
+
+class TestOverTheWire:
+    """The two routes the card actually uses, against a real app.
+
+    Worth its own test because the first attempt at checking this end-to-end was wrong in a
+    way that looked like a bug: the tool was called in the test process while the routes ran
+    in a separate server, and the open-question registry is per-process, so the card saw
+    nothing. In the app they are one process — the turn runs on a thread inside it — which is
+    exactly what this exercises.
+    """
+
+    def test_the_card_can_read_the_question_and_answer_it(self, tmp_path):
+        import importlib
+        import os
+
+        from kith import settings as settings_module
+
+        before = os.environ.get("KITH_DATA_DIR")
+        os.environ["KITH_DATA_DIR"] = str(tmp_path / "data")
+        importlib.reload(settings_module)
+        try:
+            from kith import create_app
+            from kith.api import auth
+
+            auth._cached = None
+            app = create_app()
+            app.config.update(TESTING=True)
+            client = app.test_client()
+            headers = {"X-Kith-Token": auth.token(settings_module.DATA_DIR)}
+
+            got: list[dict] = []
+            thread = threading.Thread(
+                target=lambda: got.append(questions.ask("wire", _asked("Which way?"), deadline=10)),
+                daemon=True,
+            )
+            thread.start()
+            time.sleep(0.3)
+            assert got == [], "the turn should still be waiting"
+
+            seen = client.get("/api/chat/wire/question", headers=headers).get_json()
+            assert seen["questions"][0]["question"] == "Which way?"
+            # Normalised on the way out, so the card renders one shape whichever he wrote.
+            assert seen["questions"][0]["options"][0] == {"label": "Left", "description": ""}
+
+            posted = client.post(
+                f"/api/questions/{seen['id']}/answer",
+                json={"answers": [{"chosen": ["Left"], "text": "for now"}]},
+                headers=headers,
+            ).get_json()
+            assert posted == {"answered": True}
+
+            thread.join(timeout=5)
+            assert got[0]["answers"][0]["chosen"] == ["Left"]
+            assert got[0]["answers"][0]["text"] == "for now"
+
+            # And nothing is left for the card to draw once it is answered.
+            assert client.get("/api/chat/wire/question", headers=headers).get_json() == {}
+        finally:
+            if before is None:
+                os.environ.pop("KITH_DATA_DIR", None)
+            else:
+                os.environ["KITH_DATA_DIR"] = before
+            importlib.reload(settings_module)
