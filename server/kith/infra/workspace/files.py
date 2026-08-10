@@ -201,18 +201,38 @@ def grep(pattern: str, path: str = ".", glob: str | None = None, max_matches: in
     """
     target = Path(resolve(path))
     permissions.require_path("read", target, root())
+    # Said before searching, because "no matches under a path that is not there" is a sentence
+    # that sends you looking for a better pattern.
+    if not target.exists():
+        return f"There is nothing at {path} to search."
+
     if shutil.which("rg"):
         args = ["rg", "--line-number", "--no-heading", "--color", "never", "--max-columns", "300"]
         if glob:
             args += ["--glob", glob]
         args += ["-e", pattern, str(target)]
     else:
-        args = ["grep", "-rIn", "--color=never"]
+        # `-E`, and this is the bug that made the tool look broken most of the time.
+        #
+        # ripgrep takes an extended regex, so `a|b` means "a or b". Plain `grep -e` takes a
+        # *basic* one, where `|` is the literal character — so `_parse_mcp_json|connector` was
+        # searched for as that whole string, found nothing, and reported "No matches". The same
+        # pattern on the same file gave opposite answers depending on which binary happened to
+        # be installed, and ripgrep is not installed here.
+        args = ["grep", "-rInE", "--color=never"]
         if glob:
             args += [f"--include={glob}"]
         args += ["-e", pattern, str(target)]
-    result = run_command(f"{shlex.join(args)} 2>/dev/null | head -n {int(max_matches)}", timeout=60)
+    # Errors are kept, not discarded. `2>/dev/null` meant a bad regex, an unreadable directory
+    # and a genuine absence of matches all arrived as empty output — and empty output was
+    # reported as "No matches", so every failure was indistinguishable from a successful search
+    # that found nothing, and there was nothing to correct.
+    result = run_command(f"{shlex.join(args)} 2>&1 | head -n {int(max_matches)}", timeout=60)
     out = result.output.strip()
+    # 0 found something, 1 found nothing, anything else went wrong — the convention both
+    # binaries share. 141 is `head` closing the pipe early, which is not a failure.
+    if result.exit_code not in (0, 1, 141) and out:
+        return f"The search failed: {_clip(out)}"
     if not out:
         return f"No matches for {pattern!r} under {path}."
     lines = out.splitlines()
