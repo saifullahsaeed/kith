@@ -265,6 +265,15 @@
 
 .window-controls-gap {
   padding-left: calc(var(--window-controls-inset) + 1rem);
+  transition: padding-left 180ms ease;
+}
+
+/* Full screen hides the traffic lights, so the room reserved for them is just a hole — and it
+   is a hole on the one layout where the width was the whole point. The attribute is set by the
+   desktop shell on enter/leave-full-screen (see `window.ts`); in a browser tab it never
+   appears, which is correct, because there are no window controls to clear there either. */
+[data-desktop-fullscreen] .window-controls-gap {
+  padding-left: 1rem;
 }
 
 [data-desktop] .window-drag-region {

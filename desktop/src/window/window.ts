@@ -41,6 +41,18 @@ export function createMainWindow(): BrowserWindow {
     // Don't show an empty frame while the backend is still being waited on.
     show: false,
     titleBarStyle: "hiddenInset",
+    // Centred against the header, not against a title bar that isn't there.
+    //
+    // `hiddenInset` puts the lights where a standard toolbar would want them, which is a few
+    // pixels above the middle of ours: the header is 10px of padding, a 32px control row and
+    // 10px again, so its centre is at 26 and a 12px light wants its top at 20. Left alone they
+    // sat high enough to read as misaligned with the icons beside them — which on a window with
+    // no title bar is the only vertical rhythm there is.
+    //
+    // `x` is the inset Electron already used. If it moves, `--window-controls-inset` in
+    // `index.css` has to move with it: that variable is what stops the header's first button
+    // being drawn underneath them.
+    trafficLightPosition: { x: 13, y: 20 },
     webPreferences: {
       // Stated rather than assumed. These ARE the defaults; writing them down
       // means a future edit has to disagree in public rather than by omission.
@@ -84,6 +96,36 @@ export function createMainWindow(): BrowserWindow {
   window.on("closed", () => {
     mainWindow_ = null;
   });
+
+  /* Tell the page when the traffic lights are not there.
+   *
+   * Full screen hides them, and the header goes on reserving the 78px of space they occupied —
+   * so the first control sits a thumb's width in from the edge with nothing in the gap, on the
+   * one layout where every pixel of width was the point of going full screen. Safari does the
+   * opposite and slides its controls left into the space.
+   *
+   * A one-way injection rather than a preload: main already reaches into the document this way
+   * (see the chrome probe in `main.ts`), and adding a contextBridge to publish one boolean
+   * would be a permanent hole opened for a padding rule. The renderer cannot ask for this and
+   * does not need to — it is told, and CSS does the rest.
+   */
+  const setFullScreen = (on: boolean) => {
+    if (window.isDestroyed()) return;
+    window.webContents
+      .executeJavaScript(
+        on
+          ? 'document.documentElement.dataset.desktopFullscreen = "1";'
+          : "delete document.documentElement.dataset.desktopFullscreen;",
+      )
+      .catch(() => {
+        // The page may be mid-navigation or gone. A padding rule is not worth a crash.
+      });
+  };
+  window.on("enter-full-screen", () => setFullScreen(true));
+  window.on("leave-full-screen", () => setFullScreen(false));
+  // A window restored into full screen never fires `enter-full-screen`, so the page would come
+  // up reserving room for controls that are not on screen.
+  window.webContents.on("did-finish-load", () => setFullScreen(window.isFullScreen()));
 
   mainWindow_ = window;
   return window;
