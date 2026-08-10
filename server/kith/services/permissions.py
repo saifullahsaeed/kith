@@ -17,21 +17,34 @@ Three modes, and the shape of them is deliberate:
 * **bypass** — no gate at all. Named honestly: it is what the container used to make safe
   and nothing makes safe now.
 
-Approval does not block. A gated action fails with an explanation, records a pending
-request, and he is told to ask — so he says so in his own words, you click Allow, and he
-tries again. The alternative was holding a tool call open on a background thread waiting
-for a click that may never come, on a turn you may have walked away from.
+Approval blocks. A gated action records a pending request and waits on your answer: allow it
+and the call proceeds, refuse it and the call fails as it always did.
+
+It did not, for a long time, and the reasoning was that holding a tool call open means waiting
+for a click that may never come, on a turn you may have walked away from. Both halves of that
+stopped being true — a turn runs on its own thread and survives the window closing, and it can
+be rejoined from wherever you come back to, so the prompt is reachable rather than lost.
+
+What the old shape cost was that the popup and the turn had nothing to do with one another. The
+call had already failed and the turn had moved past it by the time you saw the question, so
+clicking Allow granted the permission for next time and the thing you allowed never happened.
+That reads as the button not working.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
+
+#: How each request was answered, by id. Separate from `Request` because that is frozen —
+#: it describes what he wanted, which does not change, and the verdict is a different fact.
+_answered: dict[str, bool] = {}
 
 MODE_KEY = "permission_mode"
 GRANTS_KEY = "permission_grants"
@@ -209,6 +222,10 @@ class Request:
     what: str
     why: str
     at: float = field(default_factory=time.time)
+    #: Set by `approve` or `deny`. The tool call that raised this request is parked on it.
+    #: Only ever `.set()`, never reassigned — this dataclass is frozen, and the verdict itself
+    #: lives in `_answered` for that reason.
+    settled: threading.Event = field(default_factory=threading.Event)
 
     def public(self) -> dict:
         return {"id": self.id, "kind": self.kind, "what": self.what, "why": self.why, "at": self.at}
@@ -423,16 +440,68 @@ def _refuse(kind: Kind, what: str, why: str, signature: str) -> Decision:
     )
 
 
+#: How long a refused action waits to be allowed before giving up. The same figure a question
+#: waits, and for the same reason: long enough to walk away from and come back to, short enough
+#: that a forgotten window does not hold a thread until the process dies.
+_DEADLINE_SECONDS = 15 * 60
+
+
+def _wait_for(decision: Decision) -> None:
+    """Hold the tool call until the request is answered, then let it through or refuse it.
+
+    This used to refuse immediately and say "ask them to allow it", and the reasoning for that
+    is written at the top of this module: holding a tool call open means waiting for a click
+    that may never come, on a turn you may have walked away from. Both halves stopped being
+    true — a turn runs on its own thread and survives the window closing, and it can now be
+    rejoined from wherever you come back to, so the prompt is reachable again rather than lost.
+
+    What it fixes is that the popup and the turn had nothing to do with each other. You clicked
+    Allow on a request the turn had already given up on and moved past, so the permission was
+    granted for next time and the thing you allowed did not happen.
+
+    Denial and the deadline both still raise, because the caller's contract is unchanged: this
+    either returns because the action may proceed, or it raises `Denied`.
+    """
+    request = decision.request
+    if request is None:
+        raise Denied(decision)
+
+    # Only when somebody is there to answer.
+    #
+    # "A click that may never come" is still exactly right when nothing is watching — a
+    # reminder firing at four in the morning, a scheduled continuation, a test. Those refuse
+    # immediately as they always did, because waiting would park a thread on a prompt drawn on
+    # nobody's screen. The whole suite hung on this before the guard existed, which is the same
+    # failure a background job would have hit in the small hours.
+    from kith.services import session_context
+
+    if not session_context.current():
+        raise Denied(decision)
+
+    if not request.settled.wait(timeout=_DEADLINE_SECONDS):
+        raise Denied(decision)
+    if not _answered.get(request.id):
+        raise Denied(decision)
+
+
 def require_path(kind: Kind, target: Path, root: Path) -> None:
     decision = check_path(kind, target, root)
     if not decision.allowed:
-        raise Denied(decision)
+        _wait_for(decision)
 
 
 def require_command(command: str, root: Path) -> None:
     decision = check_command(command, root)
     if not decision.allowed:
-        raise Denied(decision)
+        _wait_for(decision)
+
+
+def release_waiting() -> None:
+    """Stop waiting on every open request, without allowing any. Called when a turn is stopped —
+    a turn parked on a permission is not reading the stop switch."""
+    for request in list(_pending.values()):
+        _answered[request.id] = False
+        request.settled.set()
 
 
 # --------------------------------------------------------------------------- #
@@ -453,6 +522,8 @@ def approve(request_id: str, scope: str = "session") -> dict:
     if scope == "always":
         _remember_always(signature)
     _session_grants.add(signature)
+    _answered[request.id] = True
+    request.settled.set()
     return request.public()
 
 
@@ -460,6 +531,8 @@ def deny(request_id: str) -> dict:
     request = _pending.pop(request_id, None)
     if request is None:
         raise KeyError(request_id)
+    _answered[request.id] = False
+    request.settled.set()
     return request.public()
 
 

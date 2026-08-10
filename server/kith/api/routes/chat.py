@@ -33,6 +33,7 @@ from kith.services import (
     history,
     live_turns,
     memory_context,
+    permissions,
     questions,
     session_context,
     touched,
@@ -126,6 +127,7 @@ def _stop(conversation_id: str) -> bool:
     # on an event — so setting the flag alone would leave Stop doing nothing for up to fifteen
     # minutes. Released first, so the tool returns and the loop reaches its next check.
     questions.release(conversation_id)
+    permissions.release_waiting()
     event = _current(conversation_id)
     if event is None:
         return False

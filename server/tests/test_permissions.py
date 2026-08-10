@@ -8,6 +8,8 @@ refusals, not the permissions.
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import ClassVar
 
@@ -239,3 +241,115 @@ class TestTakingBackOneGrant:
         # Standing and session-only are different lifetimes, but "forget this" means
         # forget it — leaving the session copy behind would look like the click did nothing.
         assert not permissions.granted("cmd:killing other programs")
+
+
+class TestWaitingForYourAnswer:
+    """Allow now lets the call through, instead of granting it for next time.
+
+    The old shape refused immediately and told him to ask. So by the time the prompt was in
+    front of you the call had already failed and the turn had moved past it: clicking Allow
+    granted the permission for some future attempt and the thing you allowed never happened.
+    From a chair that is a button that does nothing.
+
+    Blocking is only safe because a turn now survives you closing the window and can be
+    rejoined — otherwise the prompt would be unreachable and the turn parked on it.
+    """
+
+    def test_allowing_lets_the_waiting_call_through(self, tmp_path, monkeypatch):
+        from kith.services import session_context
+
+        root = tmp_path / "work"
+        root.mkdir()
+        outside = tmp_path / "elsewhere" / "notes.txt"
+        outside.parent.mkdir()
+        outside.write_text("x")
+
+        permissions.set_mode("ask")
+        outcome: list[str] = []
+
+        def call():
+            # A conversation is what makes anybody able to answer, so it is what makes this wait.
+            with session_context.working_in("c1"):
+                try:
+                    permissions.require_path("read", outside, root)
+                    outcome.append("allowed")
+                except permissions.Denied:
+                    outcome.append("denied")
+
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        assert outcome == [], "it decided without waiting to be asked"
+
+        waiting = permissions.pending()
+        assert waiting, "nothing was queued up to answer"
+        permissions.approve(waiting[0]["id"])
+        thread.join(timeout=5)
+
+        assert outcome == ["allowed"], "the call it was holding open did not go through"
+
+    def test_denying_refuses_it_there_and_then(self, tmp_path):
+        from kith.services import session_context
+
+        root = tmp_path / "work"
+        root.mkdir()
+        outside = tmp_path / "elsewhere" / "notes.txt"
+        outside.parent.mkdir()
+        outside.write_text("x")
+
+        permissions.set_mode("ask")
+        outcome: list[str] = []
+        thread = threading.Thread(
+            target=lambda: outcome.append(_try(permissions, session_context, outside, root)), daemon=True
+        )
+        thread.start()
+        time.sleep(0.3)
+        permissions.deny(permissions.pending()[0]["id"])
+        thread.join(timeout=5)
+        assert outcome == ["denied"]
+
+    def test_with_nobody_there_it_refuses_at_once(self, tmp_path):
+        """A reminder firing at four in the morning has no one to click Allow, so waiting would
+        park a thread on a prompt drawn on nobody's screen. The whole suite hung on exactly this
+        before the guard existed."""
+        root = tmp_path / "work"
+        root.mkdir()
+        outside = tmp_path / "elsewhere" / "notes.txt"
+        outside.parent.mkdir()
+        outside.write_text("x")
+
+        permissions.set_mode("ask")
+        started = time.time()
+        with pytest.raises(permissions.Denied):
+            permissions.require_path("read", outside, root)
+        assert time.time() - started < 1, "it waited for an answer nobody could give"
+
+    def test_stopping_a_turn_releases_a_waiting_call(self, tmp_path):
+        from kith.services import session_context
+
+        root = tmp_path / "work"
+        root.mkdir()
+        outside = tmp_path / "elsewhere" / "notes.txt"
+        outside.parent.mkdir()
+        outside.write_text("x")
+
+        permissions.set_mode("ask")
+        outcome: list[str] = []
+        thread = threading.Thread(
+            target=lambda: outcome.append(_try(permissions, session_context, outside, root)), daemon=True
+        )
+        thread.start()
+        time.sleep(0.3)
+
+        permissions.release_waiting()
+        thread.join(timeout=5)
+        assert outcome == ["denied"], "Stop has to reach a turn parked on a permission too"
+
+
+def _try(permissions_module, session_context, target, root) -> str:
+    with session_context.working_in("c1"):
+        try:
+            permissions_module.require_path("read", target, root)
+            return "allowed"
+        except permissions_module.Denied:
+            return "denied"
