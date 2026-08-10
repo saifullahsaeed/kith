@@ -355,9 +355,40 @@ const Composer: FC = () => {
       >
         <ComposerQuoteStrip />
         <ComposerAttachmentStrip />
-        {/* The menu, the filtering and the keys are the library's. All this file supplies is
-            the list — see `useSlashCommands`. */}
-        <ComposerPrimitive.Unstable_TriggerPopover char="/" {...slash} />
+        {/* Four parts, and it needs all four — spreading the adapter hook's return onto the
+            popover, which is what its own example implies, throws
+            `useTriggerPopoverRootContext must be used within TriggerPopoverRoot` and takes the
+            composer down with it. A Root to hold the trigger state, the popover keyed on the
+            character, exactly one behaviour child (`Action` runs a command; `Directive` is for
+            mentions, which insert text), and an explicit item list — it renders nothing at all
+            without that last one. */}
+        <ComposerPrimitive.Unstable_TriggerPopoverRoot>
+          <ComposerPrimitive.Unstable_TriggerPopover
+            char="/"
+            adapter={slash.adapter}
+            className="border-border/60 bg-popover absolute bottom-full left-0 z-20 mb-2 max-h-72 w-[22rem] overflow-y-auto rounded-xl border p-1 shadow-lg backdrop-blur-sm"
+          >
+            <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
+            <ComposerPrimitive.Unstable_TriggerPopoverItems>
+              {(items) =>
+                items.map((item) => (
+                  <ComposerPrimitive.Unstable_TriggerPopoverItem
+                    key={item.id}
+                    item={item}
+                    className="data-[highlighted]:bg-accent flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-1.5 text-left"
+                  >
+                    <span className="font-mono text-xs">/{item.label ?? item.id}</span>
+                    {item.description ? (
+                      <span className="text-muted-foreground text-[11px] leading-snug">
+                        {item.description}
+                      </span>
+                    ) : null}
+                  </ComposerPrimitive.Unstable_TriggerPopoverItem>
+                ))
+              }
+            </ComposerPrimitive.Unstable_TriggerPopoverItems>
+          </ComposerPrimitive.Unstable_TriggerPopover>
+        </ComposerPrimitive.Unstable_TriggerPopoverRoot>
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"
           className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
@@ -379,9 +410,7 @@ const Composer: FC = () => {
       </div>
       {/* A command has no reply to appear in, so it says what it did here. Without this,
           `/fold` was indistinguishable from a keystroke that did nothing. */}
-      {note ? (
-        <p className="text-muted-foreground/70 px-2 pt-1 text-[11px]">{note}</p>
-      ) : null}
+      {note ? <p className="text-muted-foreground/70 px-2 pt-1 text-[11px]">{note}</p> : null}
       <ComposerMeter />
     </ComposerPrimitive.Root>
   );
