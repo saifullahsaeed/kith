@@ -25,6 +25,7 @@ from kith.domain import clock
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.schemas import (
+    AnswerSchema,
     ChatRequestSchema,
 )
 from kith.services import (
@@ -32,6 +33,7 @@ from kith.services import (
     history,
     live_turns,
     memory_context,
+    questions,
     session_context,
     touched,
 )
@@ -120,11 +122,34 @@ def _current(conversation_id: str) -> threading.Event | None:
 
 def _stop(conversation_id: str) -> bool:
     """Ask the turn running in a conversation to stop. False if there was none."""
+    # A turn parked on a question is not reading the switch — it is inside a tool call, waiting
+    # on an event — so setting the flag alone would leave Stop doing nothing for up to fifteen
+    # minutes. Released first, so the tool returns and the loop reaches its next check.
+    questions.release(conversation_id)
     event = _current(conversation_id)
     if event is None:
         return False
     event.set()
     return True
+
+
+@api.get("/chat/<conversation_id>/question")
+@api.doc(
+    summary="The question this conversation is waiting on, if any",
+    description="Read on attaching to a turn already in flight, whose question card scrolled past before you were watching.",
+)
+def open_question(conversation_id: str):
+    return jsonify(questions.open_question(conversation_id) or {})
+
+
+@api.post("/questions/<question_id>/answer")
+@api.doc(
+    summary="Answer a question he is waiting on",
+    description="Releases the turn. One entry per question: chosen labels, free text, or skipped.",
+)
+@api.input(AnswerSchema, arg_name="payload")
+def answer_question(question_id: str, payload: dict):
+    return jsonify({"answered": questions.answer(question_id, payload.get("answers") or [])})
 
 
 @api.post("/chat/<conversation_id>/stop")

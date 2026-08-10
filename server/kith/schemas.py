@@ -85,3 +85,24 @@ class ChatRequestSchema(Schema):
 class HealthSchema(Schema):
     ok = Boolean(metadata={"description": "The backend is up"})
     ollamaReachable = Boolean(metadata={"description": "Ollama answered a probe"})
+
+
+class ReplySchema(Schema):
+    """One question's answer. All three may be present: they picked an option and typed a
+    caveat alongside it, which is the commonest real answer to a multiple-choice question."""
+
+    class Meta:
+        unknown = EXCLUDE
+
+    chosen = List(String(), metadata={"description": "Labels of the options picked, in order."})
+    text = String(metadata={"description": "What they typed instead of, or alongside, an option."})
+    skipped = Boolean(metadata={"description": "They would rather he decided."})
+
+
+class AnswerSchema(Schema):
+    """The answers to one `ask`, in the order the questions were put."""
+
+    class Meta:
+        unknown = EXCLUDE
+
+    answers = List(Nested(ReplySchema), required=True)

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from kith.services import custom_tools, permissions, touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
+    asking,
     code,
     computer,
     identity,

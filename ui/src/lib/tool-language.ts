@@ -129,6 +129,10 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   cancel_schedule: { verb: "cleared a schedule", group: "time" },
   // reaching out
   reach_out: { verb: "reached out to you", group: "outreach" },
+  // Present tense, alone in this table, and deliberately: every other phrase describes
+  // something already done, while this one is still happening — the turn is parked on it
+  // until you answer.
+  ask: { verb: "is asking you", group: "outreach" },
   // knowledge and the web
   search_sources: { verb: "searched your sources for", of: "query", group: "search" },
   read_source: { verb: "read a source you gave him", group: "reading" },
