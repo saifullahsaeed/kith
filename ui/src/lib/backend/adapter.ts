@@ -7,6 +7,7 @@ import type {
 import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
+import { foldNow, stopTurn } from "@/lib/commands";
 import { readEvents, toWireMessages } from "./stream";
 import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
@@ -87,6 +88,25 @@ export function createBackendAdapter(conversation?: {
 }): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
+      /* A slash command never becomes a turn.
+       *
+       * The menu is not enough on its own. Typing `/fold` and pressing Enter sends text like
+       * any other text — which is what happened: the command went to the model as a prompt, the
+       * conversation was over its window, and the turn folded itself on the way past. 349,000
+       * characters summarised, a real model call, and the command itself never ran.
+       *
+       * Intercepted here rather than in the composer because this is the one place every route
+       * to sending passes through — Enter, the button, a paste, a suggestion. A menu selection
+       * that fills the box and a hand-typed command now do the same thing.
+       */
+      const typed = lastUserText(messages);
+      const command = matchCommand(typed);
+      if (command) {
+        const result = await command.run(conversation?.get() ?? "");
+        yield { content: [{ type: "text", text: result }] };
+        return;
+      }
+
       const body = JSON.stringify({
         messages: toWireMessages(messages),
         // Omitted on the first turn; the server opens one and tells us which.
@@ -315,6 +335,32 @@ export async function resumeTurn(conversationId: string): Promise<AsyncGenerator
   // 204 is "nothing is running"; a body is the backlog followed by the rest as it happens.
   if (!response || response.status === 204 || !response.ok || !response.body) return null;
   return readTurn(response);
+}
+
+/** The text of the message just sent, or "" — commands are only ever the whole of it. */
+function lastUserText(messages: readonly { role: string; content: readonly unknown[] }[]): string {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "user") return "";
+  const parts = last.content as readonly { type?: string; text?: string }[];
+  return parts
+    .filter((part) => part?.type === "text")
+    .map((part) => part.text ?? "")
+    .join("")
+    .trim();
+}
+
+/** Which command this is, if it is one. Unknown slashes fall through to him on purpose: he can
+ *  answer "what does /foo do" and a hard error could not. */
+function matchCommand(text: string): { run: (conversationId: string) => Promise<string> } | null {
+  if (!text.startsWith("/")) return null;
+  const [word] = text.slice(1).split(/\s+/, 1);
+  if (word === "fold") {
+    return { run: async (id) => (await foldNow(id)).note };
+  }
+  if (word === "stop") {
+    return { run: async (id) => (await stopTurn(id)).note };
+  }
+  return null;
 }
 
 function isAbort(error: unknown): boolean {
