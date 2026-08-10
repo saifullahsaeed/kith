@@ -65,44 +65,63 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
   const items = task.checklist ?? [];
   const done = items.filter((one) => Boolean(one.done)).length;
 
+  const pct = items.length ? Math.round((done / items.length) * 100) : 0;
+
   return (
-    <div className="mx-auto mb-2 w-full max-w-(--thread-max-width) px-4">
-      <div className="border-border/60 bg-card/60 rounded-xl border px-3 py-2 backdrop-blur">
-        <div className="flex items-baseline gap-2">
-          <ListChecks className="text-kith mt-0.5 size-3.5 shrink-0 self-start" />
+    <div className="mx-auto mb-1.5 w-full max-w-(--thread-max-width) px-4">
+      {/* Quieter than the composer, deliberately. It had the same border weight and the same
+          text size, so two boxes of equal loudness sat on top of each other and the one you
+          type into was not obviously the subject. This is a status line: it should be readable
+          when you look for it and ignorable when you are not. */}
+      <div className="border-border/40 bg-muted/25 rounded-lg border px-2.5 py-2">
+        <div className="flex items-center gap-2">
+          <ListChecks className="text-kith/70 size-3.5 shrink-0" />
           <a
             href={pathForTask(task.id)}
-            className="min-w-0 flex-1 truncate text-xs font-medium hover:underline"
+            className="text-muted-foreground hover:text-foreground min-w-0 flex-1 truncate text-[11px] transition-colors"
             title={task.goal}
           >
-            <span className="text-muted-foreground/70 me-1.5 font-mono">#{task.id}</span>
+            <span className="text-muted-foreground/50 me-1.5 font-mono">#{task.id}</span>
             {task.goal}
           </a>
+
+          {/* The count sits with a bar rather than alone at the far right, where it was a
+              number with nothing to compare itself to. Two glances become one. */}
           {items.length > 0 ? (
-            <span className="text-muted-foreground/70 shrink-0 font-mono text-[11px] tabular-nums">
-              {done}/{items.length}
+            <span className="flex shrink-0 items-center gap-1.5">
+              <span className="bg-border/70 h-1 w-10 overflow-hidden rounded-full">
+                <span
+                  className="bg-roam block h-full rounded-full transition-[width] duration-500"
+                  style={{ width: `${pct}%` }}
+                />
+              </span>
+              <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
+                {done}/{items.length}
+              </span>
             </span>
           ) : null}
         </div>
 
         {items.length > 0 ? (
-          <ul className="mt-1.5 flex flex-col gap-0.5 ps-[22px]">
+          <ul className="mt-2 flex flex-col gap-1 ps-[22px]">
             {items.map((item) => {
               const ticked = Boolean(item.done);
               return (
-                <li key={item.id} className="flex items-baseline gap-1.5 text-[11px]">
+                <li key={item.id} className="flex items-start gap-2 text-[11px] leading-snug">
                   <span
                     className={cn(
-                      "mt-[3px] flex size-3 shrink-0 items-center justify-center rounded-[3px] border",
-                      ticked ? "bg-roam border-roam text-background" : "border-border/70",
+                      "mt-[2px] flex size-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+                      ticked ? "bg-roam border-roam text-background" : "border-muted-foreground/30",
                     )}
                   >
-                    {ticked ? <Check className="size-2" /> : null}
+                    {ticked ? <Check className="size-2" strokeWidth={3} /> : null}
                   </span>
                   <span
                     className={cn(
                       "min-w-0 flex-1",
-                      ticked ? "text-muted-foreground/50 line-through" : "text-muted-foreground",
+                      ticked
+                        ? "text-muted-foreground/40 line-through"
+                        : "text-muted-foreground/90",
                     )}
                   >
                     {item.text}
