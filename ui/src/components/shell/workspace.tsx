@@ -43,20 +43,20 @@ import {
   type ServerConfig,
 } from "@/lib/backend";
 
-const MIND_MIN = 320;
-const MIND_MAX = 720;
-const MIND_DEFAULT = 400;
+const WORK_MIN = 320;
+const WORK_MAX = 720;
+const WORK_DEFAULT = 400;
 
 /** The room the chat needs before anything else may have any.
  *
- * With Conversations and Mind both pinned open at fixed widths, a 1024px window left the
+ * With Conversations and Work both pinned open at fixed widths, a 1024px window left the
  * thread 370px and prose wrapped to three words a line — a paragraph became a column. Neither
  * panel yielded, because neither knew the other existed. So the two thresholds below are the
- * order in which they give way: Mind first, since it is the ancillary one, then Conversations,
+ * order in which they give way: Work first, since it is the ancillary one, then Conversations,
  * which stops taking a column of its own and covers instead. */
 const CHAT_FLOOR = 560;
 const HISTORY_WIDTH = 256;
-const MIND_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + MIND_MIN; // 1136
+const WORK_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + WORK_MIN; // 1136
 const HISTORY_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + 96; // 912
 
 /** Where the open conversation is remembered across a reload.
@@ -251,15 +251,15 @@ export function Workspace({
   const activity = useActivity();
   const inbox = useMessages();
   const { mood } = useMood();
-  // Home is two windows — Chat and Mind — side by side. Mind can be collapsed to
+  // Home is two windows — Chat and Work — side by side. Work can be collapsed to
   // give Chat the whole room, and the split is draggable (and remembered).
-  const [mindOpen, setMindOpen] = useState(true);
-  const [mindWidth, setMindWidth] = useState(() => {
+  const [workOpen, setWorkOpen] = useState(true);
+  const [workWidth, setWorkWidth] = useState(() => {
     try {
       const v = Number(localStorage.getItem("kith-work-width"));
-      return v >= MIND_MIN && v <= MIND_MAX ? v : MIND_DEFAULT;
+      return v >= WORK_MIN && v <= WORK_MAX ? v : WORK_DEFAULT;
     } catch {
-      return MIND_DEFAULT;
+      return WORK_DEFAULT;
     }
   });
   // The Control Panel (and which tab/task is open) lives in the URL, so deep
@@ -275,21 +275,21 @@ export function Workspace({
 
   /* Which panels the window can currently afford.
    *
-   * `squeezed` is kept apart from `mindOpen` on purpose: one is the window's opinion and the
-   * other is yours. Collapsing Mind by writing to `mindOpen` would overwrite your choice, so
+   * `squeezed` is kept apart from `workOpen` on purpose: one is the window's opinion and the
+   * other is yours. Collapsing Work by writing to `workOpen` would overwrite your choice, so
    * widening the window again would leave it shut and look like the app had forgotten. Held
    * this way, narrowing hides it and widening brings back exactly what you had.
    *
-   * Opening Mind by hand while narrow wins — you asked for it — until the window crosses the
+   * Opening Work by hand while narrow wins — you asked for it — until the window crosses the
    * threshold again, which is the point at which the question is genuinely being re-asked. */
   const [viewport, setViewport] = useState(() => window.innerWidth);
-  const [squeezed, setSqueezed] = useState(() => window.innerWidth < MIND_YIELDS_BELOW);
+  const [squeezed, setSqueezed] = useState(() => window.innerWidth < WORK_YIELDS_BELOW);
   useEffect(() => {
-    let wasNarrow = window.innerWidth < MIND_YIELDS_BELOW;
+    let wasNarrow = window.innerWidth < WORK_YIELDS_BELOW;
     const measure = () => {
       setViewport(window.innerWidth);
-      const narrow = window.innerWidth < MIND_YIELDS_BELOW;
-      // Only on the crossing, so a hand-opened Mind is not slammed shut by every resize event
+      const narrow = window.innerWidth < WORK_YIELDS_BELOW;
+      // Only on the crossing, so a hand-opened Work is not slammed shut by every resize event
       // of a drag that never leaves the narrow range.
       if (narrow !== wasNarrow) {
         wasNarrow = narrow;
@@ -301,32 +301,32 @@ export function Workspace({
   }, []);
 
   const covering = viewport < HISTORY_YIELDS_BELOW;
-  const mindVisible = mindOpen && !squeezed;
-  const toggleMind = useCallback(() => {
+  const workVisible = workOpen && !squeezed;
+  const toggleWork = useCallback(() => {
     if (squeezed) {
       setSqueezed(false);
-      setMindOpen(true);
-    } else setMindOpen((open) => !open);
+      setWorkOpen(true);
+    } else setWorkOpen((open) => !open);
   }, [squeezed]);
   // Clamped to what is actually there rather than to what you dragged it to once on a wider
   // window. A remembered 720 on a 1100px window is a chat column of nothing.
-  const mindRoom = Math.max(
-    MIND_MIN,
-    Math.min(mindWidth, viewport - CHAT_FLOOR - (historyOpen && !covering ? HISTORY_WIDTH : 0)),
+  const workRoom = Math.max(
+    WORK_MIN,
+    Math.min(workWidth, viewport - CHAT_FLOOR - (historyOpen && !covering ? HISTORY_WIDTH : 0)),
   );
 
   const startResize = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     const onMove = (ev: PointerEvent) => {
-      const w = Math.max(MIND_MIN, Math.min(MIND_MAX, window.innerWidth - ev.clientX));
-      setMindWidth(w);
+      const w = Math.max(WORK_MIN, Math.min(WORK_MAX, window.innerWidth - ev.clientX));
+      setWorkWidth(w);
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
-      setMindWidth((w) => {
+      setWorkWidth((w) => {
         try {
           localStorage.setItem("kith-work-width", String(w));
         } catch {
@@ -395,12 +395,12 @@ export function Workspace({
               onOpenHistory={() => setHistoryOpen((open) => !open)}
               onNewConversation={newConversation}
               unread={inbox.unread}
-              mindOpen={mindVisible}
+              workOpen={workVisible}
               onOpenInbox={() => {
                 inbox.enableNotifications();
                 navigate(pathForMessages());
               }}
-              onOpenMind={toggleMind}
+              onOpenWork={toggleWork}
               onOpenPanel={() => navigate(pathForTab("overview"))}
               onOpenSettings={() => navigate(pathForSettings())}
             />
@@ -506,7 +506,7 @@ export function Workspace({
                 </div>
               </div>
               {/* draggable divider */}
-              {mindVisible ? (
+              {workVisible ? (
                 <div
                   onPointerDown={startResize}
                   className="group relative z-10 w-1.5 shrink-0 cursor-col-resize"
@@ -517,15 +517,15 @@ export function Workspace({
                   <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/60 transition-colors group-hover:bg-kith/60 group-active:bg-kith" />
                 </div>
               ) : null}
-              {/* Mind window */}
-              {mindVisible ? (
-                <div style={{ width: mindRoom }} className="shrink-0">
+              {/* Work window */}
+              {workVisible ? (
+                <div style={{ width: workRoom }} className="shrink-0">
                   <ErrorBoundary where="Work" compact>
                     <WorkPanel
                       activity={activity}
                       conversationId={conversationId}
-                      width={mindRoom}
-                      onClose={() => setMindOpen(false)}
+                      width={workRoom}
+                      onClose={() => setWorkOpen(false)}
                       onReview={reviewFinished}
                       onApprove={approvePlan}
                     />

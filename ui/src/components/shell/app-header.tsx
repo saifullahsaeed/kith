@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, Brain, LayoutDashboard, Moon, PanelLeft, Plus, Settings2, Sun } from "lucide-react";
+import { Activity, Bell, LayoutDashboard, Moon, PanelLeft, Plus, Settings2, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -9,7 +9,7 @@ import { moodHue, type Mood } from "@/lib/backend/mood";
 import { cn } from "@/lib/utils";
 
 /** The presence bar: Kith as a living thing (orb + mood + what he's doing right
- * now), then his inbox, mind, panel, and settings. */
+ * now), then his inbox, work, panel, and settings. */
 export function AppHeader({
   working,
   status,
@@ -19,12 +19,12 @@ export function AppHeader({
   supportsEffort = false,
   onEffort,
   unread,
-  mindOpen,
+  workOpen,
   historyOpen,
   onOpenHistory,
   onNewConversation,
   onOpenInbox,
-  onOpenMind,
+  onOpenWork,
   onOpenPanel,
   onOpenSettings,
 }: {
@@ -38,12 +38,12 @@ export function AppHeader({
   supportsEffort?: boolean;
   onEffort?: (effort: string) => void;
   unread: number;
-  mindOpen?: boolean;
+  workOpen?: boolean;
   historyOpen?: boolean;
   onOpenHistory?: () => void;
   onNewConversation?: () => void;
   onOpenInbox: () => void;
-  onOpenMind: () => void;
+  onOpenWork: () => void;
   onOpenPanel: () => void;
   onOpenSettings: () => void;
 }) {
@@ -168,16 +168,16 @@ export function AppHeader({
       <Button
         variant="ghost"
         size="sm"
-        aria-pressed={mindOpen}
+        aria-pressed={workOpen}
         className={
-          mindOpen
+          workOpen
             ? "gap-1.5 bg-accent text-foreground"
             : "gap-1.5 text-muted-foreground hover:text-foreground"
         }
-        onClick={onOpenMind}
+        onClick={onOpenWork}
       >
-        <Brain className="size-4" />
-        Mind
+        <Activity className="size-4" />
+        Work
         {working ? <span className="ml-0.5 size-1.5 animate-pulse rounded-full bg-roam" /> : null}
       </Button>
       <Button
@@ -191,7 +191,7 @@ export function AppHeader({
       </Button>
 
       {/* Utilities, behind their own rule: switches get icons. Without the divider these sat
-          in the same run as Mind and Panel, so a labelled destination and an unlabelled toggle
+          in the same run as Work and Panel, so a labelled destination and an unlabelled toggle
           read as two members of one confused set. */}
       <span className="bg-border/60 mx-1 h-4 w-px" aria-hidden />
       <Button
