@@ -307,6 +307,23 @@ export function Workspace({
   // and settings already are, not state a click sets and a notification has no way to reach.
   const inboxOpen = route.inboxOpen;
 
+  /* A notification that lands you in the chat it is about.
+
+     A question he is waiting on lives in exactly one conversation, and the answer can only be
+     given there — so "he needs you" that drops you into whichever chat you last had open is a
+     notification that has not finished its job. `/chat/<id>` is the one route that could not be
+     expressed before.
+
+     Guarded on already being there, or every render would reopen it and throw away the thread
+     you are reading. */
+  useEffect(() => {
+    const wanted = route.conversationId;
+    if (!wanted || wanted === conversationId) return;
+    void openConversation(wanted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.conversationId]);
+
+
   /* Which panels the window can currently afford.
    *
    * `squeezed` is kept apart from `workOpen` on purpose: one is the window's opinion and the

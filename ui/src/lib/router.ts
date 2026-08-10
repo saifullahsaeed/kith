@@ -7,6 +7,9 @@
  *   /control-panel/<tab>       → the panel open on a tab (e.g. /control-panel/memories)
  *   /tasks/<id>                → the panel open on that task's detail
  *   /settings/<tab>            → settings on a tab (model | tools | chat | advanced)
+ *   /chat/<id>                 → that conversation open, which is where a question he is
+ *                                waiting on has to land — the answer is in one chat and
+ *                                nowhere else
  *   /messages                  → the inbox open, for a notice with nothing narrower to
  *                                point at (a reach-out, a stall, a session resting itself)
  */
@@ -54,6 +57,9 @@ export type Route = {
   taskId: number | null;
   settingsTab: SettingsTab | null;
   inboxOpen: boolean;
+  /** A conversation to open. Notifications need it: "he is waiting on an answer" is useless
+   *  if it lands you in whichever chat you happened to have open. */
+  conversationId: string | null;
 };
 
 /** Read the current URL into the app's view state. */
@@ -63,6 +69,7 @@ const HOME: Route = {
   taskId: null,
   settingsTab: null,
   inboxOpen: false,
+  conversationId: null,
 };
 
 export function parseLocation(pathname: string = window.location.pathname): Route {
@@ -81,6 +88,10 @@ export function parseLocation(pathname: string = window.location.pathname): Rout
     const tab = slugTab(pathname.split("/")[2] ?? "") ?? "overview";
     return { ...HOME, panelOpen: true, tab };
   }
+  if (pathname.startsWith("/chat/")) {
+    const id = pathname.split("/")[2] ?? "";
+    if (id) return { ...HOME, conversationId: decodeURIComponent(id) };
+  }
   if (pathname.startsWith("/messages")) {
     return { ...HOME, inboxOpen: true };
   }
@@ -92,3 +103,4 @@ export const pathForTab = (tab: PanelTab) => `/control-panel/${tabSlug(tab)}`;
 export const pathForTask = (id: number) => `/tasks/${id}`;
 export const pathForSettings = (tab: SettingsTab = "model") => `/settings/${tab}`;
 export const pathForMessages = () => "/messages";
+export const pathForConversation = (id: string) => `/chat/${encodeURIComponent(id)}`;

@@ -466,6 +466,8 @@ def _wait_for(decision: Decision) -> None:
     if request is None:
         raise Denied(decision)
 
+    _tell_them(request)
+
     # Only when somebody is there to answer.
     #
     # "A click that may never come" is still exactly right when nothing is watching — a
@@ -482,6 +484,37 @@ def _wait_for(decision: Decision) -> None:
         raise Denied(decision)
     if not _answered.get(request.id):
         raise Denied(decision)
+
+
+def _tell_them(request: Request) -> None:
+    """Raise the badge and the desktop notification for something he cannot do yet.
+
+    The prompt sits in the conversation, so without this it is only visible if you happen to be
+    looking at that chat — and now that the gate waits rather than failing forward, not seeing
+    it means a turn parked for fifteen minutes rather than a request quietly queued.
+
+    Linked to the conversation when there is one. A refusal outside a conversation is not
+    announced at all: nothing is waiting on it, because unattended work refuses at once.
+
+    Best-effort. A notification that cannot be delivered must never take down the call that
+    produced it.
+    """
+    try:
+        from kith.config import AGENT_DB_PATH
+        from kith.infra.db import repositories as repo
+        from kith.services import session_context
+
+        conversation_id = session_context.current()
+        if not conversation_id:
+            return
+        repo.messages.add_message(
+            AGENT_DB_PATH,
+            f"I need your say-so before I can {request.kind} {request.what}.",
+            link=f"/chat/{conversation_id}",
+            kind="asked",
+        )
+    except Exception:
+        pass
 
 
 def require_path(kind: Kind, target: Path, root: Path) -> None:

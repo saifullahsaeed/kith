@@ -101,6 +101,7 @@ def ask(conversation_id: str, raw: list, deadline: float = _DEADLINE_SECONDS) ->
         return {"ok": False, "error": "ask needs at least one question with at least one option"}
 
     question = Question(id=uuid.uuid4().hex[:12], conversation_id=conversation_id, asked=asked)
+    _tell_them(conversation_id, asked)
     with _LOCK:
         # One open question per conversation. A second would put two cards on screen with no
         # way to tell which turn is waiting on which.
@@ -127,6 +128,33 @@ def ask(conversation_id: str, raw: list, deadline: float = _DEADLINE_SECONDS) ->
         with _LOCK:
             if _OPEN.get(conversation_id) is question:
                 del _OPEN[conversation_id]
+
+
+def _tell_them(conversation_id: str, asked: list[dict]) -> None:
+    """Raise the badge and the desktop notification, pointing at the chat that is waiting.
+
+    Without this the question is only visible in the conversation it was asked in, so walking
+    away — or simply being in another chat when he asks — means a turn parked for fifteen
+    minutes on a card nobody knew existed. The link is the conversation and not the inbox,
+    because the answer can only be given in one place.
+
+    Best-effort, and deliberately so: a notification that cannot be delivered must never take
+    down the tool call that produced it. He still asked; the card is still there.
+    """
+    try:
+        from kith.config import AGENT_DB_PATH
+        from kith.infra.db import repositories as repo
+
+        first = asked[0]["question"]
+        more = f" (+{len(asked) - 1} more)" if len(asked) > 1 else ""
+        repo.messages.add_message(
+            AGENT_DB_PATH,
+            f"I need an answer before I can carry on: {first}{more}",
+            link=f"/chat/{conversation_id}",
+            kind="asked",
+        )
+    except Exception:
+        pass
 
 
 def open_question(conversation_id: str) -> dict | None:
