@@ -362,6 +362,10 @@ const Composer: FC = () => {
             character, exactly one behaviour child (`Action` runs a command; `Directive` is for
             mentions, which insert text), and an explicit item list — it renders nothing at all
             without that last one. */}
+        {/* The Root wraps the input as well as the popover, and that is the bit I got wrong
+            twice. The trigger watches what is being typed; the input has to be inside the same
+            Root for it to see anything at all. Wrapped around only the popover, the menu mounts
+            and never opens — no error, no missing part, nothing to notice. */}
         <ComposerPrimitive.Unstable_TriggerPopoverRoot>
           <ComposerPrimitive.Unstable_TriggerPopover
             char="/"
@@ -388,7 +392,6 @@ const Composer: FC = () => {
               }
             </ComposerPrimitive.Unstable_TriggerPopoverItems>
           </ComposerPrimitive.Unstable_TriggerPopover>
-        </ComposerPrimitive.Unstable_TriggerPopoverRoot>
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"
           className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
@@ -406,6 +409,7 @@ const Composer: FC = () => {
             for (const file of files) void composer.addAttachment(file);
           }}
         />
+        </ComposerPrimitive.Unstable_TriggerPopoverRoot>
         <ComposerAction />
       </div>
       {/* A command has no reply to appear in, so it says what it did here. Without this,
