@@ -3,6 +3,7 @@
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { AskPrompt } from "@/components/assistant-ui/ask-prompt";
+import { useSlashCommands } from "@/components/assistant-ui/slash-commands";
 import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
@@ -46,6 +47,7 @@ import {
   type ToolCallMessagePartComponent,
   useAuiState,
   useComposerRuntime,
+  unstable_useSlashCommandAdapter,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
@@ -336,6 +338,8 @@ const ThreadSuggestionItem: FC = () => {
 
 const Composer: FC = () => {
   const composer = useComposerRuntime();
+  const { commands, note } = useSlashCommands();
+  const slash = unstable_useSlashCommandAdapter({ commands, removeOnExecute: true });
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       {/* No `AttachmentDropzone` around this. It made this box the only place in the window
@@ -351,6 +355,9 @@ const Composer: FC = () => {
       >
         <ComposerQuoteStrip />
         <ComposerAttachmentStrip />
+        {/* The menu, the filtering and the keys are the library's. All this file supplies is
+            the list — see `useSlashCommands`. */}
+        <ComposerPrimitive.Unstable_TriggerPopover char="/" {...slash} />
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"
           className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
@@ -370,6 +377,11 @@ const Composer: FC = () => {
         />
         <ComposerAction />
       </div>
+      {/* A command has no reply to appear in, so it says what it did here. Without this,
+          `/fold` was indistinguishable from a keystroke that did nothing. */}
+      {note ? (
+        <p className="text-muted-foreground/70 px-2 pt-1 text-[11px]">{note}</p>
+      ) : null}
       <ComposerMeter />
     </ComposerPrimitive.Root>
   );

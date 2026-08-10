@@ -163,6 +163,33 @@ def working_on(conversation_id: str):
     return jsonify(repo.tasks.working_in(AGENT_DB_PATH, conversation_id) or {})
 
 
+@api.post("/chat/<conversation_id>/fold")
+@api.doc(
+    summary="Fold this conversation's older turns into a brief, now",
+    description="What a turn does for itself when the window gets tight, asked for on purpose.",
+)
+def fold_now(conversation_id: str):
+    """Summarise the older half of a conversation on demand.
+
+    The fold already exists; it just could not be *asked* for. A turn folds itself when the
+    window gets tight, which means the one moment you might want it — before sending something
+    long into a conversation you know is bloated — is the one moment it will not happen, and
+    the fold instead lands in the middle of the turn you were waiting on.
+
+    Reports what it removed, in the same shape the automatic one streams, so the interface can
+    say the same sentence either way.
+    """
+    messages = conversations.full_messages(conversation_id)
+    before = _conversation_chars(messages)
+    folded, brief = history.fold(
+        messages, default_config(), conversation_id, ollama_host(), AGENT_DB_PATH
+    )
+    if brief is None:
+        return jsonify({"folded": False, "note": "There is not enough here to be worth folding."})
+    after = _conversation_chars(folded)
+    return jsonify({"folded": True, "fromChars": before, "toChars": after})
+
+
 @api.post("/chat/<conversation_id>/stop")
 @api.doc(
     summary="Stop the turn running in a conversation",
