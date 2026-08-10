@@ -367,31 +367,54 @@ const Composer: FC = () => {
             Root for it to see anything at all. Wrapped around only the popover, the menu mounts
             and never opens — no error, no missing part, nothing to notice. */}
         <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-          <ComposerPrimitive.Unstable_TriggerPopover
-            char="/"
-            adapter={slash.adapter}
-            className="border-border/60 bg-popover absolute bottom-full left-0 z-20 mb-2 max-h-72 w-[22rem] overflow-y-auto rounded-xl border p-1 shadow-lg backdrop-blur-sm"
-          >
-            <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
-            <ComposerPrimitive.Unstable_TriggerPopoverItems>
-              {(items) =>
-                items.map((item) => (
-                  <ComposerPrimitive.Unstable_TriggerPopoverItem
-                    key={item.id}
-                    item={item}
-                    className="data-[highlighted]:bg-accent flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-1.5 text-left"
-                  >
-                    <span className="font-mono text-xs">/{item.label ?? item.id}</span>
-                    {item.description ? (
-                      <span className="text-muted-foreground text-[11px] leading-snug">
-                        {item.description}
-                      </span>
-                    ) : null}
-                  </ComposerPrimitive.Unstable_TriggerPopoverItem>
-                ))
-              }
-            </ComposerPrimitive.Unstable_TriggerPopoverItems>
-          </ComposerPrimitive.Unstable_TriggerPopover>
+          {/* A positioned parent, because `absolute` needs one. Without it the menu resolved
+              against whatever ancestor happened to be positioned and floated over the middle of
+              the conversation. */}
+          <div className="relative">
+            <ComposerPrimitive.Unstable_TriggerPopover
+              char="/"
+              adapter={slash.adapter}
+              className="border-border/60 bg-popover/95 absolute bottom-full left-0 z-20 mb-2 flex max-h-64 w-[26rem] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-xl border shadow-xl backdrop-blur-md"
+            >
+              <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
+              <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                <ComposerPrimitive.Unstable_TriggerPopoverItems>
+                  {(items) =>
+                    items.map((item) => (
+                      <ComposerPrimitive.Unstable_TriggerPopoverItem
+                        key={item.id}
+                        item={item}
+                        className="data-[highlighted]:bg-accent flex w-full items-baseline gap-2.5 rounded-lg px-2.5 py-1.5 text-left"
+                      >
+                        <span className="text-foreground shrink-0 font-mono text-xs">
+                          /{item.label ?? item.id}
+                        </span>
+                        {item.description ? (
+                          // Clamped to one line. A skill's description is written for him — it
+                          // tells a model when to reach for the thing, at paragraph length — and
+                          // `/code-refactor` rendered eleven lines of it, which pushed every
+                          // other command off the screen. The full text is on hover.
+                          <span
+                            className="text-muted-foreground/80 min-w-0 flex-1 truncate text-[11px]"
+                            title={item.description}
+                          >
+                            {item.description}
+                          </span>
+                        ) : null}
+                      </ComposerPrimitive.Unstable_TriggerPopoverItem>
+                    ))
+                  }
+                </ComposerPrimitive.Unstable_TriggerPopoverItems>
+              </div>
+              {/* The keys, said out loud. They already worked — the library binds them — but a
+                  menu that does not mention them is a menu people click. */}
+              <p className="border-border/50 text-muted-foreground/50 flex shrink-0 gap-3 border-t px-3 py-1.5 font-mono text-[10px]">
+                <span>↑↓ move</span>
+                <span>↵ run</span>
+                <span>esc dismiss</span>
+              </p>
+            </ComposerPrimitive.Unstable_TriggerPopover>
+          </div>
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"
           className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
