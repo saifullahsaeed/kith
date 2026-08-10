@@ -74,6 +74,8 @@ import {
   type ComponentType,
   type FC,
   type PropsWithChildren,
+  type ReactNode,
+  useEffect,
 } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
@@ -336,6 +338,48 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
+/** One row of the slash menu, which scrolls itself into view when the keys reach it.
+ *
+ *  Arrow keys moved the highlight and the list did not follow, so anything past the fourth
+ *  command was selected invisibly — the keys "worked" and you could not see what they had
+ *  landed on, which is worse than them not working.
+ *
+ *  A MutationObserver on the element's own `data-highlighted`, because the library sets that
+ *  attribute directly and there is no callback to subscribe to. `block: "nearest"` so it moves
+ *  the list by the minimum needed rather than jumping the selection to the middle.
+ */
+function SlashItem({
+  item,
+  children,
+}: {
+  item: Parameters<typeof ComposerPrimitive.Unstable_TriggerPopoverItem>[0]["item"];
+  children: ReactNode;
+}) {
+  const row = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const follow = () => {
+      if (el.hasAttribute("data-highlighted")) el.scrollIntoView({ block: "nearest" });
+    };
+    follow();
+    const watch = new MutationObserver(follow);
+    watch.observe(el, { attributes: true, attributeFilter: ["data-highlighted"] });
+    return () => watch.disconnect();
+  }, []);
+
+  return (
+    <ComposerPrimitive.Unstable_TriggerPopoverItem
+      ref={row}
+      item={item}
+      className="data-[highlighted]:bg-accent flex w-full items-baseline gap-2.5 rounded-lg px-2.5 py-1.5 text-left"
+    >
+      {children}
+    </ComposerPrimitive.Unstable_TriggerPopoverItem>
+  );
+}
+
 const Composer: FC = () => {
   const composer = useComposerRuntime();
   const { commands, note } = useSlashCommands();
@@ -351,7 +395,7 @@ const Composer: FC = () => {
         // A full-strength border and a real focus ring, rather than border/60 and a shadow.
         // On warm paper a 60% border over a card that barely differs from the background was
         // a suggestion of an input; you had to know it was there.
-        className="border-border dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] dark:shadow-none"
+        className="border-border dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 relative flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] dark:shadow-none"
       >
         <ComposerQuoteStrip />
         <ComposerAttachmentStrip />
@@ -367,25 +411,17 @@ const Composer: FC = () => {
             Root for it to see anything at all. Wrapped around only the popover, the menu mounts
             and never opens — no error, no missing part, nothing to notice. */}
         <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-          {/* A positioned parent, because `absolute` needs one. Without it the menu resolved
-              against whatever ancestor happened to be positioned and floated over the middle of
-              the conversation. */}
-          <div className="relative">
             <ComposerPrimitive.Unstable_TriggerPopover
               char="/"
               adapter={slash.adapter}
               className="border-border/60 bg-popover/95 absolute bottom-full left-0 z-20 mb-2 flex max-h-64 w-[26rem] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-xl border shadow-xl backdrop-blur-md"
             >
-              <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
+            <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
               <div className="min-h-0 flex-1 overflow-y-auto p-1">
                 <ComposerPrimitive.Unstable_TriggerPopoverItems>
                   {(items) =>
                     items.map((item) => (
-                      <ComposerPrimitive.Unstable_TriggerPopoverItem
-                        key={item.id}
-                        item={item}
-                        className="data-[highlighted]:bg-accent flex w-full items-baseline gap-2.5 rounded-lg px-2.5 py-1.5 text-left"
-                      >
+                      <SlashItem key={item.id} item={item}>
                         <span className="text-foreground shrink-0 font-mono text-xs">
                           /{item.label ?? item.id}
                         </span>
@@ -401,7 +437,7 @@ const Composer: FC = () => {
                             {item.description}
                           </span>
                         ) : null}
-                      </ComposerPrimitive.Unstable_TriggerPopoverItem>
+                      </SlashItem>
                     ))
                   }
                 </ComposerPrimitive.Unstable_TriggerPopoverItems>
@@ -414,7 +450,6 @@ const Composer: FC = () => {
                 <span>esc dismiss</span>
               </p>
             </ComposerPrimitive.Unstable_TriggerPopover>
-          </div>
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"
           className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
