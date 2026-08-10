@@ -41,6 +41,13 @@ if [[ "$what" == "all" || "$what" == "ui" ]]; then
   cd "${here}/ui"
   # --force so a stale .tsbuildinfo cannot report success for code it never looked at.
   step "tsc" npx tsc -b --force
+  # Between tsc and the build, because a type error makes every component test fail in the same
+  # unhelpful way, and a broken build is worth knowing about even when the tests pass.
+  #
+  # This step is why it exists: five interface changes shipped broken in one day, every one of
+  # them with tsc green, because tsc checks that the types agree and nothing checked that the
+  # thing worked. That difference was landing on whoever was looking at the screen.
+  step "vitest" npm test --silent
   step "vite build" npm run build
 fi
 
