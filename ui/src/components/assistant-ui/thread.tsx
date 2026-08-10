@@ -414,10 +414,18 @@ const Composer: FC = () => {
             <ComposerPrimitive.Unstable_TriggerPopover
               char="/"
               adapter={slash.adapter}
-              className="border-border/60 bg-popover/95 absolute bottom-full left-0 z-20 mb-2 flex max-h-64 w-[26rem] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-xl border shadow-xl backdrop-blur-md"
+              // Attached, not floating. It was a `bg-popover` card of its own width, with its
+              // own radius and a drop shadow, hovering two rems above the input — a second
+              // object that happened to appear near the composer rather than part of it.
+              //
+              // So: the composer's own fill and border, the composer's width, the composer's
+              // radius on the top corners and square on the bottom, and a two-pixel overlap so
+              // its fill covers the input's rounded top edge and the seam disappears. It reads
+              // as the composer having grown upwards, which is what it is.
+              className="border-border dark:border-muted-foreground/25 bg-(--composer-bg) absolute inset-x-0 bottom-full -mb-0.5 z-20 flex max-h-72 flex-col overflow-hidden rounded-t-(--composer-radius) border border-b-0 shadow-[0_-8px_28px_-14px_rgba(0,0,0,0.18)] dark:shadow-none"
             >
             <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
-              <div className="min-h-0 flex-1 overflow-y-auto p-1">
+              <div className="min-h-0 flex-1 overflow-y-auto p-(--composer-padding)">
                 <ComposerPrimitive.Unstable_TriggerPopoverItems>
                   {(items) =>
                     items.map((item) => (
