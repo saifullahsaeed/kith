@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, CornerDownLeft, Pencil } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, CornerDownLeft, Pencil } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -10,6 +10,33 @@ import {
   type Reply,
 } from "@/lib/backend/questions";
 import { cn } from "@/lib/utils";
+
+/** One step of the pager. Disabled rather than hidden, so the control does not move about
+ *  under the cursor as you page. */
+function Step({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+      className="text-muted-foreground/70 hover:text-foreground flex size-5 items-center justify-center rounded transition-colors disabled:pointer-events-none disabled:opacity-25"
+    >
+      {children}
+    </button>
+  );
+}
 
 /**
  * A question he is waiting on, where you would reply to him.
@@ -32,8 +59,10 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
   const [open, setOpen] = useState<OpenQuestion | null>(null);
   const [replies, setReplies] = useState<Reply[]>([]);
   const [at, setAt] = useState(0);
+  /** How far you have got. Forward paging stops here so it never skips a question you have
+   *  not seen, while still letting you return from one you went back to. */
+  const [furthest, setFurthest] = useState(0);
   const [sending, setSending] = useState(false);
-  const typed = useRef<HTMLInputElement>(null);
 
   // Which question the answers on screen belong to. A ref rather than reading `open` inside
   // the poll, because the two updates have to be decided together: setting state from inside
@@ -52,6 +81,7 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
           // A different question: start again rather than carry answers across.
           setReplies((found?.questions ?? []).map(() => ({ chosen: [], text: "", skipped: false })));
           setAt(0);
+          setFurthest(0);
         })
         .catch(() => {});
     load();
@@ -90,11 +120,17 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
     return all;
   };
 
-  /** Move on, or finish. One question is answered by picking; several page forward. */
+  /** Move on, or finish. One question is answered by picking; several page forward.
+   *
+   *  "Last" is the last *question*, not the furthest you have reached — so answering question
+   *  two after paging back to it goes to three rather than submitting the lot. */
   const advance = (next: Reply) => {
     const all = update(next);
     if (last) void send(all);
-    else setAt(at + 1);
+    else {
+      setFurthest((was) => Math.max(was, at + 1));
+      setAt(at + 1);
+    }
   };
 
   const choose = (label: string) => {
@@ -124,9 +160,25 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
               </span>
             ) : null}
           </p>
+          {/* Both ways, because a single-choice question answers itself the moment you click —
+              so overshooting is one careless click away and there was no way back from it.
+              Forward is only offered once you have been past, so it moves between answers you
+              have already given rather than skipping ones you have not. */}
           {open.questions.length > 1 ? (
-            <span className="text-muted-foreground/60 shrink-0 font-mono text-[11px] tabular-nums">
-              {at + 1} of {open.questions.length}
+            <span className="flex shrink-0 items-center gap-0.5">
+              <Step label="Previous question" onClick={() => setAt(at - 1)} disabled={at === 0}>
+                <ChevronLeft className="size-3.5" />
+              </Step>
+              <span className="text-muted-foreground/60 font-mono text-[11px] tabular-nums">
+                {at + 1} of {open.questions.length}
+              </span>
+              <Step
+                label="Next question"
+                onClick={() => setAt(at + 1)}
+                disabled={at >= furthest || last}
+              >
+                <ChevronRight className="size-3.5" />
+              </Step>
             </span>
           ) : null}
         </div>
@@ -177,25 +229,30 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
 
         <div className="mt-1.5 flex items-center gap-2">
           <Pencil className="text-muted-foreground/50 size-3.5 shrink-0" />
+          {/* Controlled, and that is a fix rather than a preference. Uncontrolled with
+              `defaultValue`, React keeps the same input element across a change of question —
+              same position, same type — so what you typed for question one was sitting in the
+              box for question two, already looking like your answer. Bound to the reply, the
+              box shows what that question holds and nothing else, and paging back shows your
+              words again instead of losing them. */}
           <input
-            ref={typed}
-            defaultValue={reply.text}
+            value={reply.text}
+            onChange={(event) => update({ ...reply, text: event.target.value })}
             placeholder="Something else…"
             aria-label="Answer in your own words"
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
               event.preventDefault();
-              const text = event.currentTarget.value.trim();
-              if (!text && !reply.chosen.length) return;
-              advance({ ...reply, text, skipped: false });
+              if (!reply.text.trim() && !reply.chosen.length) return;
+              advance({ ...reply, text: reply.text.trim(), skipped: false });
             }}
             className="min-w-0 flex-1 bg-transparent py-1.5 text-xs outline-none"
           />
-          {question.multiple && reply.chosen.length > 0 ? (
+          {reply.chosen.length > 0 || reply.text.trim() ? (
             <Button
               size="sm"
               className="h-7 gap-1.5 text-xs"
-              onClick={() => advance({ ...reply, text: typed.current?.value.trim() ?? "" })}
+              onClick={() => advance({ ...reply, text: reply.text.trim(), skipped: false })}
             >
               {last ? "Done" : "Next"}
               <CornerDownLeft className="size-3" />
