@@ -3,7 +3,6 @@
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { AskPrompt } from "@/components/assistant-ui/ask-prompt";
-import { useSlashCommands } from "@/components/assistant-ui/slash-commands";
 import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
@@ -47,7 +46,6 @@ import {
   type ToolCallMessagePartComponent,
   useAuiState,
   useComposerRuntime,
-  unstable_useSlashCommandAdapter,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
@@ -74,8 +72,6 @@ import {
   type ComponentType,
   type FC,
   type PropsWithChildren,
-  type ReactNode,
-  useEffect,
 } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
@@ -338,52 +334,8 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
-/** One row of the slash menu, which scrolls itself into view when the keys reach it.
- *
- *  Arrow keys moved the highlight and the list did not follow, so anything past the fourth
- *  command was selected invisibly — the keys "worked" and you could not see what they had
- *  landed on, which is worse than them not working.
- *
- *  A MutationObserver on the element's own `data-highlighted`, because the library sets that
- *  attribute directly and there is no callback to subscribe to. `block: "nearest"` so it moves
- *  the list by the minimum needed rather than jumping the selection to the middle.
- */
-function SlashItem({
-  item,
-  children,
-}: {
-  item: Parameters<typeof ComposerPrimitive.Unstable_TriggerPopoverItem>[0]["item"];
-  children: ReactNode;
-}) {
-  const row = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const el = row.current;
-    if (!el) return;
-    const follow = () => {
-      if (el.hasAttribute("data-highlighted")) el.scrollIntoView({ block: "nearest" });
-    };
-    follow();
-    const watch = new MutationObserver(follow);
-    watch.observe(el, { attributes: true, attributeFilter: ["data-highlighted"] });
-    return () => watch.disconnect();
-  }, []);
-
-  return (
-    <ComposerPrimitive.Unstable_TriggerPopoverItem
-      ref={row}
-      item={item}
-      className="data-[highlighted]:bg-accent flex w-full items-baseline gap-2.5 rounded-lg px-2.5 py-1.5 text-left"
-    >
-      {children}
-    </ComposerPrimitive.Unstable_TriggerPopoverItem>
-  );
-}
-
 const Composer: FC = () => {
   const composer = useComposerRuntime();
-  const { commands, note } = useSlashCommands();
-  const slash = unstable_useSlashCommandAdapter({ commands, removeOnExecute: true });
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       {/* No `AttachmentDropzone` around this. It made this box the only place in the window
@@ -410,54 +362,18 @@ const Composer: FC = () => {
             twice. The trigger watches what is being typed; the input has to be inside the same
             Root for it to see anything at all. Wrapped around only the popover, the menu mounts
             and never opens — no error, no missing part, nothing to notice. */}
-        <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-            <ComposerPrimitive.Unstable_TriggerPopover
-              char="/"
-              adapter={slash.adapter}
-              // Attached, not floating. It was a `bg-popover` card of its own width, with its
-              // own radius and a drop shadow, hovering two rems above the input — a second
-              // object that happened to appear near the composer rather than part of it.
-              //
-              // So: the composer's own fill and border, the composer's width, the composer's
-              // radius on the top corners and square on the bottom, and a two-pixel overlap so
-              // its fill covers the input's rounded top edge and the seam disappears. It reads
-              // as the composer having grown upwards, which is what it is.
-              className="border-border dark:border-muted-foreground/25 bg-(--composer-bg) absolute inset-x-0 bottom-full -mb-0.5 z-20 flex max-h-72 flex-col overflow-hidden rounded-t-(--composer-radius) border border-b-0 shadow-[0_-8px_28px_-14px_rgba(0,0,0,0.18)] dark:shadow-none"
-            >
-            <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
-              <div className="min-h-0 flex-1 overflow-y-auto p-(--composer-padding)">
-                <ComposerPrimitive.Unstable_TriggerPopoverItems>
-                  {(items) =>
-                    items.map((item) => (
-                      <SlashItem key={item.id} item={item}>
-                        <span className="text-foreground shrink-0 font-mono text-xs">
-                          /{item.label ?? item.id}
-                        </span>
-                        {item.description ? (
-                          // Clamped to one line. A skill's description is written for him — it
-                          // tells a model when to reach for the thing, at paragraph length — and
-                          // `/code-refactor` rendered eleven lines of it, which pushed every
-                          // other command off the screen. The full text is on hover.
-                          <span
-                            className="text-muted-foreground/80 min-w-0 flex-1 truncate text-[11px]"
-                            title={item.description}
-                          >
-                            {item.description}
-                          </span>
-                        ) : null}
-                      </SlashItem>
-                    ))
-                  }
-                </ComposerPrimitive.Unstable_TriggerPopoverItems>
-              </div>
-              {/* The keys, said out loud. They already worked — the library binds them — but a
-                  menu that does not mention them is a menu people click. */}
-              <p className="border-border/50 text-muted-foreground/50 flex shrink-0 gap-3 border-t px-3 py-1.5 font-mono text-[10px]">
-                <span>↑↓ move</span>
-                <span>↵ run</span>
-                <span>esc dismiss</span>
-              </p>
-            </ComposerPrimitive.Unstable_TriggerPopover>
+        {/* No slash menu, and this is the second time it has come out.
+            `Unstable_TriggerPopover` throws `useTriggerPopoverRootContext must be used within
+            ComposerPrimitive.TriggerPopoverRoot` and takes the whole conversation down with it —
+            an error boundary reading "The conversation stopped working", not a missing feature.
+            Wrapping the Root around the popover failed; wrapping it around the input as well
+            failed the same way, so the requirement is something else again and I have not found
+            what. It is not worth a crashing composer to keep looking in the dark.
+
+            The commands themselves do not need it. `lib/commands.ts` is wired into the adapter's
+            `run`, so typing `/fold` or `/stop` and pressing Enter runs the command and never
+            reaches the model — see `adapter.ts`. What is missing is only the menu that would
+            have told you they exist. */}
         <ComposerPrimitive.Input
           placeholder="say something to Kith…"
           className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
@@ -475,12 +391,8 @@ const Composer: FC = () => {
             for (const file of files) void composer.addAttachment(file);
           }}
         />
-        </ComposerPrimitive.Unstable_TriggerPopoverRoot>
         <ComposerAction />
       </div>
-      {/* A command has no reply to appear in, so it says what it did here. Without this,
-          `/fold` was indistinguishable from a keystroke that did nothing. */}
-      {note ? <p className="text-muted-foreground/70 px-2 pt-1 text-[11px]">{note}</p> : null}
       <ComposerMeter />
     </ComposerPrimitive.Root>
   );
