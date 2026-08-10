@@ -35,6 +35,7 @@ import {
 } from "@/lib/router";
 import {
   createBackendAdapter,
+  resumeTurn,
   fetchConversation,
   USAGE_PART,
   type ContextLedger,
@@ -181,6 +182,39 @@ export function Workspace({
     },
     [runtime],
   );
+
+  /* Rejoin the turn already running in the conversation you just opened.
+
+     The screen is a window onto a turn, not the thing running it. The turn lives on the server,
+     on its own thread, and carries on whether or not anybody is watching — but until now the
+     watching could only ever start at the beginning, so switching away mid-answer and coming
+     back showed a message frozen where you left it, and the finished reply only appeared after
+     a reload. Everything the turn said in between was reachable (`live_turns` kept it) and
+     nothing asked for it.
+
+     It matters more than a cosmetic catch-up now that he can block on a question and on a
+     permission: a card you cannot see is a turn that looks hung, and the answer it is waiting
+     for is one you have no way to give.
+
+     Guarded on `isRunning`, because the thread is already streaming when *this* window started
+     the turn — resuming then would put a second reader on the same events and render them
+     twice. */
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    void resumeTurn(conversationId).then((stream) => {
+      if (cancelled || !stream) return;
+      const state = runtime.thread.getState();
+      if (state.isRunning) return;
+      runtime.thread.resumeRun({
+        parentId: state.messages.at(-1)?.id ?? null,
+        stream: () => stream,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, threadKey, runtime]);
 
   const openConversation = useCallback(async (id: string) => {
     const detail = await fetchConversation(id).catch(() => null);

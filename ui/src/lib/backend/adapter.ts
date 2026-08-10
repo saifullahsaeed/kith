@@ -1,4 +1,8 @@
-import type { ChatModelAdapter, ThreadAssistantMessagePart } from "@assistant-ui/react";
+import type {
+  ChatModelAdapter,
+  ChatModelRunResult,
+  ThreadAssistantMessagePart,
+} from "@assistant-ui/react";
 
 import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
@@ -143,144 +147,174 @@ export function createBackendAdapter(conversation?: {
 
       if (!response) throw new Error(lastError || "Could not start the turn.");
 
-      const pieces: Piece[] = [];
-      const toolById = new Map<string, ToolPart>();
-      // One entry per model request. Kept out of `pieces` because the total belongs at
-      // the foot of the message, not wherever its round happened to land.
-      const rounds: Usage[] = [];
-      // The most recent reading of the context window, and whether this turn had to fold
-      // itself to keep going. Both belong on the same footer as the token count.
-      let context: ContextLedger | undefined;
-      // Round one's reading — before this turn's own tool calls added anything, so it's what
-      // actually carried over from the conversation so far. See turn-usage.tsx for why this,
-      // not `context`, is the headline number.
-      let baseline: ContextLedger | undefined;
-      let folded = false;
-  /** How much prose the pre-turn fold removed, when it said. Rendered while it runs, which
-   *  is the point — before this the wait was a dead composer with nothing on it. */
-  let foldedChars: { from: number; to: number } | undefined;
-  /** The round being retried, while it is being retried. Cleared the moment anything else
-   *  arrives, because by then the retry has plainly worked. */
-  let retrying: { attempt: number; message: string } | undefined;
-  /** How many rounds were sent again over the whole turn. Never cleared — see `retried` in
-   *  TurnUsage for why the live one above is not enough on its own. */
-  let retried = 0;
-
-      /** Append to the piece being written, or start a new one when the channel
-       *  changed — which is what keeps consecutive deltas from each becoming a part. */
-      const append = (kind: "reasoning" | "text", text: string) => {
-        const last = pieces.at(-1);
-        if (last?.kind === kind) last.text += text;
-        else pieces.push({ kind, text });
-      };
-
-      const snapshot = (): ThreadAssistantMessagePart[] => {
-        const parts = pieces.flatMap((piece): ThreadAssistantMessagePart[] => {
-          if (piece.kind === "tool") {
-            const tool = piece.tool;
-            return [
-              {
-                type: "tool-call",
-                // The backend's own id resets to c1 at the start of every turn — never unique
-                // across a whole conversation, only within the one it came from. There is only
-                // ever one live turn at a time, so a fixed prefix is enough to keep it out of
-                // reach of every past turn's ids, which `toThreadMessages` scopes by turn index
-                // instead (see workspace.tsx) — the two schemes just have to never coincide,
-                // not match. Internal lookups below still key on the raw id; only what the UI
-                // sees needs to be unique.
-                toolCallId: `live-${tool.id}`,
-                toolName: tool.name,
-                args: tool.args,
-                argsText: JSON.stringify(tool.args),
-                result: tool.result,
-              },
-            ];
-          }
-          // A channel can open and produce nothing; an empty part renders as a gap.
-          if (!piece.text) return [];
-          return [{ type: piece.kind === "reasoning" ? "reasoning" : "text", text: piece.text }];
-        });
-        // Last, so it reads as the message's footer and stays put as rounds arrive.
-        // `folded` joins the gate: a fold before the first round is exactly the case where
-        // there is nothing else to render and the person is staring at an empty message.
-        if (rounds.length > 0 || context || folded || retrying || retried) {
-          const usage: TurnUsage = {
-            rounds,
-            context,
-            baseline,
-            folded,
-            foldedChars,
-            retrying,
-            retried,
-          };
-          parts.push({ type: "data", name: USAGE_PART, data: usage });
-        }
-        return parts;
-      };
-
-      try {
-        for await (const event of readEvents(response)) {
-          if (event.type === "error") throw new Error(event.message);
-
-          if (event.type === "conversation") {
-            conversation?.set(event.id);
-            continue;
-          }
-
-          if (event.type === "retrying") {
-            retrying = { attempt: event.attempt, message: event.message };
-            retried += 1;
-            yield { content: snapshot() };
-            continue;
-          }
-          // Anything else arriving means the round got through.
-          retrying = undefined;
-
-          if (event.type === "delta") {
-            append(event.role === "reasoning" ? "reasoning" : "text", event.text);
-          } else if (event.type === "tool_call") {
-            const tool: ToolPart = { id: event.id, name: event.name, args: event.arguments };
-            toolById.set(event.id, tool);
-            pieces.push({ kind: "tool", tool });
-          } else if (event.type === "tool_result") {
-            const tool = toolById.get(event.id);
-            if (tool) tool.result = event.result;
-          } else if (event.type === "stats") {
-            // One of these lands per model request, so the total grows a round at a
-            // time and the footer counts up while he works.
-            rounds.push({
-              uncached: event.stats.uncachedTokens ?? 0,
-              cached: event.stats.cachedTokens ?? 0,
-              out: event.stats.responseTokens ?? 0,
-            });
-          } else if (event.type === "context") {
-            // `context` is replaced rather than accumulated: this is a reading of the window
-            // as it stands, not a thing that happened, so the last one is the only one still
-            // true. `baseline` is the opposite on purpose — set once, from the first reading,
-            // since that is the one that predates anything this turn did.
-            if (!baseline) baseline = event.context;
-            context = event.context;
-          } else if (event.type === "compacting") {
-            // He is folding to make room. Worth showing because it costs a model call and takes
-            // a moment, so an unexplained pause looks like a hang — and when it happens before
-            // the turn starts, that pause is the entire time between hitting send and seeing
-            // anything at all.
-            folded = true;
-            if (event.foldedFrom != null && event.foldedTo != null) {
-              foldedChars = { from: event.foldedFrom, to: event.foldedTo };
-            }
-          } else {
-            continue; // done
-          }
-
-          yield { content: snapshot() };
-        }
-      } catch (error) {
-        if (isAbort(error)) return;
-        throw error;
-      }
+      yield* readTurn(response, conversation);
     },
   };
+}
+
+/**
+ * One turn's events, turned into the message as it grows.
+ *
+ * Lifted out of `run` so that starting a turn and *rejoining* one are the same code. The
+ * screen is a window onto a turn, not the thing running it — the turn lives on the server and
+ * survives you closing the window — so "I sent this" and "I came back to this" have to produce
+ * the same message, and a second implementation of a hundred lines of event handling would be
+ * two things that agree until they quietly don't.
+ */
+async function* readTurn(
+  response: Response,
+  conversation?: { get: () => string; set: (id: string) => void } | undefined,
+): AsyncGenerator<ChatModelRunResult> {
+    const pieces: Piece[] = [];
+    const toolById = new Map<string, ToolPart>();
+    // One entry per model request. Kept out of `pieces` because the total belongs at
+    // the foot of the message, not wherever its round happened to land.
+    const rounds: Usage[] = [];
+    // The most recent reading of the context window, and whether this turn had to fold
+    // itself to keep going. Both belong on the same footer as the token count.
+    let context: ContextLedger | undefined;
+    // Round one's reading — before this turn's own tool calls added anything, so it's what
+    // actually carried over from the conversation so far. See turn-usage.tsx for why this,
+    // not `context`, is the headline number.
+    let baseline: ContextLedger | undefined;
+    let folded = false;
+/** How much prose the pre-turn fold removed, when it said. Rendered while it runs, which
+ *  is the point — before this the wait was a dead composer with nothing on it. */
+let foldedChars: { from: number; to: number } | undefined;
+/** The round being retried, while it is being retried. Cleared the moment anything else
+ *  arrives, because by then the retry has plainly worked. */
+let retrying: { attempt: number; message: string } | undefined;
+/** How many rounds were sent again over the whole turn. Never cleared — see `retried` in
+ *  TurnUsage for why the live one above is not enough on its own. */
+let retried = 0;
+
+    /** Append to the piece being written, or start a new one when the channel
+     *  changed — which is what keeps consecutive deltas from each becoming a part. */
+    const append = (kind: "reasoning" | "text", text: string) => {
+      const last = pieces.at(-1);
+      if (last?.kind === kind) last.text += text;
+      else pieces.push({ kind, text });
+    };
+
+    const snapshot = (): ThreadAssistantMessagePart[] => {
+      const parts = pieces.flatMap((piece): ThreadAssistantMessagePart[] => {
+        if (piece.kind === "tool") {
+          const tool = piece.tool;
+          return [
+            {
+              type: "tool-call",
+              // The backend's own id resets to c1 at the start of every turn — never unique
+              // across a whole conversation, only within the one it came from. There is only
+              // ever one live turn at a time, so a fixed prefix is enough to keep it out of
+              // reach of every past turn's ids, which `toThreadMessages` scopes by turn index
+              // instead (see workspace.tsx) — the two schemes just have to never coincide,
+              // not match. Internal lookups below still key on the raw id; only what the UI
+              // sees needs to be unique.
+              toolCallId: `live-${tool.id}`,
+              toolName: tool.name,
+              args: tool.args,
+              argsText: JSON.stringify(tool.args),
+              result: tool.result,
+            },
+          ];
+        }
+        // A channel can open and produce nothing; an empty part renders as a gap.
+        if (!piece.text) return [];
+        return [{ type: piece.kind === "reasoning" ? "reasoning" : "text", text: piece.text }];
+      });
+      // Last, so it reads as the message's footer and stays put as rounds arrive.
+      // `folded` joins the gate: a fold before the first round is exactly the case where
+      // there is nothing else to render and the person is staring at an empty message.
+      if (rounds.length > 0 || context || folded || retrying || retried) {
+        const usage: TurnUsage = {
+          rounds,
+          context,
+          baseline,
+          folded,
+          foldedChars,
+          retrying,
+          retried,
+        };
+        parts.push({ type: "data", name: USAGE_PART, data: usage });
+      }
+      return parts;
+    };
+
+    try {
+      for await (const event of readEvents(response)) {
+        if (event.type === "error") throw new Error(event.message);
+
+        if (event.type === "conversation") {
+          conversation?.set(event.id);
+          continue;
+        }
+
+        if (event.type === "retrying") {
+          retrying = { attempt: event.attempt, message: event.message };
+          retried += 1;
+          yield { content: snapshot() };
+          continue;
+        }
+        // Anything else arriving means the round got through.
+        retrying = undefined;
+
+        if (event.type === "delta") {
+          append(event.role === "reasoning" ? "reasoning" : "text", event.text);
+        } else if (event.type === "tool_call") {
+          const tool: ToolPart = { id: event.id, name: event.name, args: event.arguments };
+          toolById.set(event.id, tool);
+          pieces.push({ kind: "tool", tool });
+        } else if (event.type === "tool_result") {
+          const tool = toolById.get(event.id);
+          if (tool) tool.result = event.result;
+        } else if (event.type === "stats") {
+          // One of these lands per model request, so the total grows a round at a
+          // time and the footer counts up while he works.
+          rounds.push({
+            uncached: event.stats.uncachedTokens ?? 0,
+            cached: event.stats.cachedTokens ?? 0,
+            out: event.stats.responseTokens ?? 0,
+          });
+        } else if (event.type === "context") {
+          // `context` is replaced rather than accumulated: this is a reading of the window
+          // as it stands, not a thing that happened, so the last one is the only one still
+          // true. `baseline` is the opposite on purpose — set once, from the first reading,
+          // since that is the one that predates anything this turn did.
+          if (!baseline) baseline = event.context;
+          context = event.context;
+        } else if (event.type === "compacting") {
+          // He is folding to make room. Worth showing because it costs a model call and takes
+          // a moment, so an unexplained pause looks like a hang — and when it happens before
+          // the turn starts, that pause is the entire time between hitting send and seeing
+          // anything at all.
+          folded = true;
+          if (event.foldedFrom != null && event.foldedTo != null) {
+            foldedChars = { from: event.foldedFrom, to: event.foldedTo };
+          }
+        } else {
+          continue; // done
+        }
+
+        yield { content: snapshot() };
+      }
+  } catch (error) {
+    if (isAbort(error)) return;
+    throw error;
+  }
+}
+
+/**
+ * Rejoin the turn already running in a conversation, if there is one.
+ *
+ * Returns null when nothing is running, which is the ordinary case — opening an idle
+ * conversation must not look like starting a turn in it.
+ */
+export async function resumeTurn(conversationId: string): Promise<AsyncGenerator<ChatModelRunResult> | null> {
+  if (!conversationId) return null;
+  const response = await fetch(`/api/chat/${conversationId}/attach`).catch(() => null);
+  // 204 is "nothing is running"; a body is the backlog followed by the rest as it happens.
+  if (!response || response.status === 204 || !response.ok || !response.body) return null;
+  return readTurn(response);
 }
 
 function isAbort(error: unknown): boolean {
