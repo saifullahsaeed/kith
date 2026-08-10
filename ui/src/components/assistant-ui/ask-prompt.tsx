@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CornerDownLeft, Pencil } from "lucide-react";
+import { Check, CornerDownLeft, Pencil } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -35,21 +35,23 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
   const [sending, setSending] = useState(false);
   const typed = useRef<HTMLInputElement>(null);
 
+  // Which question the answers on screen belong to. A ref rather than reading `open` inside
+  // the poll, because the two updates have to be decided together: setting state from inside
+  // another setter's updater runs the reset twice under StrictMode, and what that looks like
+  // is a selection quietly clearing itself under your cursor.
+  const shown = useRef<string>("");
+
   useEffect(() => {
     let alive = true;
     const load = () =>
       fetchOpenQuestion(conversationId)
         .then((found) => {
-          if (!alive) return;
-          setOpen((was) => {
-            if (found?.id === was?.id) return was;
-            // A new question: start again rather than carry answers across.
-            setReplies(
-              (found?.questions ?? []).map(() => ({ chosen: [], text: "", skipped: false })),
-            );
-            setAt(0);
-            return found;
-          });
+          if (!alive || found?.id === shown.current) return;
+          shown.current = found?.id ?? "";
+          setOpen(found);
+          // A different question: start again rather than carry answers across.
+          setReplies((found?.questions ?? []).map(() => ({ chosen: [], text: "", skipped: false })));
+          setAt(0);
         })
         .catch(() => {});
     load();
@@ -112,7 +114,16 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
     <div className="mx-auto mb-2 w-full max-w-(--thread-max-width) px-4">
       <div className="border-kith/30 bg-card/85 rounded-xl border p-3 shadow-sm backdrop-blur">
         <div className="mb-2.5 flex items-baseline gap-2">
-          <p className="min-w-0 flex-1 text-sm font-medium">{question.question}</p>
+          <p className="min-w-0 flex-1 text-sm font-medium">
+            {question.question}
+            {/* Said out loud, because a card that merely *permits* several looks identical to
+                one that takes the first click as the answer. */}
+            {question.multiple ? (
+              <span className="text-muted-foreground ms-1.5 text-[11px] font-normal">
+                pick any that apply
+              </span>
+            ) : null}
+          </p>
           {open.questions.length > 1 ? (
             <span className="text-muted-foreground/60 shrink-0 font-mono text-[11px] tabular-nums">
               {at + 1} of {open.questions.length}
@@ -134,13 +145,21 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
                     picked && "bg-kith-soft/60",
                   )}
                 >
+                  {/* Square and ticked when several are allowed, numbered when one is: the
+                      shape of the marker is the fastest way to say which kind of question
+                      this is, and it says it before you have clicked anything. */}
                   <span
                     className={cn(
-                      "flex size-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]",
-                      picked ? "bg-kith text-background" : "bg-muted text-muted-foreground",
+                      "flex size-5 shrink-0 items-center justify-center font-mono text-[10px]",
+                      question.multiple ? "rounded-[5px] border" : "rounded-md",
+                      picked
+                        ? "bg-kith text-background border-kith"
+                        : question.multiple
+                          ? "border-border/70 text-transparent"
+                          : "bg-muted text-muted-foreground",
                     )}
                   >
-                    {i + 1}
+                    {question.multiple ? <Check className="size-3" /> : i + 1}
                   </span>
                   <span className="min-w-0 flex-1 text-xs">
                     {option.label}

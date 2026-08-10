@@ -68,8 +68,25 @@ def _normalise(raw: list) -> list[dict]:
                 )
         question = str(item.get("question") or "").strip()
         if question and options:
-            out.append({"question": question, "options": options, "multiple": bool(item.get("multiple"))})
+            out.append({"question": question, "options": options, "multiple": _wants_several(item)})
     return out
+
+
+#: Every spelling of "more than one may be picked" a model reaches for. The schema says
+#: `multiple`; `multiSelect` is what the convention is elsewhere and what he writes about half
+#: the time, and a flag read under only one of its names is a flag that is silently always
+#: false — which shows up not as an error but as a question you cannot answer properly.
+_SEVERAL = ("multiple", "multiSelect", "multi_select", "multiselect", "allowMultiple", "many")
+
+
+def _wants_several(item: dict) -> bool:
+    for name in _SEVERAL:
+        value = item.get(name)
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "yes", "1"}
+        if value is not None:
+            return bool(value)
+    return False
 
 
 def ask(conversation_id: str, raw: list, deadline: float = _DEADLINE_SECONDS) -> dict:

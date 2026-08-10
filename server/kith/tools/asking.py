@@ -35,9 +35,18 @@ _QUESTIONS = {
                     "required": ["label"],
                 },
             },
-            "multiple": {
+            # Named `multiSelect` because that is the convention everywhere else and therefore
+            # what he writes unprompted. The service reads it under six spellings anyway — a
+            # flag understood under only one of its names is a flag that is silently always
+            # false, which surfaces as a question the person cannot answer properly rather than
+            # as an error anybody would notice.
+            "multiSelect": {
                 "type": "boolean",
-                "description": "True when more than one option can be picked at once.",
+                "description": (
+                    "Set true when more than one option can be picked. Do set it when the "
+                    "choices are not exclusive — 'which of these should I include' is almost "
+                    "always several, and leaving it off makes the first click the answer."
+                ),
             },
         },
         "required": ["question", "options"],

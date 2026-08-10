@@ -197,3 +197,46 @@ class TestOverTheWire:
             else:
                 os.environ["KITH_DATA_DIR"] = before
             importlib.reload(settings_module)
+
+
+class TestMoreThanOneCanBePicked:
+    """Reported as "cant select multiple, no option there".
+
+    The flag was read under one name. He writes `multiSelect` about as often — it is the
+    convention everywhere else — and a flag read under only one of its spellings is a flag that
+    is silently always false. It does not fail; it just renders every question as single-choice,
+    where the first click is the answer.
+    """
+
+    def test_every_spelling_he_reaches_for_is_understood(self):
+        for name in ("multiple", "multiSelect", "multi_select", "multiselect", "allowMultiple", "many"):
+            asked = questions._normalise([{"question": "q", "options": ["a", "b"], name: True}])
+            assert asked[0]["multiple"] is True, f"{name} was ignored"
+
+    def test_a_string_true_counts(self):
+        """Tool arguments arrive as JSON, and a model writing `"true"` for a boolean is common
+        enough that reading it as false would be the same bug wearing a different hat."""
+        asked = questions._normalise([{"question": "q", "options": ["a"], "multiSelect": "true"}])
+        assert asked[0]["multiple"] is True
+
+    def test_single_choice_is_still_the_default(self):
+        """Not everything is multiple, and turning it on by accident makes every question need
+        a second click to confirm."""
+        asked = questions._normalise([{"question": "q", "options": ["a", "b"]}])
+        assert asked[0]["multiple"] is False
+
+    def test_several_answers_come_back_in_order(self):
+        got: list[dict] = []
+        thread = threading.Thread(
+            target=lambda: got.append(
+                questions.ask(
+                    "multi", [{"question": "q", "options": ["a", "b", "c"], "multiSelect": True}], deadline=5
+                )
+            ),
+            daemon=True,
+        )
+        thread.start()
+        time.sleep(0.2)
+        questions.answer(questions.open_question("multi")["id"], [{"chosen": ["a", "c"]}])
+        thread.join(timeout=5)
+        assert got[0]["answers"][0]["chosen"] == ["a", "c"]
