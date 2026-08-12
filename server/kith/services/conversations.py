@@ -216,11 +216,16 @@ def full_messages(conversation_id: str) -> list[dict]:
     """
     out: list[dict] = []
     pending: dict[str, dict] = {}
+    turn = 0
+    #: Which turn each `tool` message in `out` came from, so the old ones can be found once the
+    #: newest turn is known — which it is not until the file has been read to the end.
+    turn_of: dict[int, int] = {}
     for entry in read(conversation_id):
         kind = entry.get("type")
         if kind == "message" and entry.get("role") in ("user", "assistant"):
             if entry["role"] == "user":
                 pending = {}  # a turn boundary — nothing from before it can still be open
+                turn += 1
             out.append({"role": entry["role"], "content": entry.get("content") or ""})
         elif kind == "tool_call":
             call_id = str(entry.get("id") or "")
@@ -243,14 +248,76 @@ def full_messages(conversation_id: str) -> list[dict]:
                     ],
                 }
             )
+            turn_of[len(out)] = turn
             out.append(
                 {
                     "role": "tool",
                     "tool_name": entry.get("name") or call.get("name") or "",
                     "content": json.dumps(entry.get("result")),
+                    "_call": call.get("arguments") or {},
                 }
             )
+    _let_go_of_old_results(out, turn_of, newest=turn)
+    for message in out:
+        message.pop("_call", None)
     return out
+
+
+def _let_go_of_old_results(out: list[dict], turn_of: dict[int, int], newest: int) -> None:
+    """Trim tool output from turns older than the last few, in place.
+
+    Nothing used to. There are two things that shrink a conversation and neither is about age: the
+    fold, at 80% of the window, which summarises what was *said*; and a character budget on tool
+    results that `agent_loop` only reaches *after* the fold has given up (`if not folded:`). So
+    below 80% every tool result ever produced was replayed in full, every turn, for the life of the
+    conversation — measured at 4.42M characters across 124 turns on one real board, 39% of a
+    million-token window, with the 80,000-character budget never once applying.
+
+    **Why by turn and not by size.** Size is the smaller half of the argument. `full_messages` says
+    the rest of it in its own docstring: "a tool result from hours ago is replayed as though it were
+    still true, which it might not be." A file read forty turns ago and edited since is not stale
+    context, it is wrong context, and a stub that sends him back to the file is better than a
+    confident copy of what it used to say.
+
+    **Why here and not in the loop.** A turn boundary is fixed, so this is deterministic: a result
+    stubbed on the last turn is stubbed byte-identically on this one, and the cached prefix still
+    matches. Trimming under pressure inside the loop rewrites the middle of the array and moves the
+    eviction point every round — the mistake `_compact_tool_history` made, which cost 93% of a
+    turn's prompt re-billed uncached.
+
+    The head of the result survives, and the call's own arguments are named beside it, because the
+    point is for him to know he already looked at something. A hole where a result was is how a
+    conversation ends up reading the same file twice.
+    """
+    from kith.services import tuning
+
+    keep = int(tuning.value("keep_tool_turns") or 0)
+    if keep <= 0:
+        return
+    stub_chars = int(tuning.value("tool_stub_chars") or 1_200)
+    oldest_kept = newest - keep + 1
+    for index, from_turn in turn_of.items():
+        if from_turn >= oldest_kept:
+            continue
+        message = out[index]
+        content = message.get("content") or ""
+        if len(content) <= stub_chars:
+            continue  # trimming a couple of hundred characters buys nothing and loses something
+        name = message.get("tool_name") or "tool"
+        what = message.get("_call") or {}
+        about = what.get("path") or what.get("pattern") or what.get("command") or what.get("query")
+        # Still JSON, because the content of a `tool` message is a JSON-encoded result and
+        # `_to_openai` hands it straight to the provider.
+        message["content"] = json.dumps(
+            content[1 : stub_chars + 1].rstrip("\\")
+            + f"…[trimmed: {len(content):,} characters from {name}"
+            + (f" on {about}" if isinstance(about, str) and about else "")
+            # Deliberately *not* "N turns ago". That was the first wording and it is a cache bug:
+            # the number changes every turn, so every stub in the conversation is rewritten on every
+            # message and the prefix stops matching — the exact failure this function is placed here
+            # to avoid. A relative age is worth nothing anyway; that it is old is the whole point.
+            + " on an earlier turn. Run it again if you still need it.]"
+        )
 
 
 def timeline(conversation_id: str) -> list[dict]:

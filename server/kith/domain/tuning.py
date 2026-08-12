@@ -287,6 +287,29 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="results",
     ),
     Tunable(
+        key="keep_tool_turns",
+        env="KITH_KEEP_TOOL_TURNS",
+        label="Turns of tool output kept whole",
+        help="How many recent turns keep their tool results in full. Older ones are trimmed to a "
+        "stub naming what produced them, so he re-reads a file rather than trusting a copy of it "
+        "from an hour ago. 0 keeps everything, which is what the conversation used to do.",
+        # Two, from measuring. One real conversation held 4.42M characters of tool output across
+        # 124 turns and sat at 59% of a million-token window — 222k tokens of tool results plus
+        # 184k of file reads, about 39% of the window, none of it ever trimmed because the only
+        # things that trim are the fold at 80% and a character budget reached only *after* the
+        # fold gives up. Keeping the last two turns whole is 135k characters: 3% of it. Five is
+        # 205k, so the curve is flat past two and the extra buys very little.
+        #
+        # The other half of the argument is correctness, which `full_messages` already admits to:
+        # "a tool result from hours ago is replayed as though it were still true, which it might
+        # not be."
+        default=2,
+        group="context",
+        minimum=0,
+        maximum=100,
+        unit="turns",
+    ),
+    Tunable(
         key="tool_stub_chars",
         env="KITH_TOOL_STUB_CHARS",
         label="Kept from a trimmed result",
