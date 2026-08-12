@@ -30,7 +30,7 @@ describe("background tasks", () => {
       running: [{ name: "run-tests", command: "pytest tests/", alive: true, for: "12m" }],
     });
 
-    render(<BackgroundTasks />);
+    render(<BackgroundTasks conversationId="c-1" />);
 
     expect(await screen.findByText("run-tests")).toBeInTheDocument();
     // The command, because a name chosen an hour ago does not always say what is running.
@@ -43,7 +43,7 @@ describe("background tasks", () => {
       running: [{ name: "run-tests", command: "pytest tests/", alive: false, for: "31m" }],
     });
 
-    render(<BackgroundTasks />);
+    render(<BackgroundTasks conversationId="c-1" />);
 
     expect(await screen.findByText("done")).toBeInTheDocument();
     expect(screen.queryByText("31m")).not.toBeInTheDocument();
@@ -53,7 +53,7 @@ describe("background tasks", () => {
     // A header over an empty list is furniture, and this panel had a column of it before.
     answering({ running: [] });
 
-    const { container } = render(<BackgroundTasks />);
+    const { container } = render(<BackgroundTasks conversationId="c-1" />);
 
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
@@ -62,7 +62,7 @@ describe("background tasks", () => {
     // An older server, or one restarting. The panel must not blank out or throw over it.
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("nope"))));
 
-    const { container } = render(<BackgroundTasks />);
+    const { container } = render(<BackgroundTasks conversationId="c-1" />);
 
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });

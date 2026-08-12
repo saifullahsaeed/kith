@@ -9,6 +9,9 @@ import { Loader2, Terminal } from "lucide-react";
  * and 371 of those calls over two days. He finds out now because finishing wakes the conversation.
  * This is so *you* find out without asking either.
  *
+ * Scoped to this conversation. Two projects are two chats, and listing every session's work would
+ * show you a suite you cannot explain, stop, or take credit for.
+ *
  * Read-only. Starting and stopping stay his, through the tools: a process he started and you killed
  * is a turn carrying on against a world that changed under it.
  */
@@ -20,13 +23,13 @@ interface Task {
   for: string;
 }
 
-export function BackgroundTasks() {
+export function BackgroundTasks({ conversationId }: { conversationId?: string }) {
   const [tasks, setTasks] = useState<Task[]>([]);
 
   useEffect(() => {
     let alive = true;
     const load = () =>
-      fetch("/api/processes")
+      fetch(`/api/processes?conversation=${encodeURIComponent(conversationId ?? "")}`)
         .then((response) => (response.ok ? response.json() : null))
         .then((body: { running?: Task[] } | null) => {
           if (alive) setTasks(body?.running ?? []);
@@ -41,7 +44,7 @@ export function BackgroundTasks() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [conversationId]);
 
   if (!tasks.length) return null;
 

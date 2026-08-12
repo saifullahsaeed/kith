@@ -45,7 +45,7 @@ def _finished(name: str, command: str = "true") -> None:
     with session_context.working_in("c-1"):
         process_service.processes.start(command, name)
     for _ in range(200):
-        if not process_service.processes._running[name].running:
+        if not process_service.processes._find(name, "c-1").running:
             return
         time.sleep(0.01)
     raise AssertionError(f"{name} never exited")
@@ -101,7 +101,7 @@ class TestWhatDoesNotWakeAnything:
         import time
 
         for _ in range(200):
-            if not process_service.processes._running["orphan"].running:
+            if not process_service.processes._find("orphan", "").running:
                 break
             time.sleep(0.01)
         process_service.finished_since_last_look()
@@ -120,7 +120,7 @@ class TestTheProcessRemembersItsChat:
     def test_start_stamps_the_conversation(self):
         with session_context.working_in("c-9"):
             process_service.processes.start("sleep 30", "mine")
-        assert process_service.processes._running["mine"].conversation_id == "c-9"
+        assert process_service.processes._find("mine", "c-9").conversation_id == "c-9"
         process_service.processes.stop("mine")
 
     def test_it_is_reported_so_the_panel_can_show_it(self):

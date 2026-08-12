@@ -86,7 +86,7 @@ export function WorkPanel({
 
       {/* What is running while he does something else. Renders nothing when there is nothing — a
           header over an empty list is furniture. */}
-      <BackgroundTasks />
+      <BackgroundTasks conversationId={conversationId} />
 
       {/* The counters sit directly under the sections rather than being pushed to the bottom of the
           column. Stretching to fill drew a border a thousand pixels below the last real thing, which

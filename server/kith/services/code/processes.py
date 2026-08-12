@@ -138,6 +138,33 @@ class Processes:
         self._running: dict[str, Background] = {}
         self._lock = threading.RLock()
 
+    def _find(self, name: str, conversation_id: str | None = None) -> Background | None:
+        """The process this conversation means by that name.
+
+        Keyed by name alone until now, which made `run-tests` one global slot: the second
+        conversation to run its suite was refused and pointed at a process belonging to a chat it
+        cannot see. Two conversations are two pieces of work and may each have a `run-tests`.
+
+        Falls back to a name match in any conversation when there is no session to narrow by — a
+        script, a test, the desktop shell stopping things on the way out. Narrowing to nothing there
+        would make those callers unable to reach anything.
+        """
+        wanted = _clean_name(name)
+        chat = _current_conversation() if conversation_id is None else conversation_id
+        if chat:
+            mine = self._running.get(_key(chat, wanted))
+            if mine is not None:
+                return mine
+        return next((one for one in self._running.values() if one.name == wanted), None)
+
+    def mine(self, conversation_id: str | None = None) -> list[Background]:
+        """Every process this conversation started, oldest first, or all of them outside one."""
+        chat = _current_conversation() if conversation_id is None else conversation_id
+        everything = sorted(self._running.values(), key=lambda p: p.started)
+        if not chat:
+            return everything
+        return [one for one in everything if one.conversation_id == chat]
+
     def start(self, command: str, name: str, cwd: str | Path | None = None) -> dict[str, Any]:
         from kith.infra import workspace as sandbox
         from kith.services import permissions
@@ -156,7 +183,7 @@ class Processes:
 
         with self._lock:
             self._reap()
-            existing = self._running.get(wanted)
+            existing = self._running.get(_key(_current_conversation(), wanted))
             if existing is not None and existing.running:
                 raise ProcessError(
                     f"`{wanted}` is already running (started {_ago(existing.started)}). "
@@ -168,7 +195,7 @@ class Processes:
                     f"({', '.join(sorted(self._running))}). Stop one before starting another."
                 )
 
-            log = _log_path(wanted)
+            log = _log_path(wanted, _current_conversation())
             try:
                 handle = log.open("wb")
             except OSError as exc:
@@ -203,7 +230,7 @@ class Processes:
                 pgid = os.getpgid(process.pid)
             except OSError:
                 pgid = process.pid  # start_new_session makes it its own leader anyway
-            self._running[wanted] = Background(
+            self._running[_key(_current_conversation(), wanted)] = Background(
                 name=wanted,
                 command=command,
                 cwd=str(here),
@@ -220,7 +247,7 @@ class Processes:
         time.sleep(0.4)
         return self.check(wanted)
 
-    def check(self, name: str = "") -> dict[str, Any]:
+    def check(self, name: str = "", conversation_id: str | None = None) -> dict[str, Any]:
         """What a process has said since last time, or a list of them all."""
         with self._lock:
             self._reap()
@@ -233,12 +260,12 @@ class Processes:
                             "alive": one.running,
                             "for": _ago(one.started),
                         }
-                        for one in sorted(self._running.values(), key=lambda p: p.started)
+                        for one in self.mine(conversation_id)
                     ]
                 }
-            found = self._running.get(_clean_name(name))
+            found = self._find(name, conversation_id)
             if found is None:
-                known = ", ".join(sorted(self._running)) or "nothing"
+                known = ", ".join(one.name for one in self.mine(conversation_id)) or "nothing"
                 raise ProcessError(f"no background process called `{name}` — running: {known}")
 
             alive = found.running
@@ -273,7 +300,7 @@ class Processes:
         caller that wants to do arithmetic with it (`testing.py` scales how long its next
         wait is by this) rather than show it to someone."""
         with self._lock:
-            found = self._running.get(_clean_name(name))
+            found = self._find(name)
             return (time.time() - found.started) if found else None
 
     def full_output(self, name: str) -> str:
@@ -285,7 +312,7 @@ class Processes:
         its newest chunk, so nothing here is capped.
         """
         with self._lock:
-            found = self._running.get(_clean_name(name))
+            found = self._find(name)
             if found is None:
                 known = ", ".join(sorted(self._running)) or "nothing"
                 raise ProcessError(f"no background process called `{name}` — running: {known}")
@@ -296,11 +323,11 @@ class Processes:
 
     def stop(self, name: str) -> dict[str, Any]:
         with self._lock:
-            found = self._running.get(_clean_name(name))
+            found = self._find(name)
             if found is None:
-                known = ", ".join(sorted(self._running)) or "nothing"
+                known = ", ".join(one.name for one in self.mine()) or "nothing"
                 raise ProcessError(f"no background process called `{name}` — running: {known}")
-            self._running.pop(found.name, None)
+            self._running.pop(_key(found.conversation_id, found.name), None)
 
         already = not found.running
         # Terminated either way. "The direct child has exited" is not the same as "nothing is
@@ -397,6 +424,15 @@ def _terminate(process: subprocess.Popen, pgid: int) -> None:
         process.wait(timeout=1)
 
 
+def _key(conversation_id: str, name: str) -> str:
+    """The registry key: which conversation, and what it called the thing.
+
+    A string rather than a tuple because it is also what the log filename is derived from, and one
+    shape for both is one fewer thing to keep in step.
+    """
+    return f"{conversation_id}\x00{name}"
+
+
 def _clean_name(name: str) -> str:
     wanted = "".join(c if c.isalnum() or c in "-_." else "-" for c in str(name or "").strip())
     wanted = wanted.strip("-").lower()
@@ -405,12 +441,22 @@ def _clean_name(name: str) -> str:
     return wanted[:40]
 
 
-def _log_path(name: str) -> Path:
+def _log_path(name: str, conversation_id: str = "") -> Path:
+    """Where a process's output is kept.
+
+    Scoped by conversation for the same reason the registry is: two chats may each have a
+    `run-tests`, and one filename between them means each reads the other's output — the same leak
+    as the shared registry slot, one layer down and harder to spot.
+
+    A conversation id is already filename-safe (`20260812-144708094-4fdf58`). Unscoped keeps the bare
+    name, so a process started outside a chat still lands where it always did.
+    """
     from kith.infra import workspace as sandbox
 
     folder = Path(sandbox.internal()) / "processes"
     folder.mkdir(parents=True, exist_ok=True)
-    return folder / f"{name}.log"
+    stem = f"{conversation_id}-{name}" if conversation_id else name
+    return folder / f"{stem}.log"
 
 
 def _ago(started: float) -> str:

@@ -10,17 +10,24 @@ and you killed is a turn that continues against a world that changed under it.
 
 from __future__ import annotations
 
-from flask import jsonify
+from flask import jsonify, request
 
 from kith.api.blueprint import api
 from kith.services.code import processes
 
 
 @api.get("/processes")
-@api.doc(summary="Background tasks", description="What is running in the background, and for how long.")
+@api.doc(
+    summary="Background tasks",
+    description="What this conversation is running in the background, and for how long.",
+)
 def list_processes():
+    # Scoped to one conversation, always. Two projects are two chats, and a panel that listed every
+    # session's work would show you a test suite you cannot explain, stop, or take credit for.
+    # Absent means no conversation — the desktop shell asking in general — and lists everything.
+    conversation_id = str(request.args.get("conversation") or "")
     try:
-        return jsonify(processes.processes.check())
+        return jsonify(processes.processes.check(conversation_id=conversation_id))
     except processes.ProcessError:
         # Nothing running is not an error, and the panel must not blank out over one.
         return jsonify({"running": []})
