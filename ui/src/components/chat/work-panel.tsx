@@ -214,7 +214,7 @@ export function WorkPanel({
       {/* What is in his head, itemised — see `context-section`. Below the working task because the
           task is what you came to look at; above the feed because it is a standing fact about the
           conversation rather than one more step in it. */}
-      <ContextSection />
+      <ContextSection conversationId={conversationId} />
 
       {/* No approval queue, and no review queue.
 
