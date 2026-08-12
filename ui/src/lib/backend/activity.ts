@@ -13,18 +13,6 @@ export interface ActivityStatus {
   /** The prompt side with cache hits removed — what a provider actually had to read. */
   tokensUncached?: number;
   costUsd?: number;
-  /**
-   * Work he has finished and handed over for checking — the `review` column.
-   *
-   * Optional because an older server does not send it, and the panel must not blank out over a
-   * missing field: that exact assumption crashed the settings page once.
-   */
-  toReview?: { id: number; goal: string }[];
-  /**
-   * Plans drafted with the planning-a-task skill, waiting for a look before any
-   * implementation starts — the `planning` column. Same optionality reasoning as `toReview`.
-   */
-  toApprove?: { id: number; goal: string }[];
 }
 
 export interface ActivityItem {

@@ -2,8 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlarmClock,
-  ClipboardCheck,
-  FileCheck2,
   PanelRightClose,
   RotateCw,
   TriangleAlert,
@@ -11,6 +9,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { Button } from "@/components/ui/button";
 import { time } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -128,8 +127,6 @@ export function WorkPanel({
   conversationId = "",
   width,
   onClose,
-  onReview,
-  onApprove,
 }: {
   activity: Activity;
   /** The conversation on screen. The feed narrows to it, so switching sessions switches
@@ -138,16 +135,8 @@ export function WorkPanel({
   conversationId?: string;
   width: number;
   onClose: () => void;
-  /** Ask him, in the thread, to check the work he handed over. A message rather than a step,
-   *  because the point of the review column is that the reviewer is not the author. */
-  onReview: (taskIds: number[]) => void;
-  /** Same shape, one step earlier: ask him, in the thread, to walk through a plan waiting for
-   *  approval — a real conversation about it, not a bare yes/no button. */
-  onApprove: (taskIds: number[]) => void;
 }) {
   const { status, activity: lines } = activity;
-  const toReview = status?.toReview ?? [];
-  const toApprove = status?.toApprove ?? [];
   // Nothing carries on by itself any more, so the header has no running state to speak
   // for. What it still shows is the feed and what is waiting on you.
   // "Everything" is still available, because watching two projects advance at once is a
@@ -207,70 +196,27 @@ export function WorkPanel({
         </Button>
       </div>
 
-      {/*
-        Finished work waiting to be checked, with the button that gets it checked.
+      {/* What he is on right now, and how far through it he is.
 
-        The `review` column and the instruction telling him how to judge it both existed already —
-        and neither was visible anywhere. He would finish a task, hand it over, and the only way
-        to find out was to open the control panel and go looking. That is the same failure as the
-        silently parked tasks: a queue nobody is shown is a queue nobody works.
+          It lived above the composer, which put "what is he doing" in the middle of the thing you
+          type into — it competed with the composer for the one bit of screen you are always looking
+          at, and it is not a message. Here it sits with the round feed, which is the other half of
+          the same question, and the checklist ticks over beside the steps that are ticking it. */}
+      <WorkingOn conversationId={conversationId} />
 
-        It goes here, above Run, because this panel is already the thing beside the chat that says
-        what he is doing — and because reviewing is *chat's* job. Chat has the conversation the work
-        came out of; him reviewing his own output is what the column exists to prevent. So the
-        button sends a message into the thread.
-      */}
-      {toReview.length > 0 ? (
-        <div className="border-border/60 bg-kith-soft/40 flex items-start gap-2.5 border-b px-4 py-2.5">
-          <ClipboardCheck className="text-kith mt-0.5 size-3.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-medium">
-              {toReview.length} finished — needs your check
-            </p>
-            <p className="text-muted-foreground truncate text-[11px]" title={toReview.map((t) => `#${t.id} ${t.goal}`).join("\n")}>
-              {toReview.map((t) => t.goal).join(" · ")}
-            </p>
-          </div>
-          <Button
-            size="xs"
-            variant="outline"
-            className="shrink-0"
-            onClick={() => onReview(toReview.map((t) => t.id))}
-            title="Have him check it here, where the conversation is — rather than him marking his own homework."
-          >
-            Review
-          </Button>
-        </div>
-      ) : null}
+      {/* No approval queue, and no review queue.
 
-      {/*
-        Same pattern, one step earlier: a plan drafted with the planning-a-task skill, waiting
-        for a look before any implementation starts. Always entered from chat — see
-        `TASK_STATUSES` in domain/enums.py — so anything showing up here is a plan somebody
-        actually asked to see.
-      */}
-      {toApprove.length > 0 ? (
-        <div className="border-border/60 bg-kith-soft/40 flex items-start gap-2.5 border-b px-4 py-2.5">
-          <FileCheck2 className="text-kith mt-0.5 size-3.5 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-medium">
-              {toApprove.length} plan{toApprove.length === 1 ? "" : "s"} — need your approval
-            </p>
-            <p className="text-muted-foreground truncate text-[11px]" title={toApprove.map((t) => `#${t.id} ${t.goal}`).join("\n")}>
-              {toApprove.map((t) => t.goal).join(" · ")}
-            </p>
-          </div>
-          <Button
-            size="xs"
-            variant="outline"
-            className="shrink-0"
-            onClick={() => onApprove(toApprove.map((t) => t.id))}
-            title="Look at the plan here, in the conversation — so you can push back on it, not just approve or not."
-          >
-            Review
-          </Button>
-        </div>
-      ) : null}
+          Both were the same idea — a count with a Review button that dropped a prompt into the
+          thread — and both were removed for the same reason the columns behind them were: a queue
+          beside the conversation is a second place to find out something the conversation is
+          already telling you. `review` went with the four statuses; this one went once it was
+          actually looked at, showing four plans that were all unapprovable (no plan filed on any
+          of them) while the real approval happened by typing "ok approved" in chat.
+
+          Approval is a sentence in a conversation. He says the plan is ready and what is in it,
+          you say yes or say what to change, and `update_task` refuses `approved` without a plan
+          and a checklist — so the enforcement lives where it cannot be missed rather than in a
+          badge that can. */}
 
       {/* controls */}
       <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">

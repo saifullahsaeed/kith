@@ -150,39 +150,6 @@ export function Workspace({
    * Appending to the thread rather than posting on the task, because the point is that you see the
    * answer and can argue with it. A comment on a task is somewhere you have to go and look.
    */
-  const reviewFinished = useCallback(
-    (taskIds: number[]) => {
-      if (!taskIds.length) return;
-      const list = taskIds.map((id) => `#${id}`).join(", ");
-      const text =
-        `Check the work you finished on ${list} before it counts as done. For each one: read what ` +
-        `you claimed on the task, then verify the single claim resting on the least evidence — ` +
-        `don't re-do the work. Then close it or send it back to yourself saying what's missing.`;
-      runtime.thread.append({ role: "user", content: [{ type: "text", text }] });
-    },
-    [runtime],
-  );
-
-  /**
-   * Same shape as `reviewFinished`, one step earlier: ask him to walk through a plan waiting
-   * for approval — here, in the thread, where you can actually push back on it rather than
-   * a bare yes/no. Approving or asking for changes is his call to act on afterward
-   * (`update_task(status='approved')` or revising the plan file), not something this button
-   * does directly.
-   */
-  const approvePlan = useCallback(
-    (taskIds: number[]) => {
-      if (!taskIds.length) return;
-      const list = taskIds.map((id) => `#${id}`).join(", ");
-      const text =
-        `I'd like to look at the plan for ${list} before you start. Walk me through it — what ` +
-        `you found, what you're about to do, and anything you're unsure about — so I can approve ` +
-        `it (move it to 'approved') or tell you what to change.`;
-      runtime.thread.append({ role: "user", content: [{ type: "text", text }] });
-    },
-    [runtime],
-  );
-
   /* Rejoin the turn already running in the conversation you just opened.
 
      The screen is a window onto a turn, not the thing running it. The turn lives on the server,
@@ -577,8 +544,6 @@ export function Workspace({
                       conversationId={conversationId}
                       width={workRoom}
                       onClose={() => setWorkOpen(false)}
-                      onReview={reviewFinished}
-                      onApprove={approvePlan}
                     />
                   </ErrorBoundary>
                 </div>
