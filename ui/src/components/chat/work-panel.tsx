@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { WorkingOn } from "@/components/assistant-ui/working-on";
+import { ContextSection } from "@/components/chat/context-section";
 import { Button } from "@/components/ui/button";
 import { time } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -209,6 +210,11 @@ export function WorkPanel({
           at, and it is not a message. Here it sits with the round feed, which is the other half of
           the same question, and the checklist ticks over beside the steps that are ticking it. */}
       <WorkingOn conversationId={conversationId} />
+
+      {/* What is in his head, itemised — see `context-section`. Below the working task because the
+          task is what you came to look at; above the feed because it is a standing fact about the
+          conversation rather than one more step in it. */}
+      <ContextSection />
 
       {/* No approval queue, and no review queue.
 

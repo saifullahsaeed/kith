@@ -569,8 +569,12 @@ const ComposerMeter: FC = () => {
 
 /** The most recent assistant turn's usage data part, walking back from the end — there is
  * at most one per turn (see `USAGE_PART`), and an in-progress turn's is exactly as current
- * as the round that just landed. */
-function latestUsage(messages: readonly unknown[]): TurnUsage | undefined {
+ * as the round that just landed.
+ *
+ * Exported because the Work panel's context section reads the same figure. One reader rather than
+ * two: this walks the thread from the end looking for one part shape, and a second copy of that
+ * elsewhere is a second thing to get wrong when the shape changes. */
+export function latestUsage(messages: readonly unknown[]): TurnUsage | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i] as { role?: string; content?: unknown[] };
     if (message.role !== "assistant") continue;
