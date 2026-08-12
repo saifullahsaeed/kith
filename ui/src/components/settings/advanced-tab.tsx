@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { numericInputClass as inputClass } from "@/components/ui/input";
 import { openOnHost } from "@/lib/files";
+import { cn } from "@/lib/utils";
 import { StandingGrants } from "./standing-grants";
 import {
   fetchTuning,
@@ -31,6 +32,17 @@ import {
  * a tooltip: these are sharp, and a number whose consequence you have to hover to
  * discover is a trap.
  */
+//: Short names for the tab strip. The group's own label is a sentence written to sit *above* its
+//: settings and reads badly inside a tab — "Recognising work you already have" against "MCP".
+const SHORT: Record<string, string> = {
+  chat: "Chat",
+  context: "Context",
+  limits: "Limits",
+  connections: "Connections",
+  mcp: "MCP",
+  stuck: "Duplicates",
+};
+
 export function AdvancedTab() {
   const confirm = useConfirm();
   const [snapshot, setSnapshot] = useState<TuningSnapshot | null>(null);
@@ -39,6 +51,10 @@ export function AdvancedTab() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [onlyChanged, setOnlyChanged] = useState(false);
+  //: Which group is on screen. Thirty-two settings under six headings was one page you scrolled
+  //: past rather than read — the sections were the right division all along, they just were not a
+  //: division you could land on.
+  const [tab, setTab] = useState("");
 
   /**
    * Has this setting been touched — saved away from its default, *or* edited and not yet saved?
@@ -133,7 +149,13 @@ export function AdvancedTab() {
     );
   }
 
+  //: Searching and the Changed filter cut *across* the groups, so they override the tab — a search
+  //: that only looked inside the tab you happened to be on would answer "nothing matches" about a
+  //: setting sitting one tab away, which is worse than no search.
+  const seeking = Boolean(query.trim()) || onlyChanged;
+  const active = tab || snapshot.groups[0]?.key || "";
   const groups = snapshot.groups
+    .filter((group) => seeking || group.key === active)
     .map((group) => ({ ...group, settings: group.settings.filter(matches) }))
     .filter((group) => group.settings.length > 0);
   const shownCount = groups.reduce((sum, group) => sum + group.settings.length, 0);
@@ -175,6 +197,44 @@ export function AdvancedTab() {
         >
           Changed {changedCount ? `(${changedCount})` : ""}
         </Button>
+      </div>
+
+      {/* One tab per group. The short name is here rather than on the server because it exists for
+          the strip alone: "Recognising work you already have" is the right sentence above the
+          settings and the wrong one inside a tab. The count is worth showing — Connections has
+          eleven and MCP has two, and knowing that before you click is the point of a tab strip.
+          A dot means something in there differs from its default. */}
+      <div className="-mx-1 flex flex-wrap gap-1 px-1" role="tablist" aria-label="Setting groups">
+        {snapshot.groups.map((group) => {
+          const changed = group.settings.filter(isTouched).length;
+          const on = !seeking && group.key === active;
+          return (
+            <button
+              key={group.key}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => {
+                setTab(group.key);
+                setQuery("");
+                setOnlyChanged(false);
+              }}
+              title={group.blurb}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] transition-colors",
+                on
+                  ? "bg-accent/70 text-foreground font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent/30",
+              )}
+            >
+              {SHORT[group.key] ?? group.label}
+              <span className="text-muted-foreground/50 font-mono text-[10px] tabular-nums">
+                {group.settings.length}
+              </span>
+              {changed ? <span className="bg-kith size-1.5 rounded-full" aria-label="changed" /> : null}
+            </button>
+          );
+        })}
       </div>
 
       <p className="text-muted-foreground text-xs leading-relaxed">
