@@ -175,13 +175,8 @@ def _brief(task: dict[str, Any]) -> str:
             lines.append(f"- [{mark}] {str(item.get('text') or '').strip()}")
         lines.append("")
 
-    comments = task.get("comments") or []
-    if comments:
-        lines += ["## Notes", ""]
-        for one in comments[-12:]:
-            who = "you" if one.get("author") == "user" else "kith"
-            body = " ".join(str(one.get("body") or "").split())
-            lines.append(f"- **{who}:** {body}")
+        # The notes section came from the task's comment thread, which is gone. Progress lives in
+        # `.kith/work/task-<id>.md` now — a file, next to this one, that he already reads every turn.
         lines.append("")
 
     delivered = task.get("deliverables") or []

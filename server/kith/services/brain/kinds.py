@@ -86,22 +86,6 @@ def _make_schedule(path, data: dict) -> dict:
     return _schedule(path, data)
 
 
-def _person_commented(path: Path, data: dict) -> dict:
-    """Write a comment from the person on a task.
-
-    This used to also wake whichever session owned the task, because a comment on a task he
-    was not already parked on otherwise went nowhere: only a running session ever asked
-    `tasks_awaiting_kith`, so writing on any other task produced no reply and no sign it had
-    been read.
-
-    Nothing runs unasked now, so there is nothing to wake and the problem it solved is gone
-    with it — a comment is read when you next say something in the conversation that owns the
-    work, which is also the only place a reply could usefully arrive.
-    """
-    task_id = int(data["task_id"])
-    return repo.tasks.add_task_comment(path, task_id, "user", data.get("body", ""))
-
-
 def _milestone_add(path: Path, data: dict) -> dict:
     return repo.projects.add_milestone(
         path, int(data["project_id"]), data.get("title", ""), data.get("target_at")
@@ -189,11 +173,6 @@ KINDS: dict[str, Kind] = {
             edit=lambda p, k, d: repo.projects.update_milestone(
                 p, k, d.get("status"), d.get("title"), d.get("target_at")
             ),
-        ),
-        Kind(
-            "task_comment",
-            remove=repo.tasks.delete_task_comment,
-            add=_person_commented,
         ),
         Kind(
             "checklist_item",

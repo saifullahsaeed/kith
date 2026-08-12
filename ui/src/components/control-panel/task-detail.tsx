@@ -11,9 +11,7 @@ import {
   FileText,
   Link2,
   ListChecks,
-  MessageCircle,
   Plus,
-  Send,
   Trash2,
 } from "lucide-react";
 
@@ -44,29 +42,8 @@ const STATUS_LABEL: Record<string, string> = {
 };
 const PRIORITIES = ["high", "normal", "low"];
 
-/**
- * When a note was written, at the precision that is actually useful.
- *
- * Time alone today, weekday plus time this week, a date beyond it. The same shape
- * `formatModified` uses for files — it takes epoch seconds and these are ISO strings, which is
- * the only reason this is not a call to it.
- *
- * It matters more here than on a file: a run leaves a dozen notes on one task, and "which of
- * these happened before I told him to stop" is unanswerable without the clock.
- */
-function when(iso: string): string {
-  if (!iso) return "";
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "";
-  const time = at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  if (at.toDateString() === new Date().toDateString()) return time;
-  const days = (Date.now() - at.getTime()) / 86_400_000;
-  if (days < 7) return `${at.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
-  return at.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
-
-/** The full-page view of one task: description, checklist, deliverables, and the
- * comment thread (you + him). Rendered in place of the tab content, not a panel. */
+/** The full-page view of one task: its plan, description, checklist and deliverables.
+ * Rendered in place of the tab content, not a panel. */
 export function TaskDetailPage({
   taskId,
   projects,
@@ -89,7 +66,6 @@ export function TaskDetailPage({
 }) {
   const confirm = useConfirm();
   const [task, setTask] = useState<Detail | null>(null);
-  const [reply, setReply] = useState("");
   const [item, setItem] = useState("");
   // Collapsed until asked for. A task in `planning` is the exception — the plan is the whole
   // reason you opened it, and being asked to approve something you have to click to see is the
@@ -153,12 +129,6 @@ export function TaskDetailPage({
   };
   const patch = async (data: Record<string, unknown>) => {
     await updateBrainItem("task", taskId, data);
-    refresh();
-  };
-  const sendReply = async () => {
-    if (!reply.trim()) return;
-    await createBrainItem("task_comment", { task_id: taskId, body: reply.trim() });
-    setReply("");
     refresh();
   };
   const addItem = async () => {
@@ -537,127 +507,18 @@ export function TaskDetailPage({
             )}
           </section>
 
-          {/*
-            Activity last, in the main column, at full width.
+          {/* No activity thread, and no box to write in one.
 
-            It was a fixed 24rem sidebar with `hidden xl:flex` — so below 1280px the notes and the
-            box to write one were not narrowed or collapsed, they were **gone**, with nothing behind
-            them. On a laptop or an unmaximised window there was no way to read what he recorded on
-            a task or to answer him on it.
+              620 comments across the board, every one of them raising a notification — "New note
+              on …", four inside twenty minutes on one task — with the message that actually wanted
+              an answer somewhere underneath. Each thing the thread was used for has a better home
+              that already existed: progress in the task's working file (which is where the plan
+              above is read from), a question through `ask` in the conversation where it can be
+              answered, and evidence in the checklist and the deliverables.
 
-            Below the content rather than beside it, because that is where a log belongs when the
-            log is the longest thing on the page, and because his entries are dense technical prose
-            — paths, commands, test counts — that a narrow gutter mangles.
-          */}
-          <section>
-            <H>
-              Activity
-              {task.comments.length ? (
-                <span className="text-muted-foreground ml-2 font-normal tracking-normal normal-case">
-                  {task.comments.length}
-                </span>
-              ) : null}
-            </H>
-            <div className="max-w-[68ch] space-y-4">
-            {task.comments.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-8 text-center">
-                <span className="flex size-9 items-center justify-center rounded-xl bg-muted/70 text-muted-foreground">
-                  <MessageCircle className="size-4" />
-                </span>
-                <p className="max-w-[22ch] text-xs leading-relaxed text-muted-foreground">
-                  No comments yet — write to him here and he'll pick it up.
-                </p>
-              </div>
-            ) : (
-              /*
-                A work log, not a chat.
-
-                These were chat bubbles — `rounded-2xl` with a tail, a presence dot, his side left
-                and yours right. What actually goes in them is "Fresh frontend Vitest/build and
-                backend regression verification passed, but audit found the required backend
-                OpenRouter discovery/import routes are absent; recorded the gap in
-                `work/task-48.md`". Dense engineering notes with paths and commands in them, dressed
-                as text messages — which is most of why this page read as toy.
-
-                So: a flat column of timestamped entries, full width, his Markdown intact. Yours are
-                still distinguishable, because who said it changes what it means — an instruction
-                from you outranks a note from him — but by a rule and a label rather than by being
-                thrown to the other side of the panel.
-              */
-              task.comments.map((c) => {
-                const theirs = c.author === "user";
-                return (
-                  <article
-                    key={c.id}
-                    className={cn(
-                      "border-s-2 ps-3",
-                      theirs ? "border-kith/50" : "border-border/70",
-                    )}
-                  >
-                    <header className="mb-0.5 flex items-baseline gap-2">
-                      <span
-                        className={cn(
-                          "text-[11px] font-medium",
-                          theirs ? "text-kith" : "text-muted-foreground",
-                        )}
-                      >
-                        {theirs ? "You" : "Kith"}
-                      </span>
-                      <time className="text-muted-foreground/50 font-mono text-[10px] tabular-nums">
-                        {when(c.created_at)}
-                      </time>
-                    </header>
-                    <div className="text-sm leading-relaxed">
-                      {/* His progress notes are where he writes lists and links,
-                            and this was the one place his Markdown showed raw. */}
-                      <Markdown>{c.body}</Markdown>
-                    </div>
-                  </article>
-                );
-              })
-            )}
-            </div>
-          </section>
+              The rows are still in the database. Nothing here reads them. */}
           </div>
 
-          {/*
-            Always on screen. Moving activity into the main column took the composer with it, so
-            writing to him meant scrolling past the description, the checklist, nine deliverables
-            and every entry in the log to reach a box at the very bottom — worse than the sidebar it
-            replaced, which at least kept it in view.
-
-            A sibling of the scrolling body, inside the column — not a sibling of the *column*,
-            which would have made it a third item in the `lg:flex-row-reverse` row and laid it out
-            beside the sidebar.
-          */}
-          <div className="border-border/60 bg-background/95 shrink-0 border-t px-6 py-3 md:px-8">
-            <div className="max-w-[68ch]">
-              <div className="border-border/60 bg-card/40 focus-within:border-ring/60 flex items-end gap-2 rounded-lg border p-1.5">
-                <textarea
-                  rows={1}
-                  value={reply}
-                  onChange={(e) => setReply(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void sendReply();
-                    }
-                  }}
-                  placeholder="Comment on this task…"
-                  className="max-h-24 min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm outline-none"
-                />
-                <Button
-                  size="icon"
-                  className="size-8 shrink-0 rounded-full"
-                  onClick={sendReply}
-                  disabled={!reply.trim()}
-                  aria-label="Send"
-                >
-                  <Send className="size-4" />
-                </Button>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>

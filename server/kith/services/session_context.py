@@ -188,3 +188,64 @@ def adopt(path: Path, project_id: int | None, deliberate: bool = False) -> None:
         # Bookkeeping. A session that fails to record what it is working on must not take
         # down the work itself.
         pass
+
+
+def bound_project(path: Path) -> int | None:
+    """The project this *conversation* is locked to, or None.
+
+    Not :func:`current_project`, which is narrower and answers a different question: that one is the
+    project of the task in hand, set by `working_on`, and is None in an ordinary chat turn. This one
+    is the binding — the thing `adopt` writes and refuses to move.
+    """
+    conversation_id = current()
+    if not conversation_id:
+        return None
+    from kith.infra.db import repositories as repo
+
+    try:
+        bound = repo.conversations.project_of(path, conversation_id)
+    except Exception:
+        return None
+    return int(bound) if bound else None
+
+
+def foreign_project(path: Path, project_id: int | None) -> str:
+    """Why this conversation may not write to that project, or "" if it may.
+
+    The other half of :func:`adopt`, and the half that was missing. `adopt` goes to real trouble to
+    keep a binding from moving — a session that wandered onto another project's task was "silently
+    reassigned there" — and its docstring says the point of that is `_in_scope`, which "confines what
+    a bound session may pick up". `_in_scope` was a method on the autonomy runner and went with the
+    self-directed loop on 2026-08-08, so the binding became a fact nothing read. Chat was never
+    confined at all, and the board is the receipt: nine projects, six on one folder, two of those
+    active, one called `placeholder`.
+
+    Three ways this is not a violation, and each matters:
+
+    * **No conversation.** A script, a test, a reminder firing — nothing to be foreign to.
+    * **No binding yet.** The first write is what binds the session, so it cannot be out of scope.
+    * **No project on the thing being written.** A one-off errand belongs to nobody's project.
+
+    Reads never consult this. Looking at another project is normal and often necessary; writing to
+    one is what changes the subject.
+    """
+    if not project_id:
+        return ""
+    from kith.infra.db import repositories as repo
+
+    try:
+        bound = bound_project(path)
+        if not bound or int(bound) == int(project_id):
+            return ""
+        mine = repo.projects.get_project(path, int(bound)) or {}
+        theirs = repo.projects.get_project(path, int(project_id)) or {}
+    except Exception:
+        # Same reasoning as `adopt`: a lookup that fails must not decide the answer. Allowing the
+        # write is the safe failure — refusing on a database hiccup would block real work.
+        return ""
+    return (
+        f"This conversation is working on {mine.get('name') or f'project #{bound}'}, and that "
+        f"belongs to {theirs.get('name') or f'project #{project_id}'}. A conversation stays with "
+        "the project it started on, so this needs its own conversation — say so rather than "
+        "working around it."
+    )

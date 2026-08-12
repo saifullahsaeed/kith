@@ -35,7 +35,7 @@ SHAPE_MIN_TOOLS = 3
 
 # Tools that mean the round actually moved the work forward.
 #
-# Deliberately excludes comment_on_task and journal, or he could escape detection
+# Deliberately excludes journal, or he could escape detection
 # forever by narrating the loop instead of leaving it. Also excludes write_file:
 # during the real loop he *did* write files — they were raw page dumps — so counting
 # that as progress would have let it run indefinitely.

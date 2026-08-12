@@ -46,6 +46,14 @@ def get_project(path: Path, project_id: int) -> dict | None:
         return as_dict(row) if row else None
 
 
+def get_milestone(path: Path, milestone_id: int) -> dict | None:
+    """One milestone, or None. The sibling of `get_project`, added because a caller that needs a
+    milestone's *project* had to list every milestone to find one row."""
+    with session(path) as db:
+        row = db.get(Milestone, milestone_id)
+        return as_dict(row) if row else None
+
+
 def update_project(
     path: Path,
     project_id: int,

@@ -101,8 +101,6 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   list_tasks: { verb: "looked over his tasks", group: "tasks" },
   update_task: { verb: "updated a task", group: "tasks" },
   view_task: { verb: "opened task", of: "id", group: "tasks" },
-  comment_on_task: { verb: "noted on a task", of: "comment", group: "writing" },
-  ask_on_task: { verb: "asked you", of: "question", group: "outreach" },
   add_checklist_item: { verb: "added a step", of: "text", group: "tasks" },
   check_item: { verb: "ticked off a step", group: "tasks" },
   add_deliverable: { verb: "handed over", of: "title", group: "tasks" },

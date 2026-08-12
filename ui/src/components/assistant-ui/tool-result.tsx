@@ -130,8 +130,13 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
       return `#${s(r.id)} ${short(args.name)}`;
     case "add_deliverable":
       return short(args.title ?? args.content);
-    case "ask_on_task":
-      return `#${s(args.id)} · ${short(args.question, 48)}`;
+    case "ask": {
+      const asked = Array.isArray(args.questions) ? args.questions : [];
+      const one = asked[0] as Record<string, unknown> | undefined;
+      return asked.length > 1
+        ? `${asked.length} questions`
+        : short(String(one?.question ?? ""), 56);
+    }
     case "read_skill":
       return s(args.name);
     case "journal":
@@ -393,6 +398,63 @@ const Skill: FC<{ value: Record<string, unknown> }> = ({ value }) => {
 /** A source, `read_source`'s result — the full text of something a person handed him to read.
  *  `content` is the whole document; a `pre` block was the same "readable format shown
  *  unformatted" problem as a skill's instructions. */
+/** What `ask` produced: the question, and what came back.
+ *
+ * It had no card at all, so an answered question rendered through the generic fallback — the
+ * `questions` array and the `answers` array printed as raw JSON, sixty lines of it, in the middle of
+ * the conversation. The *pending* state was handled all along (`ask-prompt.tsx` draws a real card
+ * while the turn waits), so the one state that stays in the transcript for ever was the one nobody
+ * had drawn. Meanwhile `ask_on_task` — now removed — had a summary line of its own. Backwards.
+ *
+ * Reading an answered question is a two-line job: what was asked, and what you said. The options are
+ * deliberately not listed. They mattered while you were choosing; afterwards the choice is the fact,
+ * and reprinting five labels you did not pick is how the raw dump got long in the first place. */
+function looksLikeAsked(value: Record<string, unknown>): boolean {
+  return Array.isArray(value.questions) && Array.isArray(value.answers);
+}
+
+const Asked: FC<{ value: Record<string, unknown> }> = ({ value }) => {
+  const questions = (value.questions as Record<string, unknown>[]) ?? [];
+  const answers = (value.answers as Record<string, unknown>[]) ?? [];
+  return (
+    <div className="flex flex-col gap-2.5">
+      {questions.map((q, i) => {
+        const reply = answers[i] ?? {};
+        const chosen = Array.isArray(reply.chosen) ? reply.chosen.map(String) : [];
+        const wrote = typeof reply.text === "string" ? reply.text.trim() : "";
+        const skipped = Boolean(reply.skipped);
+        return (
+          <div key={i} className="flex flex-col gap-1.5 rounded-lg p-2.5 ring-1 ring-border/60">
+            <span className="text-sm text-foreground">{String(q.question ?? "")}</span>
+            {skipped ? (
+              /* Skipping is an answer with a meaning — "you choose" — and it reads as no answer
+                 unless it says so. */
+              <span className="text-[11px] text-muted-foreground/70">
+                you skipped it — his call
+              </span>
+            ) : (
+              <div className="flex flex-col gap-1">
+                {chosen.map((one) => (
+                  <span key={one} className="text-kith flex items-center gap-1.5 text-[13px]">
+                    <Check className="size-3 shrink-0" strokeWidth={3} />
+                    {one}
+                  </span>
+                ))}
+                {wrote ? (
+                  <span className="text-[13px] text-muted-foreground">“{wrote}”</span>
+                ) : null}
+                {!chosen.length && !wrote ? (
+                  <span className="text-[11px] text-muted-foreground/70">no answer recorded</span>
+                ) : null}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 function looksLikeSource(value: Record<string, unknown>): boolean {
   return typeof value.title === "string" && typeof value.content === "string" && "origin" in value;
 }
@@ -1146,6 +1208,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     }
 
     const object = result as Record<string, unknown>;
+    if (looksLikeAsked(object)) return <Asked value={object} />;
     if (looksLikePicture(object)) return <Picture value={object} />;
     if (looksLikeTask(object)) return <Task value={object} />;
     if (looksLikeMilestone(object)) return <Milestone value={object} />;

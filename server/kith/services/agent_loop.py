@@ -162,8 +162,6 @@ _LANDING_TOOLS = frozenset(
         "check_item",
         "add_checklist_item",
         "update_task",
-        "comment_on_task",
-        "ask_on_task",
         "view_task",
         "list_tasks",
         "write_file",
@@ -228,8 +226,6 @@ _PLANNING_TOOLS = frozenset(
         "update_task",
         "view_task",
         "list_tasks",
-        "comment_on_task",
-        "ask_on_task",
         "take_note",
         "journal",
         "remember",
@@ -251,7 +247,7 @@ _LANDING_DIRECTIVE = (
     "(You're near the end of this turn's tool budget, so stop gathering — you have enough. "
     "Spend what's left LANDING the work: write what you've found into your working file, "
     "add_deliverable for anything finished, check_item the checklist steps you've actually "
-    "completed, and comment_on_task or ask_on_task if you need something from your person. "
+    "completed, and `ask` if you need something from your person — it waits for the answer. "
     "Research you never wrote down is research you'll have to redo next time.)"
 )
 

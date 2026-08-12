@@ -55,10 +55,6 @@ class TestABriefIsReadable:
                 {"text": "Inspect the current routes", "done": True},
                 {"text": "Protect /dashboard", "done": False},
             ],
-            "comments": [
-                {"author": "user", "body": "footer should be full width"},
-                {"author": "kith", "body": "restructured the panel into three bands"},
-            ],
             "deliverables": [{"title": "PortalShell.tsx", "path": "frontend/src/components"}],
         }
         return {**base, **over}
@@ -76,7 +72,6 @@ class TestABriefIsReadable:
         assert "npm run build passes" in text, "the definition of done"
         assert "- [x] Inspect the current routes" in text
         assert "- [ ] Protect /dashboard" in text
-        assert "footer should be full width" in text, "the person's own note"
         assert "PortalShell.tsx" in text
 
     def test_it_says_it_is_a_mirror(self, tmp_path):
@@ -143,7 +138,13 @@ class TestTheBriefFollowsTheBoard:
 
         assert any("wire-the-login-form" in name for name in self.briefs(linked["project"]))
 
-    def test_a_comment_refreshes_it(self, linked):
+    def test_a_later_write_refreshes_it(self, linked):
+        """Any write to the task rewrites its brief, not just the one that created it.
+
+        This used to post a comment and look for it in the brief's Notes section. Both are gone —
+        the thread, and the section that rendered it — so the property is checked through a write
+        that still exists. It is the same property: the brief is a projection of the board, written
+        whenever the board changes rather than being a second place to change it."""
         from kith.tools import registry
 
         made = registry.get("add_task").run(
@@ -154,8 +155,8 @@ class TestTheBriefFollowsTheBoard:
                 "project_id": linked["id"],
             },
         )
-        registry.get("comment_on_task").run(
-            linked["db"], {"id": int(made["id"]), "comment": "the proxy port was wrong"}
+        registry.get("add_checklist_item").run(
+            linked["db"], {"id": int(made["id"]), "text": "the proxy port was wrong"}
         )
 
         brief = next(iter((linked["project"] / ".kith" / "tasks").glob("*.md"))).read_text()

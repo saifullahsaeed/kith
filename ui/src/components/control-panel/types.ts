@@ -58,7 +58,6 @@ export const KIND_LABEL: Record<string, string> = {
   tool: "tool",
   deliverable: "deliverable",
   checklist_item: "step",
-  task_comment: "comment",
 };
 
 /** Maps each overview stat / nav entry to the tab it opens. Tasks land on

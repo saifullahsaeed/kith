@@ -14,6 +14,16 @@ from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
 
+def _out_of_scope(path: Path, project_id: int | None) -> dict | None:
+    """A refusal when this conversation may not write to that project, or None."""
+    from kith.services import session_context
+
+    reason = session_context.foreign_project(path, project_id)
+    if not reason:
+        return None
+    return {"blocked": reason, "next": "Tell them, and work on this conversation's project instead."}
+
+
 @tool(
     "create_project",
     "Start a project — a bigger goal that groups several tasks and a roadmap of "
@@ -45,50 +55,63 @@ def create_project(path: Path, args: dict):
     """
     from kith.services import project_files, project_memory, session_context
 
+    # A conversation gets one project. `_adoption_note` used to be the whole answer to a session
+    # starting a second one: the project was created, the binding silently refused, and the reply
+    # said so in a note — which left a real row on the board that nothing was working on. Six of
+    # the nine projects on the real board point at one folder, two of those are active, and one is
+    # called `placeholder`. Refusing is what the note was trying to be.
+    bound = session_context.bound_project(path)
+    if bound:
+        current = repo.projects.get_project(path, int(bound)) or {}
+        return {
+            "blocked": (
+                f"This conversation is working on {current.get('name') or f'project #{bound}'}, and "
+                "a conversation stays with the project it started on."
+            ),
+            "next": (
+                "If this is genuinely separate work, say so and start a new conversation for it. If "
+                "it belongs to the project you are already in, file it there instead."
+            ),
+        }
+
     directory = str(args.get("directory") or "").strip()
     if directory:
         resolved = Path(sandbox.resolve(directory))
         resolved.mkdir(parents=True, exist_ok=True)
+        # A folder has one project. Handing back the existing one rather than refusing, because
+        # the intent — work on this codebase — is right and only the "new" part is wrong.
+        existing = next(
+            (
+                one
+                for one in repo.projects.list_projects(path)
+                if str(one.get("directory") or "") == str(resolved)
+            ),
+            None,
+        )
+        if existing:
+            session_context.adopt(path, existing.get("id"), deliberate=True)
+            return {
+                **existing,
+                "note": (
+                    f"{resolved} already belongs to {existing.get('name')}, so that is the project "
+                    "you are now on — nothing new was created. A second board over one folder is "
+                    "how the same work ends up in two places."
+                ),
+            }
         # Created with its scaffold now rather than on first write, so the headings are there
         # to be filled in instead of the file being invented from scratch later.
         project_memory.ensure(resolved)
         project_files.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
         session_context.adopt(path, made.get("id"), deliberate=True)
-        return {**made, "memory": f"{directory}/.kith/memory.md", **_adoption_note(path, made)}
+        return {**made, "memory": f"{directory}/.kith/memory.md"}
     made = repo.projects.add_project(path, args["name"], args.get("description") or "")
     # The conversation that started it is the one working on it. Nothing used to write this
     # down, so `conversations.project_id` existed in the schema, was read on every chat turn
     # to decide which project memory to show, and was never once set — which is why two
     # sessions saw the same everything.
     session_context.adopt(path, made.get("id"), deliberate=True)
-    return {**made, **_adoption_note(path, made)}
-
-
-def _adoption_note(path: Path, made: dict) -> dict:
-    """Did starting this project actually bind the conversation to it?
-
-    A conversation locks to the first project it works on and stays there for good — so a
-    session already working on something else does not move just because it started a
-    second project. `adopt()` already refuses that silently, which is right for it (bookkeeping
-    must not fail loudly), but the tool call that triggered it is not bookkeeping: without
-    this, the response reads as "made and you're in it" whichever one actually happened, and
-    there was no way to tell them apart short of asking `list_projects` afterwards.
-    """
-    from kith.services import session_context
-
-    conversation_id = session_context.current()
-    if not conversation_id:
-        return {}
-    if repo.conversations.project_of(path, conversation_id) == int(made["id"]):
-        return {}
-    return {
-        "note": (
-            "This conversation is already working on a different project and stays there — "
-            "this one now exists, but nothing here moved to it. Start a new conversation to "
-            "work in it."
-        )
-    }
+    return {**made}
 
 
 @tool(
@@ -126,6 +149,9 @@ def list_projects(path: Path, args: dict):
 def update_project(path: Path, args: dict):
     from kith.services import session_context
 
+    foreign = _out_of_scope(path, args.get("id"))
+    if foreign is not None:
+        return foreign
     status = args.get("status")
     if status == "done":
         # The schema already leaves "done" off the enum; this is the backstop for a
@@ -191,6 +217,9 @@ def add_milestone(path: Path, args: dict):
     """
     from kith.services import session_context
 
+    foreign = _out_of_scope(path, args.get("project_id"))
+    if foreign is not None:
+        return foreign
     session_context.adopt(path, args["project_id"])
     title = str(args["title"]).strip()
     target = next(
@@ -292,6 +321,11 @@ def _project_of(path: Path, milestone_id: int) -> int:
     required=("id",),
 )
 def update_milestone(path: Path, args: dict):
+    # The milestone's project, not an argument — a milestone id alone says nothing about scope.
+    milestone = repo.projects.get_milestone(path, int(args["id"])) or {}
+    foreign = _out_of_scope(path, milestone.get("project_id"))
+    if foreign is not None:
+        return foreign
     return repo.projects.update_milestone(
         path, args["id"], args.get("status"), args.get("title"), args.get("target_at")
     )

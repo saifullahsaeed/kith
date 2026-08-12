@@ -90,24 +90,26 @@ class TestTheBindingSticks:
 
         assert bound_to(db) == two_projects["hired"]
 
-    def test_starting_a_second_project_here_does_not_move_it_either(self, two_projects):
-        """Creating a project used to be the one *deliberate* act that could still move a
-        bound session — the exception this file used to carve out on purpose. The binding
-        being absolute means there is no longer an exception: a session hired for the
-        portal stays hired for the portal even if it goes and starts something new."""
+    def test_starting_a_second_project_here_is_refused_outright(self, two_projects):
+        """Creating a project used to be the one *deliberate* act that could still move a bound
+        session, then became an act that created the project and left the binding alone — the row
+        was made, `_adoption_note` said the session had not moved, and the board grew another
+        project nothing was working on. Nine projects, six on one folder, one called `placeholder`.
+
+        Now it is refused. The note was trying to be a refusal."""
         from kith.tools import registry
 
         db = two_projects["db"]
+        before = {p["name"] for p in repo.projects.list_projects(db)}
         with session_context.working_in("c-1"):
-            made = registry.get("create_project").run(db, {"name": "Something New"})
+            out = registry.get("create_project").run(db, {"name": "Something New"})
 
         assert bound_to(db) == two_projects["hired"]
-        assert int(made["id"]) != two_projects["hired"]  # the new project really was created
-        # And the tool call itself has to say so — without this, "created" reads as "and
-        # you're in it" whichever one actually happened, since the row it returns is the
-        # same either way.
-        assert "note" in made
-        assert "already working on a different project" in made["note"]
+        assert "blocked" in out, out
+        # Nothing was created, and the refusal says which project you are on — the answer is
+        # always "start a new conversation for it", so it should name what it is refusing for.
+        assert {p["name"] for p in repo.projects.list_projects(db)} == before
+        assert "Client Portal" in out["blocked"] or "portal" in out["blocked"].lower()
 
 
 class TestWhatBindsAnUnboundSession:

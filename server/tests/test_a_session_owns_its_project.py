@@ -149,17 +149,12 @@ class TestTheContextIsPerThread:
         assert session_context.current() == ""
 
 
-class TestWhatASessionMayWorkOn:
-    """`_in_scope` is the whole of it: which rows this session's tick is allowed to see."""
-
-
-class TestATickAdvancesOneSession:
-    def _quiet(self, module, monkeypatch, runner):
-        """Nothing due, nothing pending — so the tick reaches the work branches."""
-        monkeypatch.setattr(runner, "_new_pending", lambda: [])
-        monkeypatch.setattr(module.repo.tasks, "tasks_awaiting_kith", lambda _p: [])
-        monkeypatch.setattr(module.repo.reminders, "due_reminders", lambda _p, _n: [])
-        monkeypatch.setattr(module.repo.schedules, "due_schedules", lambda _p, _n: [])
+# Two classes stood here — `TestWhatASessionMayWorkOn`, whose docstring said "`_in_scope` is the
+# whole of it", and `TestATickAdvancesOneSession` — both emptied when the tests for the
+# self-directed loop were retired and left as shells with one uncalled helper between them. The
+# helper still patched `tasks_awaiting_kith`, which no longer exists; nothing noticed, because
+# nothing called it. `_in_scope` does not exist either: the confinement it named is now
+# `session_context.foreign_project`, tested in test_a_conversation_stays_in_its_project.py.
 
 
 class TestTheTickSeesTheProjectMemory:

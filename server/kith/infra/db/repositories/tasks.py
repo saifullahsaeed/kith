@@ -1,4 +1,11 @@
-"""Tasks, and everything hanging off one: comments, checklist, deliverables."""
+"""Tasks, and everything hanging off one: the checklist and the deliverables.
+
+The comment thread was the third, and it is gone — 620 rows of "New note on…", every one a
+notification, burying the messages that actually wanted an answer. Progress lives in the task's
+working file now, questions go through `ask`, and evidence is the checklist and the deliverables.
+`task_comments` stays in the schema with its rows: removing a feature is not destroying what was
+written with it.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db.engine import as_dict, session
-from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task, TaskComment
+from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task
 from kith.infra.db.support import utc_now_iso
 
 # Rank for sorting: high first, then normal, then low.
@@ -281,25 +288,6 @@ def delete_task(path: Path, task_id: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def add_task_comment(path: Path, task_id: int, author: str, body: str) -> dict:
-    with session(path) as db:
-        row = TaskComment(task_id=task_id, author=author, body=body, created_at=utc_now_iso())
-        db.add(row)
-        db.flush()
-        return as_dict(row)
-
-
-def list_task_comments(path: Path, task_id: int) -> list[dict]:
-    query = select(TaskComment).where(TaskComment.task_id == task_id).order_by(TaskComment.id.asc())
-    with session(path) as db:
-        return [as_dict(row) for row in db.scalars(query).all()]
-
-
-def delete_task_comment(path: Path, comment_id: int) -> bool:
-    with session(path) as db:
-        return db.execute(delete(TaskComment).where(TaskComment.id == comment_id)).rowcount > 0
-
-
 def add_checklist_item(path: Path, task_id: int, text: str) -> dict:
     with session(path) as db:
         next_index = db.scalar(
@@ -396,7 +384,6 @@ def task_detail(path: Path, task_id: int) -> dict | None:
         **task,
         "milestone_title": milestone_title,
         "held_by": held_by,
-        "comments": list_task_comments(path, task_id),
         "checklist": list_checklist(path, task_id),
         "deliverables": list_deliverables(path, task_id),
         # Read here rather than by each surface, because there are three of them — the drawer,
@@ -430,23 +417,6 @@ def _plan_for(path: Path, task: dict) -> str:
     except Exception:
         # Same contract as the rest of this: a task must load whether or not its plan does.
         return ""
-
-
-def tasks_awaiting_kith(path: Path) -> list[dict]:
-    """Tasks whose newest comment is from the person — i.e. he's been answered and
-    should pick the task back up. Powers the ask-on-task loop."""
-    candidates = active_tasks(path) + [t for t in list_tasks(path) if t["status"] == "waiting"]
-    seen: set[int] = set()
-    waiting_on_him = []
-    for task in candidates:
-        # A waiting task appears in both lists; only consider it once.
-        if task["id"] in seen:
-            continue
-        seen.add(task["id"])
-        comments = list_task_comments(path, task["id"])
-        if comments and comments[-1]["author"] == "user":
-            waiting_on_him.append(task)
-    return waiting_on_him
 
 
 def working_in(path: Path, conversation_id: str) -> dict | None:

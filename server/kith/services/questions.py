@@ -1,10 +1,10 @@
 """A question he asks mid-turn, and the turn waiting for the answer.
 
-Everything else he does that needs you is asynchronous by design. `ask_on_task` files a
-comment and moves the task to "Waiting on you"; the permission gate refuses the call, records
-a pending request and tells him to ask in his own words. Both were shaped by one constraint,
-written down in `permissions.py`: holding a tool call open on a background thread means waiting
-for a click that may never come, on a turn you may have walked away from.
+This is now the only way he asks for something. It used to be one of three: `ask_on_task` filed a
+comment and moved the task to "Waiting on you", and the permission gate refused the call and told
+him to ask in his own words. All of it was shaped by one constraint, written down in
+`permissions.py`: holding a tool call open on a background thread means waiting for a click that may
+never come, on a turn you may have walked away from.
 
 That constraint expired. A turn already runs on its own thread and survives you closing the
 window, and since `live_turns` it can be watched again from wherever you come back to. So a

@@ -13,58 +13,6 @@ from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
 
-def _ask_on_task(path: Path, a: dict) -> dict:
-    task_id = a["id"]
-    question = (a.get("question") or "").strip()
-    if not question:
-        raise ValueError("question is required")
-    comment = repo.tasks.add_task_comment(path, task_id, "kith", question)
-    repo.tasks.update_task(path, task_id, status="waiting")
-    task = repo.tasks.task_detail(path, task_id)
-    goal = task["goal"] if task else f"task #{task_id}"
-    # A notification so they know to come answer on the task — clickable to it.
-    repo.messages.add_message(
-        path,
-        f"I need your input on “{goal}” (task #{task_id}): {question}",
-        link=f"/tasks/{task_id}",
-        kind="asked",
-    )
-    _mirror_brief(path, task_id)
-    return {
-        "asked": True,
-        "task_id": task_id,
-        "comment_id": comment["id"],
-        "note": "Moved to Waiting on you; they've been notified.",
-    }
-
-
-def _comment_on_task(path: Path, a: dict) -> dict:
-    """Post a comment on a task and raise a clickable notification, so a note left
-    on a task actually reaches the person (this is how he keeps me in the loop)."""
-    task_id = a["id"]
-    comment = (a.get("comment") or "").strip()
-    if not comment:
-        raise ValueError("comment is required")
-    saved = repo.tasks.add_task_comment(path, task_id, "kith", comment)
-    task = repo.tasks.task_detail(path, task_id)
-    goal = task["goal"] if task else f"task #{task_id}"
-    snippet = comment if len(comment) <= 140 else comment[:140] + "…"
-    repo.messages.add_message(
-        path,
-        f"New note on “{goal}” (task #{task_id}): {snippet}",
-        link=f"/tasks/{task_id}",
-        # Running commentary. The numerous kind, and the one that was burying the rest.
-        kind="note",
-    )
-    _mirror_brief(path, task_id)
-    return {
-        "commented": True,
-        "task_id": task_id,
-        "comment_id": saved["id"],
-        "note": "Posted and they've been notified.",
-    }
-
-
 def _verify_done(path: Path, a: dict) -> dict | None:
     """Make 'done' mean done. Returns a refusal to hand back, or None to let it through.
 
@@ -116,7 +64,6 @@ def _verify_done(path: Path, a: dict) -> dict | None:
         # landed in a column meaning "your turn". That column is gone, and not for brevity — four
         # tasks once sat in it that nobody knew were waiting, because a tray waits to be noticed.
         # Taking a turn is `ask`, which holds the turn until it is answered.
-        repo.tasks.add_task_comment(path, a["id"], "kith", body)
         return {
             "blocked": (
                 f"{len(unmet)} of {len(checks)} requirements not met by your own account, so this "
@@ -145,7 +92,6 @@ def _verify_done(path: Path, a: dict) -> dict | None:
     from kith.services import session_context
 
     if session_context.unattended():
-        repo.tasks.add_task_comment(path, a["id"], "kith", body)
         return {
             "blocked": (
                 "Every requirement is met by your own account — and you wrote the brief, chose the "
@@ -158,8 +104,22 @@ def _verify_done(path: Path, a: dict) -> dict | None:
             ),
         }
 
-    repo.tasks.add_task_comment(path, a["id"], "kith", body)
     return None
+
+
+def _out_of_scope(path: Path, project_id: int | None) -> dict | None:
+    """A refusal when this conversation may not write to that project, or None.
+
+    The message is the whole point. "Not allowed" leaves a model looking for another route to the
+    same place; naming both projects and saying what to do instead — start a conversation for it —
+    is the difference between pushing back and being obstructive.
+    """
+    from kith.services import session_context
+
+    reason = session_context.foreign_project(path, project_id)
+    if not reason:
+        return None
+    return {"blocked": reason, "next": "Tell them, and work on this conversation's project instead."}
 
 
 def _verify_approvable(path: Path, task_id: int) -> dict | None:
@@ -206,6 +166,15 @@ def _update_task(path: Path, a: dict) -> dict | None:
     # different places, none of which agreed; the notification that mattered — "I am stuck and
     # you are the only one who can help" — is now `ask`, which holds the turn instead of leaving
     # a card in a tray somebody has to notice. Four tasks once sat in that tray unnoticed.
+    existing = repo.tasks.task_detail(path, a["id"]) or {}
+    foreign = _out_of_scope(path, existing.get("project_id"))
+    if foreign is not None:
+        return foreign
+    # And you cannot move a task *into* another project either.
+    if a.get("project_id"):
+        foreign = _out_of_scope(path, a.get("project_id"))
+        if foreign is not None:
+            return foreign
     requested = (a.get("status") or "").strip()
     if requested == "done":
         refusal = _verify_done(path, a)
@@ -377,6 +346,15 @@ def add_task(path: Path, args: dict):
     description = (args.get("description") or "").strip()
     project_id = args.get("project_id")
     milestone_id = args.get("milestone_id")
+    # A milestone carries its project, so resolve before checking scope — otherwise filing into
+    # another project by naming only its milestone walks straight past the guard.
+    if milestone_id and not project_id:
+        milestone = repo.projects.get_milestone(path, int(milestone_id))
+        if milestone:
+            project_id = milestone.get("project_id")
+    foreign = _out_of_scope(path, project_id)
+    if foreign is not None:
+        return foreign
     scoped = bool(project_id or milestone_id)
 
     # A task that belongs to real work needs a checkable finish line. Without one, "Verify the
@@ -550,30 +528,6 @@ def update_task(path: Path, args: dict):
 )
 def view_task(path: Path, args: dict):
     return repo.tasks.task_detail(path, args["id"]) or {"note": "No such task."}
-
-
-@tool(
-    "comment_on_task",
-    "Add a comment to a task's thread — an update for your person about progress "
-    "on that specific task. This notifies them with a link straight to the task, "
-    "so it's how you keep them in the loop on a task without interrupting them.",
-    {"id": INT, "comment": STR},
-    required=("id", "comment"),
-)
-def comment_on_task(path: Path, args: dict):
-    return _comment_on_task(path, args)
-
-
-@tool(
-    "ask_on_task",
-    "Ask your person a question you need answered to move a task forward. This "
-    "posts the question on the task, moves it to 'waiting', and notifies them. "
-    "Don't work it further until they reply on the task.",
-    {"id": INT, "question": STR},
-    required=("id", "question"),
-)
-def ask_on_task(path: Path, args: dict):
-    return _ask_on_task(path, args)
 
 
 @tool(
