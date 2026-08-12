@@ -27,9 +27,8 @@ def add_task(
     path: Path,
     goal: str,
     priority: str = "normal",
-    due_at: str | None = None,
     description: str = "",
-    status: str = "backlog",
+    status: str = "planning",
     created_by: str = "kith",
     project_id: int | None = None,
     milestone_id: int | None = None,
@@ -37,7 +36,7 @@ def add_task(
     if priority not in TASK_PRIORITIES:
         priority = "normal"
     if status not in TASK_STATUSES:
-        status = "backlog"
+        status = "planning"
     now = utc_now_iso()
     with session(path) as db:
         # A task under a milestone belongs to that milestone's project. Resolved in
@@ -50,7 +49,6 @@ def add_task(
             goal=goal,
             status=status,
             priority=priority,
-            due_at=due_at,
             description=description,
             created_by=created_by,
             project_id=project_id,
@@ -176,7 +174,6 @@ def update_task(
     status: str | None = None,
     goal: str | None = None,
     priority: str | None = None,
-    due_at: str | None = None,
     description: str | None = None,
 ) -> dict | None:
     if status is not None and status not in TASK_STATUSES:
@@ -198,8 +195,6 @@ def update_task(
             row.goal = goal
         if priority is not None:
             row.priority = priority
-        if due_at is not None:
-            row.due_at = due_at
         if description is not None:
             row.description = description
         row.updated_at = utc_now_iso()

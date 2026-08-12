@@ -87,7 +87,7 @@ def test_a_task_inherits_its_milestones_project(db: Path) -> None:
 def test_active_tasks_skip_a_parked_project(db: Path) -> None:
     """A finished or paused project lets him rest — this is what makes that true."""
     project = projects.add_project(db, "p")
-    task = tasks.add_task(db, "t", status="planned", project_id=project["id"])
+    task = tasks.add_task(db, "t", status="approved", project_id=project["id"])
     assert any(t["id"] == task["id"] for t in tasks.active_tasks(db))
 
     projects.update_project(db, project["id"], status="paused")

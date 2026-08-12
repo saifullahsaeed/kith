@@ -167,7 +167,7 @@ export function Workspace({
    * Same shape as `reviewFinished`, one step earlier: ask him to walk through a plan waiting
    * for approval — here, in the thread, where you can actually push back on it rather than
    * a bare yes/no. Approving or asking for changes is his call to act on afterward
-   * (`update_task(status='planned')` or revising the plan file), not something this button
+   * (`update_task(status='approved')` or revising the plan file), not something this button
    * does directly.
    */
   const approvePlan = useCallback(
@@ -177,7 +177,7 @@ export function Workspace({
       const text =
         `I'd like to look at the plan for ${list} before you start. Walk me through it — what ` +
         `you found, what you're about to do, and anything you're unsure about — so I can approve ` +
-        `it (move it to 'planned') or tell you what to change.`;
+        `it (move it to 'approved') or tell you what to change.`;
       runtime.thread.append({ role: "user", content: [{ type: "text", text }] });
     },
     [runtime],

@@ -16,17 +16,11 @@ function taskTally(tasks: BrainSnapshot["tasks"]) {
   const of = (...s: string[]) => tasks.filter((t) => s.includes(t.status)).length;
   return {
     total: tasks.length,
-    open: of("backlog", "planned"),
-    // Counted apart from `open`, for the same reason `review` is counted apart from `done`
-    // below: a plan waiting on a decision is not the same thing as work nobody has looked at
-    // yet, even though both currently show as "nothing is happening on this."
+    open: of("approved"),
+    // Counted apart from `open`: a plan waiting on a decision is not the same thing as work
+    // that has been approved and simply has not started.
     planning: of("planning"),
     working: of("working"),
-    // Counted apart from `done`, because that is the whole point of the column: work he believes
-    // is finished but nobody has checked. Rolling it into `done` would put the project's progress
-    // bar at 100% on his own say-so.
-    review: of("review"),
-    waiting: of("waiting"),
     done: of("done"),
   };
 }
@@ -115,9 +109,9 @@ export function Projects({
                 Working on <span className="text-kith">{onNow.title}</span>
                 <span className="text-muted-foreground"> in {onNow.project}</span>
               </>
-            ) : all.waiting ? (
+            ) : all.planning ? (
               <span className="text-orange-400/90">
-                {all.waiting} thing{all.waiting === 1 ? "" : "s"} waiting on you
+                {all.planning} plan{all.planning === 1 ? "" : "s"} waiting on you
               </span>
             ) : available > 0 ? (
               <span className="text-muted-foreground">
@@ -194,17 +188,6 @@ function TaskTally({ tally }: { tally: ReturnType<typeof taskTally> }) {
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
       {tally.working ? <span className="text-emerald-500">{tally.working} working</span> : null}
-      {tally.waiting ? (
-        <span className="font-medium text-kith">{tally.waiting} waiting on you</span>
-      ) : null}
-      {/* Ahead of "to do", because it is the shortest path to progress: these are finished and
-          need a glance, not work. Amber rather than the accent — it wants attention, but less
-          urgently than something actually blocked on an answer. */}
-      {tally.review ? (
-        <span className="font-medium text-amber-600 dark:text-amber-400">
-          {tally.review} to check
-        </span>
-      ) : null}
       {/* Same shape as `review`, one step earlier: a plan waiting on a decision before any
           work starts, rather than work waiting on a check after it's done. */}
       {tally.planning ? (
@@ -269,8 +252,8 @@ function ProjectCard({
                 working now
               </span>
             ) : null}
-            {tally.waiting ? (
-              <Badge className="border-kith/25 bg-kith-soft text-kith">waiting on you</Badge>
+            {tally.planning ? (
+              <Badge className="border-kith/25 bg-kith-soft text-kith">plan for your look</Badge>
             ) : null}
             {matching ? (
               <Badge className="border-kith/25 bg-kith-soft text-kith">
@@ -395,8 +378,8 @@ function LooseCard({ tasks, onOpen }: { tasks: BrainSnapshot["tasks"]; onOpen: (
           <span className="text-[15px] font-semibold leading-snug transition-colors group-hover:text-kith">
             No project
           </span>
-          {tally.waiting ? (
-            <Badge className="border-kith/25 bg-kith-soft text-kith">waiting on you</Badge>
+          {tally.planning ? (
+            <Badge className="border-kith/25 bg-kith-soft text-kith">plan for your look</Badge>
           ) : null}
         </div>
         <p className="mt-0.5 text-sm text-muted-foreground">

@@ -40,7 +40,7 @@ export const CHIP: Record<string, string> = {
 };
 
 // Mirrors TASK_STATUSES on the server — see the note in task-detail.tsx.
-export const TASK_STATUSES = ["backlog", "planning", "planned", "working", "review", "waiting", "done", "dropped"];
+export const TASK_STATUSES = ["planning", "approved", "working", "done", "dropped"];
 export const PROJECT_STATUSES = ["active", "done", "paused", "archived"];
 /** How each kind reads in a "Delete this …?" question. */
 export const KIND_LABEL: Record<string, string> = {

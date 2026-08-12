@@ -1,5 +1,11 @@
 """Old task statuses carried forward into the planning gate, not left behind.
 
+**Read with `v34_four_task_statuses`.** These assertions are about where a row ends up after the
+whole chain, and v34 renames twice more: the 'planned' this migration produces becomes 'approved',
+and 'backlog' becomes 'planning'. What is still being tested here is v28's own property — that
+'todo' and 'doing' were carried forward rather than left speaking a word the app dropped — just
+read through the later rename.
+
 `v28_task_planning_statuses` is the same shape `v14_tasks_as_issues` used for 'open' -> 'todo':
 old vocabulary out, existing rows rewritten rather than left speaking a word the app no longer
 recognises. 'todo' had no direct equivalent under the gate (nothing is actionable until a plan
@@ -54,7 +60,7 @@ def _statuses_by_goal(path: Path) -> dict[str, str]:
     return {row["goal"]: row["status"] for row in rows}
 
 
-def test_todo_is_grandfathered_into_planned(tmp_path):
+def test_todo_is_grandfathered_into_the_approved_column(tmp_path):
     path = tmp_path / "agent.db"
     _legacy_db(path)
 
@@ -64,7 +70,7 @@ def test_todo_is_grandfathered_into_planned(tmp_path):
     finally:
         conn.close()
 
-    assert _statuses_by_goal(path)["An old actionable errand"] == "planned"
+    assert _statuses_by_goal(path)["An old actionable errand"] == "approved"
 
 
 def test_doing_is_renamed_to_working(tmp_path):
@@ -91,7 +97,7 @@ def test_everything_else_is_left_alone(tmp_path):
         conn.close()
 
     statuses = _statuses_by_goal(path)
-    assert statuses["An old parked errand"] == "backlog"
+    assert statuses["An old parked errand"] == "planning"
     assert statuses["Old finished work"] == "done"
 
 
@@ -111,8 +117,8 @@ def test_it_only_runs_once(tmp_path):
         conn.close()
 
     assert _statuses_by_goal(path) == {
-        "An old actionable errand": "planned",
+        "An old actionable errand": "approved",
         "Old work in flight": "working",
-        "An old parked errand": "backlog",
+        "An old parked errand": "planning",
         "Old finished work": "done",
     }

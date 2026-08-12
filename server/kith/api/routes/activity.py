@@ -42,7 +42,10 @@ def activity_status():
     return jsonify(
         {
             **feed.status(),
-            "toReview": _waiting_on_you("review"),
+            # `toReview` is gone with the `review` column. Work he thinks is finished no longer
+            # waits in a tray to be noticed — `_verify_done` refuses the close and he raises it
+            # in chat with `ask`, which holds the turn until it is answered. The one queue left
+            # is the one decision that is genuinely a person's: approving a plan.
             "toApprove": _waiting_on_you("planning"),
         }
     )

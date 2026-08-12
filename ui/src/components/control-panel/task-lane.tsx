@@ -38,15 +38,12 @@ export function TaskLane({
 
   const rank = (task: BrainSnapshot["tasks"][number]) => {
     if (task.status === "working") return 0;
-    if (task.status === "waiting") return 1;
-    // Just under "waiting on you", because both are the person's turn — these just need a look
-    // rather than an answer. A plan (before work starts) and finished work (after) are the same
-    // shape of "your turn," so they rank together, ahead of "to do", so neither sits below work
-    // that has not started at all.
-    if (task.status === "planning") return 2;
-    if (task.status === "review") return 2;
-    if (task.milestone_id && blocked.has(task.milestone_id)) return 4;
-    return 3;
+    // A plan waiting on a decision is the only thing here that is the person's turn, so it sits
+    // above approved work that has simply not started. Everything that used to rank between the
+    // two — `waiting`, `review` — is a question in chat now rather than a row in this list.
+    if (task.status === "planning") return 1;
+    if (task.milestone_id && blocked.has(task.milestone_id)) return 3;
+    return 2;
   };
   /*
     Stable, and that is the whole point of the second key.
@@ -125,9 +122,6 @@ export function TaskLane({
                   ) : null}
                   {task.status === "planning" ? (
                     <span className="text-violet-500/90">plan ready for your look</span>
-                  ) : null}
-                  {task.status === "waiting" ? (
-                    <span className="text-orange-400/90">waiting on you</span>
                   ) : null}
                   {held ? <span>held until “{titleOf(task.milestone_id)}” is ready</span> : null}
                   {!held && task.milestone_id ? <span>{titleOf(task.milestone_id)}</span> : null}

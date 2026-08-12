@@ -799,14 +799,10 @@ const Fields: FC<{ value: Record<string, unknown> }> = ({ value }) => (
  *  status across tasks, milestones and projects; the three vocabularies don't collide because
  *  each object only ever has one of them. */
 const STATUS_TONE: Record<string, string> = {
-  backlog: "bg-muted text-muted-foreground",
-  // Its own tone, distinct from "review"'s violet below — both are "needs a person's look,"
-  // but for opposite reasons: a plan before any work starts, versus finished work after.
+  // The one state that wants a person: a plan drafted and not yet approved.
   planning: "bg-indigo-500/15 text-indigo-400",
-  planned: "bg-sky-500/15 text-sky-500",
+  approved: "bg-sky-500/15 text-sky-500",
   working: "bg-kith/15 text-kith",
-  review: "bg-violet-500/15 text-violet-400",
-  waiting: "bg-orange-500/15 text-orange-500",
   done: "bg-emerald-500/15 text-emerald-500",
   dropped: "bg-muted text-muted-foreground/60 line-through",
   active: "bg-kith/15 text-kith",
@@ -856,7 +852,7 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
       content: [
         {
           type: "text",
-          text: `Approved — move #${String(id)} to 'planned' and get started.`,
+          text: `Approved — move #${String(id)} to 'approved' and get started.`,
         },
       ],
     });
@@ -906,9 +902,8 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
           </ul>
         </div>
       ) : null}
-      {value.due_at || comments > 0 || deliverables > 0 ? (
+      {comments > 0 || deliverables > 0 ? (
         <div className="flex flex-wrap gap-x-3 text-[11px] text-muted-foreground/70">
-          {value.due_at ? <span>due {String(value.due_at)}</span> : null}
           {comments > 0 ? <span>{comments} comment{comments === 1 ? "" : "s"}</span> : null}
           {deliverables > 0 ? (
             <span>
@@ -928,7 +923,7 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
             variant="outline"
             className="w-fit"
             onClick={approve}
-            title="Approve the plan as written and move this to 'planned' — say something instead to ask for changes."
+            title="Approve the plan as written and let him start — say something instead to ask for changes."
           >
             Approve
           </Button>

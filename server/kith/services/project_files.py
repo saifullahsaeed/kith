@@ -158,7 +158,6 @@ def _brief(task: dict[str, Any]) -> str:
     facts = [
         ("Status", task.get("status")),
         ("Priority", task.get("priority")),
-        ("Due", task.get("due_at")),
     ]
     said = [f"**{label}:** {value}" for label, value in facts if value]
     if said:

@@ -81,6 +81,45 @@ def pending_user_messages(path: Path, limit: int = 5) -> list[dict]:
         return [as_dict(row) for row in rows]
 
 
+def count_messages_by_kind(path: Path) -> dict[str, int]:
+    """How many of each kind are in the channel — over all of it, not the page.
+
+    The alerts panel offers to clear one sort of thing and says how many that is. It was
+    counting the hundred rows it had been handed, so "Clear notes · 100" on a channel of six
+    hundred was a number invented by the limit. Counted here so the figure on the button is
+    the figure that goes.
+    """
+    with session(path) as db:
+        rows = db.execute(
+            select(Message.kind, func.count()).where(Message.sender != "user").group_by(Message.kind)
+        ).all()
+    return {str(kind or "note"): int(count) for kind, count in rows}
+
+
+def delete_messages(path: Path, kinds: list[str] | None = None) -> int:
+    """Clear the channel, or one sort of thing in it. Returns how many went.
+
+    ``kinds`` of None means everything he has said; a list narrows it. His person's own
+    replies are never the target — but the ones sitting below the newest thing being cleared
+    go with it, and that is load-bearing rather than tidy-mindedness. `pending_user_messages`
+    works out what he still owes an answer to by comparing ids against his last word. Delete
+    his last word and every reply he answered months ago sits above the new high-water mark
+    and becomes pending again — he would re-read them as if they had just arrived, in the
+    context of every turn. Dropping the replies beneath the cleared tail keeps that
+    comparison answering exactly what it answered before the clear.
+    """
+    criteria = [Message.sender != "user"]
+    if kinds is not None:
+        criteria.append(Message.kind.in_(kinds))
+    with session(path) as db:
+        newest = db.scalar(select(func.max(Message.id)).where(*criteria))
+        if newest is None:
+            return 0
+        removed = db.execute(delete(Message).where(*criteria)).rowcount
+        db.execute(delete(Message).where(Message.sender == "user", Message.id < newest))
+        return int(removed)
+
+
 def unread_message_count(path: Path) -> int:
     with session(path) as db:
         return int(db.scalar(select(func.count()).select_from(Message).where(Message.read == 0)) or 0)
@@ -156,29 +195,6 @@ def list_turn_log(path: Path, limit: int = 100) -> list[dict]:
             record["tools"] = _tools(record.get("tools"))
             out.append(record)
         return out
-
-
-def times_worked(path: Path, goal: str) -> int:
-    """How many turns have actually *worked* this task.
-
-    Read from the recorder rather than counted in memory, so restarting the process cannot hand a
-    task a fresh budget — which would quietly make "restart the app" the way to keep grinding.
-
-    Matched on the focus line the runner writes, ``working on: <goal>``, and only for ``start``
-    mode, so planning turns and replies do not spend a task's allowance. Matching on the goal text
-    rather than an id is what the recorder makes possible: it stores the focus line, not a foreign
-    key, and a log that survives the task being edited is worth more here than a tidy join.
-    """
-    wanted = f"working on: {str(goal).strip()}"
-    with session(path) as db:
-        return int(
-            db.scalar(
-                select(func.count())
-                .select_from(TurnLog)
-                .where(TurnLog.mode == "start", TurnLog.focus == wanted)
-            )
-            or 0
-        )
 
 
 def _tools(raw: object) -> list[str]:

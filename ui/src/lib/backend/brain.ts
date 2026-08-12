@@ -25,7 +25,6 @@ export interface Task {
   goal: string;
   status: string;
   priority: string; // low | normal | high
-  due_at: string | null;
   description: string;
   created_by: string; // kith | user
   project_id: number | null;

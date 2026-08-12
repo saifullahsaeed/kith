@@ -442,9 +442,6 @@ def _present_state(conversation_id: str = "") -> str:
         memory_context.messages_block(AGENT_DB_PATH),
         memory_context.projects_block(AGENT_DB_PATH),
         memory_context.work_block(AGENT_DB_PATH),
-        # Only ever shown to him with you present. Reviewing his own work unwatched is
-        # the thing the review column exists to stop.
-        memory_context.review_block(AGENT_DB_PATH),
     ]
     present = memory_context.context_block(AGENT_DB_PATH)
     if present:

@@ -10,27 +10,37 @@ MEMORY_LEVELS = ("core", "recall")
 REMINDER_STATUSES = ("pending", "done", "cancelled")
 CURIOSITY_STATUSES = ("open", "exploring", "explored", "dropped")
 SCHEDULE_STATUSES = ("active", "paused")
-# Kanban columns for tasks. 'backlog' is not yet started; 'planning' is a plan being
-# drafted or awaiting approval; 'planned' is approved and ready to implement; 'working' is
-# actionable, in progress; 'review' is finished work nobody has checked yet; 'waiting' is
-# parked on the person; 'done'/'dropped' are closed.
+# The states a task can be in. Four, and a person sets none of them.
 #
-# The gate between 'planning' and 'planned' exists for the same reason the one below does,
-# one step earlier: a plan nobody but its author has seen is a guess wearing the clothes of a
-# decision. Entering 'planning' is always a person asking for one, in chat — never his own
-# initiative — so a plan waiting for a look is always one somebody actually wanted looked at.
+#   planning  a plan is being drafted
+#   approved  you said yes; he may work it
+#   working   he is on it
+#   done
+#   dropped
 #
-# 'review' exists because he was the only judge of his own work. It ran
-# `_verify_done` on itself — enumerate the brief, answer per item — and then closed the task,
-# which is marking your own homework with the answer sheet you wrote. It is also the column that
-# stops a task being reopened and ground on: nothing in `review` is offered to him at all, so
-# work that is finished-pending-a-look cannot be picked up and reworked for another twelve hours.
-TASK_STATUSES = ("backlog", "planning", "planned", "working", "review", "waiting", "done", "dropped")
-#: What he may pick up without being asked for it by name. Deliberately narrow — `backlog` and `planning` are not
-#: here because starting either is always a person's decision, made in chat, not his; and
-#: `review`/`waiting` are both "someone else's turn", so reaching either would
-#: take back work it had already handed over.
-TASK_ACTIVE = ("planned", "working")
+# There were eight, and the board was not using them: counted the day this changed, 67 done,
+# 4 waiting, 3 planned, 3 dropped, 3 backlog, 1 working, and **nothing had ever been in
+# `review`**. Two were dead and two more were indistinguishable in practice, which is how a
+# status comes to be wrong often enough that removing it beats fixing it.
+#
+# 'backlog' is gone because every task now lands in the gate, so there is no state before
+# planning. 'planned' is 'approved', which is what it always meant.
+#
+# 'review' and 'waiting' are gone, and their absence is the point rather than a simplification.
+# Both meant "someone else's turn", and a column is a bad way to take a turn: it waits to be
+# noticed. `ask` is the good way — it holds the turn until it is answered, in the conversation
+# the work came out of. So finished work and blocked work both reach a person as a question, and
+# the task stays `working` until they answer. `review`'s real job — that he cannot be the only
+# judge of his own work — is done better by being asked than by being queued.
+#
+# The gate between 'planning' and 'approved' is unchanged and is the only decision a person
+# makes about a task: a plan nobody but its author has seen is a guess wearing the clothes of a
+# decision. It is entered from chat, never on his own initiative, and `update_task` refuses it
+# without a plan and a checklist to approve.
+TASK_STATUSES = ("planning", "approved", "working", "done", "dropped")
+#: What he may pick up without being asked for it by name. `planning` is not here: nothing is
+#: pickable until a person has approved a plan for it.
+TASK_ACTIVE = ("approved", "working")
 #: Closed, either way. The one set both `active_tasks` (repositories/tasks.py) and `add_task`'s
 #: duplicate-merge / milestone-cap checks (tools/tasks.py) need, kept in one place after both
 #: had grown their own copy of the same two strings.

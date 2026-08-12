@@ -19,7 +19,6 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { DatePicker } from "@/components/ui/date-picker";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { FileViewer, Markdown, MarkdownInline, skipTextRead } from "@/components/files";
@@ -35,20 +34,11 @@ import {
   type TaskDetail as Detail,
 } from "@/lib/backend/brain";
 
-// Mirrors TASK_STATUSES on the server. A status missing from here is a task that cannot be moved
-// out of it from the interface, and one whose current column renders blank.
-const STATUSES = ["backlog", "planning", "planned", "working", "review", "waiting", "done", "dropped"];
 const STATUS_LABEL: Record<string, string> = {
-  backlog: "Backlog",
-  // Same reasoning as "Finished, needs checking" below, one step earlier: not "Plan" or
-  // "Planning" on its own — it should read as where the *plan* is, not an instruction.
+  // Not "Planning" on its own — it should read as where the *plan* is, not as an instruction.
   planning: "Plan ready for your look",
-  planned: "Planned",
+  approved: "Approved",
   working: "Working",
-  // Not "Review" — it reads as an instruction to the person. He finished it and wants a look
-  // before it counts as done; the column belongs to him, not to them.
-  review: "Finished, needs checking",
-  waiting: "Waiting on you",
   done: "Done",
   dropped: "Dropped",
 };
@@ -301,14 +291,13 @@ export function TaskDetailPage({
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row-reverse lg:overflow-hidden">
         <aside className="border-border/60 bg-card/20 shrink-0 border-b lg:w-[17rem] lg:border-b-0 lg:border-s xl:w-[19rem] lg:overflow-y-auto">
           <div className="grid grid-cols-2 gap-x-5 gap-y-3 px-5 py-4 sm:grid-cols-3 lg:grid-cols-1">
+          {/* Shown, not set. Eight statuses were maintained by hand and were wrong often
+              enough to be worth removing rather than fixing — 67 done, 4 waiting, 3 planned,
+              1 working, and nothing ever in `review`. He owns every transition now; the one
+              decision that is a person's is approving a plan, and that happens in chat where
+              the plan can actually be discussed. */}
           <Prop label="Status">
-            <Dropdown
-              value={task.status}
-              onChange={(v) => patch({ status: v })}
-              className="w-full"
-              options={STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))}
-              ariaLabel="Status"
-            />
+            <span className="block py-1.5 text-sm">{STATUS_LABEL[task.status] ?? task.status}</span>
           </Prop>
           <Prop label="Priority">
             <Dropdown
@@ -317,14 +306,6 @@ export function TaskDetailPage({
               options={PRIORITIES}
               className="w-full"
               ariaLabel="Priority"
-            />
-          </Prop>
-          <Prop label="Due">
-            <DatePicker
-              value={task.due_at ? task.due_at.slice(0, 10) : ""}
-              onChange={(day) => patch({ due_at: day ? `${day}T00:00:00+00:00` : null })}
-              placeholder="No due date"
-              ariaLabel="Due date"
             />
           </Prop>
           {/* Shown, not editable, and it was never really editable: `update_task` has no

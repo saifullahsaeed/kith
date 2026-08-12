@@ -15,26 +15,23 @@ from kith.tools import run_tool
 
 
 class TestTheVocabulary:
-    def test_the_eight_columns_and_no_others(self):
-        assert TASK_STATUSES == (
-            "backlog",
-            "planning",
-            "planned",
-            "working",
-            "review",
-            "waiting",
-            "done",
-            "dropped",
-        )
+    def test_the_four_columns_and_no_others(self):
+        # Was eight. `backlog` folded into `planning` (there is no state before the gate),
+        # `planned` was renamed to what it means, and `review`/`waiting` are gone entirely —
+        # both meant "someone else's turn", which is `ask` in chat now rather than a tray.
+        assert TASK_STATUSES == ("planning", "approved", "working", "done", "dropped")
 
     def test_planning_is_not_active(self):
-        """Drafting a plan is not doing the work — a tick must not be handed a task still
+        """Drafting a plan is not doing the work — nothing may be handed a task still
         waiting on its plan to be looked at."""
         assert "planning" not in TASK_ACTIVE
 
-    def test_backlog_review_and_waiting_are_not_active_either(self):
-        for status in ("backlog", "review", "waiting"):
-            assert status not in TASK_ACTIVE
+    def test_only_approved_work_is_active(self):
+        assert set(TASK_ACTIVE) == {"approved", "working"}
+
+    def test_the_retired_words_are_not_statuses_any_more(self):
+        for gone in ("backlog", "planned", "review", "waiting"):
+            assert gone not in TASK_STATUSES
 
     def test_settled_and_active_do_not_overlap(self):
         assert set(TASK_ACTIVE) & set(TASK_SETTLED) == set()
@@ -46,7 +43,7 @@ class TestThePlanTravelsWithTheApproval:
 
     def test_the_doc_at_the_convention_is_attached(self, db, tmp_path):
         project = repo.projects.add_project(db, "App", "", str(tmp_path))
-        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "backlog", "kith", int(project["id"]))
+        task = repo.tasks.add_task(db, "Ship it", "normal", "", "planning", "kith", int(project["id"]))
         work = tmp_path / ".kith" / "work"
         work.mkdir(parents=True)
         (work / f"task-{task['id']}.md").write_text("# The plan\n\nDo the thing carefully.\n")
@@ -56,7 +53,7 @@ class TestThePlanTravelsWithTheApproval:
         assert "Do the thing carefully" in out["plan"]
 
     def test_no_project_directory_is_silent(self, db):
-        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "backlog", "kith")
+        task = repo.tasks.add_task(db, "Ship it", "normal", "", "planning", "kith")
 
         out = run_tool("update_task", {"id": task["id"], "status": "planning"}, db)["result"]
 
@@ -64,7 +61,7 @@ class TestThePlanTravelsWithTheApproval:
 
     def test_no_file_at_the_convention_is_silent(self, db, tmp_path):
         project = repo.projects.add_project(db, "App", "", str(tmp_path))
-        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "backlog", "kith", int(project["id"]))
+        task = repo.tasks.add_task(db, "Ship it", "normal", "", "planning", "kith", int(project["id"]))
 
         out = run_tool("update_task", {"id": task["id"], "status": "planning"}, db)["result"]
 
@@ -74,7 +71,7 @@ class TestThePlanTravelsWithTheApproval:
         """The file might genuinely exist from an earlier round — it is only worth surfacing
         again at the moment someone is actually being asked to approve it."""
         project = repo.projects.add_project(db, "App", "", str(tmp_path))
-        task = repo.tasks.add_task(db, "Ship it", "normal", None, "", "backlog", "kith", int(project["id"]))
+        task = repo.tasks.add_task(db, "Ship it", "normal", "", "planning", "kith", int(project["id"]))
         work = tmp_path / ".kith" / "work"
         work.mkdir(parents=True)
         (work / f"task-{task['id']}.md").write_text("# The plan\n")

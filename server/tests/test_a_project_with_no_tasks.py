@@ -35,7 +35,7 @@ class TestFindingWorkNobodyCanStart:
     def test_a_milestone_with_open_tasks_is_not(self, db, project):
         first = repo.projects.add_milestone(db, project, "The data model is defined")
         repo.tasks.add_task(
-            db, "Define the exercise record", status="planned", milestone_id=first["id"], project_id=project
+            db, "Define the exercise record", status="approved", milestone_id=first["id"], project_id=project
         )
         assert repo.projects.milestones_needing_tasks(db) == []
 

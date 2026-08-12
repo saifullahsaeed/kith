@@ -522,6 +522,29 @@ def _migrations():
         # than having none.
         conn.execute("ALTER TABLE tasks ADD COLUMN conversation_id TEXT")
 
+    def v34_four_task_statuses(conn):
+        # Eight statuses down to four, and the due date out with them.
+        #
+        # The eight were not being used. On the real board: 67 done, 4 waiting, 3 planned,
+        # 3 dropped, 3 backlog, 1 working — and nothing had ever been in `review`.
+        #
+        # 'waiting' and 'review' both meant "someone else's turn", which is a question in chat
+        # now rather than a column, so both land in `working` and he raises them. `review` is
+        # deliberately not `done`: work he claimed was finished and nobody checked is not
+        # finished, and closing it here would grant exactly the pass the column withheld.
+        conn.execute("UPDATE tasks SET status = 'planning' WHERE status = 'backlog'")
+        conn.execute("UPDATE tasks SET status = 'approved' WHERE status = 'planned'")
+        conn.execute("UPDATE tasks SET status = 'working' WHERE status IN ('waiting', 'review')")
+        # 77 of 81 tasks carried a due date, essentially all of them stamped by him rather than
+        # asked for. A field that is always set carries no signal, and this one was read back to
+        # him every turn in the task block.
+        #
+        # ALTER ... DROP COLUMN, not a table rebuild: the rows must not go with the column, and
+        # a rebuild is the version of this that loses them. SQLite has supported it since 3.35;
+        # the model mapping goes in the same change, because a dropped column the ORM still maps
+        # breaks every query against the table (see v29/v30 for the same ordering trap).
+        conn.execute("ALTER TABLE tasks DROP COLUMN due_at")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -556,6 +579,7 @@ def _migrations():
         v31_file_touches,
         v32_file_touch_extent,
         v33_task_conversation,
+        v34_four_task_statuses,
     ]
 
 

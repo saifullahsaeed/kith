@@ -57,11 +57,10 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     goal: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="backlog")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="planning")
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     priority: Mapped[str] = mapped_column(Text, nullable=False, default="normal")
-    due_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     #: The conversation working this task, while it is being worked. Set when the status
     #: becomes `working`, cleared when it leaves — see `update_task`. Null for everything

@@ -39,7 +39,7 @@ class TestFilingWorkIntoAFinishedProject:
                 "goal": "Build the dashboard shell",
                 "description": "npm run build passes and /dashboard renders when logged in",
                 "project_id": finished_project,
-                "status": "planned",
+                "status": "approved",
             },
         )
 
@@ -54,7 +54,7 @@ class TestFilingWorkIntoAFinishedProject:
                 "goal": "Build the dashboard shell",
                 "description": "npm run build passes and /dashboard renders when logged in",
                 "project_id": finished_project,
-                "status": "planned",
+                "status": "approved",
             },
         )
 
@@ -63,10 +63,10 @@ class TestFilingWorkIntoAFinishedProject:
     def test_promoting_a_backlog_task_reopens_it_too(self, db, finished_project):
         from kith.tools import registry
 
-        task = repo.tasks.add_task(db, "Later", "normal", None, "", "backlog", "kith", finished_project)
+        task = repo.tasks.add_task(db, "Later", "normal", "", "planning", "kith", finished_project)
         repo.projects.update_project(db, finished_project, status="done")
 
-        registry.get("update_task").run(db, {"id": int(task["id"]), "status": "planned"})
+        registry.get("update_task").run(db, {"id": int(task["id"]), "status": "approved"})
 
         assert repo.projects.get_project(db, finished_project)["status"] == "active"
 
@@ -80,7 +80,7 @@ class TestFilingWorkIntoAFinishedProject:
                 "goal": "Someday",
                 "description": "a thing to consider much later, with a real finish line here",
                 "project_id": finished_project,
-                "status": "backlog",
+                "status": "planning",
             },
         )
 
@@ -96,7 +96,7 @@ class TestFilingWorkIntoAFinishedProject:
                 "goal": "Build the dashboard shell",
                 "description": "npm run build passes and /dashboard renders when logged in",
                 "project_id": finished_project,
-                "status": "planned",
+                "status": "approved",
             },
         )
 

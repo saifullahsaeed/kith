@@ -64,7 +64,6 @@ def _task_edit(path, task_id, data: dict):
         data.get("status"),
         data.get("goal"),
         data.get("priority"),
-        data.get("due_at"),
         data.get("description"),
     )
 
@@ -168,9 +167,8 @@ KINDS: dict[str, Kind] = {
                 p,
                 d.get("goal", ""),
                 d.get("priority") or "normal",
-                d.get("due_at"),
                 d.get("description") or "",
-                d.get("status") or "backlog",
+                d.get("status") or "planning",
                 "user",
                 d.get("project_id"),
             ),

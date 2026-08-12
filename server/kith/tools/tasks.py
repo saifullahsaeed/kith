@@ -109,18 +109,27 @@ def _verify_done(path: Path, a: dict) -> dict | None:
     body = "**Checked against the brief**\n" + "\n".join(lines)
 
     if unmet:
-        # He said it himself: something's missing. That's a hand-back, not a close.
-        body += f"\n\n**{len(unmet)} of {len(checks)} not met — leaving this with you rather than calling it done.**"
-        a["status"] = "waiting"
+        # He said it himself: something's missing. A refusal, and it has to *be* one.
+        #
+        # This used to set `a["status"] = "waiting"` and return None, so the reclassification was
+        # the refusal: the update went through, the caller was told it had succeeded, and the task
+        # landed in a column meaning "your turn". That column is gone, and not for brevity — four
+        # tasks once sat in it that nobody knew were waiting, because a tray waits to be noticed.
+        # Taking a turn is `ask`, which holds the turn until it is answered.
         repo.tasks.add_task_comment(path, a["id"], "kith", body)
-        repo.messages.add_message(
-            path,
-            f"I couldn't finish “{detail.get('goal') or ('task #' + str(a['id']))}” (task #{a['id']}): "
-            + "; ".join(str(c.get("requirement")) for c in unmet),
-            link=f"/tasks/{a['id']}",
-            kind="stuck",
-        )
-        return None
+        return {
+            "blocked": (
+                f"{len(unmet)} of {len(checks)} requirements not met by your own account, so this "
+                "is not done."
+            ),
+            "not_met": [str(c.get("requirement")) for c in unmet],
+            "checked": body,
+            "next": (
+                "The task stays where it is. Either finish what is missing, or raise it with your "
+                "person in chat with `ask` — say what is blocking you and what you want to do. Do "
+                "not call this again with the same verification."
+            ),
+        }
 
     # Every requirement met — by his own account, with nobody having checked it. That is not
     # a close, it is a submission. `_verify_done` is genuinely good at catching work he knows is
@@ -129,58 +138,37 @@ def _verify_done(path: Path, a: dict) -> dict | None:
     # it. On a real project that produced a finished, confident analysis document asserting the
     # system used SQLite when it had moved to Postgres — every box ticked.
     #
-    # So a pass with nobody watching lands in `review`, where he cannot pick it up again and a chat turn
-    # is shown it. In a conversation there is a person present and the whole context to judge
-    # from, so `done` there stays `done`.
+    # So a pass with nobody watching is refused rather than filed. It used to move to `review`,
+    # a column he could not pick up again — which worked, and cost a whole status to say
+    # "somebody look at this". There is a person in every chat turn now, so the answer is to be
+    # asked there instead of queued here.
     from kith.services import session_context
 
     if session_context.unattended():
-        a["status"] = "review"
-        body += (
-            "\n\n**Finished as far as I can tell — leaving it in review rather than closing it, "
-            "since I am the one who wrote the brief I just checked against.**"
-        )
         repo.tasks.add_task_comment(path, a["id"], "kith", body)
-        return None
+        return {
+            "blocked": (
+                "Every requirement is met by your own account — and you wrote the brief, chose the "
+                "requirements and supplied the evidence, so nobody has actually checked this."
+            ),
+            "checked": body,
+            "next": (
+                "Not closable with nobody present. Leave it as it is and raise it in chat when "
+                "there is somebody to look: say what you finished and what you want confirmed."
+            ),
+        }
 
     repo.tasks.add_task_comment(path, a["id"], "kith", body)
     return None
 
 
-def _status_of(path: Path, task_id: int) -> str:
-    """What column a task is in right now, or "" if it can't be read.
-
-    Read before an update so a status *change* can be told apart from a status being restated.
-    Silent on failure: this exists to decide whether to send a notification, and a task that
-    cannot be read is not a reason to fail the update itself.
-    """
-    try:
-        row = repo.tasks.task_detail(path, int(task_id))
-        return str((row or {}).get("status") or "")
-    except Exception:
-        return ""
-
-
 def _update_task(path: Path, a: dict) -> dict | None:
-    # Read before `_verify_done` gets to rewrite it. Parking work on his person is the one
-    # status change they have to hear about, and it was the one that said nothing: `ask_on_task`
-    # notifies, and the unmet-brief hand-back below notifies, but a bare
-    # `update_task(status='waiting')` moved the task into their column in total silence — no
-    # message, no link, nothing in the header.
-    #
-    # Which is how four tasks came to sit in "Waiting on you" that nobody knew were waiting, and
-    # how a task parked by the loop-breaker on a blocker that was not even real (see
-    # a narrowed toolset) stayed parked for three hours until someone read the turn log. A
-    # stall he cannot get past is exactly the moment his person is the only one who can help;
-    # not telling them makes it a stall that lasts until they happen to look.
-    #
-    # Taking it from what was *asked for* is also what keeps the two paths from both firing.
-    # `_verify_done` sets `a["status"] = "waiting"` and notifies, then falls through here; a
-    # marker saying "already told them" would work, but it would live in the argument dict the
-    # model fills in, and anything he can pass is something he can pass to go quiet. The
-    # request he actually made is not his to rewrite.
+    # There is no longer a status that means "your turn", so there is no longer a status change
+    # that has to be announced. `waiting` was that status and it was announced from three
+    # different places, none of which agreed; the notification that mattered — "I am stuck and
+    # you are the only one who can help" — is now `ask`, which holds the turn instead of leaving
+    # a card in a tray somebody has to notice. Four tasks once sat in that tray unnoticed.
     requested = (a.get("status") or "").strip()
-    was = _status_of(path, a["id"]) if requested == "waiting" else ""
     if requested == "done":
         refusal = _verify_done(path, a)
         if refusal is not None:
@@ -196,7 +184,6 @@ def _update_task(path: Path, a: dict) -> dict | None:
         a.get("status"),
         a.get("goal"),
         a.get("priority"),
-        a.get("due_at"),
         a.get("description"),
     )
     # Moving a task along is working on its project, whether or not this call is the one that
@@ -207,20 +194,9 @@ def _update_task(path: Path, a: dict) -> dict | None:
 
     session_context.adopt(path, (out or {}).get("project_id"))
     _mirror_brief(path, (out or {}).get("id"))
-    # Only on the way in, and only if nobody has said it already: re-parking a task that is
-    # already waiting is a no-op, and pinging them for it turns the notification into noise.
-    if requested == "waiting" and was != "waiting":
-        goal = str((out or {}).get("goal") or f"task #{a['id']}")
-        repo.messages.add_message(
-            path,
-            f"I've left “{goal}” (task #{a['id']}) with you — I couldn't get past it on my own.",
-            link=f"/tasks/{a['id']}",
-            kind="stuck",
-        )
-    # Promoting something out of the backlog is the moment it becomes work, and therefore the
-    # moment worth waking for. This is the other half of scaffolding into `backlog`: you lay
-    # the roadmap out with nothing running, and approving a plan into `planned` is what says
-    # go — rather than a button somewhere else that means the same thing.
+    # Approving a plan is the moment work becomes work. This is the other half of everything
+    # landing in `planning`: you lay the roadmap out with nothing running, and saying yes to a
+    # plan is what says go — rather than a button somewhere else that means the same thing.
     if (a.get("status") or "") in TASK_ACTIVE:
         reopened = _reopen_if_finished(path, (out or {}).get("project_id"))
         if reopened and out:
@@ -331,9 +307,10 @@ def _plan_doc(path: Path, task_id: int | None) -> str:
     "how you'll KNOW it's done — ideally something runnable (a command that exits 0, a test that "
     'passes, a file that exists). "Verify/inspect/consolidate X" is a done-condition, not a task '
     "of its own. A task under a project or milestone MUST carry such a description. 'priority' is "
-    "high for what matters most; 'due_at' if it's time-bound. New tasks start in 'backlog' — "
-    "nothing is pickable until it's been through the planning-a-task skill and approved into "
-    "'planned', so there is no separate 'ready but unplanned' column any more.",
+    "high for what matters most. Every task starts in 'planning' and nothing is pickable until "
+    "your person has approved a plan for it — draft one with the planning-a-task skill, with the "
+    "whole checklist written, then hand it over. There are no due dates: a date you set yourself "
+    "is not a deadline anyone agreed to.",
     {
         "goal": {**STR, "description": "Short title — the outcome, not a verb like 'verify X'."},
         "description": {
@@ -342,8 +319,7 @@ def _plan_doc(path: Path, task_id: int | None) -> str:
             "milestone; a runnable check beats prose.",
         },
         "priority": {**STR, "enum": list(TASK_PRIORITIES), "description": "low | normal | high."},
-        "due_at": {**STR, "description": "Optional due time, ISO 8601 (your local zone)."},
-        "status": {**STR, "enum": list(TASK_STATUSES), "description": "Defaults to 'backlog'."},
+        "status": {**STR, "enum": list(TASK_STATUSES), "description": "Defaults to 'planning'."},
         "project_id": {**INT, "description": "Optional: the project this task belongs to."},
         "milestone_id": {
             **INT,
@@ -410,18 +386,16 @@ def add_task(path: Path, args: dict):
                 ),
             }
 
-    # Everything starts in `backlog` now, milestone or not — the old split (a standalone errand
-    # landing straight in `todo`, ready to pick up) does not have anywhere to go any more, because
-    # nothing is pickable at all until it has been through the planning-a-task skill and someone
-    # has approved it into `planned`. The problem `backlog`-for-milestones originally solved — a
-    # roadmap being laid out is not started halfway through writing it — is now just true of every
-    # task by construction, not a special case for the ones filed under a milestone.
-    status = args.get("status") or "backlog"
+    # Everything starts in `planning`, milestone or not. The old split — a standalone errand
+    # landing straight in a ready-to-pick column — has nowhere to go, because nothing is pickable
+    # until a person has approved a plan for it. The problem the separate backlog originally
+    # solved (a roadmap being laid out is not started halfway through writing it) is now true of
+    # every task by construction rather than a special case for the ones under a milestone.
+    status = args.get("status") or "planning"
     made = repo.tasks.add_task(
         path,
         goal,
         args.get("priority") or "normal",
-        args.get("due_at"),
         description,
         status,
         "kith",
@@ -457,16 +431,15 @@ def list_tasks(path: Path, args: dict):
 
 @tool(
     "update_task",
-    "Update a task — move it between columns (backlog/planning/planned/working/waiting/done/"
-    "dropped), or change its goal, description, priority, due date, or which project/milestone "
-    "it belongs to. New work starts in 'backlog'. Move it to 'planning' once you've drafted a "
-    "plan with the planning-a-task skill and it's ready for their look; to 'planned' once they "
-    "approve it; to 'working' once you actually start; 'done' when finished, 'dropped' if you're "
-    "giving up. ('review' is not yours to choose — closing a brief-carrying task while nobody is "
-    "watching lands it there on its own; see verification below.) Marking the last task of a "
-    "milestone 'done' auto-completes that milestone, and completing all of a project's milestones "
-    "auto-completes the project — so just keep tasks honest. "
-    "Once a task is 'done' or 'dropped', leave it alone — don't re-work it. "
+    "Update a task — move it between planning/approved/working/done/dropped, or change its goal, "
+    "description, priority, or which project/milestone it belongs to. Every task starts in "
+    "'planning' while you draft its plan. 'approved' is NOT yours to set: your person approves a "
+    "plan in chat, and this refuses it without a plan file and a checklist. Move it to 'working' "
+    "when you start, 'done' when it is genuinely finished, 'dropped' if you are giving up. "
+    "There is no column meaning 'your turn' — if you are blocked or want something confirmed, use "
+    "`ask` in chat, which waits for the answer. Marking the last task of a milestone 'done' "
+    "auto-completes that milestone, and completing all of a project's milestones auto-completes "
+    "the project — so just keep tasks honest. Once a task is 'done' or 'dropped', leave it alone. "
     "Moving a task with a written brief to 'done' REQUIRES `verification` — see below.",
     {
         "id": INT,
@@ -474,7 +447,6 @@ def list_tasks(path: Path, args: dict):
         "goal": STR,
         "description": STR,
         "priority": {**STR, "enum": list(TASK_PRIORITIES)},
-        "due_at": STR,
         "project_id": {**INT, "description": "Move it under this project (or omit)."},
         "milestone_id": {**INT, "description": "Link it to this milestone (or omit)."},
         "verification": {
