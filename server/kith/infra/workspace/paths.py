@@ -279,6 +279,51 @@ def resolve(path: str) -> str:
     return str(base_dir() / expanded)
 
 
+def display(path: Path | str) -> str:
+    """How a path is named when it is shown to him: short where that is unambiguous, full where
+    it is not.
+
+    This exists because `glob` formatted its results with ``relative_to(root())`` and failed 14
+    times out of 23 over 2026-08-10 to 2026-08-12, handing the model a raw
+    ``ValueError: '…/ai-play/…' is not in the subpath of '/Users/…/Kith'``. Permission had
+    already said yes — a folder linked to an active project is his (see
+    ``permissions.linked_project_roots``) — so the search ran, found the files, and then could
+    not name them. Permission knew about linked folders and presentation did not.
+
+    A helper rather than a mended line, because the assumption is available to make at every
+    call site that formats a path for him, and `glob` only happened to make it first.
+
+    Relative to the **innermost** root that contains the path, so a project linked inside his own
+    folder is named relative to the project — both answers are true and the specific one is the
+    useful one. A path under no known root is returned whole: there is nothing for it to be
+    relative to, and inventing something would name a file he cannot open.
+    """
+    target = Path(path)
+    resolved = _resolved(target)
+
+    innermost: Path | None = None
+    for base in (root(), *permissions.linked_project_roots()):
+        candidate = _resolved(base)
+        if resolved != candidate and not resolved.is_relative_to(candidate):
+            continue
+        if innermost is None or len(candidate.parts) > len(innermost.parts):
+            innermost = candidate
+    if innermost is None:
+        return str(target)
+    relative = resolved.relative_to(innermost)
+    # The root itself. "" is not a path and reads as a bug in whatever printed it.
+    return str(relative) if relative.parts else "."
+
+
+def _resolved(path: Path) -> Path:
+    """``resolve`` that cannot raise. A path that will not resolve — a broken link, a folder gone
+    since it was listed — still has to be namable, and its literal form is the honest answer."""
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
 def status() -> dict:
     """What the interface shows about where he works."""
     here = root()

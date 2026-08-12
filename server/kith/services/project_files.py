@@ -96,6 +96,29 @@ def slug(text: str, limit: int = 42) -> str:
     return cleaned[:limit].strip("-") or "task"
 
 
+def plan_path(project_dir: str | Path, task_id: int) -> Path:
+    """Where the `planning-a-task` skill files a task's plan.
+
+    Built from `kith_dir` rather than `folder_for` on purpose: `folder_for` creates the folder,
+    and asking whether a plan exists must not be what brings `.kith/work/` into being.
+    """
+    return kith_dir(project_dir) / WORK / f"task-{int(task_id)}.md"
+
+
+def read_plan(project_dir: str | Path, task_id: int) -> str:
+    """The plan filed for this task, or "" if there is none.
+
+    Best-effort by design, and the design is the skill's: the path is prose guidance to a model,
+    not an enforced location, so a plan filed anywhere else does not show. Silence beats an error
+    here — nothing about a task should fail to load because its plan is missing or unreadable.
+    """
+    try:
+        doc = plan_path(project_dir, task_id)
+        return doc.read_text(encoding="utf-8") if doc.is_file() else ""
+    except OSError:
+        return ""
+
+
 def brief_path(project_dir: str | Path, task_id: int, goal: str) -> Path:
     return folder_for(project_dir, TASKS) / f"{int(task_id):02d}-{slug(goal)}.md"
 

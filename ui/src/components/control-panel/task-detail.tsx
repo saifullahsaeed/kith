@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
@@ -100,6 +101,10 @@ export function TaskDetailPage({
   const [task, setTask] = useState<Detail | null>(null);
   const [reply, setReply] = useState("");
   const [item, setItem] = useState("");
+  // Collapsed until asked for. A task in `planning` is the exception — the plan is the whole
+  // reason you opened it, and being asked to approve something you have to click to see is the
+  // shape of the bug this section exists to fix.
+  const [planOpen, setPlanOpen] = useState(false);
 
   const load = useCallback(() => {
     fetchTaskDetail(taskId)
@@ -109,6 +114,12 @@ export function TaskDetailPage({
   useEffect(() => {
     load();
   }, [load]);
+  // A task awaiting approval opens with its plan already showing: being asked to approve
+  // something you have to click to read is the same failure this section was added to fix, one
+  // click further in. Only ever opens — it never slams shut on a status change you did not make.
+  useEffect(() => {
+    if (task?.status === "planning") setPlanOpen(true);
+  }, [task?.status]);
 
   /**
    * Keep the page current while it is open.
@@ -390,6 +401,34 @@ export function TaskDetailPage({
               />
             </div>
           </section>
+
+          {/* The plan, on the task. It was written to `.kith/work/task-<id>.md` and shown on the
+              approval bar, and nowhere on the page you open to read the task — which produced
+              "where the fuck is plan on task do you not attach plan on tasks" four days after the
+              planning gate shipped.
+
+              Read-only, and collapsed by default. Read-only because the file is the source of
+              truth and an editable copy here would be a second one; collapsed because a real plan
+              is several hundred words and this section sits above the checklist, which is what you
+              open a working task to see. */}
+          {task.plan ? (
+            <section>
+              <Collapsible open={planOpen} onOpenChange={setPlanOpen}>
+                <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-left">
+                  <H>Plan</H>
+                  <ChevronRight
+                    className="mb-1.5 size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
+                    aria-hidden
+                  />
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="max-w-[68ch] text-[15px] leading-relaxed">
+                    <Markdown>{task.plan}</Markdown>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </section>
+          ) : null}
 
           <section>
             <H>

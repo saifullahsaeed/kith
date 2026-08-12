@@ -8,6 +8,7 @@ refusals, not the permissions.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from pathlib import Path
@@ -255,8 +256,8 @@ class TestWaitingForYourAnswer:
     rejoined — otherwise the prompt would be unreachable and the turn parked on it.
     """
 
-    def test_allowing_lets_the_waiting_call_through(self, tmp_path, monkeypatch):
-        from kith.services import session_context
+    def test_allowing_lets_the_waiting_call_through(self, tmp_path):
+        from kith.services import live_turns, session_context
 
         root = tmp_path / "work"
         root.mkdir()
@@ -266,9 +267,13 @@ class TestWaitingForYourAnswer:
 
         permissions.set_mode("ask")
         outcome: list[str] = []
+        # A *live turn*, not merely a conversation id — see `_wait_for`. The id says which chat
+        # this belongs to; only a live turn says something is streaming it to a screen, which is
+        # the condition under which the prompt is drawn at all. This test asserted the older
+        # contract for two days after the guard tightened.
+        turn = live_turns.begin("c1")
 
         def call():
-            # A conversation is what makes anybody able to answer, so it is what makes this wait.
             with session_context.working_in("c1"):
                 try:
                     permissions.require_path("read", outside, root)
@@ -285,8 +290,88 @@ class TestWaitingForYourAnswer:
         assert waiting, "nothing was queued up to answer"
         permissions.approve(waiting[0]["id"])
         thread.join(timeout=5)
+        live_turns.finish(turn)
 
         assert outcome == ["allowed"], "the call it was holding open did not go through"
+
+    def test_a_refusal_nobody_is_watching_does_not_wait(self, tmp_path):
+        """A conversation with no live turn refuses at once, and that is deliberate.
+
+        A reminder firing at four in the morning, a scheduled continuation, a checkpoint taken by
+        a test — all of them have a conversation id and none of them has anybody looking. Waiting
+        would park the thread for fifteen minutes on a prompt drawn on nobody's screen.
+        """
+        from kith.services import session_context
+
+        root = tmp_path / "work"
+        root.mkdir()
+        outside = tmp_path / "elsewhere" / "notes.txt"
+        outside.parent.mkdir()
+        outside.write_text("x")
+
+        permissions.set_mode("ask")
+
+        with session_context.working_in("c1"), pytest.raises(permissions.Denied):
+            permissions.require_path("read", outside, root)
+
+
+class TestItAsksOnceOrNotAtAll:
+    """The announcement is the notification and the badge, and it belongs to exactly one case.
+
+    `ba6ec1b` set out to move it *after* the "is anybody watching" guard — its own message says
+    so: "a refusal nobody is waiting on is not an interruption worth making, and announcing every
+    unattended one put a database write and a desktop notification on paths that had neither".
+    The diff added the call after the guard and left the original above it, so the move was an
+    add: an attended refusal announced twice, and an unattended one still announced.
+    """
+
+    def _refusal(self, tmp_path):
+        root = tmp_path / "work"
+        root.mkdir()
+        outside = tmp_path / "elsewhere" / "notes.txt"
+        outside.parent.mkdir()
+        outside.write_text("x")
+        permissions.set_mode("ask")
+        return root, outside
+
+    def test_an_attended_refusal_raises_one_alert_not_two(self, tmp_path, never_the_real_database):
+        from kith.infra.db import repositories as repo
+        from kith.services import live_turns, session_context
+
+        root, outside = self._refusal(tmp_path)
+        turn = live_turns.begin("c1")
+
+        def call():
+            with session_context.working_in("c1"), contextlib.suppress(permissions.Denied):
+                permissions.require_path("read", outside, root)
+
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        time.sleep(0.3)
+        alerts = [m for m in repo.messages.list_messages(never_the_real_database) if m["kind"] == "asked"]
+        waiting = permissions.pending()
+        if waiting:
+            permissions.deny(waiting[0]["id"])
+        thread.join(timeout=5)
+        live_turns.finish(turn)
+
+        # One request, one interruption. Two notifications for one thing to approve reads as two
+        # things to approve.
+        assert len(alerts) == 1, alerts
+
+    def test_an_unattended_refusal_raises_none(self, tmp_path, never_the_real_database):
+        from kith.infra.db import repositories as repo
+        from kith.services import session_context
+
+        root, outside = self._refusal(tmp_path)
+
+        with session_context.working_in("c1"), contextlib.suppress(permissions.Denied):
+            permissions.require_path("read", outside, root)
+
+        alerts = [m for m in repo.messages.list_messages(never_the_real_database) if m["kind"] == "asked"]
+        # Nothing is waiting on this one — it refused at once — so there is nothing to interrupt
+        # anybody about, and a notification would arrive about a request already answered.
+        assert alerts == []
 
     def test_denying_refuses_it_there_and_then(self, tmp_path):
         from kith.services import session_context

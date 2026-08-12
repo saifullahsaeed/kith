@@ -102,6 +102,72 @@ class TestApplyingSeveralAtOnce:
         assert (workspace_root / "many.py").read_text() == "n = 2\nn = 2\nn = 2\n"
 
 
+class TestAnEditTheFileAlreadySatisfies:
+    """One already-applied edit must not discard the nine around it.
+
+    This is where refusing `old == new` hurt most. A ten-edit refactor in which he had already
+    made the first change — because he made it earlier in the same turn and lost track — failed
+    every remaining edit and reported that none were applied. He then had to reconstruct which
+    nine were still needed from a 460,000-token transcript, which is the situation that lost
+    track of the first one.
+
+    Satisfied is not a failure: the file already reads the way the edit asked for. The
+    atomicity promise is about edits that *cannot* apply, and it is untouched below.
+    """
+
+    def test_the_rest_of_the_batch_still_lands(self, workspace_root):
+        write(workspace_root, "done.py", "already = 1\n")
+        write(workspace_root, "todo.py", "pending = 1\n")
+
+        workspace.edit_files(
+            [
+                {"path": "done.py", "old": "already = 1", "new": "already = 1"},
+                {"path": "todo.py", "old": "pending = 1", "new": "pending = 2"},
+            ]
+        )
+
+        assert (workspace_root / "todo.py").read_text() == "pending = 2\n"
+        assert (workspace_root / "done.py").read_text() == "already = 1\n"
+
+    def test_it_says_which_edits_were_already_satisfied(self, workspace_root):
+        write(workspace_root, "done.py", "already = 1\n")
+        write(workspace_root, "todo.py", "pending = 1\n")
+
+        out = workspace.edit_files(
+            [
+                {"path": "done.py", "old": "already = 1", "new": "already = 1"},
+                {"path": "todo.py", "old": "pending = 1", "new": "pending = 2"},
+            ]
+        )
+
+        # Named by position, the way a tolerant match is: he needs to know *which* of the ten
+        # he had already done, or the report tells him nothing he can act on.
+        assert "1" in str(out.get("note", "")), out
+
+    def test_a_batch_that_is_entirely_satisfied_is_not_an_error(self, workspace_root):
+        write(workspace_root, "done.py", "already = 1\n")
+
+        out = workspace.edit_files([{"path": "done.py", "old": "already = 1", "new": "already = 1"}])
+
+        assert out["replacements"] == 0
+        assert (workspace_root / "done.py").read_text() == "already = 1\n"
+
+    def test_an_unappliable_edit_still_discards_the_batch(self, workspace_root):
+        # The line between the two kinds. Softening satisfied must not soften this.
+        write(workspace_root, "done.py", "already = 1\n")
+        write(workspace_root, "todo.py", "pending = 1\n")
+
+        with pytest.raises(WorkspaceError):
+            workspace.edit_files(
+                [
+                    {"path": "done.py", "old": "already = 1", "new": "already = 1"},
+                    {"path": "todo.py", "old": "text that is not there", "new": "x"},
+                ]
+            )
+
+        assert (workspace_root / "todo.py").read_text() == "pending = 1\n"
+
+
 class TestNothingIsWrittenWhenAnythingFails:
     """The atomicity promise, which is the whole reason to prefer this over a loop."""
 

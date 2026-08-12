@@ -466,8 +466,6 @@ def _wait_for(decision: Decision) -> None:
     if request is None:
         raise Denied(decision)
 
-    _tell_them(request)
-
     # Only when somebody is there to answer.
     #
     # "A click that may never come" is still exactly right when nothing is watching — a
@@ -486,9 +484,14 @@ def _wait_for(decision: Decision) -> None:
     if not live_turns.current(session_context.current()):
         raise Denied(decision)
 
-    # Announced only now. A refusal nobody is waiting on is not an interruption worth making,
-    # and firing one from every unattended refusal put a database write and a desktop
-    # notification on paths that had neither before.
+    # Announced only now, and only once. A refusal nobody is waiting on is not an interruption
+    # worth making, and firing one from every unattended refusal put a database write and a
+    # desktop notification on paths that had neither before.
+    #
+    # "Only once" is load-bearing and was not true for two days: the commit that moved this below
+    # the guard added it here and left the original above, so the move was an add. An attended
+    # refusal raised two alerts for one thing to approve — which reads as two things to approve —
+    # and an unattended one still raised the alert the guard exists to suppress.
     _tell_them(request)
 
     if not request.settled.wait(timeout=_DEADLINE_SECONDS):
@@ -665,7 +668,14 @@ def forget_linked_projects() -> None:
     _linked = None
 
 
-def _linked_project_roots() -> tuple[Path, ...]:
+def linked_project_roots() -> tuple[Path, ...]:
+    """The folders he may treat as his own because a project points at them.
+
+    Public because permission is not the only question a caller has about these folders.
+    `paths.display` needs them too: a path inside one has somewhere to be relative *to*, and
+    the absence of that knowledge in the formatting layer is what made `glob` fail 61% of the
+    time outside his own folder while the permission layer was happily letting it run.
+    """
     global _linked
     now = time.monotonic()
     if _linked is not None and now - _linked[0] < _LINKED_TTL:
@@ -689,4 +699,4 @@ def _linked_project_roots() -> tuple[Path, ...]:
 
 
 def _inside_linked_project(resolved: Path) -> bool:
-    return any(_inside(resolved, root) for root in _linked_project_roots())
+    return any(_inside(resolved, root) for root in linked_project_roots())

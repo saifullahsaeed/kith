@@ -389,7 +389,37 @@ def task_detail(path: Path, task_id: int) -> dict | None:
         "comments": list_task_comments(path, task_id),
         "checklist": list_checklist(path, task_id),
         "deliverables": list_deliverables(path, task_id),
+        # Read here rather than by each surface, because there are three of them — the drawer,
+        # `view_task`, and the approval bar — and the one that forgot was the one you open to
+        # read a task. Always present, empty when no plan is filed, so the interface branches on
+        # content and not on whether the key arrived.
+        "plan": _plan_for(path, task),
     }
+
+
+def _plan_for(path: Path, task: dict) -> str:
+    """The plan for this task, from its project's folder or from his own.
+
+    Not gated on having a project any more. Every task goes through the same
+    `backlog → planning → planned` gate now, so requiring a project to *find* a plan made the
+    one kind of task that never has one — the standalone errand — the one kind that could not
+    carry a plan at all.
+    """
+    from kith.infra.workspace import paths
+    from kith.services import project_files
+
+    try:
+        directory = ""
+        if task.get("project_id"):
+            from kith.infra.db.repositories.projects import get_project
+
+            project = get_project(path, int(task["project_id"]))
+            directory = str((project or {}).get("directory") or "").strip()
+        base = Path(directory) if directory and Path(directory).is_dir() else paths.root()
+        return project_files.read_plan(base, int(task["id"]))
+    except Exception:
+        # Same contract as the rest of this: a task must load whether or not its plan does.
+        return ""
 
 
 def tasks_awaiting_kith(path: Path) -> list[dict]:

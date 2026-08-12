@@ -9,6 +9,7 @@ dropped.
 
 from __future__ import annotations
 
+import threading
 from typing import ClassVar
 
 import pytest
@@ -108,21 +109,36 @@ class TestAnnouncing:
 
     def test_a_failing_notification_never_breaks_the_caller(self, monkeypatch):
         """He said the thing and it is recorded; a doorbell that will not ring is not a
-        reason to fail the tool call that rang it."""
+        reason to fail the tool call that rang it.
+
+        This used to assert `announce(...) is False` — a failing delivery reported itself. That
+        stopped being possible when delivery moved onto its own thread, because
+        `renderer.notify` posts to the desktop shell with a 55-second timeout and the things
+        raising notifications are now a permission gate and a question, both of which the turn is
+        already parked on. A doorbell must not hold the door.
+
+        So the return value means "it was sent", not "it arrived", which is the honest thing to
+        promise about a notification. The property the test is named for is unchanged and is what
+        it checks now: the caller comes back cleanly from a delivery that is going to fail.
+        """
+        tried = threading.Event()
 
         def explode(title, body, link=None):
+            tried.set()
             raise RuntimeError("no desktop app")
 
         monkeypatch.setattr("kith.infra.renderer.notify", explode)
-        assert notify.announce("asked", "come look") is False
+
+        # Returns rather than raises, and says it was sent.
+        assert notify.announce("asked", "come look") is True
+        # And the failure really did happen — otherwise this passes on a delivery never attempted,
+        # which would make it a test of nothing.
+        assert tried.wait(timeout=5), "the notification was never attempted"
 
     def test_a_long_body_is_trimmed_rather_than_truncated_mid_word(self, monkeypatch):
-        seen = {}
-        monkeypatch.setattr(
-            "kith.infra.renderer.notify",
-            lambda title, body, link=None: seen.update(title=title, body=body, link=link) or True,
-        )
+        seen = _delivery(monkeypatch)
         notify.announce("stuck", "x " * 400)
+        assert seen.wait(timeout=5), "the notification was never delivered"
         assert len(seen["body"]) <= 160
         assert seen["body"].endswith("…")
         assert seen["title"] == "Kith is stuck"
@@ -130,10 +146,36 @@ class TestAnnouncing:
     def test_the_link_reaches_the_notification(self, monkeypatch):
         """The whole point of a deeplink: a notification that names a task has to be able to
         open it, or you read "I need your input on task #42" and go hunting for task #42."""
-        seen = {}
-        monkeypatch.setattr(
-            "kith.infra.renderer.notify",
-            lambda title, body, link=None: seen.update(link=link) or True,
-        )
+        seen = _delivery(monkeypatch)
         notify.announce("asked", "come look", "/tasks/42")
+        assert seen.wait(timeout=5), "the notification was never delivered"
         assert seen["link"] == "/tasks/42"
+
+
+class _Delivery(dict):
+    """What the notification was called with, and a way to wait for it.
+
+    Waiting is not optional any more. `announce` hands delivery to its own thread — a doorbell
+    must not hold the door — so reading these straight after the call is a race that the caller
+    usually wins and does not have to. Demonstrated rather than assumed: with 50ms of delay in
+    the notifier, the previous shape of these two tests fails with `KeyError: 'body'`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.delivered = threading.Event()
+
+    def wait(self, timeout: float) -> bool:
+        return self.delivered.wait(timeout=timeout)
+
+
+def _delivery(monkeypatch) -> _Delivery:
+    seen = _Delivery()
+
+    def record(title, body, link=None):
+        seen.update(title=title, body=body, link=link)
+        seen.delivered.set()
+        return True
+
+    monkeypatch.setattr("kith.infra.renderer.notify", record)
+    return seen

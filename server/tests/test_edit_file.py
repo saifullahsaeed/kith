@@ -56,16 +56,63 @@ class TestItRefusesRatherThanGuesses:
         with pytest.raises(ws.WorkspaceError):
             ws.edit_file("a.py", "", "y = 2")
 
-    def test_an_edit_that_changes_nothing(self, workspace_root):
-        (workspace_root / "a.py").write_text("x = 1\n")
-        with pytest.raises(ws.WorkspaceError) as caught:
-            ws.edit_file("a.py", "x = 1", "x = 1")
-        assert "identical" in str(caught.value)
-
     def test_a_file_that_does_not_exist(self, workspace_root):
         with pytest.raises(ws.WorkspaceError) as caught:
             ws.edit_file("nope.py", "a", "b")
         assert "no nope.py" in str(caught.value)
+
+
+class TestAnEditTheFileAlreadySatisfies:
+    """`old == new` used to be refused, alongside not-found and ambiguous. It is not the same
+    kind of thing, and treating it as one cost 72 of the 96 `edit_file` failures over
+    2026-08-10 to 2026-08-12.
+
+    Not-found means the state he asked for was **not** reached, so reporting success would be a
+    lie. `old == new` means it is already true. The file says what he wants it to say; there
+    are simply no bytes to move. That is worth reporting as done — and it is what he does when
+    he has already made the change earlier in a turn and lost track of it, which is what a
+    460,000-token transcript for a working memory produces.
+
+    What the original refusal was protecting still holds: a no-op must never read as a
+    *change*. So this is a loud no-op — the report says no bytes moved and why — never a silent
+    one.
+    """
+
+    def test_it_is_not_an_error(self, workspace_root):
+        (workspace_root / "a.py").write_text("x = 1\n")
+        report = ws.edit_file("a.py", "x = 1", "x = 1")
+        assert "already" in report
+
+    def test_the_file_is_left_exactly_as_it_was(self, workspace_root):
+        (workspace_root / "a.py").write_text("x = 1\n")
+        ws.edit_file("a.py", "x = 1", "x = 1")
+        assert (workspace_root / "a.py").read_text() == "x = 1\n"
+
+    def test_it_says_no_bytes_moved_rather_than_claiming_a_replacement(self, workspace_root):
+        (workspace_root / "a.py").write_text("x = 1\n")
+        report = ws.edit_file("a.py", "x = 1", "x = 1")
+        # The one thing this must not do is read like a change landed. "1 replacement" is
+        # exactly the phrase that would make him believe one did.
+        assert "1 replacement" not in report
+
+    def test_text_that_is_not_there_at_all_is_still_an_error(self, workspace_root):
+        # The distinction this whole class rests on: satisfied is not the same as unappliable,
+        # and softening one must not soften the other. `old == new` on text the file does not
+        # contain is not-found wearing a disguise — answering "already reads that way" to it is
+        # exactly the silent success the original refusal existed to prevent.
+        (workspace_root / "a.py").write_text("x = 1\n")
+        with pytest.raises(ws.WorkspaceError) as caught:
+            ws.edit_file("a.py", "y = 2", "y = 2")
+        assert "not in" in str(caught.value)
+
+    def test_a_match_only_the_tolerant_path_would_find_is_not_satisfied(self, workspace_root):
+        # The file has two spaces, he sent four. It does *not* already read that way, so
+        # "satisfied" would be untrue — and the only change this edit could make is a pure
+        # re-indentation of text he believed was already right, which he never meant to ask for.
+        (workspace_root / "a.py").write_text("if x:\n  deep()\n")
+        with pytest.raises(ws.WorkspaceError):
+            ws.edit_file("a.py", "    deep()", "    deep()")
+        assert (workspace_root / "a.py").read_text() == "if x:\n  deep()\n"
 
 
 class TestItChangesExactlyWhatWasAsked:

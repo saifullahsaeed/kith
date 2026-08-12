@@ -68,6 +68,9 @@ export interface TaskDetail extends Task {
   comments: TaskComment[];
   checklist: ChecklistItem[];
   deliverables: Deliverable[];
+  /** The plan this task was approved on, as Markdown — read from `.kith/work/task-<id>.md` on
+   *  every request, so the file is still the thing you edit. Empty when none is filed. */
+  plan: string;
 }
 export interface Milestone {
   id: number;

@@ -229,7 +229,7 @@ def _update_task(path: Path, a: dict) -> dict | None:
     # otherwise the person reviewing it sees "→ planning" and has to go read the file
     # themselves to find out what they are actually being asked to approve.
     if requested == "planning" and out:
-        plan = _plan_doc(path, out.get("id"), out.get("project_id"))
+        plan = _plan_doc(path, out.get("id"))
         if plan:
             return {**out, "plan": plan}
     return out
@@ -302,23 +302,24 @@ def _mirror_brief(path: Path, task_id: int | None) -> None:
         pass
 
 
-def _plan_doc(path: Path, task_id: int | None, project_id: int | None) -> str:
+def _plan_doc(path: Path, task_id: int | None) -> str:
     """The plan the planning-a-task skill wrote, if there is one at the convention it names.
 
     Best effort and silent, the same way `_mirror_brief` is: the skill's `.kith/work/task-<id>.md`
-    is prose guidance to the model, not an enforced path, so a plan filed anywhere else — or a
-    task with no project directory at all — just does not attach. The status change still goes
-    through either way; this only decides whether the approval carries the doc with it.
+    is prose guidance to the model, not an enforced path, so a plan filed anywhere else just does
+    not attach. The status change still goes through either way; this only decides whether the
+    approval carries the doc with it.
+
+    Delegates to `task_detail` rather than resolving the path a second time. It had its own copy
+    of that logic and the copies had already drifted — this one required a `project_id` and so
+    could never find the plan for a standalone task, which every task now is at the point the
+    gate applies. That parameter is gone with the duplication that needed it.
     """
-    if not task_id or not project_id:
+    if not task_id:
         return ""
     try:
-        project = repo.projects.get_project(path, int(project_id))
-        directory = str((project or {}).get("directory") or "").strip()
-        if not directory:
-            return ""
-        doc = Path(directory) / ".kith" / "work" / f"task-{task_id}.md"
-        return doc.read_text(encoding="utf-8") if doc.is_file() else ""
+        detail = repo.tasks.task_detail(path, int(task_id))
+        return str((detail or {}).get("plan") or "")
     except Exception:
         return ""
 

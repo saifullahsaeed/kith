@@ -17,7 +17,7 @@ from kith.services import permissions
 
 from .base import _EXEC_TIMEOUT, WorkspaceError, _clip
 from .checkpoints import _checkpoint_before_change
-from .paths import INTERNAL_DIR, resolve, root
+from .paths import INTERNAL_DIR, display, resolve, root
 from .shell import run_command
 
 #: What one `read_file` may return, separately from what a *command* may print.
@@ -378,13 +378,44 @@ def _apply_edit(before: str, old: str, new: str, path: str, replace_all: bool) -
 
     Split out of ``edit_file`` so a batch can apply several edits to one file in memory
     before anything is written — which is what makes the batch atomic.
+
+    A count of **zero** is the third outcome, *satisfied*: the file already says what the edit
+    asked for, so there are no bytes to move. Callers report it as done rather than as a
+    failure — see the note on ``old == new`` below.
     """
     if not old:
         raise WorkspaceError("old must be the exact text to replace — an empty string matches nothing")
-    if old == new:
-        raise WorkspaceError("old and new are identical, so there is nothing to change")
-
     found = before.count(old)
+    if old == new:
+        # Refused until 2026-08-12, alongside not-found and ambiguous, and it did not belong
+        # there: 72 of the 96 `edit_file` failures over the preceding two days were this, every
+        # one of them a file that already read the way he wanted. Not-found means the state he
+        # asked for was not reached and success would be a lie; this means it is already true.
+        # Inside a batch the old behaviour was worse than useless — one already-applied edit
+        # discarded the nine around it and reported that none were applied.
+        #
+        # **Only when the text is actually there**, and verbatim. `old == new` on text the file
+        # does not contain is not satisfied, it is not-found wearing a disguise, and answering
+        # "already reads that way" to it would be the silent success the original refusal
+        # existed to prevent.
+        #
+        # Verbatim rules out the whitespace-tolerant match on purpose, so a block that matches
+        # only ignoring indentation is not-found here even though a differing edit would have
+        # been re-indented to fit. Two reasons: the file does not in fact already read that way,
+        # and the only change such an edit could make is a pure re-indentation of text he
+        # believed was already correct — which is never what he meant to ask for.
+        #
+        # Ambiguity is not consulted on purpose — replacing any of three identical occurrences
+        # with itself changes nothing, so there is nothing to be ambiguous about.
+        if not found:
+            raise WorkspaceError(
+                f"that exact text is not in {path}. Whitespace and indentation count — read the "
+                "part you mean to change and copy it verbatim."
+            )
+        # Loud, which is what the refusal was protecting: the report says no bytes moved, so it
+        # can never read as a change that landed.
+        return before, 0, False
+
     if found > 1 and not replace_all:
         raise WorkspaceError(
             f"that text appears {found} times in {path}, so which one is ambiguous. Include "
@@ -428,6 +459,15 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
     Both refusals name the fix, because the caller is a model that will otherwise retry the
     identical call.
 
+    **Already satisfied is the third outcome, and it is not a refusal.** ``old == new`` on text
+    the file really contains means the file already says what he asked for: no bytes to move, so
+    nothing is written and the report says so. That was an error until 2026-08-12 and it cost 72
+    of the 96 `edit_file` failures in the two days before — every one of them a change he had
+    already made and lost track of, which is what a 460,000-token transcript for a working
+    memory produces. It is not the same as not-found: there the state he asked for was never
+    reached, here it is already true. ``old == new`` on text that is *not* there stays an error
+    for exactly that reason.
+
     One concession to reality, added later and deliberately narrow: if the text is not there
     verbatim but exactly one block matches it line-for-line ignoring indentation, that block
     is edited and the result says the match was tolerant. See ``_tolerant_span`` — two
@@ -444,6 +484,10 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
         raise WorkspaceError(f"cannot read {path} to edit it: {exc}") from None
 
     after, replacements, tolerant = _apply_edit(before, old, new, path, replace_all)
+    if not replacements:
+        # Satisfied: nothing to write, so nothing is written — the file keeps its mtime and
+        # anything watching it stays quiet.
+        return _NOTE_SATISFIED.format(path=path)
     data = after.encode()
     if len(data) > _MAX_WRITE:
         raise WorkspaceError(f"the result would be too large ({len(data)} bytes; max {_MAX_WRITE})")
@@ -454,6 +498,12 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
 
     report = _diff(path, before, after, old, replacements)
     return _NOTE_TOLERANT + report if tolerant else report
+
+
+#: What a satisfied edit reports. Deliberately says "already" and deliberately does not say
+#: "replacement" — this is the one message that must not read like a change landed, because the
+#: whole reason `old == new` was once refused was that a silent no-op looks like success.
+_NOTE_SATISFIED = "{path} already reads that way — nothing to change, so no bytes moved."
 
 
 #: Prefixed to a diff whose match was whitespace-tolerant rather than exact. Worth saying out
@@ -508,6 +558,7 @@ def edit_files(edits: list[dict]) -> dict:
     originals: dict[Path, str] = {}
     counts: dict[Path, int] = {}
     tolerant_at: list[int] = []
+    satisfied_at: list[int] = []
 
     for i, raw, target, edit in prepared:
         if target not in texts:
@@ -535,6 +586,8 @@ def edit_files(edits: list[dict]) -> dict:
         counts[target] += made
         if tolerant:
             tolerant_at.append(i)
+        if not made:
+            satisfied_at.append(i)
 
     for target, after in texts.items():
         data = after.encode()
@@ -543,6 +596,10 @@ def edit_files(edits: list[dict]) -> dict:
 
     written = []
     for target, after in texts.items():
+        # A file every one of whose edits was already satisfied has nothing to write. Skipping it
+        # keeps its mtime, which matters when a watcher or a test runner is looking at it.
+        if after == originals[target]:
+            continue
         try:
             target.write_text(after)
         except OSError as exc:
@@ -562,11 +619,22 @@ def edit_files(edits: list[dict]) -> dict:
         "replacements": sum(counts.values()),
         "diff": _clip("\n".join(diffs)),
     }
+    notes = []
     if tolerant_at:
-        result["note"] = (
+        notes.append(
             f"edit{'' if len(tolerant_at) == 1 else 's'} {', '.join(map(str, tolerant_at))} "
             "matched ignoring indentation and were re-indented to fit — check the diff."
         )
+    if satisfied_at:
+        # By position, the way a tolerant match is reported. "One of your ten was already done"
+        # is not something he can act on; "edit 3 was" is.
+        notes.append(
+            f"edit{'' if len(satisfied_at) == 1 else 's'} {', '.join(map(str, satisfied_at))} "
+            f"{'was' if len(satisfied_at) == 1 else 'were'} already satisfied — the file "
+            "already read that way, so no bytes moved there."
+        )
+    if notes:
+        result["note"] = " ".join(notes)
     return result
 
 
@@ -702,8 +770,11 @@ def glob(pattern: str, path: str = ".") -> str:
         return f"Nothing under {path} matches {wanted}"
     found.sort(key=lambda item: item.stat().st_mtime, reverse=True)
     shown = found[:200]
-    lines = [str(item.relative_to(root())) for item in shown]
-    body = "\n".join(lines)
+    # `display` rather than `relative_to(root())`, which crashed on every result that lived in a
+    # linked project — see its docstring. The header names what the short paths are relative to,
+    # because two hundred of them are worth their brevity only if that is not a guess.
+    lines = [display(item) for item in shown]
+    body = f"under {target}\n" + "\n".join(lines)
     if len(found) > len(shown):
         body += f"\n… [{len(found) - len(shown)} more; narrow the pattern]"
     return _clip(body)
