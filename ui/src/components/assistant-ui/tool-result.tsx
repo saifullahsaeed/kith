@@ -410,15 +410,23 @@ const Skill: FC<{ value: Record<string, unknown> }> = ({ value }) => {
  * deliberately not listed. They mattered while you were choosing; afterwards the choice is the fact,
  * and reprinting five labels you did not pick is how the raw dump got long in the first place. */
 function looksLikeAsked(value: Record<string, unknown>): boolean {
-  return Array.isArray(value.questions) && Array.isArray(value.answers);
+  return Array.isArray(value.answers);
 }
 
-const Asked: FC<{ value: Record<string, unknown> }> = ({ value }) => {
-  const questions = (value.questions as Record<string, unknown>[]) ?? [];
+/** The question is in the *arguments* and the answer is in the *result* — which is why the first
+ *  attempt at this card never rendered: it looked for both on the result and they are never both
+ *  there. `{questions: […]}` goes in, `{answered: true, answers: […]}` comes back, and the two
+ *  halves are only together here, where `ToolResultBody` is handed both. */
+const Asked: FC<{ args: Args; value: Record<string, unknown> }> = ({ args, value }) => {
+  const questions = (Array.isArray(args.questions) ? args.questions : []) as Record<
+    string,
+    unknown
+  >[];
   const answers = (value.answers as Record<string, unknown>[]) ?? [];
   return (
     <div className="flex flex-col gap-2.5">
-      {questions.map((q, i) => {
+      {(questions.length ? questions : answers).map((_, i) => {
+        const q = questions[i] ?? {};
         const reply = answers[i] ?? {};
         const chosen = Array.isArray(reply.chosen) ? reply.chosen.map(String) : [];
         const wrote = typeof reply.text === "string" ? reply.text.trim() : "";
@@ -1208,7 +1216,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     }
 
     const object = result as Record<string, unknown>;
-    if (looksLikeAsked(object)) return <Asked value={object} />;
+    if (looksLikeAsked(object)) return <Asked args={args} value={object} />;
     if (looksLikePicture(object)) return <Picture value={object} />;
     if (looksLikeTask(object)) return <Task value={object} />;
     if (looksLikeMilestone(object)) return <Milestone value={object} />;
@@ -1296,6 +1304,10 @@ const PLUMBING = new Set(["limit", "offset", "contains"]);
 //: not in the diff.
 const SUPERSEDED_BY_RESULT: Record<string, Set<string>> = {
   edit_file: new Set(["old", "new"]),
+  //: Same reasoning, and the case that showed it was not just about diffs: `ask`'s `questions` is a
+  //: nested array of options with descriptions, which `Fields` prints as raw JSON — sixty lines of
+  //: it above an answer of five words. The card below renders the question and what you said.
+  ask: new Set(["questions"]),
 };
 
 export const ToolArgs: FC<{ argsText?: string; toolName?: string }> = ({ argsText, toolName }) => {
