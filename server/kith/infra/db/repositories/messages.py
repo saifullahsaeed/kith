@@ -11,6 +11,31 @@ from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import Message, TurnLog
 from kith.infra.db.support import utc_now_iso
 
+
+def _notifies_message(write):
+    from functools import wraps
+
+    @wraps(write)
+    def inner(*args, **kwargs):
+        out = write(*args, **kwargs)
+        _changed()
+        return out
+
+    return inner
+
+
+def _changed() -> None:
+    """Tell the interface a message arrived or was read — the alerts list and the badge both read it.
+    Local import and swallowed, the same as the task one: a note about a save, never a reason one
+    fails."""
+    try:
+        from kith.services import changes
+
+        changes.publish("message")
+    except Exception:
+        pass
+
+
 # How many turns the summary looks back over. Enough to see a trend, bounded so the
 # aggregate stays cheap on a database that has been running for months.
 _SUMMARY_WINDOW = 500
@@ -22,6 +47,7 @@ _TOP_TOOLS = 10
 # --------------------------------------------------------------------------- #
 
 
+@_notifies_message
 def add_message(
     path: Path,
     body: str,
@@ -125,6 +151,7 @@ def unread_message_count(path: Path) -> int:
         return int(db.scalar(select(func.count()).select_from(Message).where(Message.read == 0)) or 0)
 
 
+@_notifies_message
 def mark_message_read(path: Path, message_id: int) -> dict | None:
     with session(path) as db:
         row = db.get(Message, message_id)
@@ -135,11 +162,13 @@ def mark_message_read(path: Path, message_id: int) -> dict | None:
         return as_dict(row)
 
 
+@_notifies_message
 def mark_all_messages_read(path: Path) -> int:
     with session(path) as db:
         return db.execute(update(Message).where(Message.read == 0).values(read=1)).rowcount
 
 
+@_notifies_message
 def delete_message(path: Path, message_id: int) -> bool:
     with session(path) as db:
         return db.execute(delete(Message).where(Message.id == message_id)).rowcount > 0

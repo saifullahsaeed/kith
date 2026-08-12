@@ -29,6 +29,7 @@ import {
 import { TaskDetailPage } from "@/components/control-panel/task-detail";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
+import { useChanges } from "@/hooks/use-changes";
 import {
   createBrainItem,
   deleteBrainItem,
@@ -115,8 +116,13 @@ export function ControlPanel({
   // route is gone, so the request was a 404 on a timer and the answer it fed was always
   // false.
   const busy = Boolean(snap?.tasks?.some((task) => task.status === "working"));
+  // Everything on this panel comes from one snapshot, so it subscribes to everything that can change
+  // one: the board, a project, a message, a background task starting.
+  useChanges(["task", "project", "message", "process"], () => void load());
   useEffect(() => {
-    const id = window.setInterval(load, busy ? 3_000 : 20_000);
+    // A backstop. `useChanges` below is what refreshes the board the moment it moves; this covers a
+    // dropped stream. (was 3s while a task was working, 20s otherwise.)
+    const id = window.setInterval(load, 30_000);
     return () => window.clearInterval(id);
   }, [busy, load]);
 

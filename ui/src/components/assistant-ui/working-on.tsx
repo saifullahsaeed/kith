@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, ListChecks } from "lucide-react";
 
+import { useChanges } from "@/hooks/use-changes";
 import { pathForTask } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,7 @@ interface WorkingTask {
  */
 export function WorkingOn({ conversationId }: { conversationId: string }) {
   const [task, setTask] = useState<WorkingTask | null>(null);
+  const [changed, setChanged] = useState(0);
 
   useEffect(() => {
     if (!conversationId) {
@@ -51,14 +53,21 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
         })
         .catch(() => {});
     load();
-    // Slower than the question card: nothing is blocked on this, it is a status line. Fast
+    // A backstop, not the mechanism. `useChanges` below is what makes a ticked checklist item
+    // appear at once; this catches the case where the stream dropped and the browser has not
+    // reconnected yet. Slow, because it is now only insurance.
+    // (was 2s, when it was the only way this ever updated)
     // enough that a tick lands while you are still looking at the round that made it.
-    const timer = setInterval(load, 2_000);
+    const timer = setInterval(load, 30_000);
     return () => {
       alive = false;
       clearInterval(timer);
     };
-  }, [conversationId]);
+  }, [conversationId, changed]);
+
+  // A task moving, or a checklist item ticking, is a `task` event — so the card follows him round by
+  // round instead of up to two seconds behind.
+  useChanges("task", () => setChanged((n) => n + 1));
 
   if (!task) return null;
 

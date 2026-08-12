@@ -21,6 +21,7 @@ import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { FileViewer, Markdown, MarkdownInline, skipTextRead } from "@/components/files";
 import { EditableText } from "@/components/ui/editable-text";
+import { useChanges } from "@/hooks/use-changes";
 import { openWorkspaceFile } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import {
@@ -114,14 +115,26 @@ export function TaskDetailPage({
             editing.value.trim().length > 0));
       if (!midEdit) load();
     };
-    const timer = window.setInterval(tick, active ? 3_000 : 12_000);
+    // A backstop now. `useChanges` below is what makes a ticked item or a status change appear at
+    // once; this covers a dropped stream. (was 3s while working, 12s otherwise.)
+    const timer = window.setInterval(tick, 30_000);
+    // Through `tick` rather than `load`, so a change arriving while you are mid-sentence in the
+    // description is still skipped — the guard is the point, not the interval.
+    const onChange = () => tick();
+    window.addEventListener("kith:task-changed", onChange);
     // Coming back to the window is the other moment you expect it to be current.
     window.addEventListener("focus", tick);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", tick);
+      window.removeEventListener("kith:task-changed", onChange);
     };
   }, [active, load]);
+
+  // A DOM event rather than calling `tick` directly, because `tick` is built inside the effect above
+  // where the mid-edit guard lives, and lifting it out to satisfy the hook's dependency list would
+  // put the guard and the thing it guards in two places.
+  useChanges("task", () => window.dispatchEvent(new Event("kith:task-changed")));
 
   const refresh = () => {
     load();

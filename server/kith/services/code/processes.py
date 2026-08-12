@@ -245,6 +245,7 @@ class Processes:
         # does it immediately. Waiting a moment turns "started" into a truthful answer rather
         # than an optimistic one.
         time.sleep(0.4)
+        _changed(_current_conversation())
         return self.check(wanted)
 
     def check(self, name: str = "", conversation_id: str | None = None) -> dict[str, Any]:
@@ -473,6 +474,17 @@ def _ago(started: float) -> str:
 processes = Processes()
 
 
+def _changed(conversation_id: str = "") -> None:
+    """Tell the interface a background task started or ended. Swallowed: a note about a process, not
+    a reason to fail starting one."""
+    try:
+        from kith.services import changes
+
+        changes.publish("process", conversation_id)
+    except Exception:
+        pass
+
+
 def _current_conversation() -> str:
     """The chat this is being started from, or "" outside one.
 
@@ -519,6 +531,11 @@ def finished_since_last_look() -> list[str]:
             note += f" Its last output:\n\n```\n{tail.strip()[-2000:]}\n```"
         by_chat.setdefault(background.conversation_id, []).append(note)
 
+    if by_chat:
+        # Before the turns, so the panel drops the finished task from its list at the same moment the
+        # conversation starts talking about it.
+        for conversation_id in by_chat:
+            _changed(conversation_id)
     for conversation_id, notes in by_chat.items():
         scheduler._continue(conversation_id, notes)
     return list(by_chat)

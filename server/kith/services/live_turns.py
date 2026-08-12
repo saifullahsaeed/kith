@@ -49,10 +49,16 @@ _REGISTRY = threading.Lock()
 
 
 def begin(conversation_id: str) -> LiveTurn:
-    """Open the record for a turn about to start, replacing any stale one."""
+    """Open the record for a turn about to start, replacing any stale one.
+
+    And say so on the changes stream, which is what lets an open window attach to a turn *it* did not
+    start — a reminder firing, a background task finishing. Without this the transcript grew on disk
+    and the window found out when somebody reloaded it.
+    """
     turn = LiveTurn(conversation_id=conversation_id)
     with _REGISTRY:
         _LIVE[conversation_id] = turn
+    _announce(conversation_id)
     return turn
 
 
@@ -72,6 +78,17 @@ def publish(turn: LiveTurn, line: str) -> None:
         watcher.put(line)
 
 
+def _announce(conversation_id: str) -> None:
+    """Local import and swallowed: `live_turns` is imported by the chat route on every turn, and a
+    notification must not be able to stop one starting."""
+    try:
+        from kith.services import changes
+
+        changes.publish("turn", conversation_id)
+    except Exception:
+        pass
+
+
 def finish(turn: LiveTurn) -> None:
     """The turn is over. Release the readers and drop the backlog.
 
@@ -85,6 +102,7 @@ def finish(turn: LiveTurn) -> None:
         turn.lines.clear()
     for watcher in watchers:
         watcher.put(_END)
+    _announce(turn.conversation_id)
     with _REGISTRY:
         if _LIVE.get(turn.conversation_id) is turn:
             del _LIVE[turn.conversation_id]

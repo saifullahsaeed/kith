@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Loader2, Terminal } from "lucide-react";
 
+import { useChanges } from "@/hooks/use-changes";
+
 /**
  * What is running in the background, while it runs.
  *
@@ -25,6 +27,7 @@ interface Task {
 
 export function BackgroundTasks({ conversationId }: { conversationId?: string }) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [changed, setChanged] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -36,15 +39,17 @@ export function BackgroundTasks({ conversationId }: { conversationId?: string })
         })
         .catch(() => {});
     load();
-    // Slower than the working-task card: this changes when something starts or stops, which is
-    // rare, and the elapsed time it shows is coarse enough that a tighter poll would show the
-    // same string.
-    const timer = window.setInterval(load, 4_000);
+    // The elapsed time needs a clock of its own — "12m" goes stale on its own without anything
+    // changing — so this stays, slowly. Starting and finishing arrive as events below.
+    const timer = window.setInterval(load, 30_000);
     return () => {
       alive = false;
       window.clearInterval(timer);
     };
-  }, [conversationId]);
+  }, [conversationId, changed]);
+
+  // Starting and finishing both publish, so the list appears and empties as it happens.
+  useChanges("process", () => setChanged((n) => n + 1), conversationId);
 
   if (!tasks.length) return null;
 

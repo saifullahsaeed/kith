@@ -19,6 +19,7 @@ import { HistoryPanel } from "@/components/chat/history-panel";
 import { SessionBar } from "@/components/chat/session-bar";
 import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
+import { useChanges } from "@/hooks/use-changes";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
 import { useMood } from "@/hooks/use-mood";
@@ -166,11 +167,10 @@ export function Workspace({
      Guarded on `isRunning`, because the thread is already streaming when *this* window started
      the turn — resuming then would put a second reader on the same events and render them
      twice. */
-  useEffect(() => {
+  const rejoin = useCallback(() => {
     if (!conversationId) return;
-    let cancelled = false;
     void resumeTurn(conversationId).then((stream) => {
-      if (cancelled || !stream) return;
+      if (!stream) return;
       const state = runtime.thread.getState();
       if (state.isRunning) return;
       runtime.thread.resumeRun({
@@ -178,10 +178,19 @@ export function Workspace({
         stream: () => stream,
       });
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId, threadKey, runtime]);
+  }, [conversationId, runtime]);
+
+  useEffect(rejoin, [rejoin, threadKey]);
+
+  /* And again whenever a turn *starts* in this conversation, which is the half that was missing.
+     The effect above only fires when you open a conversation, so a turn the server began on its own
+     — a reminder firing, a background task finishing — streamed to nobody: the transcript grew on
+     disk and the window found out when you reloaded it. That was the second Cmd-R.
+
+     `resumeTurn` is already idempotent about this (it returns nothing when no turn is live, and the
+     `isRunning` guard drops the case where this window started the turn itself), so an extra call is
+     free and a missed event is the only thing that costs anything. */
+  useChanges("turn", rejoin, conversationId);
 
   const openConversation = useCallback(async (id: string) => {
     const detail = await fetchConversation(id).catch(() => null);

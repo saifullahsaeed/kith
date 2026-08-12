@@ -56,7 +56,11 @@ FILENAME = "api.token"
 #: same-origin instead (see :func:`_same_origin`), so a web page cannot subscribe; a local
 #: process can, and gets a feed of status and token counts, no content. That trade is
 #: written down rather than discovered.
-OPEN_PATHS = frozenset({"/api/health", "/api/activity/stream"})
+#:
+#: ``/api/changes`` — the same EventSource constraint and the same trade, with less to trade: it
+#: carries the *name* of what changed and a conversation id, never a value. A local process learning
+#: that "tasks changed" learns nothing it could not learn by watching the file mtimes.
+OPEN_PATHS = frozenset({"/api/health", "/api/activity/stream", "/api/changes"})
 
 #: Documentation. Serving the schema of an API someone cannot call is not a leak, and
 #: locking it means /docs is a login wall on a single-user machine.
