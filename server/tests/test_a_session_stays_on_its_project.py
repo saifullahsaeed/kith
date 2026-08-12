@@ -44,7 +44,7 @@ class TestTheBindingSticks:
 
         db = two_projects["db"]
         stray = repo.tasks.add_task(
-            db, "Something else", "normal", None, "", "approved", "kith", two_projects["other"]
+            db, "Something else", "normal", "", "approved", "kith", two_projects["other"]
         )
 
         with session_context.working_in("c-1"):

@@ -41,10 +41,25 @@ def add_task(
     with session(path) as db:
         # A task under a milestone belongs to that milestone's project. Resolved in
         # the same transaction as the insert, so the two can't disagree.
-        if milestone_id and not project_id:
+        #
+        # And refused if there is no such milestone, which is the hole `set_task_milestone` was
+        # closed against and this kept: it looked the milestone up only to copy the project, so a
+        # stray id fell through the `if milestone` and was stored anyway. Tasks 91, 92 and 93 on
+        # the real board all point at milestone 30, which does not exist — their project is null,
+        # the roadmap cannot gate them, and the task page renders the bare number 30 where a
+        # title belongs. Nothing said the link was broken.
+        #
+        # Zero is "no milestone" rather than an error, matching `set_task_milestone`: it is what an
+        # empty form field arrives as, and the same value must not be valid on one path and fatal
+        # on the other.
+        if milestone_id:
             milestone = db.get(Milestone, milestone_id)
-            if milestone:
+            if milestone is None:
+                raise ValueError(f"there is no milestone {milestone_id}")
+            if not project_id:
                 project_id = milestone.project_id
+        else:
+            milestone_id = None
         row = Task(
             goal=goal,
             status=status,

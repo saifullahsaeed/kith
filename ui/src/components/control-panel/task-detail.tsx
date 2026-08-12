@@ -297,7 +297,15 @@ export function TaskDetailPage({
               decision that is a person's is approving a plan, and that happens in chat where
               the plan can actually be discussed. */}
           <Prop label="Status">
-            <span className="block py-1.5 text-sm">{STATUS_LABEL[task.status] ?? task.status}</span>
+            {/* "Plan ready for your look" is a claim about there being a plan, and #93 on the real
+                board says it with none filed. The label tells the truth about which of the two
+                situations you are in, because the difference decides whether there is anything
+                for you to do. */}
+            <span className="block py-1.5 text-sm">
+              {task.status === "planning" && !task.plan
+                ? "Planning — no plan yet"
+                : (STATUS_LABEL[task.status] ?? task.status)}
+            </span>
           </Prop>
           <Prop label="Priority">
             <Dropdown
@@ -334,6 +342,13 @@ export function TaskDetailPage({
                   value: String(m.id),
                   label: m.status === "done" ? `${m.title} ✓` : m.title,
                 })),
+                // A milestone id with no milestone behind it. Without an option to match, the
+                // dropdown renders the bare number as though it were a name — #91, #92 and #93 all
+                // showed "30", and there is no milestone 30. Naming it says what is wrong and
+                // leaves "No milestone" selectable, which is the fix.
+                ...(task.milestone_id != null && !milestones.some((m) => m.id === task.milestone_id)
+                  ? [{ value: String(task.milestone_id), label: `#${task.milestone_id} — no longer exists` }]
+                  : []),
               ]}
               className="w-full"
               ariaLabel="Milestone"
@@ -395,12 +410,18 @@ export function TaskDetailPage({
           {task.plan ? (
             <section>
               <Collapsible open={planOpen} onOpenChange={setPlanOpen}>
-                <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-left">
-                  <H>Plan</H>
-                  <ChevronRight
-                    className="mb-1.5 size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-90"
-                    aria-hidden
-                  />
+                {/* The chevron goes *inside* `H`, the way the checklist's progress bar does, and
+                    the trigger is a plain block. `H` is a block with a bottom border, so as a flex
+                    *item* it shrank to the word — every other section got a full-width rule and
+                    this one got a stub underline under "Plan". */}
+                <CollapsibleTrigger className="group w-full text-left">
+                  <H>
+                    Plan
+                    <ChevronRight
+                      className="text-muted-foreground ml-1.5 size-3.5 transition-transform group-data-[state=open]:rotate-90"
+                      aria-hidden
+                    />
+                  </H>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <div className="max-w-[68ch] text-[15px] leading-relaxed">
@@ -408,6 +429,18 @@ export function TaskDetailPage({
                   </div>
                 </CollapsibleContent>
               </Collapsible>
+            </section>
+          ) : task.status === "planning" ? (
+            /* A task whose status says "plan ready for your look" and has no plan is the exact
+               thing the four-status change is meant to stop being possible — and on the real board
+               #91, #92 and #93 all look like this. Saying so beats rendering nothing: an absent
+               section reads as "no plan section on this page", not as "there is no plan". */
+            <section>
+              <H>Plan</H>
+              <p className="text-muted-foreground max-w-[68ch] text-sm">
+                No plan filed yet, so there is nothing to approve. He writes one to{" "}
+                <code className="text-[13px]">.kith/work/task-{task.id}.md</code>.
+              </p>
             </section>
           ) : null}
 
