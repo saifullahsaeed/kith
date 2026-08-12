@@ -39,6 +39,7 @@ const SHORT: Record<string, string> = {
   context: "Context",
   limits: "Limits",
   connections: "Connections",
+  machine: "This computer",
   mcp: "MCP",
   stuck: "Duplicates",
 };

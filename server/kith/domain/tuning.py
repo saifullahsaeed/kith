@@ -147,6 +147,12 @@ GROUPS: tuple[Group, ...] = (
         "Which model, which providers, and where the pieces around him live.",
     ),
     Group(
+        "machine",
+        "On this computer",
+        "The parts of him that are not in the cloud: what time it is where you are, and the local "
+        "programs he reaches for. Nothing here leaves the machine.",
+    ),
+    Group(
         "mcp",
         "Other programs' tools",
         "MCP servers are separate programs he talks to over a pipe. These are how long he "
@@ -445,7 +451,7 @@ TUNABLES: tuple[Tunable, ...] = (
         label="His clock",
         help="Reminders and schedules are interpreted in this zone. An IANA name, like Asia/Riyadh.",
         default="UTC",
-        group="connections",
+        group="machine",
         kind="text",
     ),
     Tunable(
@@ -455,7 +461,7 @@ TUNABLES: tuple[Tunable, ...] = (
         help="Where Ollama listens. Used for local models and — whatever he thinks "
         "with — for the embeddings behind memory search.",
         default="http://127.0.0.1:11434",
-        group="connections",
+        group="machine",
         kind="text",
     ),
     Tunable(
@@ -465,7 +471,7 @@ TUNABLES: tuple[Tunable, ...] = (
         help="Turns his memories into vectors so recall works by meaning. Runs locally "
         "even when he thinks in the cloud. Changing it invalidates existing vectors.",
         default="nomic-embed-text",
-        group="connections",
+        group="machine",
         kind="text",
     ),
     Tunable(
