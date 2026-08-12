@@ -108,11 +108,10 @@ def repo_map(path: Path, args: dict):
     "test name to run just that one while you are fixing it — much faster, and the noise of "
     "the other two hundred is not what you need. A slow suite does not block you: if it is "
     'not done after a wait you get back `status: "running"` instead of the usual counts. '
-    'One repeat check is fine. A SECOND `status: "running"` in the same turn means it is '
-    "genuinely slow — at that point do not sit in this turn checking a third time. Say it's "
-    "running, use set_reminder for a few minutes out, and finish the turn; calling run_tests "
-    "again later re-attaches to the same run and hands back the real result whenever it "
-    "actually finishes.",
+    "When that happens, say so and finish the turn. **Do not set a reminder to check back, and "
+    "do not keep calling this to see if it is done yet** — when the run finishes it comes back "
+    "to you on its own, in this conversation, with the exit code and the output. Checking costs "
+    "a whole round; waiting costs nothing.",
     {
         "path": {**STR, "description": "The project folder (default: your whole folder)."},
         "filter": {
@@ -140,7 +139,13 @@ def run_tests(path: Path, args: dict):
     "that takes minutes. Unlike `shell`, this returns straight away instead of waiting, and "
     "unlike `nohup … &` you can still see it: use check_process to read what it has printed "
     "since you last looked, and stop_process when you are done. Give it a short name you will "
-    "recognise ('dev-server', 'tests-watch'). Always stop what you started before you finish.",
+    "recognise ('dev-server', 'tests-watch'). "
+    "**A task that finishes comes back to you here, on its own** — the exit code and its last "
+    "output arrive in this conversation whenever it ends, however long that takes. So start it, "
+    "say what you started, and get on with something else or finish the turn. Do not set a "
+    "reminder to check on it and do not poll it: both spend a whole round asking a question that "
+    "answers itself. A long-lived thing you never expect to end — a dev server, a watcher — is "
+    "the one case to stop yourself, and to stop before you finish.",
     {
         "command": {**STR, "description": "The command to run, e.g. 'npm run dev'."},
         "name": {**STR, "description": "A short name to refer to it by, e.g. 'dev-server'."},
@@ -158,8 +163,10 @@ def start_process(path: Path, args: dict):
     "check_process",
     "See what a background process has printed since you last looked, and whether it is still "
     "alive. Only the new output, so you can check a watcher repeatedly without re-reading its "
-    "startup banner every time. Call it with no name to list everything you have running. If "
-    "something exited, this is how you find out and what it said on the way out.",
+    "startup banner every time. Call it with no name to list everything you have running. "
+    "For a *watcher* — something with no end, printing as it goes — this is how you read it. "
+    "For a task you are waiting to *finish*, you do not need this at all: the ending comes back "
+    "to you by itself. Use it when you want the output now, not to find out whether it is done.",
     {"name": {**STR, "description": "Which one (optional — omit to list them all)."}},
     required=(),
 )

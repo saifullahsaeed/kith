@@ -53,7 +53,10 @@ def _schedule(path: Path, a: dict) -> dict:
     "Leave a reminder for your future self, tied to a moment. Give either "
     "'in_minutes' (from now) or 'at' (a time). When it comes due, it surfaces "
     "to you on your own so you can act on it. Use it to pace yourself, follow "
-    "up on something later, or not lose a thread.",
+    "up on something later, or not lose a thread. "
+    "**Not for waiting on a background task.** A test run, a build, a CI check — those come back "
+    "to you by themselves when they end, so a reminder to go and look is a round spent on an "
+    "answer that was already coming. Reminders are for things nothing else will tell you about.",
     {
         "note": {**STR, "description": "What to remind yourself of."},
         "in_minutes": {"type": "number", "description": "Fire this many minutes from now."},
