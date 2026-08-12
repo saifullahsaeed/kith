@@ -1,7 +1,7 @@
 # The sharp edges
 
 **Date:** 2026-08-12
-**Status:** approved, in build
+**Status:** done — `40deab2`. 2117 passed. (d) turned out differently from the hypothesis; see it.
 
 Four contained defects found by reading every conversation and log from 2026-08-10 to
 2026-08-12. They share nothing architecturally — they are grouped because each is small,
@@ -90,18 +90,40 @@ tests/test_notify.py::TestAnnouncing::test_a_failing_notification_never_breaks_t
 
 A permission request resolves to `denied` without waiting to be asked.
 
-**The hypothesis.** `permission_mode` is set to `bypass` in the live config — every guard in
-`permissions.py` off, on a machine with real shell access and no container. The transcripts
-show *"Not allowed yet: he wants to write to something outside his workspace… ask them to
-allow it"* arriving as a hard tool failure rather than as a prompt anyone could answer. If
-asking cannot be answered, turning the asking off is the rational move, and the safety layer
-is disabled as a symptom rather than as a preference.
+**The hypothesis was that asking is broken.** `permission_mode` is set to `bypass` in the live
+config — every guard off, on a machine with real shell access and no container — and the
+transcripts show *"Not allowed yet: he wants to write to something outside his workspace… ask
+them to allow it"* arriving as a hard tool failure. If asking cannot be answered, turning the
+asking off is the rational move.
 
-**What happens next.** This one is debugged before it is designed. Reproduce the failing wait,
-find why the outcome resolves without a question being posted, fix that — and only then decide
-whether `bypass` can come off. The notify failure is checked separately and may well be the
-test's fault injection not taking on real macOS rather than a live defect; if either turns out
-to be a test artifact, that gets said plainly rather than fixed into a pass.
+**The evidence does not support it.** Both real denials are explained without a live defect:
+
+* 2026-08-10 04:41 (`try creating a folder test` / `try on desktop`) predates `0f1e7d6` at
+  06:03, which is the commit that made a refusal *wait* at all. Refusing immediately was the
+  behaviour at the time, not a bug in it.
+* 2026-08-11 01:26 (pushing to a remote) was a reminder-driven turn. A conversation with no
+  live turn refuses at once **on purpose** — waiting would park a thread for fifteen minutes on
+  a prompt drawn on nobody's screen.
+
+So `bypass` is not evidence that the gate is broken, and nothing here justifies taking it off.
+That is the user's call and it stays theirs.
+
+**What the two failures actually were: stale assertions, not bugs.** Both belong to `ba6ec1b`
+(08-10 08:58), whose own subject says "with an unresolved test regression" and whose body lists
+`TestWaitingForYourAnswer` as still to do. A conversation id alone no longer blocks — it takes a
+live turn — and `announce` now promises "sent" rather than "arrived", because delivery moved off
+the caller's thread so a 55-second desktop timeout cannot hold a turn that is already parked.
+Rewritten to assert what is true now, plus a test each for the deliberate behaviour introduced.
+
+**One real defect found on the way.** That commit says the notification *moved* below the "is
+anybody watching" guard. The diff added a call below it and left the original above, so the move
+was an add: an attended refusal raised two alerts for one thing to approve, and an unattended one
+still raised the alert the guard exists to suppress. Fixed, with a test per case.
+
+**And two tests that were passing on luck.** `test_a_long_body_is_trimmed…` and
+`test_the_link_reaches_the_notification` read values written by the notify thread immediately
+after `announce` returns. Demonstrated rather than assumed: 50ms of delay in the notifier breaks
+that shape with `KeyError: 'body'`. They wait for delivery now.
 
 ## Out of scope
 
