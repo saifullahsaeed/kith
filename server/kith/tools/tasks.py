@@ -162,6 +162,44 @@ def _verify_done(path: Path, a: dict) -> dict | None:
     return None
 
 
+def _verify_approvable(path: Path, task_id: int) -> dict | None:
+    """Make approval mean something. Returns a refusal to hand back, or None to let it through.
+
+    Saying yes to a plan is the only decision about a task left to a person, and it is worth
+    nothing if the thing being approved is incomplete. It was: asked to plan a task on the first
+    real run of this vocabulary, he wrote a good 1,449-character plan, attached it, created no
+    checklist items, and `update_task(status='approved')` said yes.
+
+    Nothing was wrong with what he did. `planning-a-task` describes the plan document at length
+    and never asks for a checklist — its only two mentions of one are warnings against writing it
+    early. So the requirement belongs here and not in the skill: prose can be forgotten, misread,
+    or skipped on a task that looks small; a refusal cannot.
+
+    Both halves are required, and the checklist is the half worth insisting on. A plan is prose and
+    can describe anything. The checklist is what makes progress legible afterwards — it is what the
+    working-task card counts through — and a task approved without one shows a person nothing
+    between "started" and "claims to be finished".
+    """
+    detail = repo.tasks.task_detail(path, int(task_id))
+    if not detail:
+        return None
+    missing = []
+    if not (detail.get("plan") or "").strip():
+        missing.append("a plan")
+    if not (detail.get("checklist") or []):
+        missing.append("a checklist")
+    if not missing:
+        return None
+    return {
+        "blocked": f"Nothing to approve yet: this task has no {' and no '.join(missing)}.",
+        "next": (
+            "Write the plan to `.kith/work/task-<id>.md` and add the checklist with "
+            "`add_checklist_item` — every step, before you hand it over, not as you go. Then set "
+            "'planning' so they can look at both together. They approve it; you do not."
+        ),
+    }
+
+
 def _update_task(path: Path, a: dict) -> dict | None:
     # There is no longer a status that means "your turn", so there is no longer a status change
     # that has to be announced. `waiting` was that status and it was announced from three
@@ -171,6 +209,10 @@ def _update_task(path: Path, a: dict) -> dict | None:
     requested = (a.get("status") or "").strip()
     if requested == "done":
         refusal = _verify_done(path, a)
+        if refusal is not None:
+            return refusal
+    if requested == "approved":
+        refusal = _verify_approvable(path, a["id"])
         if refusal is not None:
             return refusal
     # Milestone linkage also sets the project, so apply it before a bare project set.
@@ -392,6 +434,16 @@ def add_task(path: Path, args: dict):
     # solved (a roadmap being laid out is not started halfway through writing it) is now true of
     # every task by construction rather than a special case for the ones under a milestone.
     status = args.get("status") or "planning"
+    # A task cannot be born approved, and the reason is stronger than "the gate would refuse it":
+    # the plan lives at `.kith/work/task-<id>.md`, and the id does not exist until this row does.
+    # There is no order of operations in which a brand-new task already has an approved plan, so
+    # `approved` here is always a mistake — and left unhandled it was a way straight past
+    # `_verify_approvable`, which only guards `update_task`.
+    #
+    # Filed rather than refused: the work is still wanted, it just starts where everything starts.
+    born_approved = status == "approved"
+    if born_approved:
+        status = "planning"
     made = repo.tasks.add_task(
         path,
         goal,
@@ -415,6 +467,16 @@ def add_task(path: Path, args: dict):
         reopened = _reopen_if_finished(path, made.get("project_id"))
         if reopened:
             return {**made, "note": reopened}
+    if born_approved:
+        return {
+            **made,
+            "note": (
+                "Filed in 'planning', not 'approved' — a task cannot start approved, because its "
+                "plan lives at .kith/work/task-"
+                f"{made.get('id')}.md and there was no id to write it against until now. Write the "
+                "plan and the whole checklist, then set 'planning' for them to look at."
+            ),
+        }
     return made
 
 
