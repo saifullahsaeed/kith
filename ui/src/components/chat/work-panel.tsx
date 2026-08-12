@@ -164,6 +164,12 @@ export function WorkPanel({
   const steps = blocks.filter((one) => !one.control).length;
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
   const hidden = lines.length - shown.length;
+  // Whether that row has anything to say at all. It used to render regardless and fill itself with
+  // "no steps yet", on the reasoning that an empty bar reads as one that failed to load — which was
+  // true when it was the only thing between the header and the feed, and stopped being true once the
+  // working-task card moved above it. What was left was a rule, ten pixels of padding and a
+  // right-aligned placeholder floating in the gap. An empty bar is better removed than captioned.
+  const hasCounters = steps > 0 || lifetime > 0 || hidden > 0;
 
   return (
     <aside
@@ -218,53 +224,52 @@ export function WorkPanel({
           and a checklist — so the enforcement lives where it cannot be missed rather than in a
           badge that can. */}
 
-      {/* controls */}
-      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
-        {/* Interrupt and "stop every session" both lived here. Neither has anything to act
-            on: a turn is stopped from the thread it is in, which is where you are already
-            looking when you want it stopped. */}
-        <div className="flex-1" />
-        {/* Only offered when narrowing is actually hiding something, so it is a way out of
-            a filter rather than a switch to reason about on an empty feed. */}
-        {conversationId && (hidden > 0 || everything) ? (
-          <button
-            type="button"
-            onClick={() => setEverything((all) => !all)}
-            className={cn(
-              "rounded px-1.5 py-0.5 text-[11px] transition-colors",
-              everything
-                ? "bg-accent/60 text-foreground"
-                : "text-muted-foreground/60 hover:text-foreground",
-            )}
+      {/* controls — rendered only when they are counting something */}
+      {hasCounters ? (
+        <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
+          {/* Interrupt and "stop every session" both lived here. Neither has anything to act
+              on: a turn is stopped from the thread it is in, which is where you are already
+              looking when you want it stopped. */}
+          <div className="flex-1" />
+          {/* Only offered when narrowing is actually hiding something, so it is a way out of
+              a filter rather than a switch to reason about on an empty feed. */}
+          {conversationId && (hidden > 0 || everything) ? (
+            <button
+              type="button"
+              onClick={() => setEverything((all) => !all)}
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[11px] transition-colors",
+                everything
+                  ? "bg-accent/60 text-foreground"
+                  : "text-muted-foreground/60 hover:text-foreground",
+              )}
+              title={
+                everything
+                  ? "Showing every session. Click for this conversation only."
+                  : `${hidden} line${hidden === 1 ? "" : "s"} from other sessions`
+              }
+            >
+              {everything ? "All sessions" : `+${hidden}`}
+            </button>
+          ) : null}
+          <span
+            className="text-[11px] tabular-nums text-muted-foreground"
             title={
-              everything
-                ? "Showing every session. Click for this conversation only."
-                : `${hidden} line${hidden === 1 ? "" : "s"} from other sessions`
+              status?.tokensIn
+                ? `${formatTokens(status.tokensIn)} shown, ${formatTokens(status.tokensIn - (status.tokensUncached ?? 0))} of it served from cache`
+                : undefined
             }
           >
-            {everything ? "All sessions" : `+${hidden}`}
-          </button>
-        ) : null}
-        <span
-          className="text-[11px] tabular-nums text-muted-foreground"
-          title={
-            status?.tokensIn
-              ? `${formatTokens(status.tokensIn)} shown, ${formatTokens(status.tokensIn - (status.tokensUncached ?? 0))} of it served from cache`
-              : undefined
-          }
-        >
-          {[
-            steps ? `${steps} step${steps === 1 ? "" : "s"}` : "",
-            // Since the server started, and only what a provider actually had to read.
-            lifetime ? `${formatTokens(lifetime)} tokens` : "",
-          ]
-            .filter(Boolean)
-            .join(" · ") ||
-            // Rather than nothing: with both figures empty this row was one button and a
-            // stretch of void, which reads as a bar that failed to load.
-            "no steps yet"}
-        </span>
-      </div>
+            {[
+              steps ? `${steps} step${steps === 1 ? "" : "s"}` : "",
+              // Since the server started, and only what a provider actually had to read.
+              lifetime ? `${formatTokens(lifetime)} tokens` : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        </div>
+      ) : null}
 
       {/* feed */}
       <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">

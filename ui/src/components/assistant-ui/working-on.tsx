@@ -68,12 +68,17 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
   const pct = items.length ? Math.round((done / items.length) * 100) : 0;
 
   return (
-    <div className="mx-auto mb-1.5 w-full max-w-(--thread-max-width) px-4">
+    // Panel spacing, not composer spacing. This carried `mx-auto`, `max-w-(--thread-max-width)`
+    // and a `mb-1.5` from sitting in the composer stack — a thread measurement and a gap between
+    // siblings, neither of which means anything here. `px-4` matches the panel's other rows; the
+    // vertical padding is its own, because it is the first thing under the header and had been
+    // sitting flush against the rule.
+    <div className="w-full px-4 pt-3 pb-3">
       {/* Quieter than the composer, deliberately. It had the same border weight and the same
           text size, so two boxes of equal loudness sat on top of each other and the one you
           type into was not obviously the subject. This is a status line: it should be readable
           when you look for it and ignorable when you are not. */}
-      <div className="border-border/40 bg-muted/25 rounded-lg border px-2.5 py-2">
+      <div className="border-border/40 bg-muted/25 rounded-lg border px-3 py-2.5">
         <div className="flex items-center gap-2">
           <ListChecks className="text-kith/70 size-3.5 shrink-0" />
           <a
@@ -103,11 +108,11 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
         </div>
 
         {items.length > 0 ? (
-          <ul className="mt-2 flex flex-col gap-1 ps-[22px]">
+          <ul className="mt-2.5 flex flex-col gap-2.5 ps-[22px]">
             {items.map((item) => {
               const ticked = Boolean(item.done);
               return (
-                <li key={item.id} className="flex items-start gap-2 text-[11px] leading-snug">
+                <li key={item.id} className="flex items-start gap-2 text-[11px] leading-normal">
                   <span
                     className={cn(
                       "mt-[2px] flex size-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
