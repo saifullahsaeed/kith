@@ -110,6 +110,16 @@ def start() -> None:
                 fire_due(clock.now_iso())
             except Exception:
                 traceback.print_exc()
+            # A background task that has finished is the same question this thread already asks —
+            # something completed, and the conversation it belongs to should hear about it — so it
+            # is asked here rather than on a second timer. The docstring above warns against "and
+            # while we're awake, also…", and this is not that: it is due-work, in a different coat.
+            try:
+                from kith.services.code import processes
+
+                processes.finished_since_last_look()
+            except Exception:
+                traceback.print_exc()
 
     _thread = threading.Thread(target=run, name="kith-scheduler", daemon=True)
     _thread.start()

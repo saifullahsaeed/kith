@@ -65,6 +65,14 @@ class Background:
     #: How far into the log the last check read. This is what makes each check show only
     #: what is new.
     read_to: int = 0
+    #: The conversation that started it, so finishing can be reported back there. Empty for one
+    #: started outside a chat — a script, a test, setup for something else — which has nowhere to
+    #: report to and is left alone.
+    conversation_id: str = ""
+    #: Whether its ending has already been told to that conversation. The watcher runs every thirty
+    #: seconds and a finished process stays finished, so without this it would wake the chat for
+    #: ever.
+    _reported: bool = field(default=False, repr=False)
     _stopped: bool = field(default=False, repr=False)
 
     @property
@@ -203,6 +211,7 @@ class Processes:
                 log=log,
                 started=time.time(),
                 pgid=pgid,
+                conversation_id=_current_conversation(),
             )
 
         # A command that is going to fail — a typo, a missing binary, a port in use — usually
@@ -416,3 +425,54 @@ def _ago(started: float) -> str:
 #: One per process, like the language-server manager and for the same reason: two registries
 #: would each think they owned the port.
 processes = Processes()
+
+
+def _current_conversation() -> str:
+    """The chat this is being started from, or "" outside one.
+
+    Read here rather than passed in: `start_process` is one of sixty tool handlers called as
+    `run(path, args)`, and threading a conversation id through all of them to reach one is the
+    shape this codebase already rejected for `session_context` generally.
+    """
+    try:
+        from kith.services import session_context
+
+        return session_context.current() or ""
+    except Exception:
+        return ""
+
+
+def finished_since_last_look() -> list[str]:
+    """Report every background process that has finished, to the chat that started it.
+
+    Returns the conversations woken, in order. Called by the scheduler's timer — the same one that
+    asks whether a reminder is due, because this is the same question in a different coat: something
+    completed, and the conversation it belongs to should hear about it.
+
+    Waking rather than waiting, deliberately. Holding the tool call open until the command returned
+    was the other option and is worse for exactly the case this is for: a half-hour test suite would
+    hold the conversation for half an hour, and going and doing something else is the whole point of
+    putting it in the background.
+
+    A stopped process is not reported. You already know how that ended — you stopped it.
+    """
+    from kith.services import scheduler
+
+    by_chat: dict[str, list[str]] = {}
+    for background in list(processes._running.values()):
+        if background._reported or background._stopped or background.running:
+            continue
+        background._reported = True
+        if not background.conversation_id:
+            continue  # nowhere to report to
+        code = background.exit_code
+        tail, _ = background.tail()
+        how = "finished" if code == 0 else f"failed with exit code {code}"
+        note = f"The background task `{background.name}` ({background.command}) {how}."
+        if tail.strip():
+            note += f" Its last output:\n\n```\n{tail.strip()[-2000:]}\n```"
+        by_chat.setdefault(background.conversation_id, []).append(note)
+
+    for conversation_id, notes in by_chat.items():
+        scheduler._continue(conversation_id, notes)
+    return list(by_chat)
