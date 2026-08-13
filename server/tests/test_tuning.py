@@ -182,21 +182,21 @@ class TestSnapshot:
 
 class TestBooleans:
     def test_a_switch_reads_a_real_boolean(self):
-        knob = for_key("stop_after_delegating")
+        knob = for_key("require_provider_parameters")
         assert knob.coerce(True) is True
         assert knob.coerce(False) is False
 
     @pytest.mark.parametrize("raw", ["1", "true", "TRUE", "yes", "on"])
     def test_the_environment_can_only_send_strings(self, raw):
-        assert for_key("stop_after_delegating").coerce(raw) is True
+        assert for_key("require_provider_parameters").coerce(raw) is True
 
     @pytest.mark.parametrize("raw", ["0", "false", "no", "off", ""])
     def test_and_the_off_spellings(self, raw):
-        assert for_key("stop_after_delegating").coerce(raw) is False
+        assert for_key("require_provider_parameters").coerce(raw) is False
 
     def test_it_defaults_to_on(self):
         # The behaviour it prevents is the one that was actually observed.
-        assert tuning.value("stop_after_delegating") is True
+        assert tuning.value("require_provider_parameters") is True
 
 
 class TestAKnobWithAFixedSetOfAnswers:

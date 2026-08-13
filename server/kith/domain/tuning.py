@@ -201,18 +201,11 @@ TUNABLES: tuple[Tunable, ...] = (
         maximum=16,
         unit="calls",
     ),
-    Tunable(
-        key="stop_after_delegating",
-        env="KITH_STOP_AFTER_DELEGATING",
-        label="Stop working once he's delegated",
-        help="When he files a task or starts a project, that's a decision the work "
-        "happens later — so he stops researching it and tells you what he set up. Off, "
-        "and he files a task and then immediately spends the rest of the step on it, "
-        "which is neither delegating nor finishing.",
-        default=True,
-        group="chat",
-        kind="bool",
-    ),
+    # `stop_after_delegating` stood here and is gone with the mechanism it drove — see the long
+    # note in `services/agent_loop` where the `delegated` latch used to be. Short version: it
+    # dated from when a conversation was an intake desk, it contradicted the chat directive
+    # outright once that changed, and it was the largest single cause of a turn announcing a
+    # plan and doing none of it.
     Tunable(
         key="milestone_task_cap",
         env="KITH_MILESTONE_TASK_CAP",

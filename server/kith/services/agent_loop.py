@@ -17,7 +17,7 @@ import re
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -192,51 +192,88 @@ _LANDING_TOOLS = frozenset(
         "journal",
         "remember",
         "reach_out",
+        # The third time this list has been caught forbidding what the directive beside it
+        # commands — see `edit_file` above, and `add_task` in `_PLANNING_TOOLS` below. This one
+        # is the worst of the three, because `_LANDING_DIRECTIVE` names the tool outright: "and
+        # `ask` if you need something from your person — it waits for the answer."
+        #
+        # It was not there. So the one moment the harness tells him to put a question to his
+        # person is the one moment he cannot, and with nothing else to reach for a turn that is
+        # genuinely stuck can only stop — which reads, from the other side, as him giving up
+        # rather than as him being unable to speak. Asked what he wanted here, his person was
+        # unambiguous: stopping when there is really nothing to go on is fine, but a question is
+        # almost always preferable to a stop.
+        #
+        # Landing is also precisely when a question is most likely to be worth asking: the
+        # gathering is over, so anything still missing is not going to be found by looking
+        # harder. And it costs nothing to keep — `ask` blocks on an answer, so it cannot be the
+        # tool a turn spins on.
+        "ask",
     }
 )
 
-# Handing work to himself for later. Creating a task or a project is a decision that
-# the work happens *later* — so continuing to research it in the same turn
-# is doing the thing he just decided to defer, and doing it with the rounds he has
-# left rather than the whole budget a fresh turn would give it. He would file a task and then
-# burn nineteen tool calls on it immediately, which is neither delegating nor finishing.
-_DELEGATION_TOOLS = frozenset({"add_task", "create_project"})
+# Filing a task used to stop the turn, and that mechanism is gone. What stood here was a
+# `delegated` latch: `add_task` or `create_project` succeeding meant "he has decided this
+# happens later", so the doing-tools were taken away and a directive told him to stop working
+# and describe the plan instead.
+#
+# It was right for a conversation that was an intake desk. `CHAT_DIRECTIVE` opened with
+# "CAPTURE, DON'T DO (most important)" — file it, refuse to touch a work tool, say when you'll
+# get to it — and against that, filing a task really was the end of the turn.
+#
+# That design was reversed (see `routes/chat.CHAT_DIRECTIVE`, which now says the opposite in
+# as many words) and this outlived it. The two texts ended up in direct contradiction on the
+# same tool call:
+#
+#     CHAT_DIRECTIVE 2:  "...A project and its first milestone's tasks... Then start on the
+#                         first task in the same breath."
+#     the directive:     "You've handed that to yourself as work for later, so stop working
+#                         on it now."
+#
+# Measured over 523 recorded turns: 51 ended with a narrowed toolset and 13 of those were this,
+# firing on messages like "ok lets start on this you know everything dont wait for me", "ok lets
+# start with that", and "go ahed then" — three rounds in, right after filing the task those very
+# messages asked for. It was the single largest cause of a turn that announced a plan and did
+# nothing, and the plan it announced was the one it had just been told to stop executing.
+#
+# There is a real failure underneath it — filing a task and then burning nineteen rounds on it
+# immediately is neither delegating nor finishing — but that is a *budget* concern, and the
+# landing reserve is already the mechanism for budget. It does not need a second one keyed off
+# a tool name that now means the opposite of what it meant when this was written.
 
-# What he may still do once he has delegated: finish describing the plan and tell you
-# about it. Gathering is over — that is the point.
-_PLANNING_TOOLS = frozenset(
-    {
-        # Filing the tasks IS finishing the plan, so it has to survive the guardrail that
-        # `create_project` trips. It did not, and the gap only became visible once the
-        # allow-lists were actually enforced: asked to set up a project, he created it, added
-        # the milestone, then said "the task-creation operation wasn't available in this
-        # session, so I couldn't honestly file the milestone's tasks" — and retried
-        # `add_milestone` three times looking for a way through.
-        #
-        # The chat directive tells him, in as many words, to file "a project and its first
-        # milestone's tasks". A directive commanding what the toolset forbids is worse than
-        # either alone: he cannot comply and cannot tell you why without guessing.
-        #
-        # What the guardrail is actually for is the *doing* — searching, fetching, shell —
-        # after he has decided the work happens later. That is untouched.
-        "add_task",
-        "add_milestone",
-        "add_checklist_item",
-        "update_project",
-        "update_task",
-        "view_task",
-        "list_tasks",
-        "take_note",
-        "journal",
-        "remember",
-    }
-)
+#: Consecutive dead rounds a turn will absorb before it stops trying to work and starts trying
+#: to land. Counted consecutively and reset by any round that succeeds, because the question
+#: this is asking is "is the provider out?", and a blip at round 2 tells you nothing about
+#: round 25.
+#:
+#: One, so a single dead round is absorbed and two in a row is an outage. The measured case for
+#: absorbing the first: turn 1244 on 2026-08-12, round 2 of a 40-round budget. One round died
+#: after its three attempts, the loop called that landing, and the next call went out with the
+#: toolset cut from 69 schemas to the 19 landing ones — visible in the turn's own ledger as
+#: built_in_tools dropping 10,601 -> 3,392 tokens — carrying a directive that told him he was
+#: near the end of his budget. He was on round 2. He did as he was told: wrote a seven-point
+#: plan of what he was about to do, called nothing, and ended the turn. His person asked "what
+#: are you waiting for then man", and the next turn — same work, full toolset — did all of it
+#: in 16 rounds and committed.
+#:
+#: The narrowing is not free either: swapping the tools block rewrites the cached prefix, so
+#: that round billed 153,516 cache-*write* tokens and read 0.
+_FAILED_ROUNDS_BEFORE_LANDING = 1
 
-_DELEGATED_DIRECTIVE = (
-    "(You've handed that to yourself as work for later, so stop working on it now — "
-    "that's what the task is for, and you'll have a whole turn's budget for it. "
-    "Finish describing the plan if it needs it, then tell them what you've set up and "
-    "what you'll do first.)"
+#: Spent when one round's model call died and the turn is carrying on regardless. Its job is to
+#: account for the gap, because from inside the conversation there is one: the dead round left
+#: no assistant message at all, so the history reads as a request he answered with silence. The
+#: likeliest thing to conclude from that is that he already replied, which is how a turn talks
+#: itself into stopping.
+#:
+#: Deliberately not `_LANDING_DIRECTIVE`. Landing says "you are near the end of your tool
+#: budget", and after one bad round that is simply false — saying it costs the turn the work it
+#: was in the middle of, which is the whole of what this constant exists to stop.
+_ROUND_FAILED_DIRECTIVE = (
+    "(The last request to the model failed and could not be completed. That was the provider, "
+    "not you, and not anything about the work — nothing you did earlier in this turn was lost, "
+    "it is all still above. You have your full toolset and the rest of your rounds. Carry on "
+    "from where you were.)"
 )
 
 #: Spent when a turn changed code and recorded nothing about the project. Deliberately not
@@ -669,6 +706,157 @@ def _compact_tool_history(convo: list[dict[str, Any]], offload=None) -> None:
             msg["_stubbed"] = True
 
 
+@dataclass
+class _Retries:
+    """What the turn has lost to the provider so far.
+
+    Kept at turn level rather than per round so the count a person sees runs 1,2,3,4 instead of
+    restarting at 1 for each round — "attempt 2, attempt 3, attempt 2, attempt 3" reads like the
+    retry is going backwards. It is also what the final error reports having tried.
+    """
+
+    #: Model calls made and lost across the whole turn.
+    attempts: int = 0
+    #: When the first one was lost, for the "over 7s" in the giving-up message. 0 means none yet.
+    first_failed_at: float = 0.0
+
+    def lost(self) -> None:
+        self.attempts += 1
+        self.first_failed_at = self.first_failed_at or time.time()
+
+
+def _send_round(
+    convo: list[dict[str, Any]],
+    config: Config,
+    host: str,
+    schemas: list[dict],
+    retries: _Retries,
+) -> Iterator[dict]:
+    """One round's model call, attempted up to `_ROUND_ATTEMPTS` times.
+
+    Returns ``(content, tool_calls, stats, failure)`` — ``failure`` is None when a call got
+    through, and the caller decides what a dead round costs. Driven with ``yield from``, which
+    forwards the reasoning/answer deltas and the `retrying` notices and hands back that tuple.
+
+    Retrying *here* is safe in a way retrying the turn is not, and the difference is the whole
+    design. The tools of every previous round have already run and their results are already in
+    `convo`; repeating this call repeats a model request and nothing else. The client's own
+    retry deliberately stops the moment a response body exists, because by then he may have
+    written files and committed — that reasoning applies to the turn, not to one round in it.
+
+    What is *not* retried is a round that already emitted. A second attempt may answer
+    differently, and the person would watch half of one answer followed by all of another. That
+    round is over, and it is the caller's problem from there.
+    """
+    content = ""
+    tool_calls: list[dict] = []
+    stats: dict | None = None
+    failure: dict | None = None
+
+    for attempt in range(1, _ROUND_ATTEMPTS + 1):
+        failure = None
+        spoke = False
+        content, tool_calls, stats = "", [], None
+        for event in _stream_once(convo, config, host, tools=schemas):
+            kind = event["type"]
+            if kind == "delta":
+                spoke = True
+                yield event  # forward reasoning/answer tokens
+            elif kind == "error":
+                failure = event
+                break
+            elif kind == "turn":
+                content = event["content"]
+                tool_calls = event["tool_calls"]
+                stats = event["stats"]
+        if failure is None:
+            break
+        retries.lost()
+        if spoke or not _worth_retrying(failure) or attempt == _ROUND_ATTEMPTS:
+            break
+        yield {
+            "type": "retrying",
+            # What is about to be tried, counted across the turn — see `_Retries`.
+            "attempt": retries.attempts,
+            "message": str(failure.get("message") or ""),
+        }
+        time.sleep(_backoff(attempt))
+
+    return content, tool_calls, stats, failure
+
+
+def _make_room(
+    convo: list[dict[str, Any]],
+    schemas: list[dict],
+    room: ContextBudget,
+    *,
+    take_reading,
+    config: Config,
+    host: str,
+    offload=None,
+) -> Iterator[dict]:
+    """Reduce the turn's history until the next request fits. Returns the reading after.
+
+    A generator because the fold is worth announcing — it costs a model call and several
+    seconds, and before the `compacting` event existed that wait was indistinguishable from a
+    slow provider. Driven with ``book = yield from _make_room(...)``, which forwards the events
+    and hands back the return value.
+
+    Three moves, cheapest first, and the order is the whole design:
+
+    1. **Fold** the middle into a summary. Costs one model call, happens at most `_MAX_FOLDS`
+       times, and produces a *new stable prefix* — the round after a fold is byte-identical to
+       the fold, so caching resumes immediately.
+    2. **Shave** — stub old tool results, drop seen images, strip bulky call arguments. Lossy,
+       and it rewrites the middle of the history every time it runs, so the prefix cache dies
+       with it.
+    3. **Drop** whole exchanges. Guaranteed to free room and guaranteed to break the cache,
+       which is exactly why it is last.
+
+    Two pressure signals feed it and they used to get two different responses. ``over`` is a
+    share of the whole window — the fold's own trigger, 80% by default. ``tight`` is `room`'s
+    absolute ceiling, which also charges for the biggest single round-to-round growth seen so
+    far, and can fire well under ``over`` on a turn that already had one huge round in it.
+    ``over`` tried a real fold first and only fell back to shaving; ``tight`` went straight to
+    dropping, with no fold attempt at all. Measured on a real turn: cache held above 99.8% for
+    several rounds, then one ``tight``-triggered drop sent the next round out at 3.2% cached —
+    400,483 tokens re-billed in full for a conversation that had grown by 5,424 since the last
+    one. Both signals now get the same first response.
+
+    The toolset is deliberately untouched throughout. Reusing the `landing` latch to free room
+    was the obvious move and is wrong: it is one-way, so context pressure at round 3 of a
+    40-round turn would remove shell and every file tool for the remaining 37 and leave him
+    structurally unable to do what he was asked. Trim the history; leave the capability alone.
+    """
+    book = take_reading()
+
+    over = book.past(_FOLD_ABOVE_SHARE) if config.context_window > 0 else _room_is_tight(convo, 0)
+    tight = room.is_tight(conversation_chars(convo, schemas))
+    if over or tight:
+        folded = False
+        if compaction.already_folded(convo) < _MAX_FOLDS:
+            yield {"type": "compacting", "used": book.used, "window": book.window}
+            folded = compaction.fold(convo, partial(_summarise, config=config, host=host))
+        if not folded:
+            # Either it has been folded as often as is worth paying for, or there was no safe
+            # place to cut. Fall back to the older shaving, which is lossy and breaks the
+            # prefix — and is still better than a turn that dies on a 400.
+            _compact_tool_history(convo, offload)
+            _compact_images(convo)
+            _compact_call_arguments(convo)
+        book = take_reading()
+
+    # Still tight after folding or shaving — the fold was exhausted, or neither move freed
+    # enough room.
+    dropped_any = False
+    while room.is_tight(conversation_chars(convo, schemas)) and _drop_oldest_exchange(convo):
+        dropped_any = True
+    if dropped_any:
+        book = take_reading()
+
+    return book
+
+
 def stream_agent(
     messages: list[dict[str, Any]],
     config: Config,
@@ -788,13 +976,11 @@ def _run_turn(
     # prefix for the one request the turn cannot skip.
     schemas: list[dict] = []
     landing = False
-    delegated = False  # did he hand this to himself for later?
-    #: Model calls made and lost across the whole turn, and when the first one was lost. Kept at
-    #: turn level rather than per round so the count a person sees runs 1,2,3,4 instead of
-    #: restarting at 1 for the landing round — "attempt 2, attempt 3, attempt 2, attempt 3" reads
-    #: like the retry is going backwards. It is also what the final error says it tried.
-    attempts = 0
-    first_failed_at = 0.0
+    #: What this turn has lost to the provider, counted across the whole turn — see `_Retries`.
+    retries = _Retries()
+    #: Rounds that died in a row, reset by any round that comes back. See
+    #: `_FAILED_ROUNDS_BEFORE_LANDING` for why consecutive and why the first one is absorbed.
+    failed_rounds = 0
 
     for round_index in range(budget):
         # Re-read tools each round so a tool Kith just built is usable right away.
@@ -814,17 +1000,10 @@ def _run_turn(
             convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
         if landing:
             schemas = [s for s in schemas if s["function"]["name"] in _LANDING_TOOLS]
-        elif delegated:
-            # Not the same as landing: he keeps his remaining rounds and may still
-            # flesh out the plan. What he loses is the ability to *do* the work —
-            # no searching, no fetching, no shell.
-            allowed = _LANDING_TOOLS | _PLANNING_TOOLS
-            schemas = [s for s in schemas if s["function"]["name"] in allowed]
 
         # What he was actually offered this round, and — from here on — what he may actually
-        # run. Derived from the finished list rather than from `allow`, so all three
-        # narrowings above are enforced by the same line and a fourth one added later cannot
-        # forget to be.
+        # run. Derived from the finished list rather than from `allow`, so both narrowings
+        # above are enforced by the same line and a third one added later cannot forget to be.
         #
         # Until now none of them were enforced at all. Every one only ever reached
         # `tool_schemas(only=...)`, which decides what the model is *shown*; `run_tool`
@@ -857,61 +1036,19 @@ def _run_turn(
                 custom_names=custom_names,
             )
 
-        book = take_reading()
-
-        # Two separate pressure signals used to get two separate responses. `over` is a share
-        # of the whole window — the fold's own trigger, 80% by default. `tight` is `room`'s own
-        # absolute ceiling, which also charges for the biggest single round-to-round growth
-        # seen so far, and can fire well under `over` on a turn that already had one huge
-        # round in it. `over` tried a real fold first and only fell back to shaving; `tight`
-        # went straight to dropping whole exchanges, with no fold attempt at all.
-        #
-        # Both mutate the middle of `convo`, and mutating anything but the very end breaks the
-        # provider's prefix cache the same way either way — but only the fold path was ever
-        # built to avoid firing that every round. Measured on a real turn: cache held above
-        # 99.8% for several rounds straight, then one `tight`-triggered drop sent the very next
-        # round out at 3.2% cached — 400,483 tokens re-billed in full for a conversation that
-        # had grown by all of 5,424 tokens since the last one. So now both signals get the
-        # same first response, and dropping is the last resort for both, not the only response
-        # to one of them.
-        over = book.past(_FOLD_ABOVE_SHARE) if config.context_window > 0 else _room_is_tight(convo, 0)
-        tight = room.is_tight(conversation_chars(convo, schemas))
-        if over or tight:
-            folded = False
-            if compaction.already_folded(convo) < _MAX_FOLDS:
-                yield {"type": "compacting", "used": book.used, "window": book.window}
-                folded = compaction.fold(convo, partial(_summarise, config=config, host=host))
-            if not folded:
-                # Either it has been folded as often as is worth paying for, or there was no safe
-                # place to cut. Fall back to the older shaving, which is lossy and breaks the
-                # prefix — and is still better than a turn that dies on a 400.
-                _compact_tool_history(convo, offload_result)
-                _compact_images(convo)
-                _compact_call_arguments(convo)
-            book = take_reading()
-
-        # Still tight after folding or shaving — the fold was exhausted, or neither move freed
-        # enough room. Guaranteed to work, unlike either above, which is exactly why it is the
-        # last resort rather than the first: it breaks the cache the same way they do.
-        #
-        # The toolset is deliberately untouched here. Reusing the `landing` latch was the
-        # obvious move and is wrong: it is one-way, so context pressure at round 3 of a
-        # 40-round turn would remove shell and every file tool for the remaining 37 and leave
-        # him structurally unable to do the thing he was asked. Trim the history; leave the
-        # capability alone.
-        dropped_any = False
-        while room.is_tight(conversation_chars(convo, schemas)) and _drop_oldest_exchange(convo):
-            dropped_any = True
-        if dropped_any:
-            book = take_reading()
+        book = yield from _make_room(
+            convo,
+            schemas,
+            room,
+            take_reading=take_reading,
+            config=config,
+            host=host,
+            offload=offload_result,
+        )
 
         # Taken last, so it always describes the request about to be sent — not a reading from
         # before the last thing that could still change it.
         yield {"type": "context", "context": book.as_wire()}
-
-        content = ""
-        tool_calls: list[dict] = []
-        stats: dict | None = None
 
         # Measured now, before the request, so it describes what was actually sent.
         sent = conversation_chars(convo, schemas)
@@ -921,65 +1058,46 @@ def _run_turn(
         # this one call.
         round_config = replace(config, effort=landing_effort) if landing and landing_effort else config
 
-        # One round, attempted up to `_ROUND_ATTEMPTS` times.
-        #
-        # Retrying *here* is safe in a way retrying the turn is not, and the difference is the
-        # whole design. The tools of every previous round have already run and their results are
-        # already in `convo`; repeating this call repeats a model request and nothing else. The
-        # client's own retry deliberately stops the moment a response body exists, because by
-        # then he may have written files and committed — that reasoning applies to the turn, not
-        # to one round inside it.
-        #
-        # What is *not* retried is a round that already emitted. A second attempt may answer
-        # differently, and the person would watch half of one answer followed by all of another.
-        # That round is over; the turn recovers by landing instead — see below.
-        failure: dict | None = None
-        for attempt in range(1, _ROUND_ATTEMPTS + 1):
-            failure = None
-            spoke = False
-            content, tool_calls, stats = "", [], None
-            for event in _stream_once(convo, round_config, host, tools=schemas):
-                kind = event["type"]
-                if kind == "delta":
-                    spoke = True
-                    yield event  # forward reasoning/answer tokens
-                elif kind == "error":
-                    failure = event
-                    break
-                elif kind == "turn":
-                    content = event["content"]
-                    tool_calls = event["tool_calls"]
-                    stats = event["stats"]
-            if failure is None:
-                break
-            attempts += 1
-            first_failed_at = first_failed_at or time.time()
-            if spoke or not _worth_retrying(failure) or attempt == _ROUND_ATTEMPTS:
-                break
-            yield {
-                "type": "retrying",
-                # What is about to be tried, counted across the turn — see `attempts`.
-                "attempt": attempts,
-                "message": str(failure.get("message") or ""),
-            }
-            time.sleep(_backoff(attempt))
+        content, tool_calls, stats, failure = yield from _send_round(
+            convo, round_config, host, schemas, retries
+        )
 
         if failure is not None:
             # Out of attempts, or a failure not worth repeating. Dying here is what threw away
-            # five rounds of finished work on a sixth-round timeout — so instead, hand the rest
-            # of the turn to landing, where the reserve exists precisely to write down what has
-            # been found. Only once: `landing` is already set means the landing round itself
-            # failed, and a provider still refusing then is not going to be talked round.
+            # five rounds of finished work on a sixth-round timeout, so the turn does not die —
+            # but *how* it survives depends on what the failure says about the provider, and
+            # for a long time it did not, which was the bug.
             #
-            # And not at all when the machine has no route to the provider, because landing is a
-            # model call and there is nothing to land it on — three more failures and three more
-            # seconds of backoff, spent proving what the last three already established.
+            # Not at all when the machine has no route to the provider: every recovery below is
+            # a model call and there is nothing to make one on — more failures and more backoff,
+            # spent proving what the last three already established. Same when `landing` is
+            # already set, which means the landing round itself failed.
             if landing or _unreachable(failure):
-                yield {**failure, "message": _gave_up(failure, attempts, first_failed_at)}
+                yield {**failure, "message": _gave_up(failure, retries.attempts, retries.first_failed_at)}
                 return
+
+            failed_rounds += 1
+            # A transport failure or a 5xx says the provider is unwell and says nothing about
+            # the request — so the request is still good, and the honest recovery is to note the
+            # gap and go again with everything intact. Landing here instead is what ended a
+            # turn on round 2 of 40 with a plan and no work; see
+            # `_FAILED_ROUNDS_BEFORE_LANDING` for the measurement.
+            #
+            # A 400 or a 401 is the opposite: the server calling the request itself wrong or
+            # unpaid, and it will say so again. There the narrowed toolset is not a cost but the
+            # point — it is a *different, smaller* request, and one that may well get through
+            # where the failed one could not.
+            if _worth_retrying(failure) and failed_rounds <= _FAILED_ROUNDS_BEFORE_LANDING:
+                convo.append({"role": "user", "content": _ROUND_FAILED_DIRECTIVE})
+                continue
             landing = True
             convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
             continue
+
+        # The provider came back, so whatever went wrong before is not an outage. Reset here
+        # rather than at the top of the round: a round is only survived once its model call has
+        # actually returned, and the top of the loop is several hundred lines too early to know.
+        failed_rounds = 0
 
         # What that request actually cost, against how big it was — the one measurement the
         # budget is built on. Taken from `sent`, captured before the call, because `convo`
@@ -1089,13 +1207,6 @@ def _run_turn(
 
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
             for step, result in zip(batch, results, strict=True):
-                worked = isinstance(result, dict) and result.get("ok", True)
-                if step["name"] in _DELEGATION_TOOLS and worked and not delegated:
-                    delegated = True
-                    if tuning.value("stop_after_delegating"):
-                        convo.append({"role": "user", "content": _DELEGATED_DIRECTIVE})
-                    else:
-                        delegated = False  # the guardrail is switched off
                 yield {"type": "tool_result", "id": step["id"], "name": step["name"], "result": result}
                 image = _image_from(result)
                 if image:

@@ -17,6 +17,7 @@ disarmed. `commit` was missing too — from the one phase whose entire job is to
 
 from __future__ import annotations
 
+from kith.services import agent_loop
 from kith.services.agent_loop import _LANDING_TOOLS
 
 
@@ -66,3 +67,36 @@ class TestEveryNameIsReal:
         from kith.tools import registry
 
         assert not (_LANDING_TOOLS - set(registry.names()))
+
+
+class TestHeCanStillPutAQuestion:
+    """`_LANDING_DIRECTIVE` names `ask` outright — "and `ask` if you need something from your
+    person — it waits for the answer" — and for a long time landing removed it.
+
+    So the one moment the harness tells him to ask is the one moment he cannot, and a turn with
+    a real question in it has nothing left to do but stop. From the other side that is
+    indistinguishable from giving up. The standing preference is the opposite: stopping when
+    there is genuinely nothing to go on is fine, a question is almost always better than a stop.
+
+    Landing is the only door left that narrows the toolset — the `delegated` latch that used to
+    be the other one is gone.
+    """
+
+    def test_ask_survives_landing(self):
+        assert "ask" in agent_loop._LANDING_TOOLS
+
+    def test_the_directive_does_not_name_a_tool_it_takes_away(self):
+        """The general form of the bug, so the next one is caught by this test and not in use.
+
+        Three have shipped: `edit_file`, `add_task`, and `ask`. Each was a directive commanding
+        what the toolset beside it forbade — which is worse than either mistake alone, because
+        he can neither comply nor explain why without guessing.
+
+        Written as a loop over (directive, toolset) pairs rather than against `_LANDING_DIRECTIVE`
+        alone, so a second narrowing door added later is one line to cover rather than a test
+        somebody has to think to write. There is only one today.
+        """
+        for directive, permitted in ((agent_loop._LANDING_DIRECTIVE, agent_loop._LANDING_TOOLS),):
+            named = {word.strip("`") for word in directive.split() if word.startswith("`")}
+            missing = {n for n in named if n not in permitted}
+            assert not missing, f"{directive[:40]!r}... tells him to use {sorted(missing)}, which it removes"
