@@ -10,6 +10,14 @@
 #   ./check         everything
 #   ./check server  python only (fast loop while working on the backend)
 #   ./check ui      typescript only
+#   ./check lint    ruff and format only — no pytest
+#
+# `lint` exists for the release workflow, and it is a workaround rather than a feature. The
+# suite does not currently run on a machine that is not a developer's: it wants a settings
+# table, a workspace root and a skills directory that are all there by the time anyone runs it
+# locally, so a clean checkout fails ~200 tests on environment rather than on behaviour.
+# Releases would be blocked on that forever. When the suite is hermetic, delete this mode and
+# put `./check` back in .github/workflows/release.yml.
 #
 # Note `tsc -b`, not `tsc --noEmit`. They read different configs: --noEmit passed clean on a
 # tree where the real build failed with six errors, two of them genuine type mismatches.
@@ -30,11 +38,13 @@ step() {
   fi
 }
 
-if [[ "$what" == "all" || "$what" == "server" ]]; then
+if [[ "$what" == "all" || "$what" == "server" || "$what" == "lint" ]]; then
   cd "${here}/server"
   step "ruff"   .venv/bin/python -m ruff check kith/ tests/
   step "format" .venv/bin/python -m ruff format --check kith/ tests/
-  step "pytest" .venv/bin/python -m pytest tests/ -q
+  if [[ "$what" != "lint" ]]; then
+    step "pytest" .venv/bin/python -m pytest tests/ -q
+  fi
 fi
 
 if [[ "$what" == "all" || "$what" == "ui" ]]; then
