@@ -12,3 +12,17 @@
 
 ruff>=0.16,<0.17
 pytest>=9.1,<10
+
+# Shuffles the order tests run in, and prints the seed so a failure reproduces.
+#
+# Without it pytest runs files alphabetically, every time, so a test that only passes because
+# a sibling ran first keeps passing — until somebody adds a file that sorts earlier, and then
+# it breaks for reasons that have nothing to do with their change.
+#
+# That was not hypothetical here. `test_the_suite_does_not_start_loops` asserts no `kith-`
+# thread outlives its file, and `test_the_wait_before_he_answers` leaves one per test — it
+# calls the chat view, whose whole job is to start a turn thread and return. Alphabetically
+# `…suite…` sorts before `…wait…`, so the guard had never once seen them. Under shuffling it
+# failed about one run in three, and what it was catching was real: a turn thread that
+# outlives `monkeypatch` reads the shipped database rather than the test's.
+pytest-randomly>=4.0,<5

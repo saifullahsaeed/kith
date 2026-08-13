@@ -44,6 +44,31 @@ def _chat(payload: dict):
         return route.chat()
 
 
+@pytest.fixture(autouse=True)
+def _no_turn_thread_outlives_the_test():
+    """Wait for the turn threads these tests start, before handing the process on.
+
+    `chat()` finishes by starting a daemon thread named `kith-turn-<conversation id>` and
+    returning — which is the whole point of this file, and it means every test in it leaves one
+    running. Usually it is done microseconds later and nobody notices.
+
+    `test_the_suite_does_not_start_loops` notices. It asserts no `kith-` thread survives its
+    file, for the reason its own docstring gives: a thread that outlives `monkeypatch` reads
+    the *real* `AGENT_DB_PATH`, and one that reaches a due reminder makes a real network call
+    against the real board. Alphabetically that guard sorts before this file — `…suite…` before
+    `…wait…` — so in the fixed order pytest runs by default it has never once seen these. Run
+    the suite in any other order and it fails about one time in three; the threads are only
+    still alive when the machine is busy enough, which is exactly when a full suite runs.
+
+    Joining rather than asserting: this file's threads are legitimate, and it is their owner's
+    job to see them out. The guard stays the guard.
+    """
+    yield
+    for thread in threading.enumerate():
+        if thread.name.startswith("kith-turn-"):
+            thread.join(timeout=5)
+
+
 @pytest.fixture
 def feed(db: Path, monkeypatch):
     published: list[dict] = []
