@@ -41,6 +41,11 @@ class Question:
     answered: threading.Event = field(default_factory=threading.Event)
     #: One entry per question once answered: `{"chosen": [str], "text": str, "skipped": bool}`.
     replies: list[dict] | None = None
+    #: True for a question recovered from a transcript after a restart, where the turn that
+    #: asked it is gone. Nothing is waiting on `answered`, so an answer has nowhere to be
+    #: returned to — the client sends it as an ordinary message instead, and the next turn picks
+    #: it up with the whole conversation in front of it. See `recover_interrupted`.
+    interrupted: bool = False
 
 
 _OPEN: dict[str, Question] = {}
@@ -168,7 +173,14 @@ def open_question(conversation_id: str) -> dict | None:
         question = _OPEN.get(conversation_id)
     if question is None:
         return None
-    return {"id": question.id, "conversationId": conversation_id, "questions": question.asked}
+    return {
+        "id": question.id,
+        "conversationId": conversation_id,
+        "questions": question.asked,
+        # Nothing is waiting on this one, so answering it cannot hand anything back — the client
+        # sends the answer as an ordinary message instead. See `recover_interrupted`.
+        "interrupted": question.interrupted,
+    }
 
 
 def answer(question_id: str, replies: list) -> bool:
@@ -197,3 +209,88 @@ def release(conversation_id: str) -> None:
     if question is not None:
         question.replies = None
         question.answered.set()
+
+
+#: What the interrupted turn's missing tool result says, written on the next start.
+_INTERRUPTED = (
+    "The server restarted while this question was waiting, so it was never answered and the "
+    "turn that asked it ended there. Their answer, if they give one, arrives as an ordinary "
+    "message — read it as the answer to this."
+)
+
+
+def recover_interrupted() -> int:
+    """Close the books on questions the process died holding, and put the cards back.
+
+    A parked question lived only in `_OPEN` and the turn waiting on it was a daemon thread, so
+    a restart took both with nothing written down: the transcript stopped mid-tool-call, there
+    was no result, no error, and no turn-log row. Measured on 2026-08-13 — a question asked at
+    11:33:15 with a fifteen-minute deadline, a server that came up at 11:41:56, and a
+    conversation whose file simply ends. Five of them across the transcripts, two of which were
+    `remember this`, asked again by hand minutes later because nothing said what had happened.
+
+    The transcript is the persistence, which is why there is no table here. The `tool_call` is
+    written before the tool runs and carries the whole question, so a call with no result *is*
+    the record of an interrupted ask — no second copy to keep in step, and no migration.
+
+    Two things happen for each one:
+
+    * the missing `tool_result` is written, so the turn's books are closed and the history is
+      well-formed. Until it is, `conversations.full_messages` drops the orphaned call entirely
+      (it has to — a provider refuses a `tool_calls` message it cannot pair), so the next turn
+      cannot see that it ever asked. That is the whole of why "remember this" had to be typed
+      twice: he had no record of asking what to remember.
+    * the question goes back in `_OPEN`, marked `interrupted`, so the card returns rather than
+      the person being left to guess what he wanted.
+
+    Returns how many were recovered, for the line the server prints at startup.
+    """
+    from kith.services import conversations
+
+    found = 0
+    for conversation_id in conversations.interrupted_asks():
+        # Checked before anything is written, not after. A conversation already holding a live
+        # question has a turn parked on it right now, and writing a "the server restarted"
+        # result into its transcript would be a lie about a turn that is still running — and
+        # would pair off the call it is about to answer for itself.
+        with _LOCK:
+            if conversation_id in _OPEN:
+                continue
+        asked = _asked_in(conversation_id)
+        if asked is None:
+            continue
+        call_id, questions_asked = asked
+        conversations.record_event(
+            conversation_id,
+            "tool_result",
+            {"id": call_id, "name": "ask", "result": {"ok": True, "answered": False, "note": _INTERRUPTED}},
+        )
+        with _LOCK:
+            _OPEN[conversation_id] = Question(
+                id=uuid.uuid4().hex[:12],
+                conversation_id=conversation_id,
+                asked=questions_asked,
+                interrupted=True,
+            )
+        found += 1
+    return found
+
+
+def _asked_in(conversation_id: str) -> tuple[str, list[dict]] | None:
+    """The unanswered `ask` at the end of this transcript: its call id and its questions."""
+    from kith.services import conversations
+
+    pending: dict[str, dict] = {}
+    for entry in conversations.read(conversation_id):
+        kind = entry.get("type")
+        if kind == "message" and entry.get("role") == "user":
+            pending = {}
+        elif kind == "tool_call" and entry.get("name") == "ask":
+            pending[str(entry.get("id") or "")] = entry
+        elif kind == "tool_result":
+            pending.pop(str(entry.get("id") or ""), None)
+    if not pending:
+        return None
+    call_id, entry = next(reversed(pending.items()))
+    asked = _normalise((entry.get("arguments") or {}).get("questions") or [])
+    return (call_id, asked) if asked else None

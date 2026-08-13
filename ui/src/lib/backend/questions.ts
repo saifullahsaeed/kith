@@ -15,6 +15,16 @@ export interface OpenQuestion {
   id: string;
   conversationId: string;
   questions: AskedQuestion[];
+  /**
+   * Recovered from a transcript after the server restarted, so the turn that asked it is gone
+   * and nothing is waiting on the answer.
+   *
+   * It changes where the answer goes, not how it looks. `answerQuestion` would post it to a
+   * thread that no longer exists and the reply would be dropped on the floor; sent as an
+   * ordinary message it starts a fresh turn, which reads the whole conversation — including the
+   * question, now that the interrupted call has been closed off — and carries on.
+   */
+  interrupted?: boolean;
 }
 
 export interface Reply {

@@ -472,6 +472,50 @@ def read(conversation_id: str) -> list[dict]:
     return entries
 
 
+def interrupted_asks() -> list[str]:
+    """Conversations whose transcript ends on an `ask` that never got a result.
+
+    That shape has exactly one cause: the process died while a turn was parked on a question.
+    Everything else writes a result — an answer, a stop, or the deadline — because the tool
+    returns down all three paths and the loop records what it returned.
+
+    Read from the tail rather than the whole file. A transcript runs to megabytes and there are
+    hundreds of them; the question, if there is one, is in the last handful of lines by
+    definition, because nothing can have been appended after the turn that stopped writing.
+    Cheap enough to do on every start, which is where it is called from.
+    """
+    out = []
+    for path in sorted(directory().glob("*.jsonl")):
+        try:
+            tail = path.read_text(errors="replace").splitlines()[-_TAIL_LINES:]
+        except OSError:
+            continue
+        pending: set[str] = set()
+        for line in tail:
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            kind = entry.get("type")
+            if kind == "tool_call" and entry.get("name") == "ask":
+                pending.add(str(entry.get("id") or ""))
+            elif kind == "tool_result":
+                pending.discard(str(entry.get("id") or ""))
+            elif kind == "message" and entry.get("role") == "user":
+                # They carried on talking, so whatever was open is not what the conversation is
+                # waiting on any more.
+                pending.clear()
+        if pending:
+            out.append(path.stem)
+    return out
+
+
+#: How much of a transcript's end is read looking for an unanswered question. Generous next to
+#: the few lines a parked turn can have left — a `stats`, a `tool_call`, and nothing else — and
+#: small enough that scanning every conversation on start costs nothing worth measuring.
+_TAIL_LINES = 40
+
+
 def search(agent_db: Path, query: str, limit: int = 40) -> list[dict]:
     """Find where something was said, across every conversation.
 

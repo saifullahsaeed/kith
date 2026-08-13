@@ -1,3 +1,4 @@
+import { useThreadRuntime } from "@assistant-ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronLeft, ChevronRight, CornerDownLeft, Pencil } from "lucide-react";
 
@@ -55,7 +56,29 @@ function Step({
  * survives the case that matters most — coming back to a conversation whose question was
  * asked while you were somewhere else.
  */
+/** The answers, written the way the person would have typed them.
+ *
+ *  Only used for a recovered question, where the answer travels as a message rather than as a
+ *  reply — so it has to carry its own question with it. A bare "Use each invoice date" arriving
+ *  on its own is unreadable a day later, and unanswerable by a turn that has to work out what it
+ *  was in aid of. */
+function asText(open: OpenQuestion, replies: Reply[]): string {
+  const lines = open.questions.map((q, i) => {
+    const reply = replies[i];
+    const said = reply?.skipped
+      ? "(you decide)"
+      : [reply?.chosen?.join(", "), reply?.text].filter(Boolean).join(" — ") || "(no answer)";
+    return `${q.question}\n${said}`;
+  });
+  return lines.join("\n\n");
+}
+
 export function AskPrompt({ conversationId }: { conversationId: string }) {
+  // Optional, because drawing the card does not need a runtime and only the recovered-question
+  // path does. Required, it threw "ThreadRuntime is not available" in every test that renders
+  // this on its own — a component that cannot be mounted without the whole thread around it is
+  // harder to test than it needs to be, for a dependency it uses on one branch.
+  const runtime = useThreadRuntime({ optional: true });
   const [open, setOpen] = useState<OpenQuestion | null>(null);
   const [replies, setReplies] = useState<Reply[]>([]);
   const [at, setAt] = useState(0);
@@ -97,14 +120,22 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
     async (final: Reply[]) => {
       if (!open || sending) return;
       setSending(true);
-      const went = await answerQuestion(open.id, final);
+      // A question recovered after a restart has nobody waiting on it — the turn that asked it
+      // died with the process. Posting the answer to `/answer` would set an event no thread is
+      // holding and the reply would go nowhere, which from this side looks exactly like the
+      // card working. Sent as an ordinary message it starts a turn, and that turn reads the
+      // conversation with the question in it, because the interrupted call was closed off on
+      // the way back up. See `questions.recover_interrupted`.
+      await answerQuestion(open.id, final);
+      if (open.interrupted) {
+        runtime?.append({ role: "user", content: [{ type: "text", text: asText(open, final) }] });
+      }
       // Cleared either way: if the server no longer has it, the turn moved on without us and
       // leaving the card up would invite answering something nobody is waiting for.
       setOpen(null);
       setSending(false);
-      if (!went) return;
     },
-    [open, sending],
+    [open, sending, runtime],
   );
 
   if (!open || open.questions.length === 0) return null;

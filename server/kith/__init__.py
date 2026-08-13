@@ -134,7 +134,16 @@ def create_app() -> APIFlask:
 
     config_store.init(CONFIG_DB_PATH)
     migrations.init(AGENT_DB_PATH)
+    # Questions the last process died holding. A parked turn is a daemon thread waiting on an
+    # in-memory event, so a restart took both and wrote nothing down — see
+    # `questions.recover_interrupted` for the measurements. Done here, before anything can
+    # serve a request, so the card is already back by the time the window reconnects.
     if _owns_background():
+        from kith.services import questions
+
+        recovered = questions.recover_interrupted()
+        if recovered:
+            print(f"[kith] recovered {recovered} unanswered question(s) from an interrupted turn")
         _start_background()
     print(f"[kith] config db: {CONFIG_DB_PATH}")
     print(f"[kith] agent db:  {AGENT_DB_PATH}")
