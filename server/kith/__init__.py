@@ -1,190 +1,61 @@
 """Kith — a small, independent Flask service.
 
-It talks to a local Ollama, owns the persona and chat parameters,
-splits reasoning from the answer, and streams both. The web UI is just one
-client; the API is documented with OpenAPI (Swagger UI at /docs) so anything can
-drive it.
+It talks to a local Ollama, owns the persona and chat parameters, splits reasoning from the
+answer, and streams both. The web UI is just one client; the API is documented with OpenAPI
+(Swagger UI at /docs) so anything can drive it.
+
+**This file holds no imports, and that is the point.**
+
+It used to build the application. `create_app`, the CORS policy, the background startup and
+the logging all lived here, above a header that imported APIFlask, every route module,
+`config`, the migrations, embeddings, the scheduler, the connection manager and the MCP
+manager. That is the composition root, and a composition root is entitled to reach into every
+layer — but Python runs a package's `__init__` before any module inside it, so *every* import
+of *anything* under `kith.` ran the whole of it.
+
+Measured, with the venv interpreter rather than by reading the graph::
+
+    import kith.domain.stall     ->  153 kith modules, 905 modules total, 0.68s
+                                     apiflask, flask, requests, sqlite3, yaml
+
+`domain/stall.py` is 90 lines of regex and set arithmetic whose own docstring says it needs no
+database, no clock and no IO. Importing it started a web framework.
+
+This is upstream of the layering work rather than part of it. A `kernel/` package that imports
+nothing is clean in the import graph and still pays for Flask at runtime, because reaching it
+means running this file first — so the extraction would have looked like it worked while
+changing nothing about what a module actually costs to load. It also quietly set the floor for
+every test in the suite, none of which can pay less than 0.68s and 905 modules to import
+anything at all.
+
+`create_app` now lives in `kith.app`, which is a module like any other and is loaded only by
+whoever asks for it. The accessor below keeps `from kith import create_app` working — that is
+what `server/app.py` and two tests say, and there is no reason to make them say something else
+to buy this. It resolves on attribute access, so the cost lands on the caller that wants an
+application and on nobody else.
 """
 
 from __future__ import annotations
 
-import os
-
-from apiflask import APIFlask
-from flask_cors import CORS
-
-from kith import settings
-from kith.api import auth, csp, spa
-from kith.api.routes import api
-from kith.config import AGENT_DB_PATH, CONFIG_DB_PATH
-from kith.infra.db import config_store, migrations
-from kith.services import embeddings, scheduler, tuning
-
-# The functions, not the modules. `kith.services.connections` re-exports a ConnectionManager
-# *instance* under the name `manager`, so `from kith.services.connections import manager`
-# gets the object and the call fails with AttributeError at startup — which it did.
-from kith.services.connections.manager import backfill_context_window_async
-from kith.services.mcp.manager import connect_async as connect_mcp_async
-from kith.services.persona import fragment_paths
+from typing import TYPE_CHECKING, Any
 
 __all__ = ["create_app"]
 
+if TYPE_CHECKING:
+    # For the type checker and for anything reading this file to find out where `create_app`
+    # went. Never executed, so it costs nothing at runtime — which is the entire exercise.
+    from kith.app import create_app
 
-#: The dev server, on both spellings of loopback. A page on the public internet
-#: cannot forge its Origin, so listing these costs nothing.
-_DEV_PORTS = (5173, 4173)
-_ALLOWED_ORIGINS = [f"http://{host}:{port}" for host in ("localhost", "127.0.0.1") for port in _DEV_PORTS]
 
+def __getattr__(name: str) -> Any:
+    """Resolve `kith.create_app` on demand (PEP 562).
 
-def _owns_background() -> bool:
-    """Whether this process is the one that should run the long-lived background work.
-
-    Building the app and owning background work were the same statement until a reloader
-    existed, and then they stopped being: `flask run --reload` re-executes the module, so
-    `app = create_app()` happens in *two* processes — the watcher that never serves a request,
-    and the child that does. Nothing here is idempotent across processes. `runner.ensure_loop`
-    guards on `self._thread`, which is per-process, so two processes means two schedulers
-    firing the same reminders and taking the same steps twice. `connect_async` spawns MCP
-    servers under `npx`, so it means two sets of those, and there is no `atexit` anywhere to
-    reap the ones the previous child left behind.
-
-    So it is decided here rather than left to luck: with the reloader on, only the child that
-    Werkzeug marks as the serving process owns any of it. Without the reloader — packaged,
-    Docker, a plain `python app.py`, the test suite — there is only one process, and it does.
+    Only `create_app`. A general "forward anything to `kith.app`" would put the eager import
+    back the first time someone touched an unrelated attribute, and would turn a typo into a
+    Flask startup instead of an `AttributeError`.
     """
-    if os.environ.get("KITH_RELOAD") != "1":
-        return True
-    return os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    if name == "create_app":
+        from kith.app import create_app
 
-
-def _start_background() -> None:
-    """The work that outlives a request: embeddings, the context-window probe, MCP servers,
-    and the scheduler.
-
-    All off the request path deliberately — each one is either a network call or a subprocess
-    that downloads on first run, and none of them may stand between launching and answering.
-
-    `KITH_NO_BACKGROUND` skips the scheduler only — the one thing a reloader restart can do
-    real damage with, since it restarts mid-step and can re-fire a reminder that already fired.
-
-    It deliberately does *not* skip MCP any more. It did at first, on the grounds that a reload
-    drops MCP child processes without reaping them, so each save leaks an `npx`. True, but the
-    wrong trade by a wide margin: `agent_loop` reads `mcp_manager.snapshot()`, which is empty
-    until something has connected, so skipping this silently handed the model **no MCP tools at
-    all** for a whole dev session. A leaked process is untidy; a model quietly missing half its
-    tools is a different program.
-    """
-    embeddings.backfill_async(AGENT_DB_PATH)  # embed any memories that predate vectors
-    # Learn the model's context window if it was chosen before that was recorded.
-    backfill_context_window_async(CONFIG_DB_PATH)
-    # Bring up any MCP servers that are switched on, in a thread: one installed by npx or uvx
-    # downloads on first run, and that must not be what stands between launching and answering.
-    connect_mcp_async(CONFIG_DB_PATH)
-    if os.environ.get("KITH_NO_BACKGROUND") == "1":
-        print("[kith] background: scheduler off (KITH_NO_BACKGROUND); MCP still connecting")
-        return
-    # The one thing that still runs unasked: checking whether a reminder or a schedule has
-    # come due. Started here rather than at import, so a test suite never inherits it.
-    scheduler.start()
-
-
-def create_app() -> APIFlask:
-    app = APIFlask(
-        __name__,
-        title="Kith",
-        version="1.0.0",
-        docs_path="/docs",
-        spec_path="/openapi.json",
-    )
-    app.description = (
-        "Kith — a local AI you work with. Talks to Ollama, owns the persona "
-        "and chat config, and streams reasoning + answer as NDJSON."
-    )
-
-    # NOT "*", which is what this was. A wildcard here means every website you
-    # visit while Kith is running can read his files, his config and his memory,
-    # and can POST as you — a page at evil.example was answered with
-    # `Access-Control-Allow-Origin: https://evil.example` and got the lot. Being
-    # bound to loopback is no protection: the browser is on loopback too.
-    #
-    # Nothing legitimate needed the wildcard. The desktop app serves the interface
-    # from this same process, so it is same-origin and sends no CORS preflight at
-    # all; the only real cross-origin caller is the Vite dev server. curl and other
-    # tools send no Origin header and are unaffected by any of this.
-    CORS(app, resources={r"/api/*": {"origins": _ALLOWED_ORIGINS}})
-
-    app.register_blueprint(api, url_prefix="/api")
-
-    # Every API call needs the shared secret from here on. See kith.api.auth for why CORS
-    # and a loopback bind were not enough: CORS stops a page reading the reply, not sending
-    # the request, and every process running as you is on loopback too.
-    auth.register(app, settings.DATA_DIR)
-
-    # The desktop app serves the UI from this process so the browser origin and
-    # the API origin are the same one. Off unless KITH_UI_DIST is set, which is
-    # how the Docker stack (nginx in front) keeps its current behaviour.
-    served = spa.register(app)
-    if served:
-        # Hashes the bundle's inline theme script, so the pre-paint dark class keeps
-        # working instead of being blocked into a white flash on every launch.
-        # The token script goes in the page on the way out, so its hash has to be in the
-        # policy too — an inline script the CSP has not hashed is silently not run, and the
-        # page then loads with no token and 401s every call.
-        csp.register(app, served, extra_inline=[spa.token_script()])
-
-    config_store.init(CONFIG_DB_PATH)
-    migrations.init(AGENT_DB_PATH)
-    # Questions the last process died holding. A parked turn is a daemon thread waiting on an
-    # in-memory event, so a restart took both and wrote nothing down — see
-    # `questions.recover_interrupted` for the measurements. Done here, before anything can
-    # serve a request, so the card is already back by the time the window reconnects.
-    if _owns_background():
-        from kith.services import questions
-
-        recovered = questions.recover_interrupted()
-        if recovered:
-            print(f"[kith] recovered {recovered} unanswered question(s) from an interrupted turn")
-        _start_background()
-    print(f"[kith] config db: {CONFIG_DB_PATH}")
-    print(f"[kith] agent db:  {AGENT_DB_PATH}")
-    print(f"[kith] embeddings: {tuning.value('embed_model')}")
-    print(f"[kith] web ui:   {served or '(not served — the vite dev server is in front)'}")
-    if served:
-        print(
-            f"[kith] csp:      script hashes for {len(csp._inline_scripts(served / 'index.html'))} inline script(s)"
-        )
-    _log_configuration()
-    _log_persona()
-    return app
-
-
-def _log_configuration() -> None:
-    """Print every effective setting.
-
-    Nearly every confusing failure in this project has been a configuration one — a
-    host that does not resolve, a path that is not set, a search provider forced to
-    something unexpected. Printing the resolved values means the log answers that
-    before anyone starts reading code.
-    """
-    from kith.services import tuning
-
-    # Joined here rather than inside `settings.describe()`. Both halves belong in one entry,
-    # but `settings` is the bottom of the tree and reaching up to `tuning` for the second half
-    # is what forced that import to be written inside the function to hide it from Python.
-    for key, value in {**settings.describe(), "tunables": tuning.describe()}.items():
-        if isinstance(value, dict):
-            print(f"[kith] {key}:")
-            for inner, detail in value.items():
-                print(f"[kith]     {inner}: {detail}")
-        else:
-            print(f"[kith] {key}: {value}")
-
-
-def _log_persona() -> None:
-    """Print which persona fragments are in play, for transparency at startup."""
-    if settings.SYSTEM_PROMPT_OVERRIDE:
-        print("[kith] persona: using KITH_SYSTEM env override")
-        return
-    fragments = fragment_paths()
-    names = ", ".join(path.name for path in fragments) or "(none)"
-    print(f"[kith] persona: {len(fragments)} fragment(s) merged — {names}")
+        return create_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
