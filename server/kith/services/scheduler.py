@@ -14,11 +14,12 @@ from __future__ import annotations
 import threading
 import traceback
 
-from kith.config import AGENT_DB_PATH, default_config
+from kith.config import default_config
 from kith.domain import clock
 from kith.infra.db import repositories as repo
 from kith.services import conversations, session_context
 from kith.services.activity import feed
+from kith.settings import AGENT_DB_PATH
 
 #: How often to ask. Reminders are minute-grained at best, so this is comfortably finer than
 #: anything anyone can set, and cheap: two indexed reads against SQLite.

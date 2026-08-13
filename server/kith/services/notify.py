@@ -68,8 +68,8 @@ _TITLES: dict[str, str] = {
 
 
 def _store():
-    from kith.config import CONFIG_DB_PATH
     from kith.infra.db import config_store
+    from kith.settings import CONFIG_DB_PATH
 
     return CONFIG_DB_PATH, config_store
 

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
 from typing import Any
 
 from kith import settings
+from kith.domain.chat import Config
 from kith.infra.db import config_store
 from kith.services import skills
 from kith.services.persona import load_persona
@@ -29,38 +29,12 @@ def ollama_host() -> str:
     return str(tuning.value("ollama_host"))
 
 
-DATA_DIR = settings.DATA_DIR
-CONFIG_DB_PATH = DATA_DIR / "config.db"  # server configuration
-AGENT_DB_PATH = DATA_DIR / "agent.db"  # the agent's memory/workspace
-
-
-@dataclass(frozen=True)
-class Config:
-    """A resolved set of chat parameters."""
-
-    model: str
-    num_ctx: int
-    num_predict: int
-    system: str
-    think: bool
-    #: How hard to think before answering: "" (leave it to the provider), "none", "minimal",
-    #: "low", "medium", "high", "xhigh" or "max" — OpenRouter's full reasoning-effort scale
-    #: (`kith.llm.openai_compat.REASONING_EFFORTS`). Only sent to models whose OpenRouter
-    #: entry lists `reasoning` in supported_parameters — sending it elsewhere is a 400 on
-    #: the whole request, not a field quietly ignored.
-    effort: str = ""
-    #: OpenRouter stickiness for this conversation, so its rounds land on one warm cache.
-    #: Blank falls back to the install-wide id.
-    session_id: str = ""
-    base_url: str = ""  # OpenAI-compatible cloud endpoint; blank = local Ollama
-    api_key: str = ""  # cloud API key; when set (with base_url), chat runs in the cloud
-    #: How many tokens this model can hold, or 0 when nobody knows.
-    #:
-    #: A fact about the model rather than a setting, which is why it is resolved here and is
-    #: not in the tuning registry. 0 is load-bearing and must never be replaced by a guess: a
-    #: window guessed too high never fires and every turn 400s; guessed too low, it truncates
-    #: work that would have fitted. "I don't know" has to stay expressible.
-    context_window: int = 0
+# The database paths were declared here and now live in `kith/settings.py`, which is where
+# the folder they hang off already came from. 29 of this module's 43 imports were those two
+# constants, and ten of them were `infra/` and `llm/` — layers that must not import this one,
+# because `default_config` below merges the persona with the skill index and therefore reaches
+# into two services. They were all written inside function bodies to hide the cycle from
+# Python. A path is not a policy, and asking for one should not cost you the other.
 
 
 def default_config() -> Config:
@@ -70,7 +44,7 @@ def default_config() -> Config:
     changed at runtime. The persona is merged from the ``persona/`` folder on
     each call; ``KITH_SYSTEM`` bypasses it with a single inline prompt.
     """
-    stored = config_store.load_settings(CONFIG_DB_PATH)
+    stored = config_store.load_settings(settings.CONFIG_DB_PATH)
     return Config(
         model=_str_setting("KITH_MODEL", stored, "model", "qwen3:4b"),
         num_ctx=_int_setting("KITH_NUM_CTX", stored, "num_ctx", 40960),
@@ -155,7 +129,7 @@ def model_capabilities() -> dict:
     worse than not offering one.
     """
     unknown = {"known": False, "images": False, "files": False, "reasoning": False, "modalities": ["text"]}
-    stored = config_store.load_settings(CONFIG_DB_PATH)
+    stored = config_store.load_settings(settings.CONFIG_DB_PATH)
     raw = stored.get("model_capabilities")
     if not raw:
         return unknown

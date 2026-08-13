@@ -13,7 +13,7 @@ values this module now forwards.
 
 from __future__ import annotations
 
-from kith.config import Config
+from kith.domain.chat import Config
 from kith.llm.openai_compat import REASONING_EFFORTS, _reasoning_options
 
 

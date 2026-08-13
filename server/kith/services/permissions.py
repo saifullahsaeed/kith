@@ -263,8 +263,8 @@ _next_id = 0
 
 
 def _store():
-    from kith.config import CONFIG_DB_PATH
     from kith.infra.db import config_store
+    from kith.settings import CONFIG_DB_PATH
 
     return CONFIG_DB_PATH, config_store
 
@@ -514,9 +514,9 @@ def _tell_them(request: Request) -> None:
     produced it.
     """
     try:
-        from kith.config import AGENT_DB_PATH
         from kith.infra.db import repositories as repo
         from kith.services import session_context
+        from kith.settings import AGENT_DB_PATH
 
         conversation_id = session_context.current()
         if not conversation_id:
@@ -682,8 +682,8 @@ def linked_project_roots() -> tuple[Path, ...]:
         return _linked[1]
     roots: list[Path] = []
     try:
-        from kith.config import AGENT_DB_PATH
         from kith.infra.db import repositories as repo
+        from kith.settings import AGENT_DB_PATH
 
         for directory in repo.projects.linked_directories(AGENT_DB_PATH):
             try:

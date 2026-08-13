@@ -14,9 +14,9 @@ import threading
 from collections import deque
 from datetime import UTC, datetime
 
-from kith.config import AGENT_DB_PATH
 from kith.infra.db import repositories as repo
 from kith.services import tuning
+from kith.settings import AGENT_DB_PATH
 
 #: How much of an argument survives into a feed line.
 _ARG_CHARS = 160

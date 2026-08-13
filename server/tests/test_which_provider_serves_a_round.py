@@ -23,7 +23,7 @@ bill could not be attributed to a host. OpenRouter sends it on every chunk.
 
 from __future__ import annotations
 
-from kith.config import Config
+from kith.domain.chat import Config
 from kith.llm.openai_compat import _routing_options, _stats
 from kith.services import tuning
 

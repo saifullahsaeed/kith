@@ -8,7 +8,7 @@ opening a socket, the same way `_stats` is checked without a real response.
 
 from __future__ import annotations
 
-from kith.config import Config
+from kith.domain.chat import Config
 from kith.llm.openai_compat import _routing_options
 from kith.services import tuning
 

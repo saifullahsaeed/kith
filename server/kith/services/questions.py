@@ -147,8 +147,8 @@ def _tell_them(conversation_id: str, asked: list[dict]) -> None:
     down the tool call that produced it. He still asked; the card is still there.
     """
     try:
-        from kith.config import AGENT_DB_PATH
         from kith.infra.db import repositories as repo
+        from kith.settings import AGENT_DB_PATH
 
         first = asked[0]["question"]
         more = f" (+{len(asked) - 1} more)" if len(asked) > 1 else ""

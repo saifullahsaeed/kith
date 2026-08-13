@@ -24,8 +24,8 @@ from __future__ import annotations
 import time
 
 from kith import autonomy
-from kith.config import AGENT_DB_PATH
 from kith.infra.db import repositories as repo
+from kith.settings import AGENT_DB_PATH
 
 # Each case is a self-contained work task with a rubric we can eyeball against
 # the resulting task_detail. Keep them small and gradeable.

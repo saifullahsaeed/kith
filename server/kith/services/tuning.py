@@ -18,9 +18,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from kith.config import CONFIG_DB_PATH
 from kith.domain.tuning import GROUPS, TUNABLES, Tunable, for_key
 from kith.infra.db import config_store
+from kith.settings import CONFIG_DB_PATH
 
 #: Stored keys are prefixed so they cannot collide with chat config ("model",
 #: "think") in the same key/value table.

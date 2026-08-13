@@ -35,7 +35,7 @@ from typing import Any
 import requests
 
 from kith import settings
-from kith.config import Config, default_config
+from kith.domain.chat import Config
 from kith.domain.search import SearchKind
 from kith.infra import workspace as sandbox
 from kith.infra.db import config_store
@@ -73,12 +73,19 @@ _SEARX_BLOCKED_TTL = 600.0
 _searx_blocked_until = 0.0
 
 
-def search(query: str, limit: int = 5) -> list[dict]:
-    """Search the web through the first provider that actually answers."""
+def search(query: str, config: Config, limit: int = 5) -> list[dict]:
+    """Search the web through the first provider that actually answers.
+
+    `config` is passed in rather than resolved here, and that is the only reason this module
+    no longer imports `kith.config`. Every other function below already took it as a
+    parameter — this one fetched it, which meant `infra/` importing a module that merges the
+    persona with the skill index in order to find out which search provider to try first.
+    The caller is `tools/web.py`, an adapter, and resolving a request's parameters is exactly
+    what an adapter is for.
+    """
     global _searx_blocked_until
 
     limit = max(1, min(int(limit or 5), _MAX_RESULTS))
-    config = default_config()
     misses: list[str] = []
 
     for name in _order(config):
@@ -130,8 +137,8 @@ def _order(config: Config) -> list[str]:
 
 def _chosen(config: Config) -> SearchKind | None:
     """The saved preference, or None when it was left on auto."""
-    from kith.config import CONFIG_DB_PATH
     from kith.services.search_setup import KIND_KEY, _as_kind
+    from kith.settings import CONFIG_DB_PATH
 
     if _PROVIDER and _PROVIDER != "auto":
         return _as_kind(_PROVIDER)
@@ -189,8 +196,8 @@ def _searx(query: str, limit: int, config: Config) -> list[dict]:
 
 def _searx_url() -> str:
     """The chosen instance, or the configured default."""
-    from kith.config import CONFIG_DB_PATH
     from kith.services.search_setup import URL_KEY
+    from kith.settings import CONFIG_DB_PATH
 
     stored = str(config_store.load_settings(CONFIG_DB_PATH).get(URL_KEY) or "")
     return (stored or settings.SEARCH_URL).rstrip("/")

@@ -146,8 +146,8 @@ def _checkpoint_before_change(trigger: str) -> None:
         result = _take_checkpoint(root_here, trigger)
         if result is None:
             return
-        from kith.config import AGENT_DB_PATH
         from kith.infra.db.repositories import checkpoints as checkpoint_repo
+        from kith.settings import AGENT_DB_PATH
 
         checkpoint_repo.add_checkpoint(
             AGENT_DB_PATH,

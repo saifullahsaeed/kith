@@ -7,11 +7,11 @@ from pathlib import Path
 from flask import jsonify, request, send_file
 
 from kith.api.blueprint import api
-from kith.config import AGENT_DB_PATH
 from kith.infra import default_app
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import handoff
+from kith.settings import AGENT_DB_PATH
 
 
 def _anchor(path: str, project_id: str | None) -> str:

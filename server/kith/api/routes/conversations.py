@@ -5,9 +5,9 @@ from __future__ import annotations
 from flask import jsonify, request
 
 from kith.api.blueprint import api
-from kith.config import AGENT_DB_PATH
 from kith.infra.db import repositories as repo
 from kith.services import conversations
+from kith.settings import AGENT_DB_PATH
 
 
 @api.get("/conversations")

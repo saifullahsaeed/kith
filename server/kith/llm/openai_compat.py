@@ -23,7 +23,7 @@ from typing import Any
 
 import requests
 
-from kith.config import Config
+from kith.domain.chat import Config
 from kith.llm import budget, caching
 
 #: OpenRouter's full reasoning-effort scale, descending. Confirmed against their own
@@ -73,8 +73,8 @@ def _refuses_reasoning(response: requests.Response) -> bool:
 
 def _session_id() -> str:
     """The persisted stickiness id, read through the config store."""
-    from kith.config import CONFIG_DB_PATH
     from kith.infra.db import config_store
+    from kith.settings import CONFIG_DB_PATH
 
     stored = config_store.load_settings(CONFIG_DB_PATH)
     return caching.session_id(

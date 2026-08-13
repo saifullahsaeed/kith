@@ -16,7 +16,6 @@ from flask_cors import CORS
 from kith import settings
 from kith.api import auth, csp, spa
 from kith.api.routes import api
-from kith.config import AGENT_DB_PATH, CONFIG_DB_PATH
 from kith.infra.db import config_store, migrations
 from kith.services import embeddings, scheduler, tuning
 
@@ -26,6 +25,7 @@ from kith.services import embeddings, scheduler, tuning
 from kith.services.connections.manager import backfill_context_window_async
 from kith.services.mcp.manager import connect_async as connect_mcp_async
 from kith.services.persona import fragment_paths
+from kith.settings import AGENT_DB_PATH, CONFIG_DB_PATH
 
 __all__ = ["create_app"]
 

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from kith import tools
-from kith.config import Config
+from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
 from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars

@@ -95,7 +95,7 @@ class TestServingTheBytes:
 
         db = tmp_path / "config.db"
         config_store.init(db)
-        monkeypatch.setattr("kith.config.CONFIG_DB_PATH", db, raising=False)
+        monkeypatch.setattr("kith.settings.CONFIG_DB_PATH", db, raising=False)
         permissions.revoke_all()
 
         outside = tmp_path.parent / "private.png"

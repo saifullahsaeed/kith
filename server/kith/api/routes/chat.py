@@ -15,7 +15,6 @@ from flask import Response, jsonify
 
 from kith.api.blueprint import api
 from kith.config import (
-    AGENT_DB_PATH,
     default_config,
     merge_overrides,
     model_capabilities,
@@ -42,6 +41,7 @@ from kith.services import (
 )
 from kith.services.activity import describe_call, short_args
 from kith.services.agent_loop import stream_agent
+from kith.settings import AGENT_DB_PATH
 
 #: What a conversation is for.
 #:

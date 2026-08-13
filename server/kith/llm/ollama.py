@@ -14,7 +14,7 @@ from typing import Any
 
 import requests
 
-from kith.config import Config
+from kith.domain.chat import Config
 from kith.domain.think_splitter import ThinkSplitter
 
 _NS_PER_SECOND = 1_000_000_000

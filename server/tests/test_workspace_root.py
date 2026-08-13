@@ -33,7 +33,7 @@ def isolated(tmp_path, monkeypatch):
     db = tmp_path / "config.db"
     config_store.init(db)
     # The module imports kith.config inside the call, so patching the attribute is enough.
-    monkeypatch.setattr("kith.config.CONFIG_DB_PATH", db, raising=False)
+    monkeypatch.setattr("kith.settings.CONFIG_DB_PATH", db, raising=False)
     monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", "", raising=False)
     current = tmp_path / "current"
     current.mkdir()
@@ -142,7 +142,7 @@ class TestChoosingOne:
 class TestFallingBack:
     def test_no_config_database_means_the_default(self, tmp_path, monkeypatch):
         monkeypatch.setattr(workspace.paths.settings, "WORKSPACE_DIR", "", raising=False)
-        monkeypatch.setattr("kith.config.CONFIG_DB_PATH", tmp_path / "absent.db", raising=False)
+        monkeypatch.setattr("kith.settings.CONFIG_DB_PATH", tmp_path / "absent.db", raising=False)
         # First run, or a migration in flight. Answering with the default beats taking the
         # whole app down over a folder setting.
         assert workspace.configured_root() == workspace.DEFAULT_ROOT

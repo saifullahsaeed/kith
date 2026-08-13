@@ -52,8 +52,8 @@ def never_the_real_database(tmp_path_factory, monkeypatch):
 
     Chasing the call sites is the wrong fix — `test_stopping_a_step.py` alone builds six
     runners and patches the path once, and the next one written will forget too. Thirteen
-    modules do `from kith.config import AGENT_DB_PATH`, which copies the value, so patching
-    `kith.config` alone does nothing; every holder gets its own patch. A test that wants its
+    modules do `from kith.settings import AGENT_DB_PATH`, which copies the value, so patching
+    `kith.settings` alone does nothing; every holder gets its own patch. A test that wants its
     own database still monkeypatches over this, which is what every existing one already does.
     """
     safe = tmp_path_factory.mktemp("never-real") / "agent.db"

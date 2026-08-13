@@ -12,10 +12,10 @@ different modules used to answer separately.
 
 from __future__ import annotations
 
-from kith.config import CONFIG_DB_PATH
 from kith.services.connections import providers, readiness
 from kith.services.connections.manager import ConnectionManager, ProbeResult
 from kith.services.search_setup import SearchManager
+from kith.settings import CONFIG_DB_PATH
 
 #: The app has one configuration database, so one manager over it. Constructed here
 #: rather than per-request: it holds no mutable state, only the path it writes to.

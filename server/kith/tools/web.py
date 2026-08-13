@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kith.config import default_config
 from kith.infra import websearch
 from kith.infra import workspace as sandbox
 from kith.tools.params import INT, STR
@@ -20,7 +21,7 @@ from kith.tools.registry import tool
     required=("query",),
 )
 def web_search(path: Path, args: dict):
-    return websearch.search(args["query"], args.get("limit") or 5)
+    return websearch.search(args["query"], default_config(), args.get("limit") or 5)
 
 
 @tool(

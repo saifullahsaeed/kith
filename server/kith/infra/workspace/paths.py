@@ -53,8 +53,8 @@ def configured_root() -> Path:
     """
     stored: object = None
     try:
-        from kith.config import CONFIG_DB_PATH
         from kith.infra.db import config_store
+        from kith.settings import CONFIG_DB_PATH
 
         stored = config_store.load_settings(CONFIG_DB_PATH).get(ROOT_KEY)
     except Exception:
@@ -98,9 +98,9 @@ def base_dir() -> Path:
     breaking the file operation that asked.
     """
     try:
-        from kith.config import AGENT_DB_PATH
         from kith.infra.db import repositories as repo
         from kith.services import session_context
+        from kith.settings import AGENT_DB_PATH
 
         # The task in hand first, the conversation second. Only the conversation was
         # consulted for a long time, and that made linking a folder work in chat and do
@@ -157,8 +157,8 @@ def set_root(raw: str) -> Path:
     if chosen != previous:
         _carry_records(previous, chosen)
 
-    from kith.config import CONFIG_DB_PATH
     from kith.infra.db import config_store
+    from kith.settings import CONFIG_DB_PATH
 
     config_store.update_settings(CONFIG_DB_PATH, {ROOT_KEY: str(chosen)})
     return chosen

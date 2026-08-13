@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import pytest
 
-from kith.config import Config
+from kith.domain.chat import Config
 from kith.services import conversations, history
 from kith.services.history import compact
 

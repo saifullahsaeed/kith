@@ -50,6 +50,12 @@ from pathlib import Path
 #: the tree: `settings.py` reads the environment and nothing else, so it is a kernel citizen,
 #: while `config.py` builds a chat request out of the persona and the skill index, which is
 #: orchestration wearing a configuration name.
+#:
+#: `app` is ranked above every adapter because it is the composition root — it wires the
+#: layers together, so reaching into all of them is its job. It is ranked rather than left
+#: out: an unranked package is skipped as importer *and* as target, so omitting it would
+#: hand `kith/app.py` the same silent exemption `kith/__init__.py` earns by being empty,
+#: except that `app.py` is not empty and would stop being checked at all.
 RANK = {
     "kernel": 0,
     "settings": 0,
@@ -61,7 +67,21 @@ RANK = {
     "schemas": 3,
     "api": 4,
     "tools": 4,
+    "app": 5,
 }
+
+#: Packages that share a rank and still may not import each other.
+#:
+#: Equal rank means "neither is above the other", which the downward rule cannot express: it
+#: only ever fires on `RANK[there] > RANK[here]`, so a sideways import is invisible to it.
+#: For most peers that is right — two modules in `services/` calling each other is ordinary.
+#: For these it is not, and the pairing has to be stated separately or the docstring above is
+#: describing a rule nothing enforces.
+#:
+#: `infra` and `llm` are peers by construction: storage and the provider transport. Neither
+#: is built on the other, and an edge either way is the beginning of a cycle that the rank
+#: rule would never report.
+PEERS: tuple[tuple[str, str], ...] = (("infra", "llm"),)
 
 SOURCE = Path(__file__).resolve().parent.parent / "kith"
 
@@ -72,10 +92,8 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:
 #: Each line is a tranche's worth of work, in the order they are being done:
 #:
-#: * `infra -> config` and `llm -> config` are one fix — `AGENT_DB_PATH` and
-#:   `CONFIG_DB_PATH` are pure constants trapped in a module that also imports two services.
-#: * `infra -> services` is `session_context`, `permissions` and `changes`, which are runtime
-#:   primitives filed as orchestration.
+#: * `infra -> services` and `llm -> services` are `session_context`, `permissions`,
+#:   `changes` and `tuning` — runtime primitives filed as orchestration.
 #: * `services -> tools` is the five edges that have to invert before `tools/` can be an
 #:   adapter: the loop takes a tool host rather than importing the registry, and
 #:   `brain/kinds.py` stops reaching into a tool module for two private functions.
@@ -84,20 +102,32 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   three *private* functions — out of `api/routes/chat.py`. Not a slip: a reminder firing
 #:   runs the same turn a typed message does, so that machinery was never route-shaped. It
 #:   retires when the turn moves out of the route, not before.
+#: * `infra <-> llm` are the two peer edges, and they were invisible until `PEERS` existed:
+#:   the rank rule only ever fires downward-to-upward, so two packages declared equal could
+#:   import each other freely while the docstring said they must not. `websearch` reaches for
+#:   the OpenRouter transport to run a search through it; `openai_compat` reaches for
+#:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
+#:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far:
+#: Struck off so far, 38 -> 27:
 #:
-#: * `settings -> services`, which was `describe()` fetching the tunables for the startup
-#:   log. The caller joins the two halves now.
+#: * `settings -> services` (1), which was `describe()` fetching the tunables for the
+#:   startup log. The caller joins the two halves now.
+#: * `infra -> config` (7) and `llm -> config` (3), which were three separate things wearing
+#:   one name. Six sites wanted `AGENT_DB_PATH` or `CONFIG_DB_PATH`, now in `settings.py`
+#:   where the folder they hang off already lived. Three wanted the `Config` dataclass, now
+#:   `domain/chat.py` — a frozen dataclass was costing three import cycles. One, `websearch`,
+#:   called `default_config()`, and every other function in that file already took the config
+#:   as a parameter; now `search` does too and its adapter resolves it.
 ALLOWED: dict[tuple[str, str], int] = {
     ("infra", "services"): 16,
-    ("infra", "config"): 7,
     ("services", "tools"): 5,
-    ("llm", "config"): 3,
     ("llm", "services"): 2,
     ("domain", "services"): 2,
     ("domain", "infra"): 1,
     ("services", "api"): 1,
+    ("infra", "llm"): 1,
+    ("llm", "infra"): 1,
 }
 
 
@@ -151,9 +181,14 @@ def _edges() -> dict[tuple[str, str], list[str]]:
                 there = _package(target)
                 if there == here or there not in RANK:
                     continue
-                if RANK[there] > RANK[here]:
+                banned = RANK[there] > RANK[here] or (here, there) in _FORBIDDEN_PEERS
+                if banned:
                     found[(here, there)].append(f"{path.relative_to(SOURCE.parent)}:{node.lineno}")
     return dict(found)
+
+
+#: Both directions of every pair in `PEERS`, since neither may import the other.
+_FORBIDDEN_PEERS = frozenset(pair for a, b in PEERS for pair in ((a, b), (b, a)))
 
 
 def test_no_import_points_up_a_layer():

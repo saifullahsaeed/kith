@@ -86,6 +86,23 @@ def _number(name: str, default: int) -> int:
 #: Databases. Overridable so a packaged app can put them somewhere else again.
 DATA_DIR = Path(_text("KITH_DATA_DIR") or _DEFAULT_DATA_DIR)
 
+#: Server configuration — chat settings, the tunables, the connection, the MCP server list.
+CONFIG_DB_PATH = DATA_DIR / "config.db"
+
+#: The agent's own memory: tasks, projects, notes, messages, the flight recorder.
+AGENT_DB_PATH = DATA_DIR / "agent.db"
+
+# These two lived in `kith/config.py` and are here because of what else that module does.
+# It is named like a configuration leaf, and 29 of its 43 imports are these two constants —
+# but it also builds `Config`, which means merging the persona with the skill index, which
+# means importing two services. So the ten modules in `infra/` and `llm/` that wanted a
+# path were importing orchestration to get it, and had to write the import inside a
+# function body to stop Python noticing the cycle.
+#
+# A path is not a policy. Nothing about knowing where the database is requires knowing how
+# a chat request is assembled, and this file — which reads the environment and imports
+# nothing — is where the answer already came from.
+
 #: The built UI to serve from this process. Empty = something else serves it
 #: (the Vite dev server), and the SPA routes are not registered at all.
 #:

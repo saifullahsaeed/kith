@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from kith.api.blueprint import api
-from kith.config import CONFIG_DB_PATH, default_config, to_wire
+from kith.config import default_config, to_wire
 from kith.infra.db import config_store
 from kith.schemas import (
     ConfigSchema,
 )
+from kith.settings import CONFIG_DB_PATH
 
 _SETTING_KEYS = {
     "model": "model",

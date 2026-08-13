@@ -28,7 +28,7 @@ def home_and_project(tmp_path, monkeypatch, db):
     project = tmp_path / "Desktop" / "the-app"
     project.mkdir(parents=True)
     monkeypatch.setattr(workspace.paths, "configured_root", lambda: home)
-    monkeypatch.setattr("kith.config.AGENT_DB_PATH", db)
+    monkeypatch.setattr("kith.settings.AGENT_DB_PATH", db)
 
     row = repo.projects.add_project(db, "The App", "an app", directory=str(project))
     return {"home": home, "project": project, "id": int(row["id"]), "db": db}

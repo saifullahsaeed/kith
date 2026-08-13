@@ -11,10 +11,10 @@ from __future__ import annotations
 from flask import jsonify, request
 
 from kith.api.blueprint import api
-from kith.config import CONFIG_DB_PATH
 from kith.domain.mcp import MCPServer
 from kith.services import tuning
 from kith.services.mcp import manager
+from kith.settings import CONFIG_DB_PATH
 
 
 def _timeouts() -> tuple[float, float]:

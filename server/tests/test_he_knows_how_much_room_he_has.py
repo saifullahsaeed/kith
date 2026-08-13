@@ -20,21 +20,30 @@ from dataclasses import replace
 
 import pytest
 
-from kith.config import CONTEXT_KEY, Config, default_config, merge_overrides
-
 #: The manager *module*. `from kith.services.connections import manager` gives the
 #: ConnectionManager instance the package re-exports under that name, not the module — the
 #: same shadowing that broke `create_app` at startup an hour ago, walked into twice.
+#:
+#: The lookup needs the import above it, and did not have one. It worked because
+#: `kith/__init__.py` used to build the whole application on any `import kith.…`, so all 153
+#: modules were in `sys.modules` before a test file was read — this line was reading a module
+#: some *other* test had caused to load. Now that the package root imports nothing, it is a
+#: `KeyError` unless this file says what it needs. `import x.y.z as name` is not the fix: the
+#: package shadows the submodule with the instance, which is the whole reason for the lookup.
+import kith.services.connections.manager  # noqa: F401 - puts the module in sys.modules
+from kith.config import CONTEXT_KEY, default_config, merge_overrides
+from kith.domain.chat import Config
+
 MANAGER = sys.modules["kith.services.connections.manager"]
 
 
 @pytest.fixture
 def cloud(config_db, monkeypatch):
     """A stored cloud connection whose settings we can rewrite per test."""
-    import kith.config as config_module
+    import kith.settings as settings_module
     from kith.infra.db import config_store
 
-    monkeypatch.setattr(config_module, "CONFIG_DB_PATH", config_db)
+    monkeypatch.setattr(settings_module, "CONFIG_DB_PATH", config_db)
     for key in ("KITH_BASE_URL", "KITH_MODEL", "KITH_NUM_CTX"):
         monkeypatch.delenv(key, raising=False)
 
@@ -128,10 +137,10 @@ class TestTheBackfill:
     def test_it_writes_the_pair_that_the_reader_expects(self, config_db, monkeypatch):
         """Adoption and the backfill must agree on the shape, or one of them writes a record
         the other silently reads as unknown."""
-        import kith.config as config_module
+        import kith.settings as settings_module
         from kith.infra.db import config_store
 
-        monkeypatch.setattr(config_module, "CONFIG_DB_PATH", config_db)
+        monkeypatch.setattr(settings_module, "CONFIG_DB_PATH", config_db)
         for key in ("KITH_BASE_URL", "KITH_MODEL"):
             monkeypatch.delenv(key, raising=False)
         config_store.update_settings(
@@ -153,12 +162,12 @@ class TestTheBackfill:
     def test_the_backfill_leaves_a_record_the_reader_accepts(self, config_db, monkeypatch):
         """End to end, with the catalogue stubbed: what the backfill writes must be what
         `default_config` reads back, or the two halves are correct and useless."""
-        import kith.config as config_module
+        import kith.settings as settings_module
         from kith.domain.connection import ModelInfo
         from kith.infra.db import config_store
         from kith.services.connections import providers
 
-        monkeypatch.setattr(config_module, "CONFIG_DB_PATH", config_db)
+        monkeypatch.setattr(settings_module, "CONFIG_DB_PATH", config_db)
         for key in ("KITH_BASE_URL", "KITH_MODEL"):
             monkeypatch.delenv(key, raising=False)
         config_store.update_settings(

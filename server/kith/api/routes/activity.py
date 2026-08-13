@@ -8,10 +8,10 @@ import queue
 from flask import Response, jsonify, request
 
 from kith.api.blueprint import api
-from kith.config import AGENT_DB_PATH
 from kith.infra.db import repositories as repo
 from kith.services.activity import feed
 from kith.services.agent_loop import usage_snapshot
+from kith.settings import AGENT_DB_PATH
 
 
 @api.get("/activity/status")

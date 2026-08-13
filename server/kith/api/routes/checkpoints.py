@@ -11,9 +11,9 @@ from __future__ import annotations
 from flask import jsonify
 
 from kith.api.blueprint import api
-from kith.config import AGENT_DB_PATH
 from kith.infra import workspace
 from kith.services import checkpoints
+from kith.settings import AGENT_DB_PATH
 
 
 @api.get("/conversations/<conversation_id>/checkpoints")
