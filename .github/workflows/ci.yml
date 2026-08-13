@@ -1,0 +1,64 @@
+# What `./check` does, on every push and pull request.
+#
+# Deliberately a thin wrapper around the script rather than a re-listing of the steps. The
+# script is the one people run locally, and a CI file that spells the same steps out again is a
+# second source of truth that drifts — the failure mode being a green pull request that fails
+# the moment someone runs `./check` on their own machine.
+#
+# Two jobs rather than one, because they need different toolchains and there is no reason for a
+# Python failure to hide a TypeScript one. `./check server` and `./check ui` are the same split
+# the script already offers.
+
+name: check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# A new push to the same branch makes the run in progress pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: server (ruff, format, pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches `ruff.toml`'s target-version. The suite uses 3.12+ syntax.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      # `./check` runs `server/.venv/bin/python` by name, so the venv has to exist at that
+      # exact path. Creating it is cheaper than teaching the script about two layouts.
+      - name: Create the venv the checks expect
+        run: |
+          python -m venv server/.venv
+          server/.venv/bin/pip install --quiet --upgrade pip
+          server/.venv/bin/pip install --quiet -r server/requirements.txt
+
+      - run: ./check server
+
+  ui:
+    name: ui (tsc, vitest, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install
+        working-directory: ui
+        run: npm ci
+
+      - run: ./check ui
