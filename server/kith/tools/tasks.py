@@ -12,6 +12,13 @@ from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
+#: Key in `session_context.turn_notes()` holding the ids of tasks filed during this turn.
+#:
+#: A set rather than a flag because a turn can file several, and approval is asked about one at
+#: a time. Lives in the turn's scratch rather than on the row: "was this filed a moment ago"
+#: is a fact about *now*, and a column would still say yes tomorrow.
+FILED_THIS_TURN = "tasks_filed_this_turn"
+
 
 def _verify_done(path: Path, a: dict) -> dict | None:
     """Make 'done' mean done. Returns a refusal to hand back, or None to let it through.
@@ -140,6 +147,38 @@ def _verify_approvable(path: Path, task_id: int) -> dict | None:
     working-task card counts through — and a task approved without one shows a person nothing
     between "started" and "claims to be finished".
     """
+    # The half that was missing, and the half that was the whole point.
+    #
+    # Everything below this checks the plan is *complete*. Nothing checked it was *theirs to
+    # approve* — so the refusal text three lines down, "They approve it; you do not", was prose
+    # in an error message and nothing enforced it. Measured on task #104: one turn, seven calls
+    # — `add_task`, `write_file` for the plan, four `add_checklist_item`, then
+    # `update_task(status='approved')`. Both conditions below were satisfied because he had just
+    # written both, so it passed, and he reported "I created and approved Task #104" to a person
+    # who had not seen it yet. Then he stopped anyway and waited for them, which is the worst of
+    # both: their decision taken away and the wait kept.
+    #
+    # `add_task` already refuses a task *born* approved, and its comment worries about exactly
+    # this — "left unhandled it was a way straight past `_verify_approvable`, which only guards
+    # `update_task`". Filing and then approving is that same door with a different handle.
+    #
+    # "Has a person seen it" cannot be read from here, but "has a turn passed" can, and it is the
+    # honest proxy: the plan is handed over in chat, so the earliest anyone could have answered is
+    # the turn after the one that wrote it. Outside a turn — a test, a script — `turn_notes()` is
+    # an empty throwaway and this cannot fire, which is right: there is nobody to have asked.
+    from kith.services import session_context
+
+    if int(task_id) in session_context.turn_notes().get(FILED_THIS_TURN, ()):
+        return {
+            "blocked": "You filed this task in this same turn, so nobody has had a chance to read it yet.",
+            "next": (
+                "Leave it in 'planning' and say the plan and the checklist back to them in chat. "
+                "Approving is the one decision about a task that is theirs — wait for them to say "
+                "yes, then move it. If the work is small and obvious enough not to need any of "
+                "this, it did not need a plan either: put it straight into 'working' and do it."
+            ),
+        }
+
     detail = repo.tasks.task_detail(path, int(task_id))
     if not detail:
         return None
@@ -437,6 +476,11 @@ def add_task(path: Path, args: dict):
     # repository resolves it — and a session that laid out a roadmap this way would otherwise be
     # bound to nothing.
     session_context.adopt(path, made.get("project_id"))
+    # Remembered so `_verify_approvable` can refuse to approve it in the same breath — see the
+    # note there. Written here rather than inferred from `created_at` because the question is
+    # "was this filed in *this* turn", and a timestamp comparison would need a turn-start time
+    # nothing records and would answer differently on a slow turn.
+    session_context.turn_notes().setdefault(FILED_THIS_TURN, set()).add(made.get("id"))
     _mirror_brief(path, made.get("id"))
     # And something actionable is a reason to get on with it. The loop only wakes for a session
     # that is working, so before this a task filed in a conversation sat there until someone
