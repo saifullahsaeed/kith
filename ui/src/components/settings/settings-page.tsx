@@ -20,9 +20,26 @@ import { fetchSetup, type ServerConfig, type SetupSnapshot } from "@/lib/backend
 import { PersonaTab } from "@/components/settings/persona-tab";
 import { SkillsTab } from "@/components/settings/skills-tab";
 import type { SettingsTab } from "@/lib/router";
+import { cn } from "@/lib/utils";
 
-const TABS: { id: SettingsTab; label: string; hint: string; icon: typeof Cpu }[] = [
-  { id: "model", label: "Model", hint: "where he thinks", icon: Cpu },
+/**
+ * The tabs, and how wide each one wants to be.
+ *
+ * Width was the shell's decision — one `max-w-3xl` over all of them — which is right
+ * only for the tabs that are forms and prose, where a long line is a line you lose your
+ * place in. The model tab is a table: eight columns of scores and prices, squeezed into
+ * 768px on a window three times that, wrapping every price onto two rows to make room
+ * for whitespace on either side. So the tab says, and the shell obeys.
+ */
+const TABS: {
+  id: SettingsTab;
+  label: string;
+  hint: string;
+  icon: typeof Cpu;
+  /** Omitted means the reading measure. */
+  wide?: boolean;
+}[] = [
+  { id: "model", label: "Model", hint: "where he thinks", icon: Cpu, wide: true },
   { id: "persona", label: "Persona", hint: "who he is, in his own files", icon: FileText },
   { id: "skills", label: "Skills", hint: "what he knows how to do", icon: Puzzle },
   { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench },
@@ -144,7 +161,12 @@ export function SettingsPage({
         </nav>
 
         <div className="min-w-0 flex-1 overflow-y-auto px-6 py-6">
-          <div className="mx-auto max-w-3xl">
+          <div
+            className={cn(
+              "mx-auto",
+              TABS.find((entry) => entry.id === tab)?.wide ? "max-w-none" : "max-w-3xl",
+            )}
+          >
             {error ? (
               <p className="text-destructive text-sm">{error}</p>
             ) : !snapshot ? (

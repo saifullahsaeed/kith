@@ -28,6 +28,10 @@ def entry(
     benchmarks: object = None,
     hugging_face_id: str | None = None,
     expiration_date: str | None = None,
+    created: object = 1784912544,
+    description: str = "A model.",
+    knowledge_cutoff: str = "2026-02-16",
+    max_output: int | None = None,
 ) -> SimpleNamespace:
     """One catalogue entry, shaped like the SDK's model object."""
     return SimpleNamespace(
@@ -35,10 +39,14 @@ def entry(
         name=f"Vendor: {mid}",
         pricing=SimpleNamespace(prompt=prompt, completion=completion),
         context_length=context,
+        top_provider=SimpleNamespace(max_completion_tokens=max_output),
         supported_parameters=list(params),
         benchmarks=benchmarks,
         hugging_face_id=hugging_face_id,
         expiration_date=expiration_date,
+        created=created,
+        description=description,
+        knowledge_cutoff=knowledge_cutoff,
     )
 
 
@@ -94,6 +102,92 @@ class TestTranslation:
         assert model.retires_on == "2026-08-10"
         # And that alone stops it being recommended.
         assert not model.is_recommendable
+
+
+class TestWhatThePickerShows:
+    """The fields the picker needs to answer a question without sending you elsewhere.
+
+    All of these were already arriving in the catalogue and being dropped on the floor —
+    the model list carried one score, a context length and two prices, so "which of these
+    should I try today" was a question you had to leave the app to answer. The point of
+    reading them is that nobody has to.
+    """
+
+    def test_the_three_indices_are_all_kept(self):
+        """Coding, agentic and general ability rank differently, so one is not the three."""
+        block = {
+            "artificial_analysis": {
+                "agentic_index": 59.2,
+                "coding_index": 78.0,
+                "intelligence_index": 63.1,
+            }
+        }
+        model = _to_model_info(entry(benchmarks=block))
+        assert (model.coding_index, model.agentic_index, model.intelligence_index) == (
+            78.0,
+            59.2,
+            63.1,
+        )
+
+    def test_the_best_arena_placing_is_the_one_kept(self):
+        """First at data visualisation and fortieth at gamedev is worth knowing;
+        the average of the two says neither thing."""
+        block = SimpleNamespace(
+            design_arena=[
+                SimpleNamespace(arena="models", category="gamedev", elo=1100.0, rank=40, win_rate=41.0),
+                SimpleNamespace(arena="models", category="dataviz", elo=1383.0, rank=1, win_rate=63.9),
+            ],
+            artificial_analysis=None,
+        )
+        model = _to_model_info(entry(benchmarks=block))
+        assert model.arena_rank == 1
+        assert model.arena_category == "models/dataviz"
+        assert model.arena_win_rate == 63.9
+
+    def test_a_model_with_no_placing_says_so(self):
+        block = SimpleNamespace(design_arena=[], artificial_analysis=None)
+        assert _to_model_info(entry(benchmarks=block)).arena_rank is None
+        assert _to_model_info(entry()).public()["arena"] is None
+
+    def test_the_release_timestamp_becomes_a_date(self):
+        """1784912544 does not answer "is this new" to anybody.
+
+        Read in UTC, deliberately: a release date that shifted with the reader's
+        timezone would have two people disagree about when a model came out, and being
+        a day out either side of midnight costs nothing next to that.
+        """
+        model = _to_model_info(entry(created=1784912544))
+        assert model.released_on == "2026-07-24"
+
+    def test_a_broken_timestamp_is_no_date_rather_than_a_crash(self):
+        assert _to_model_info(entry(created="whenever")).released_on is None
+        assert _to_model_info(entry(created=None)).released_on is None
+
+    def test_the_descriptive_fields_survive_being_absent(self):
+        """They are shown around a model rather than ranked on, so a renamed key
+        upstream must not take the whole catalogue down with it."""
+        bare = SimpleNamespace(
+            id="vendor/model",
+            name="Vendor: model",
+            pricing=SimpleNamespace(prompt="0.000005", completion="0.000025"),
+            context_length=200_000,
+            supported_parameters=["tools"],
+            benchmarks=None,
+            hugging_face_id=None,
+            expiration_date=None,
+        )
+        model = _to_model_info(bare)
+        assert model.description == ""
+        assert model.knowledge_cutoff == ""
+        assert model.released_on is None
+        assert model.max_output is None
+
+    def test_max_output_is_not_the_context_window(self):
+        """The number that stops a long file halfway through, which the context length
+        does not tell you."""
+        model = _to_model_info(entry(context=1_000_000, max_output=128_000))
+        assert model.context == 1_000_000
+        assert model.max_output == 128_000
 
 
 class TestCatalogue:

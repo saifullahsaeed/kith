@@ -23,6 +23,7 @@ lets the picker fill while someone is still deciding. Passing an empty string do
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from openrouter import OpenRouter
@@ -166,10 +167,21 @@ def _to_model_info(entry: Any) -> ModelInfo:
         # which the picker shows as nothing rather than as free.
         cache_read_per_mtok=_per_million(getattr(pricing, "input_cache_read", None)),
         cache_write_per_mtok=_per_million(getattr(pricing, "input_cache_write", None)),
+        web_search_per_call=_number(getattr(pricing, "web_search", None)),
         context=entry.context_length,
+        max_output=getattr(getattr(entry, "top_provider", None), "max_completion_tokens", None),
         supports_tools="tools" in (entry.supported_parameters or []),
         agentic_index=_number(scores.get("agentic_index")),
         coding_index=_number(scores.get("coding_index")),
+        intelligence_index=_number(scores.get("intelligence_index")),
+        **_arena(entry),
+        # `getattr` for the descriptive fields, as for `architecture` and `top_provider`
+        # above: they are what the picker shows *around* a model rather than what it
+        # ranks by, and a catalogue that 500s because one optional key was renamed
+        # upstream would cost more than the prose is worth.
+        description=str(getattr(entry, "description", "") or "").strip(),
+        knowledge_cutoff=str(getattr(entry, "knowledge_cutoff", "") or ""),
+        released_on=_released(getattr(entry, "created", None)),
         # Published weights. An exact answer, where guessing from the vendor name
         # would be wrong in both directions.
         open_weights=bool(entry.hugging_face_id),
@@ -198,6 +210,43 @@ def _artificial_analysis(entry: Any) -> dict:
     if scores is None:
         return {}
     return scores if isinstance(scores, dict) else scores.model_dump()
+
+
+def _arena(entry: Any) -> dict:
+    """This model's best placing in Design Arena, and what it was best at.
+
+    The block is a list of one entry per arena and category — "models/dataviz",
+    "agents/webapps" — each with a rank among everything OpenRouter serves. The best of
+    them is kept rather than an average: a model that is first at data visualisation and
+    fortieth at gamedev is worth knowing about, and averaging says neither thing.
+
+    Unlike the Artificial Analysis indices these are head-to-head results judged by
+    people, so they answer a question no index does — not "how does it score" but "which
+    one did they prefer".
+    """
+    entries = getattr(getattr(entry, "benchmarks", None), "design_arena", None) or []
+    ranked = [one for one in entries if getattr(one, "rank", None)]
+    if not ranked:
+        return {}
+    best = min(ranked, key=lambda one: one.rank)
+    return {
+        "arena_rank": int(best.rank),
+        "arena_category": f"{best.arena}/{best.category}",
+        "arena_elo": _number(best.elo),
+        "arena_win_rate": _number(best.win_rate),
+    }
+
+
+def _released(created: object) -> str | None:
+    """The unix timestamp OpenRouter stamps on a model, as a date.
+
+    A date rather than the raw number because the only question asked of it is "is this
+    new", and 1784912544 does not answer that to anybody.
+    """
+    try:
+        return datetime.fromtimestamp(float(created), tz=UTC).date().isoformat()  # type: ignore[arg-type]
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
 
 
 def _number(raw: object) -> float | None:

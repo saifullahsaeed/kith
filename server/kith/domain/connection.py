@@ -67,7 +67,35 @@ class ModelInfo:
     #: because that is the whole of what Kith does — and the one thing price does not
     #: predict. ``None`` where it has not been measured, which is most of a catalogue.
     agentic_index: float | None = None
+    #: How good it is at writing code, and how good it is at everything. Both published
+    #: alongside the agentic index and both worth having on screen: agentic ability is
+    #: what Kith needs, but "which model should I try today" is a coding question, and
+    #: the two orders are not the same — the model at the top of one is regularly third
+    #: or fourth on the other.
     coding_index: float | None = None
+    intelligence_index: float | None = None
+    #: Design Arena's best placing for this model — head-to-head battles judged by
+    #: people, rather than an index. Kept as the single best rank it holds across every
+    #: arena and category, with the category named, because "1st at data visualisation"
+    #: says something an aggregate score cannot.
+    arena_rank: int | None = None
+    arena_category: str = ""
+    arena_elo: float | None = None
+    arena_win_rate: float | None = None
+    #: The provider's own sentence about it. Two lines of prose beats a row of numbers
+    #: for the question "what *is* this model", which is the one you have before you
+    #: have any of the others.
+    description: str = ""
+    #: When its training data ends, and when it was released. The first decides whether
+    #: it has heard of the library you are using; the second is most of what "what
+    #: should I try today" means.
+    knowledge_cutoff: str = ""
+    released_on: str | None = None
+    #: The most it can write in one reply, which is not the context window and is the
+    #: number that stops a long file halfway through.
+    max_output: int | None = None
+    #: Dollars per web search, where the provider bills them separately.
+    web_search_per_call: float | None = None
     #: The weights are published, so the model can outlive the company serving it.
     open_weights: bool = False
     #: ISO date the provider intends to withdraw it. Never recommend one of these.
@@ -120,6 +148,22 @@ class ModelInfo:
             "supportsTools": self.supports_tools,
             "agenticIndex": self.agentic_index,
             "codingIndex": self.coding_index,
+            "intelligenceIndex": self.intelligence_index,
+            "arena": (
+                {
+                    "rank": self.arena_rank,
+                    "category": self.arena_category,
+                    "elo": self.arena_elo,
+                    "winRate": self.arena_win_rate,
+                }
+                if self.arena_rank
+                else None
+            ),
+            "description": self.description,
+            "knowledgeCutoff": self.knowledge_cutoff,
+            "releasedOn": self.released_on,
+            "maxOutput": self.max_output,
+            "webSearchPerCall": self.web_search_per_call,
             "openWeights": self.open_weights,
             "retiresOn": self.retires_on,
             "inputModalities": list(self.input_modalities),

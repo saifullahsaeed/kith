@@ -40,11 +40,35 @@ export interface ModelOption {
    *  The most relevant number here, since that is all Kith does. Null where the
    *  provider publishes no measurement, which is most of any catalogue. */
   agenticIndex: number | null;
+  /** How good it is at code, and at everything. Published beside the agentic index and
+   *  ordered differently from it — the model at the top of one is regularly third on
+   *  the other, which is the whole reason the picker lets you choose the axis. */
   codingIndex: number | null;
+  intelligenceIndex: number | null;
+  /** Its best placing in Design Arena — head-to-head battles judged by people rather
+   *  than an index — and what it was best at. Null for most of the catalogue. */
+  arena: { rank: number; category: string; elo: number | null; winRate: number | null } | null;
+  /** The provider's own sentence about it: what this model *is*, which is the question
+   *  you have before any of the numbers mean anything. */
+  description: string;
+  /** Where its training data ends, and when it was released. */
+  knowledgeCutoff: string;
+  releasedOn: string | null;
+  /** The most it can write in one reply — not the context window, and the number that
+   *  stops a long file halfway through. */
+  maxOutput: number | null;
+  /** Dollars per web search, where the provider bills those separately. */
+  webSearchPerCall: number | null;
   /** The weights are published, so the model can outlive whoever serves it. */
   openWeights: boolean;
   /** ISO date the provider intends to withdraw it. */
   retiresOn: string | null;
+  /** What it can be given, and whether an effort control means anything to it. Sent by
+   *  the server since the picker was written; declared here now that the panel shows it. */
+  inputModalities: string[];
+  supportsImages: boolean;
+  supportsFiles: boolean;
+  supportsReasoning: boolean;
 }
 
 /** Why a model is being recommended. Three kinds of good, not one axis. */

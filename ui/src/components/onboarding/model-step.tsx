@@ -1,5 +1,14 @@
 import { useMemo, useState } from "react";
-import { Check, Gauge, PackageOpen, Search, Sparkles, Wallet } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Gauge,
+  PackageOpen,
+  Search,
+  Sparkles,
+  Trophy,
+  Wallet,
+} from "lucide-react";
 
 import {
   formatContext,
@@ -8,6 +17,8 @@ import {
   type Pick as ModelPick,
   type Tier,
 } from "@/lib/backend";
+import { RANKINGS, rank, turnCost, value } from "@/lib/models";
+import { cn } from "@/lib/utils";
 
 /** A catalogue can run to hundreds of entries. Rendering them all costs a visible
  *  frame drop on the first keystroke, and nobody scrolls past forty. */
@@ -27,10 +38,15 @@ const TIER_ICONS: Record<Tier, typeof Sparkles> = {
  * and the strongest with published weights — and each carries the number it was chosen
  * on, so the recommendation can be checked rather than taken on faith.
  *
- * The number that matters is the agentic index: how well a model sustains multi-step
- * tool use, which is the entirety of what Kith does and the one thing price does not
- * predict. Where a provider publishes no measurements the cards say so plainly instead
- * of dressing price up as quality.
+ * Underneath is a leaderboard, and it exists because the list underneath the cards was
+ * a flat catalogue with one number on it. Everything needed to answer "what should I try
+ * today" is already in OpenRouter's catalogue and most of it was being thrown away on
+ * arrival: a coding index and a general intelligence index beside the agentic one, Design
+ * Arena's head-to-head ranks, release dates, knowledge cutoffs, max output, cache and
+ * search pricing, and the provider's own description. So it is all kept now (see
+ * `providers/openrouter.py`), the axis is a control rather than a decision made for you
+ * (`lib/models.ts`), and the row opens to the rest — which is the part that means nobody
+ * has to go and read a model page somewhere else to decide.
  */
 export function ModelStep({
   models,
@@ -44,6 +60,8 @@ export function ModelStep({
   onSelect: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [ranking, setRanking] = useState(RANKINGS[0]);
+  const [opened, setOpened] = useState("");
 
   const picks = useMemo(
     () =>
@@ -61,8 +79,14 @@ export function ModelStep({
             entry.id.toLowerCase().includes(needle) || entry.name.toLowerCase().includes(needle),
         )
       : models;
-    return { rows: pool.slice(0, MAX_ROWS), total: pool.length };
-  }, [query, models]);
+    const ordered = rank(pool, ranking);
+    return { rows: ordered.slice(0, MAX_ROWS), total: ordered.length };
+  }, [query, models, ranking]);
+
+  // Only where the provider publishes measurements. On a plain OpenAI-compatible
+  // endpoint there is nothing to rank by, and a leaderboard of dashes is worse than the
+  // list it replaced.
+  const measured = useMemo(() => models.some((one) => one.codingIndex !== null), [models]);
 
   return (
     <div className="space-y-4">
@@ -84,7 +108,7 @@ export function ModelStep({
         <div className="relative">
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
           <input
-            className="w-full rounded-md border bg-transparent py-2 pr-3 pl-9 text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="focus-visible:border-ring focus-visible:ring-ring/40 w-full rounded-md border bg-transparent py-2 pr-3 pl-9 text-sm shadow-xs outline-none transition-colors focus-visible:ring-2"
             placeholder={`Search all ${models.length} models…`}
             value={query}
             spellCheck={false}
@@ -92,29 +116,80 @@ export function ModelStep({
           />
         </div>
 
-        <div className="mt-2 max-h-56 overflow-y-auto rounded-md border">
-          {filtered.rows.length === 0 ? (
-            <p className="text-muted-foreground p-4 text-center text-sm">
-              Nothing matches “{query}”.
+        {measured ? (
+          <>
+            {/* The axis, as a control. Which of these you want is the actual question —
+                "best" means a different model depending on the answer, and picking one
+                on your behalf is what made this a list rather than a leaderboard. */}
+            <div className="mt-2.5 flex flex-wrap items-center gap-1">
+              <span className="text-muted-foreground/60 me-1 text-[11px]">Rank by</span>
+              {RANKINGS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setRanking(option)}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-[11px] transition-colors",
+                    option.key === ranking.key
+                      ? "bg-kith-soft text-kith font-medium"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent/60",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-muted-foreground/70 mt-1.5 text-[11px] leading-relaxed">
+              {ranking.hint}
             </p>
-          ) : (
-            filtered.rows.map((option) => (
-              <Row
-                key={option.id}
-                option={option}
-                active={option.id === selected}
-                onSelect={() => onSelect(option.id)}
-              />
-            ))
-          )}
-          {filtered.total > filtered.rows.length ? (
-            <p className="text-muted-foreground/70 border-t px-3 py-2 text-center text-xs">
-              {filtered.total - filtered.rows.length} more — narrow the search to see them
-            </p>
+          </>
+        ) : null}
+
+        <div className="mt-2 overflow-hidden rounded-md border">
+          {measured ? (
+            <div className="text-muted-foreground/50 bg-muted/40 flex items-center gap-3 border-b px-3 py-1.5 text-[10px] font-medium tracking-wide uppercase">
+              <span className="w-6 shrink-0" />
+              <span className="min-w-0 flex-1">Model</span>
+              <span className="w-10 shrink-0 text-right">code</span>
+              <span className="w-10 shrink-0 text-right">agent</span>
+              <span className="hidden w-14 shrink-0 text-right sm:inline">
+                {ranking.column.label}
+              </span>
+              <span className="w-32 shrink-0 text-right">in / out</span>
+              <span className="w-4 shrink-0" />
+            </div>
           ) : null}
+
+          <div className="max-h-[32rem] overflow-y-auto">
+            {filtered.rows.length === 0 ? (
+              <p className="text-muted-foreground p-4 text-center text-sm">
+                Nothing matches “{query}”.
+              </p>
+            ) : (
+              filtered.rows.map((option, index) => (
+                <Row
+                  key={option.id}
+                  option={option}
+                  place={query ? null : index + 1}
+                  column={ranking.column}
+                  measured={measured}
+                  active={option.id === selected}
+                  open={opened === option.id}
+                  onToggle={() => setOpened((was) => (was === option.id ? "" : option.id))}
+                  onSelect={() => onSelect(option.id)}
+                />
+              ))
+            )}
+            {filtered.total > filtered.rows.length ? (
+              <p className="text-muted-foreground/70 border-t px-3 py-2 text-center text-xs">
+                {filtered.total - filtered.rows.length} more — narrow the search to see them
+              </p>
+            ) : null}
+          </div>
         </div>
-        <p className="text-muted-foreground/70 mt-2 text-xs">
-          Ranked by how well each model handles multi-step work, best first.
+        <p className="text-muted-foreground/70 mt-2 text-[11px]">
+          Scores are Artificial Analysis and Design Arena, carried in OpenRouter's catalogue. Prices
+          are per million tokens, from the provider.
         </p>
       </div>
     </div>
@@ -137,14 +212,14 @@ function PickCard({
     <button
       type="button"
       onClick={onSelect}
-      className={`flex flex-col rounded-xl border p-3 text-left transition-all duration-150 hover:border-kith/50 hover:bg-card ${
-        active ? "border-kith bg-kith-soft/40 ring-2 ring-ring/40" : "bg-card/60"
+      className={`hover:border-kith/50 flex flex-col rounded-xl border p-3 text-left transition-all duration-150 hover:bg-card ${
+        active ? "border-kith bg-kith-soft/40 ring-ring/40 ring-2" : "bg-card/60"
       }`}
     >
       <span className="flex items-center gap-2">
         <Icon className={`size-4 shrink-0 ${active ? "text-kith" : "text-muted-foreground"}`} />
         <span className="text-sm font-semibold">{pick.headline}</span>
-        {active ? <Check className="ml-auto size-4 shrink-0 text-kith" /> : null}
+        {active ? <Check className="text-kith ml-auto size-4 shrink-0" /> : null}
       </span>
 
       <span className="mt-2 truncate text-xs font-medium" title={model.id}>
@@ -156,6 +231,11 @@ function PickCard({
         {model.agenticIndex !== null ? (
           <Badge title="Artificial Analysis agentic index — sustained multi-step tool use">
             agentic {model.agenticIndex.toFixed(1)}
+          </Badge>
+        ) : null}
+        {model.codingIndex !== null ? (
+          <Badge title="Artificial Analysis coding index">
+            coding {model.codingIndex.toFixed(1)}
           </Badge>
         ) : null}
         <Badge>{formatContext(model.context)} ctx</Badge>
@@ -244,6 +324,107 @@ function Badge({ children, title }: { children: React.ReactNode; title?: string 
 
 function Row({
   option,
+  place,
+  column,
+  measured,
+  active,
+  open,
+  onToggle,
+  onSelect,
+}: {
+  option: ModelOption;
+  /** Its position on the current ranking, or null while searching — a "#3" beside a
+   *  search hit would be a rank among the matches, which is a number about your query. */
+  place: number | null;
+  column: { label: string; of: (model: ModelOption) => string };
+  measured: boolean;
+  active: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onSelect: () => void;
+}) {
+  return (
+    <div className={cn("border-b last:border-b-0", active && "bg-kith-soft/50")}>
+      <div className="hover:bg-accent/60 flex items-center gap-3 px-3 text-sm transition-colors">
+        {/* Two targets in one row: the name picks the model, the chevron opens it. The
+            row used to be one button, which meant reading about a model and choosing it
+            were the same click. */}
+        <button
+          type="button"
+          onClick={onSelect}
+          className="flex min-w-0 flex-1 items-center gap-3 py-2 text-left"
+        >
+          <span className="text-muted-foreground/40 w-6 shrink-0 text-right font-mono text-[11px] tabular-nums">
+            {place ?? ""}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate" title={option.id}>
+              {option.name || option.id}
+            </span>
+            <span className="text-muted-foreground/50 flex items-center gap-1.5 text-[10px]">
+              <span className="truncate font-mono">{option.id}</span>
+              {option.supportsTools === false ? (
+                <span className="text-destructive shrink-0">no tools</span>
+              ) : null}
+              {option.openWeights ? <span className="shrink-0">open</span> : null}
+              {option.retiresOn ? (
+                <span className="shrink-0 text-orange-400">retires {option.retiresOn}</span>
+              ) : null}
+            </span>
+          </span>
+        </button>
+
+        {measured ? (
+          <>
+            <Score value={option.codingIndex} title="Coding index" />
+            <Score value={option.agenticIndex} title="Agentic index" />
+            <span className="text-muted-foreground hidden w-14 shrink-0 text-right font-mono text-xs tabular-nums sm:inline">
+              {column.of(option)}
+            </span>
+          </>
+        ) : null}
+        <span
+          className="text-muted-foreground w-32 shrink-0 text-right font-mono text-xs whitespace-nowrap"
+          title={priceTitle(option)}
+        >
+          {formatPrice(option.promptPerMTok)}
+          <span className="text-muted-foreground/50"> / </span>
+          {formatPrice(option.completionPerMTok)}
+        </span>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={open ? "Hide the details" : "Show the details"}
+          aria-expanded={open}
+          className="text-muted-foreground/40 hover:text-foreground -me-1 shrink-0 p-1 transition-colors"
+        >
+          <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+        </button>
+      </div>
+
+      {open ? <Detail option={option} active={active} onSelect={onSelect} /> : null}
+    </div>
+  );
+}
+
+function Score({ value: score, title }: { value: number | null; title: string }) {
+  return (
+    <span
+      title={title}
+      className={cn(
+        "w-10 shrink-0 text-right font-mono text-xs tabular-nums",
+        score === null ? "text-muted-foreground/30" : "text-muted-foreground",
+      )}
+    >
+      {score === null ? "—" : score.toFixed(1)}
+    </span>
+  );
+}
+
+/** Everything else the provider says about it — the part that was being fetched and
+ *  dropped, and the reason this panel can answer a question without a browser. */
+function Detail({
+  option,
   active,
   onSelect,
 }: {
@@ -251,46 +432,70 @@ function Row({
   active: boolean;
   onSelect: () => void;
 }) {
+  const cost = turnCost(option);
+  const points = value(option);
+  const facts: [string, string][] = [
+    ["Context", formatContext(option.context)],
+    ["Max reply", option.maxOutput ? formatContext(option.maxOutput) : "—"],
+    ["Knows up to", option.knowledgeCutoff || "—"],
+    ["Released", option.releasedOn ?? "—"],
+    // The blended figure the value ranking is built on, shown wherever that ranking
+    // could have sent someone — a score you cannot see the arithmetic of is a claim.
+    ["A turn costs", cost === null ? "—" : `${formatPrice(cost)}/Mtok`],
+    ["Coding per $", points === null ? "—" : points.toFixed(1)],
+  ];
+
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`flex w-full items-center gap-3 border-b px-3 py-2 text-left text-sm transition-colors last:border-b-0 hover:bg-accent/60 ${
-        active ? "bg-kith-soft/50" : ""
-      }`}
-    >
-      <span className="min-w-0 flex-1 truncate" title={option.id}>
-        {option.id}
-      </span>
-      {/* Only worth saying when it's a no: unknown tool support is the normal case on
-          a generic endpoint, and flagging that would cry wolf. */}
-      {option.supportsTools === false ? (
-        <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive">
-          no tools
-        </span>
+    <div className="bg-muted/25 space-y-2.5 border-t px-3 py-2.5">
+      {option.description ? (
+        <p className="text-muted-foreground text-[11px] leading-relaxed">{option.description}</p>
       ) : null}
-      {option.openWeights ? (
-        <span className="text-muted-foreground/60 shrink-0 text-[10px]">open</span>
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+        {facts.map(([label, fact]) => (
+          <div key={label} className="flex items-baseline justify-between gap-2">
+            <dt className="text-muted-foreground/60 text-[10px]">{label}</dt>
+            <dd className="font-mono text-[11px] tabular-nums">{fact}</dd>
+          </div>
+        ))}
+      </dl>
+
+      {option.arena ? (
+        <p className="text-muted-foreground flex items-center gap-1.5 text-[11px]">
+          <Trophy className="size-3 shrink-0 text-orange-400" />
+          Design Arena: ranked #{option.arena.rank} at {option.arena.category}
+          {option.arena.winRate !== null
+            ? ` — wins ${option.arena.winRate.toFixed(0)}% of them`
+            : ""}
+        </p>
       ) : null}
-      <span
-        className="text-muted-foreground w-14 shrink-0 text-right font-mono text-xs"
-        title="agentic index"
+
+      <div className="flex flex-wrap items-center gap-1">
+        <Prices model={option} />
+        {option.webSearchPerCall ? (
+          <Badge title="Charged per search, on top of tokens">
+            {formatPrice(option.webSearchPerCall)}/search
+          </Badge>
+        ) : null}
+        {option.supportsReasoning ? <Badge>reasoning</Badge> : null}
+        {option.supportsImages ? <Badge>images</Badge> : null}
+        {option.supportsFiles ? <Badge>files</Badge> : null}
+      </div>
+
+      <button
+        type="button"
+        onClick={onSelect}
+        disabled={active}
+        className={cn(
+          "rounded-md border px-2 py-1 text-[11px] transition-colors",
+          active
+            ? "border-kith/40 text-kith cursor-default"
+            : "hover:border-kith/50 hover:bg-card text-muted-foreground hover:text-foreground",
+        )}
       >
-        {option.agenticIndex !== null ? option.agenticIndex.toFixed(1) : "—"}
-      </span>
-      <span className="text-muted-foreground shrink-0 font-mono text-xs">
-        {formatContext(option.context)}
-      </span>
-      <span
-        className="text-muted-foreground w-32 shrink-0 text-right font-mono text-xs"
-        title={priceTitle(option)}
-      >
-        {formatPrice(option.promptPerMTok)}
-        <span className="text-muted-foreground/50"> / </span>
-        {formatPrice(option.completionPerMTok)}
-      </span>
-      <span className="w-4 shrink-0">{active ? <Check className="size-4 text-kith" /> : null}</span>
-    </button>
+        {active ? "Chosen" : "Use this model"}
+      </button>
+    </div>
   );
 }
 
