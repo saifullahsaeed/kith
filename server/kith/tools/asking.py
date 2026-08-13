@@ -56,11 +56,18 @@ _QUESTIONS = {
 
 @tool(
     "ask",
-    "Ask your person something and WAIT for the answer before doing anything else. Use it at a "
-    "real fork — when two answers would send you to different work — and not for reassurance "
-    "or to have a decision confirmed back to you. They can pick an option, write something "
-    "else, or skip. Skipping means they would rather you chose: say what you chose and why. "
-    "This holds the turn, so one good question beats three cautious ones.",
+    "Ask your person something and WAIT for the answer before doing anything else. Two uses. "
+    "One: a real fork, where two answers would send you to different work — not reassurance, "
+    "and not having a decision confirmed back to you. Two: you are BLOCKED and need something "
+    "only they can give — a credential, a decision, an action in a system you cannot reach. "
+    "Being blocked is the case people most often get wrong: the alternative to asking is not "
+    "waiting, it is ending your turn, and from their side that is indistinguishable from "
+    "giving up. If you are about to write 'I need X from you' or 'I'll wait until Y', ask "
+    "instead — that is what this is. First make sure you are actually blocked: a condition you "
+    "could go and check yourself is not a blocker, it is your next step. "
+    "They can pick an option, write something else, or skip. Skipping means they would rather "
+    "you chose: say what you chose and why. This holds the turn, so one good question beats "
+    "three cautious ones.",
     {"questions": _QUESTIONS},
     required=("questions",),
 )

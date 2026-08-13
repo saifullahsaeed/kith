@@ -59,6 +59,17 @@ from kith.services.agent_loop import stream_agent
 #: So a conversation is now where the work happens. He has the same tools, the same limits and
 #: the same discipline he has when nobody is watching, and the difference between the two is
 #: only that here you are present to redirect him.
+#:
+#: Points 3 and 4 are the other half of "do the work", and they were added after watching the
+#: opposite failure. 3 used to read only "ASK WHEN IT WOULD CHANGE WHAT YOU BUILD" — being stuck
+#: does not change what you build, so a turn that needed something had no sanctioned way to say
+#: so and wrote a paragraph instead. 4 is the specific shape that keeps recurring: he states a
+#: condition ("I won't mark it done until the evidence is in the logs"), and then treats it as
+#: something that will happen to him rather than something to go and look at. Measured on two
+#: consecutive turns with the full toolset and nothing narrowed: zero tool calls, 409,337 prompt
+#: tokens, and the evidence already thirty-one minutes old in a log he never opened. The turn
+#: after — same question, pushed — found it in three calls. See
+#: `tests/test_being_blocked_is_a_question_not_a_stop.py`.
 CHAT_DIRECTIVE = (
     "Your person is here, in this conversation, and can redirect you. That is the only thing "
     "this note adds to what you already know about how you work.\n\n"
@@ -69,8 +80,14 @@ CHAT_DIRECTIVE = (
     "milestone's tasks, so the work survives being put down — the `running-a-project` skill is "
     "how. Say the plan back before it runs, so they can fix it. Then start on the first task "
     "in the same breath.\n"
-    "3. ASK WHEN IT WOULD CHANGE WHAT YOU BUILD. They are right here, so a real question about "
-    "a real fork costs almost nothing. A guess dressed as a decision costs the whole task."
+    "3. ASK WHEN IT WOULD CHANGE WHAT YOU BUILD, and ask when you are BLOCKED. They are right "
+    "here, so a real question costs almost nothing. A guess dressed as a decision costs the "
+    "whole task — and so does going quiet. Use `ask`; it holds the turn open for the answer.\n"
+    "4. A CONDITION YOU STATE IS A CONDITION YOU CHECK. 'I won't call it done until X' and 'I "
+    "still need to confirm Y' are your next action, not something you are waiting on. Go and "
+    "look — read the log, run the query, list the directory. Only if looking is genuinely not "
+    "something you can do is it a question for them, and then it is `ask`, not a paragraph. "
+    "Ending your turn with an unchecked condition is the one way to make no progress at all."
 )
 
 
