@@ -20,6 +20,22 @@ from .checkpoints import _checkpoint_before_change
 from .paths import INTERNAL_DIR, display, resolve, root
 from .shell import run_command
 
+
+def _wrote() -> None:
+    """Tell the interface a file changed, so the Files tab and the viewer follow him.
+
+    Every write goes through one of three functions here, which is why this lives at this layer
+    rather than in the tools. Swallowed and locally imported: a note about a save must never be able
+    to fail the save.
+    """
+    try:
+        from kith.services import changes
+
+        changes.publish("workspace")
+    except Exception:
+        pass
+
+
 #: What one `read_file` may return, separately from what a *command* may print.
 #:
 #: They shared the 8,000 and should not: clipping arbitrary command output there is sensible,
@@ -292,6 +308,7 @@ def write_file(path: str, content: str) -> str:
         target.write_bytes(data)
     except OSError as exc:
         raise WorkspaceError(f"cannot write {path}: {exc}") from None
+    _wrote()
     return f"wrote {len(data)} bytes to {target}"
 
 
@@ -496,6 +513,7 @@ def edit_file(path: str, old: str, new: str, replace_all: bool = False) -> str:
     except OSError as exc:
         raise WorkspaceError(f"cannot write {path}: {exc}") from None
 
+    _wrote()
     report = _diff(path, before, after, old, replacements)
     return _NOTE_TOLERANT + report if tolerant else report
 
@@ -613,6 +631,7 @@ def edit_files(edits: list[dict]) -> dict:
             ) from None
         written.append(target)
 
+    _wrote()
     diffs = [_diff(str(target), originals[target], texts[target], "", counts[target]) for target in texts]
     result = {
         "files": len(texts),

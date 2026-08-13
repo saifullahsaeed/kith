@@ -13,11 +13,38 @@ from kith.infra.db.models import Milestone, MilestoneDep, Project, Task
 from kith.infra.db.repositories.tasks import list_tasks
 from kith.infra.db.support import utc_now_iso
 
+
+def _notifies(write):
+    """Publish a `project` change after a write returns.
+
+    The same decorator the task repository uses, for the same reason: three writers (his tools, the
+    control panel, `brain/kinds`) and a notification on two of them is a roadmap that updates unless
+    you were the one who moved it. This was subscribed to before it was published — the panel listened
+    for `project` and nothing emitted it, so creating a project or finishing a milestone still needed
+    a reload.
+    """
+    from functools import wraps
+
+    @wraps(write)
+    def inner(*args, **kwargs):
+        out = write(*args, **kwargs)
+        try:
+            from kith.services import changes
+
+            changes.publish("project")
+        except Exception:
+            pass
+        return out
+
+    return inner
+
+
 # --------------------------------------------------------------------------- #
 # Projects (group tasks toward a bigger goal)
 # --------------------------------------------------------------------------- #
 
 
+@_notifies
 def add_project(path: Path, name: str, description: str = "", directory: str | None = None) -> dict:
     now = utc_now_iso()
     with session(path) as db:
@@ -54,6 +81,7 @@ def get_milestone(path: Path, milestone_id: int) -> dict | None:
         return as_dict(row) if row else None
 
 
+@_notifies
 def update_project(
     path: Path,
     project_id: int,
@@ -78,6 +106,7 @@ def update_project(
         return as_dict(row)
 
 
+@_notifies
 def delete_project(path: Path, project_id: int) -> bool:
     with session(path) as db:
         # Orphan the tasks rather than delete them — the work outlives the grouping,
@@ -92,6 +121,7 @@ def delete_project(path: Path, project_id: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 
+@_notifies
 def add_milestone(path: Path, project_id: int, title: str, target_at: str | None = None) -> dict:
     now = utc_now_iso()
     with session(path) as db:
@@ -125,6 +155,7 @@ def list_milestones(path: Path, project_id: int | None = None) -> list[dict]:
         return [as_dict(row) for row in db.scalars(query).all()]
 
 
+@_notifies
 def update_milestone(
     path: Path,
     milestone_id: int,
@@ -149,6 +180,7 @@ def update_milestone(
         return as_dict(row)
 
 
+@_notifies
 def delete_milestone(path: Path, milestone_id: int) -> bool:
     with session(path) as db:
         return db.execute(delete(Milestone).where(Milestone.id == milestone_id)).rowcount > 0
@@ -203,6 +235,7 @@ def dependencies(path: Path, project_id: int | None = None) -> list[dict]:
         ]
 
 
+@_notifies
 def add_dependency(path: Path, milestone_id: int, depends_on_id: int) -> None:
     """Make one milestone wait for another.
 
@@ -245,6 +278,7 @@ def add_dependency(path: Path, milestone_id: int, depends_on_id: int) -> None:
             db.add(MilestoneDep(milestone_id=milestone_id, depends_on_id=depends_on_id))
 
 
+@_notifies
 def remove_dependency(path: Path, milestone_id: int, depends_on_id: int) -> None:
     with session(path) as db:
         db.execute(
@@ -277,6 +311,7 @@ def _reaches(path: Path, start: int, target: int) -> bool:
     return False
 
 
+@_notifies
 def set_milestone_position(path: Path, milestone_id: int, x: float, y: float) -> None:
     """Remember where someone dragged a node to."""
     with session(path) as db:
@@ -406,6 +441,7 @@ def milestones_needing_tasks(path: Path) -> list[dict]:
     ]
 
 
+@_notifies
 def set_directory(path: Path, project_id: int, directory: str | None) -> dict | None:
     """Point a project at a folder, or unpoint it.
 
