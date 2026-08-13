@@ -23,6 +23,7 @@ from kith.config import (
 from kith.domain import clock
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
+from kith.kernel import live_turns
 from kith.llm import ledger
 from kith.llm.budget import SEED_CHARS_PER_TOKEN
 from kith.schemas import (
@@ -32,7 +33,6 @@ from kith.schemas import (
 from kith.services import (
     conversations,
     history,
-    live_turns,
     memory_context,
     permissions,
     questions,

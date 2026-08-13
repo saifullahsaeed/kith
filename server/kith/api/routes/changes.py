@@ -17,7 +17,7 @@ import queue
 from flask import Response
 
 from kith.api.blueprint import api
-from kith.services import changes
+from kith.kernel import changes
 
 
 @api.get("/changes")

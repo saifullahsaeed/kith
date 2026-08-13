@@ -478,7 +478,7 @@ def _changed(conversation_id: str = "") -> None:
     """Tell the interface a background task started or ended. Swallowed: a note about a process, not
     a reason to fail starting one."""
     try:
-        from kith.services import changes
+        from kith.kernel import changes
 
         changes.publish("process", conversation_id)
     except Exception:

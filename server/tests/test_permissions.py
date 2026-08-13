@@ -257,7 +257,8 @@ class TestWaitingForYourAnswer:
     """
 
     def test_allowing_lets_the_waiting_call_through(self, tmp_path):
-        from kith.services import live_turns, session_context
+        from kith.kernel import live_turns
+        from kith.services import session_context
 
         root = tmp_path / "work"
         root.mkdir()
@@ -336,7 +337,8 @@ class TestItAsksOnceOrNotAtAll:
 
     def test_an_attended_refusal_raises_one_alert_not_two(self, tmp_path, never_the_real_database):
         from kith.infra.db import repositories as repo
-        from kith.services import live_turns, session_context
+        from kith.kernel import live_turns
+        from kith.services import session_context
 
         root, outside = self._refusal(tmp_path)
         turn = live_turns.begin("c1")

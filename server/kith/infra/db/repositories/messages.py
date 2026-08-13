@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select, update
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import Message, TurnLog
 from kith.infra.db.support import utc_now_iso
+from kith.kernel import changes
 
 
 def _notifies_message(write):
@@ -26,11 +27,9 @@ def _notifies_message(write):
 
 def _changed() -> None:
     """Tell the interface a message arrived or was read — the alerts list and the badge both read it.
-    Local import and swallowed, the same as the task one: a note about a save, never a reason one
-    fails."""
+    Swallowed, the same as the task one: a note about a save, never a reason one fails. The import
+    was local too and did not need to be — `changes` imports nothing, so there was no cycle."""
     try:
-        from kith.services import changes
-
         changes.publish("message")
     except Exception:
         pass

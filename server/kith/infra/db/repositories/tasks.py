@@ -18,6 +18,7 @@ from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_S
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task
 from kith.infra.db.support import utc_now_iso
+from kith.kernel import changes
 
 
 def _notifies(write):
@@ -43,12 +44,13 @@ def _changed() -> None:
 
     In the repository rather than in the tools, because there are three writers — his tools, the
     control panel's PATCH, and `brain/kinds` — and a notification attached to two of them is a widget
-    that updates unless you were the one who changed it. Local import and swallowed: this is a note
-    about a save, and it must never be the reason one fails.
+    that updates unless you were the one who changed it. Swallowed: this is a note about a save, and
+    it must never be the reason one fails.
+
+    The import was local as well, and only the swallow was doing any work — `changes` imports
+    nothing, so there was never a cycle here to dodge.
     """
     try:
-        from kith.services import changes
-
         changes.publish("task")
     except Exception:
         pass

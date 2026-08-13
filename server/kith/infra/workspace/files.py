@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from kith.kernel import changes
 from kith.services import permissions
 
 from .base import _EXEC_TIMEOUT, WorkspaceError, _clip
@@ -25,12 +26,13 @@ def _wrote() -> None:
     """Tell the interface a file changed, so the Files tab and the viewer follow him.
 
     Every write goes through one of three functions here, which is why this lives at this layer
-    rather than in the tools. Swallowed and locally imported: a note about a save must never be able
-    to fail the save.
+    rather than in the tools. Swallowed: a note about a save must never be able to fail the save.
+
+    The import used to be local too, and the two reasons were run together in one sentence. Only
+    the swallow was ever load-bearing — `changes` imports nothing at all, so there was no cycle to
+    dodge, and now that it lives in the kernel there could not be one.
     """
     try:
-        from kith.services import changes
-
         changes.publish("workspace")
     except Exception:
         pass

@@ -82,7 +82,7 @@ def _announce(conversation_id: str) -> None:
     """Local import and swallowed: `live_turns` is imported by the chat route on every turn, and a
     notification must not be able to stop one starting."""
     try:
-        from kith.services import changes
+        from kith.kernel import changes
 
         changes.publish("turn", conversation_id)
     except Exception:

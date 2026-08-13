@@ -25,7 +25,7 @@ import json
 
 import pytest
 
-from kith.services import changes
+from kith.kernel import changes
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +90,7 @@ class TestWhatPublishes:
     def test_starting_a_turn_says_so(self):
         """The one that fixes the reload. A turn the server starts — a reminder, a finished
         background task — is invisible to an open window until something says it began."""
-        from kith.services import live_turns
+        from kith.kernel import live_turns
 
         subscription = changes.subscribe()
         turn = live_turns.begin("c-1")
@@ -100,7 +100,7 @@ class TestWhatPublishes:
         assert any(e["kind"] == "turn" and e["conversation"] == "c-1" for e in events), events
 
     def test_finishing_a_turn_says_so_too(self):
-        from kith.services import live_turns
+        from kith.kernel import live_turns
 
         turn = live_turns.begin("c-1")
         subscription = changes.subscribe()

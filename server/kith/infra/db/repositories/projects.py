@@ -12,6 +12,7 @@ from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import Milestone, MilestoneDep, Project, Task
 from kith.infra.db.repositories.tasks import list_tasks
 from kith.infra.db.support import utc_now_iso
+from kith.kernel import changes
 
 
 def _notifies(write):
@@ -29,8 +30,8 @@ def _notifies(write):
     def inner(*args, **kwargs):
         out = write(*args, **kwargs)
         try:
-            from kith.services import changes
-
+            # Swallowed, never a reason a save fails. The import was local as well and did not
+            # need to be — `changes` imports nothing, so there was no cycle to dodge.
             changes.publish("project")
         except Exception:
             pass

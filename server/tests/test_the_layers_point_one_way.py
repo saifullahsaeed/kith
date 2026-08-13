@@ -32,6 +32,12 @@ fails loudly at import, so it cannot survive. A local one runs fine forever and 
 until someone maps the graph. `_edges` therefore walks the whole AST rather than reading the
 module header.
 
+**The unit is the import statement, not the imported name.** `from kith.services import (a,
+b, c)` is one edge, not three. That is deliberate but it is the sort of thing worth knowing
+before reading a number here as a count of dependencies: it is a count of *places that reach
+across a boundary*, which is what has to be visited to fix them. It also means lifting one
+name out of a grouped import leaves the count unchanged — the statement is still there.
+
 **The allow-list shrinks, and only shrinks.** Fixing a violation without touching this file
 is meant to pass — the assertion is a subset check, not equality. Adding one fails. Each
 tranche of the layering work deletes entries from `ALLOWED`, and when it is empty this test
@@ -109,7 +115,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
 #:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far, 38 -> 27:
+#: Struck off so far, 38 -> 25:
 #:
 #: * `settings -> services` (1), which was `describe()` fetching the tunables for the
 #:   startup log. The caller joins the two halves now.
@@ -119,8 +125,13 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `domain/chat.py` — a frozen dataclass was costing three import cycles. One, `websearch`,
 #:   called `default_config()`, and every other function in that file already took the config
 #:   as a parameter; now `search` does too and its adapter resolves it.
+#: * `infra -> services` 16 -> 12, from `changes` moving to the kernel. Four of those were
+#:   `infra` publishing a change notification through a function-local import, and the
+#:   comment at each one gave two reasons — "local import and swallowed". Only the swallow
+#:   was ever load-bearing: `changes` imports nothing, so there was no cycle to dodge. The
+#:   imports are module-level now and the `try` wraps only the `publish`.
 ALLOWED: dict[tuple[str, str], int] = {
-    ("infra", "services"): 16,
+    ("infra", "services"): 12,
     ("services", "tools"): 5,
     ("llm", "services"): 2,
     ("domain", "services"): 2,
@@ -244,3 +255,45 @@ def test_the_kernel_imports_nothing_from_kith():
                 if _package(target) != "kernel":
                     offences.append(f"{path.relative_to(SOURCE.parent)}:{node.lineno} -> {target}")
     assert not offences, "the kernel reaches out of itself:\n" + "\n".join(f"  {one}" for one in offences)
+
+
+def test_importing_the_kernel_loads_only_the_kernel():
+    """The runtime counterpart, in a fresh interpreter.
+
+    `test_the_kernel_imports_nothing_from_kith` reads the AST, which is the right check for
+    intent and the wrong one for cost: it sees what a file says, not what loading it drags in.
+    A kernel module that imported something innocuous which *itself* imported the world would
+    pass it and still pay for Flask.
+
+    That is not hypothetical here. It is precisely what `kith/__init__.py` did to every module
+    in the tree until it was emptied — `import kith.domain.stall`, a file whose docstring says
+    it needs no database, no clock and no IO, loaded 153 kith modules and 905 in total. The
+    graph was clean; the runtime was not.
+
+    A subprocess rather than this one: by the time the suite has collected, `sys.modules`
+    holds most of the tree, so asking the question in-process can only ever answer "yes".
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    probe = textwrap.dedent("""
+        import importlib, pkgutil, sys
+        import kith.kernel
+        for info in pkgutil.iter_modules(kith.kernel.__path__):
+            importlib.import_module(f"kith.kernel.{info.name}")
+        strays = sorted(
+            name for name in sys.modules
+            if name.startswith("kith.") and not name.startswith("kith.kernel")
+        )
+        print(",".join(strays))
+    """)
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        cwd=SOURCE.parent,
+    )
+    assert done.returncode == 0, f"the kernel would not import on its own:\n{done.stderr}"
+    strays = [one for one in done.stdout.strip().split(",") if one]
+    assert not strays, "importing the kernel dragged in:\n" + "\n".join(f"  {one}" for one in strays)

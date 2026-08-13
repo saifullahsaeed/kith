@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import threading
 
-from kith.services import live_turns
+from kith.kernel import live_turns
 
 
 class TestArrivingLate:
