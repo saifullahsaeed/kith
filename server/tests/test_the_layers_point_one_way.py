@@ -115,7 +115,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
 #:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far, 38 -> 25:
+#: Struck off so far, 38 -> 22:
 #:
 #: * `settings -> services` (1), which was `describe()` fetching the tunables for the
 #:   startup log. The caller joins the two halves now.
@@ -130,8 +130,11 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   comment at each one gave two reasons — "local import and swallowed". Only the swallow
 #:   was ever load-bearing: `changes` imports nothing, so there was no cycle to dodge. The
 #:   imports are module-level now and the `try` wraps only the `publish`.
+#: * `infra -> services` 12 -> 9, from `session_context` moving to the kernel. It split 13
+#:   pure names from 3 that resolve a project through the repositories; the three went to
+#:   `services/project_binding.py`, whose only callers were already in `tools/`.
 ALLOWED: dict[tuple[str, str], int] = {
-    ("infra", "services"): 12,
+    ("infra", "services"): 9,
     ("services", "tools"): 5,
     ("llm", "services"): 2,
     ("domain", "services"): 2,
@@ -297,3 +300,36 @@ def test_importing_the_kernel_loads_only_the_kernel():
     assert done.returncode == 0, f"the kernel would not import on its own:\n{done.stderr}"
     strays = [one for one in done.stdout.strip().split(",") if one]
     assert not strays, "importing the kernel dragged in:\n" + "\n".join(f"  {one}" for one in strays)
+
+
+def test_each_context_variable_is_built_exactly_once():
+    """Two `ContextVar`s from the same name string are two different variables.
+
+    This is the one failure mode in the layering work that is silent rather than loud. A
+    `ContextVar` is identified by object identity, not by the name it was given — the name is
+    only a repr — so a module left behind during a move, or a re-export that rebuilds one,
+    produces a second variable that nothing writes to. Reading it does not raise: it returns
+    the declared default, which for `kith_conversation` is `""` and is
+    `kernel/session_context.py`'s documented legitimate answer for "nothing claims this work".
+
+    So the failure looks exactly like the honest empty state. Work would land in the wrong
+    project's folder, checkpoints would stop being taken, and every test asserting the empty
+    case would still pass. Cheaper to assert the count.
+    """
+    built: dict[str, list[str]] = defaultdict(list)
+    for path in sorted(SOURCE.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            is_ctxvar = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "ContextVar"
+            )
+            if is_ctxvar and node.args and isinstance(node.args[0], ast.Constant):
+                built[str(node.args[0].value)].append(f"{path.relative_to(SOURCE.parent)}:{node.lineno}")
+    twice = {name: where for name, where in built.items() if len(where) > 1}
+    assert not twice, "the same context variable is constructed more than once:\n" + "\n".join(
+        f"  {name}\n" + "\n".join(f"      {one}" for one in where) for name, where in sorted(twice.items())
+    )

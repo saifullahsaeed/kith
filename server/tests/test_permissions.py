@@ -257,8 +257,7 @@ class TestWaitingForYourAnswer:
     """
 
     def test_allowing_lets_the_waiting_call_through(self, tmp_path):
-        from kith.kernel import live_turns
-        from kith.services import session_context
+        from kith.kernel import live_turns, session_context
 
         root = tmp_path / "work"
         root.mkdir()
@@ -302,7 +301,7 @@ class TestWaitingForYourAnswer:
         a test — all of them have a conversation id and none of them has anybody looking. Waiting
         would park the thread for fifteen minutes on a prompt drawn on nobody's screen.
         """
-        from kith.services import session_context
+        from kith.kernel import session_context
 
         root = tmp_path / "work"
         root.mkdir()
@@ -337,8 +336,7 @@ class TestItAsksOnceOrNotAtAll:
 
     def test_an_attended_refusal_raises_one_alert_not_two(self, tmp_path, never_the_real_database):
         from kith.infra.db import repositories as repo
-        from kith.kernel import live_turns
-        from kith.services import session_context
+        from kith.kernel import live_turns, session_context
 
         root, outside = self._refusal(tmp_path)
         turn = live_turns.begin("c1")
@@ -363,7 +361,7 @@ class TestItAsksOnceOrNotAtAll:
 
     def test_an_unattended_refusal_raises_none(self, tmp_path, never_the_real_database):
         from kith.infra.db import repositories as repo
-        from kith.services import session_context
+        from kith.kernel import session_context
 
         root, outside = self._refusal(tmp_path)
 
@@ -376,7 +374,7 @@ class TestItAsksOnceOrNotAtAll:
         assert alerts == []
 
     def test_denying_refuses_it_there_and_then(self, tmp_path):
-        from kith.services import session_context
+        from kith.kernel import session_context
 
         root = tmp_path / "work"
         root.mkdir()
@@ -412,7 +410,7 @@ class TestItAsksOnceOrNotAtAll:
         assert time.time() - started < 1, "it waited for an answer nobody could give"
 
     def test_stopping_a_turn_releases_a_waiting_call(self, tmp_path):
-        from kith.services import session_context
+        from kith.kernel import session_context
 
         root = tmp_path / "work"
         root.mkdir()

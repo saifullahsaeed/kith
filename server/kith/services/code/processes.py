@@ -493,7 +493,7 @@ def _current_conversation() -> str:
     shape this codebase already rejected for `session_context` generally.
     """
     try:
-        from kith.services import session_context
+        from kith.kernel import session_context
 
         return session_context.current() or ""
     except Exception:

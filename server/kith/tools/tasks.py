@@ -7,6 +7,7 @@ from pathlib import Path
 from kith.domain import stall
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db import repositories as repo
+from kith.services import project_binding
 from kith.tools import paging
 from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
@@ -96,7 +97,7 @@ def _verify_done(path: Path, a: dict) -> dict | None:
     # a column he could not pick up again — which worked, and cost a whole status to say
     # "somebody look at this". There is a person in every chat turn now, so the answer is to be
     # asked there instead of queued here.
-    from kith.services import session_context
+    from kith.kernel import session_context
 
     if session_context.unattended():
         return {
@@ -121,9 +122,8 @@ def _out_of_scope(path: Path, project_id: int | None) -> dict | None:
     same place; naming both projects and saying what to do instead — start a conversation for it —
     is the difference between pushing back and being obstructive.
     """
-    from kith.services import session_context
 
-    reason = session_context.foreign_project(path, project_id)
+    reason = project_binding.foreign_project(path, project_id)
     if not reason:
         return None
     return {"blocked": reason, "next": "Tell them, and work on this conversation's project instead."}
@@ -166,7 +166,7 @@ def _verify_approvable(path: Path, task_id: int) -> dict | None:
     # honest proxy: the plan is handed over in chat, so the earliest anyone could have answered is
     # the turn after the one that wrote it. Outside a turn — a test, a script — `turn_notes()` is
     # an empty throwaway and this cannot fire, which is right: there is nobody to have asked.
-    from kith.services import session_context
+    from kith.kernel import session_context
 
     if int(task_id) in session_context.turn_notes().get(FILED_THIS_TURN, ()):
         return {
@@ -240,9 +240,8 @@ def _update_task(path: Path, a: dict) -> dict | None:
     # named it. That covers the ordinary case a create-only rule would miss: picking up a
     # project someone laid out yesterday, where the first thing he touches is a task that
     # already exists.
-    from kith.services import session_context
 
-    session_context.adopt(path, (out or {}).get("project_id"))
+    project_binding.adopt(path, (out or {}).get("project_id"))
     _mirror_brief(path, (out or {}).get("id"))
     # Approving a plan is the moment work becomes work. This is the other half of everything
     # landing in `planning`: you lay the roadmap out with nothing running, and saying yes to a
@@ -379,7 +378,8 @@ def _plan_doc(path: Path, task_id: int | None) -> str:
     required=("goal",),
 )
 def add_task(path: Path, args: dict):
-    from kith.services import session_context, tuning
+    from kith.kernel import session_context
+    from kith.services import tuning
 
     goal = (args.get("goal") or "").strip()
     description = (args.get("description") or "").strip()
@@ -475,7 +475,7 @@ def add_task(path: Path, args: dict):
     # off the arguments, because a task given only a milestone still lands in a project — the
     # repository resolves it — and a session that laid out a roadmap this way would otherwise be
     # bound to nothing.
-    session_context.adopt(path, made.get("project_id"))
+    project_binding.adopt(path, made.get("project_id"))
     # Remembered so `_verify_approvable` can refuse to approve it in the same breath — see the
     # note there. Written here rather than inferred from `created_at` because the question is
     # "was this filed in *this* turn", and a timestamp comparison would need a turn-start time

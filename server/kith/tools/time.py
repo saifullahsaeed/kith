@@ -13,7 +13,7 @@ from kith.tools.registry import tool
 
 
 def _set_reminder(path: Path, a: dict) -> dict:
-    from kith.services import session_context
+    from kith.kernel import session_context
 
     note = (a.get("note") or "").strip()
     if not note:
@@ -35,7 +35,7 @@ def _list_reminders(path: Path) -> list[dict]:
 
 
 def _schedule(path: Path, a: dict) -> dict:
-    from kith.services import session_context
+    from kith.kernel import session_context
 
     note = (a.get("note") or "").strip()
     if not note:

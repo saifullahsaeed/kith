@@ -23,22 +23,14 @@ from kith.config import (
 from kith.domain import clock
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
-from kith.kernel import live_turns
+from kith.kernel import live_turns, session_context
 from kith.llm import ledger
 from kith.llm.budget import SEED_CHARS_PER_TOKEN
 from kith.schemas import (
     AnswerSchema,
     ChatRequestSchema,
 )
-from kith.services import (
-    conversations,
-    history,
-    memory_context,
-    permissions,
-    questions,
-    session_context,
-    touched,
-)
+from kith.services import conversations, history, memory_context, permissions, questions, touched
 from kith.services.activity import describe_call, short_args
 from kith.services.agent_loop import stream_agent
 from kith.settings import AGENT_DB_PATH

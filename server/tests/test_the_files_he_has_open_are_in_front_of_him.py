@@ -18,7 +18,8 @@ from kith import tools
 from kith.api.routes.chat import _build_messages
 from kith.config import default_config
 from kith.infra import workspace
-from kith.services import session_context, touched
+from kith.kernel import session_context
+from kith.services import touched
 
 
 @pytest.fixture

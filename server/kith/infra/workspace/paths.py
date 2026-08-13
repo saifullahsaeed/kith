@@ -99,7 +99,7 @@ def base_dir() -> Path:
     """
     try:
         from kith.infra.db import repositories as repo
-        from kith.services import session_context
+        from kith.kernel import session_context
         from kith.settings import AGENT_DB_PATH
 
         # The task in hand first, the conversation second. Only the conversation was

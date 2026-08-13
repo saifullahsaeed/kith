@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
-from kith.services import session_context
+from kith.kernel import session_context
 from kith.tools import run_tool
 
 BRIEF = "Done when the thing exists and the check passes."

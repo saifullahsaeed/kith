@@ -15,7 +15,8 @@ import pytest
 
 from kith.infra import workspace
 from kith.infra.db import repositories as repo
-from kith.services import checkpoints, conversations, session_context
+from kith.kernel import session_context
+from kith.services import checkpoints, conversations
 
 
 @pytest.fixture

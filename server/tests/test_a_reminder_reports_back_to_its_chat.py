@@ -18,7 +18,8 @@ from __future__ import annotations
 import pytest
 
 from kith.infra.db import repositories as repo
-from kith.services import conversations, session_context
+from kith.kernel import session_context
+from kith.services import conversations
 from kith.tools.time import _schedule, _set_reminder
 
 

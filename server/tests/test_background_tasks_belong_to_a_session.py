@@ -20,7 +20,7 @@ import time
 
 import pytest
 
-from kith.services import session_context
+from kith.kernel import session_context
 from kith.services.code import processes as process_service
 
 

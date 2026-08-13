@@ -34,7 +34,7 @@ from pathlib import Path
 
 from kith.infra import workspace
 from kith.infra.db import repositories as repo
-from kith.services import session_context
+from kith.kernel import session_context
 
 #: Which tools touch a file, and what to call what they did. `read` and `wrote` rather than
 #: the tool names: the manifest is read by a model deciding whether to open something again,

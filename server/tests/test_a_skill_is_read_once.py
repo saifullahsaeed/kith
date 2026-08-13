@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from kith.services import session_context
+from kith.kernel import session_context
 from kith.tools import registry
 
 

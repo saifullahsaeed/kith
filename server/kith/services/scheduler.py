@@ -17,7 +17,8 @@ import traceback
 from kith.config import default_config
 from kith.domain import clock
 from kith.infra.db import repositories as repo
-from kith.services import conversations, session_context
+from kith.kernel import session_context
+from kith.services import conversations
 from kith.services.activity import feed
 from kith.settings import AGENT_DB_PATH
 

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.services import questions, session_context
+from kith.kernel import session_context
+from kith.services import questions
 from kith.tools.registry import tool
 
 _QUESTIONS = {

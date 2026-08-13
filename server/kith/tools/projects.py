@@ -8,6 +8,7 @@ from pathlib import Path
 from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
+from kith.services import project_binding
 from kith.tools import paging
 from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
@@ -16,9 +17,8 @@ from kith.tools.registry import tool
 
 def _out_of_scope(path: Path, project_id: int | None) -> dict | None:
     """A refusal when this conversation may not write to that project, or None."""
-    from kith.services import session_context
 
-    reason = session_context.foreign_project(path, project_id)
+    reason = project_binding.foreign_project(path, project_id)
     if not reason:
         return None
     return {"blocked": reason, "next": "Tell them, and work on this conversation's project instead."}
@@ -53,14 +53,14 @@ def create_project(path: Path, args: dict):
     Not every project has code, though, and one that does not should not be handed a pretend
     directory: a shortlist or a piece of research is a project with rows and no folder.
     """
-    from kith.services import project_files, project_memory, session_context
+    from kith.services import project_files, project_memory
 
     # A conversation gets one project. `_adoption_note` used to be the whole answer to a session
     # starting a second one: the project was created, the binding silently refused, and the reply
     # said so in a note — which left a real row on the board that nothing was working on. Six of
     # the nine projects on the real board point at one folder, two of those are active, and one is
     # called `placeholder`. Refusing is what the note was trying to be.
-    bound = session_context.bound_project(path)
+    bound = project_binding.bound_project(path)
     if bound:
         current = repo.projects.get_project(path, int(bound)) or {}
         return {
@@ -89,7 +89,7 @@ def create_project(path: Path, args: dict):
             None,
         )
         if existing:
-            session_context.adopt(path, existing.get("id"), deliberate=True)
+            project_binding.adopt(path, existing.get("id"), deliberate=True)
             return {
                 **existing,
                 "note": (
@@ -103,14 +103,14 @@ def create_project(path: Path, args: dict):
         project_memory.ensure(resolved)
         project_files.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
-        session_context.adopt(path, made.get("id"), deliberate=True)
+        project_binding.adopt(path, made.get("id"), deliberate=True)
         return {**made, "memory": f"{directory}/.kith/memory.md"}
     made = repo.projects.add_project(path, args["name"], args.get("description") or "")
     # The conversation that started it is the one working on it. Nothing used to write this
     # down, so `conversations.project_id` existed in the schema, was read on every chat turn
     # to decide which project memory to show, and was never once set — which is why two
     # sessions saw the same everything.
-    session_context.adopt(path, made.get("id"), deliberate=True)
+    project_binding.adopt(path, made.get("id"), deliberate=True)
     return {**made}
 
 
@@ -147,7 +147,6 @@ def list_projects(path: Path, args: dict):
     required=("id",),
 )
 def update_project(path: Path, args: dict):
-    from kith.services import session_context
 
     foreign = _out_of_scope(path, args.get("id"))
     if foreign is not None:
@@ -172,7 +171,7 @@ def update_project(path: Path, args: dict):
     # project has just been set aside has nothing left to do there, and binding it would
     # keep it pointed at work nobody wants touched right now.
     if status in (None, "active"):
-        session_context.adopt(path, args["id"])
+        project_binding.adopt(path, args["id"])
     return out
 
 
@@ -215,12 +214,11 @@ def add_milestone(path: Path, args: dict):
     So: idempotent on the milestone, and `after` is honoured whether the milestone was just
     made or already there.
     """
-    from kith.services import session_context
 
     foreign = _out_of_scope(path, args.get("project_id"))
     if foreign is not None:
         return foreign
-    session_context.adopt(path, args["project_id"])
+    project_binding.adopt(path, args["project_id"])
     title = str(args["title"]).strip()
     target = next(
         (
@@ -359,7 +357,7 @@ def link_folder(path: Path, args: dict):
     anywhere outside the workspace with no record of why. This is one named folder, named by
     them, revoked when the work ends.
     """
-    from kith.services import permissions, project_files, project_memory, session_context
+    from kith.services import permissions, project_files, project_memory
 
     folder = str(args.get("folder") or "").strip()
     if not folder:
@@ -400,7 +398,7 @@ def link_folder(path: Path, args: dict):
     permissions.forget_linked_projects()
     project_memory.ensure(resolved)
     project_files.ensure(resolved)
-    session_context.adopt(path, args["id"], deliberate=True)
+    project_binding.adopt(path, args["id"], deliberate=True)
     return {
         **updated,
         "memory": str(project_memory.path_for(resolved)),

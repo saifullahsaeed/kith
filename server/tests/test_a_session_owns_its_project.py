@@ -15,7 +15,8 @@ from __future__ import annotations
 import pytest
 
 from kith.infra.db import repositories as repo
-from kith.services import conversations, session_context
+from kith.kernel import session_context
+from kith.services import conversations
 from kith.tools import projects as project_tools
 from kith.tools import tasks as task_tools
 

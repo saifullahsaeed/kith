@@ -877,7 +877,7 @@ def stream_agent(
     setting a context variable inside a generator sets it in whoever called `next()`, which
     is not the same thing and leaks.
     """
-    from kith.services import session_context
+    from kith.kernel import session_context
 
     with session_context.a_turn():
         yield from _run_turn(

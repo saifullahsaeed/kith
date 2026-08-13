@@ -25,7 +25,8 @@ import pytest
 
 from kith import tools
 from kith.infra import workspace
-from kith.services import conversations, session_context, touched
+from kith.kernel import session_context
+from kith.services import conversations, touched
 
 
 @pytest.fixture

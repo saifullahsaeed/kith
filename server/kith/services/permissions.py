@@ -473,8 +473,7 @@ def _wait_for(decision: Decision) -> None:
     # immediately as they always did, because waiting would park a thread on a prompt drawn on
     # nobody's screen. The whole suite hung on this before the guard existed, which is the same
     # failure a background job would have hit in the small hours.
-    from kith.kernel import live_turns
-    from kith.services import session_context
+    from kith.kernel import live_turns, session_context
 
     # A live turn, not merely a conversation id. The id says which chat this belongs to; it
     # does not say that anything is streaming it to a screen. A checkpoint taken by a test, a
@@ -516,7 +515,7 @@ def _tell_them(request: Request) -> None:
     """
     try:
         from kith.infra.db import repositories as repo
-        from kith.services import session_context
+        from kith.kernel import session_context
         from kith.settings import AGENT_DB_PATH
 
         conversation_id = session_context.current()

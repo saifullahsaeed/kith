@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import pytest
 
-from kith.services import scheduler, session_context
+from kith.kernel import session_context
+from kith.services import scheduler
 from kith.services.code import processes as process_service
 
 

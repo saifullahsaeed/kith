@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 from kith.infra import workspace
-from kith.services import session_context
+from kith.kernel import session_context
 
 
 @pytest.fixture

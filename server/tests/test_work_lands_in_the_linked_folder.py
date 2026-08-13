@@ -8,7 +8,8 @@ only decides WHERE relative paths and a command's cwd land, never WHAT he may to
 
 from kith.infra import workspace
 from kith.infra.db import repositories as repo
-from kith.services import conversations, session_context
+from kith.kernel import session_context
+from kith.services import conversations
 
 
 def _link(db, tmp_path, monkeypatch):

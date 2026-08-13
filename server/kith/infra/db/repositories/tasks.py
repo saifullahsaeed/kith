@@ -278,7 +278,7 @@ def _who_is_working() -> str | None:
     and the cycle is real. None is the honest answer for a reminder firing at four in the
     morning — it is working the task, but there is no session for anyone to watch it in.
     """
-    from kith.services import session_context
+    from kith.kernel import session_context
 
     return session_context.current() or None
 
