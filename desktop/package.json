@@ -38,16 +38,19 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/adhoc-sign.js",
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
         {
-          "target": "dir",
+          "target": "dmg",
           "arch": [
             "arm64"
           ]
         }
       ],
+      "identity": null,
+      "hardenedRuntime": false,
       "extendInfo": {
         "NSDesktopFolderUsageDescription": "Kith needs this to read files you point him at on your Desktop.",
         "NSDocumentsFolderUsageDescription": "Kith needs this to read files you point him at in Documents.",

@@ -15,7 +15,7 @@
 #
 # **The persona is data, not code.** It is markdown, read at runtime, and the app starts
 # with no personality at all if it is missing — with only a "0 fragments" line in the log to
-# say so. Same for the directives that shape each kind of tick.
+# say so.
 #
 # **Half the dependency graph is invisible to static analysis.** APIFlask builds its schema
 # layer through apispec plugins resolved by name, SQLAlchemy loads its dialect by string,
@@ -40,7 +40,6 @@ if not UI_DIST.is_dir():
 datas = [
     # Read at runtime from SERVER_ROOT, which is the bundle directory when frozen.
     (str(HERE / "persona"), "persona"),
-    (str(HERE / "kith" / "autonomy" / "directives"), "kith/autonomy/directives"),
     # The interface. Served by this process, so KITH_UI_DIST points here at startup.
     (str(UI_DIST), "ui"),
 ]
