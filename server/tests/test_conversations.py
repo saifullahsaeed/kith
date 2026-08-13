@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from kith.infra.db import repositories as repo
 from kith.services import conversations
 
 
@@ -271,6 +272,89 @@ class TestListing:
         report = conversations.storage()
         assert report["files"] == 2
         assert report["bytes"] > 0
+
+
+class TestWhereYouLeftIt:
+    """Each row says what came of the conversation, not how it opened.
+
+    The sidebar carried the first thing the person typed and a count of the messages since,
+    so a hundred and fifty rows read "hey · 80 msg" — the opening of a session and its
+    volume, neither of which is what anyone opens a history list to find out. The index row
+    keeps his last word now, and these are the two properties that makes it worth anything:
+    it is the *last* one, and it is a readable line rather than whatever character his reply
+    happened to begin with.
+    """
+
+    def test_his_last_word_is_the_one_kept(self, db):
+        chat = conversations.start(db, "hey")["id"]
+        conversations.record(db, chat, "assistant", "Started on the auth flow.")
+        conversations.record(db, chat, "user", "and the tests?")
+        conversations.record(db, chat, "assistant", "Pushed b432a34 to origin/main. CI is green.")
+
+        row = next(one for one in conversations.recent(db) if one["id"] == chat)
+        assert row["lastSaid"] == "Pushed b432a34 to origin/main. CI is green."
+
+    def test_what_you_typed_is_not_what_is_shown(self, db):
+        chat = conversations.start(db, "hey")["id"]
+        conversations.record(db, chat, "user", "hey")
+        conversations.record(db, chat, "assistant", "Rewrote the fold cadence — tests green.")
+
+        row = next(one for one in conversations.recent(db) if one["id"] == chat)
+        assert row["title"] == "hey", "the title is still your words; the row just stops leading with it"
+        assert row["lastSaid"] == "Rewrote the fold cadence — tests green."
+
+    @pytest.mark.parametrize(
+        ("reply", "expected"),
+        [
+            ("```python\nprint(1)\n```\nDone — it prints.", "Done — it prints."),
+            ("## What changed\n\nThree files.", "What changed"),
+            ("- Fixed the migration\n- Ran the suite", "Fixed the migration"),
+            ("**Green.** All 412 tests pass.", "Green. All 412 tests pass."),
+        ],
+    )
+    def test_it_is_the_first_readable_line_not_the_first_line(self, db, reply, expected):
+        """A row reading "```python" is worse than the message count it replaced."""
+        chat = conversations.start(db, "go")["id"]
+        conversations.record(db, chat, "assistant", reply)
+        assert conversations.recent(db)[0]["lastSaid"] == expected
+
+    def test_a_reply_with_nothing_readable_leaves_the_last_one_standing(self, db):
+        chat = conversations.start(db, "go")["id"]
+        conversations.record(db, chat, "assistant", "Here it is.")
+        conversations.record(db, chat, "assistant", "```\ndiff --git a/x b/x\n```")
+        assert conversations.recent(db)[0]["lastSaid"] == "Here it is."
+
+    def test_a_long_reply_is_cut_to_a_line(self, db):
+        chat = conversations.start(db, "go")["id"]
+        conversations.record(db, chat, "assistant", "word " * 200)
+        said = conversations.recent(db)[0]["lastSaid"]
+        assert len(said) <= conversations.OUTCOME_CHARS + 1
+        assert said.endswith("…")
+
+    def test_a_conversation_from_before_the_column_is_read_out_of_its_transcript(self, db):
+        """A hundred and fifty existing rows have no last word stored. They have one on disk."""
+        chat = conversations.start(db, "an old one")["id"]
+        conversations.record(db, chat, "assistant", "Left it at the checkpoint.")
+        # As the migration leaves them: indexed, transcript intact, column blank.
+        repo.conversations.set_last_said(db, chat, "")
+
+        assert conversations.recent(db)[0]["lastSaid"] == "Left it at the checkpoint."
+        assert repo.conversations.get(db, chat)["last_said"] == "Left it at the checkpoint.", (
+            "read once and written back, or every listing re-reads every transcript"
+        )
+
+    def test_reading_your_history_does_not_reorder_it(self, db):
+        older = conversations.start(db, "older")["id"]
+        conversations.record(db, older, "assistant", "Finished that.")
+        newer = conversations.start(db, "newer")["id"]
+        conversations.record(db, newer, "assistant", "And this.")
+        repo.conversations.set_last_said(db, older, "")
+        was = repo.conversations.get(db, older)["updated_at"]
+
+        listed = [row["id"] for row in conversations.recent(db)]
+
+        assert listed[0] == newer, "backfilling an old row pushed it to the top of the sidebar"
+        assert repo.conversations.get(db, older)["updated_at"] == was
 
 
 class TestSearchingWhatWasSaid:

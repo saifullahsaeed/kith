@@ -545,6 +545,21 @@ def _migrations():
         # breaks every query against the table (see v29/v30 for the same ordering trap).
         conn.execute("ALTER TABLE tasks DROP COLUMN due_at")
 
+    def v35_conversation_last_said(conn):
+        # What a conversation was left in the middle of, so the sidebar can say it.
+        #
+        # The index row carried the first thing the person typed and a count of the messages
+        # since — so a hundred and fifty rows read "hey · 80 msg", which describes the opening
+        # of a session and its volume, and nothing about what came of it. Both are facts about
+        # the input to a conversation, and the question anyone actually brings to a history
+        # list is about the output: what state did I leave this in.
+        #
+        # Empty for everything that already exists. The transcripts hold the answer, so
+        # `services.conversations.recent` fills a blank one from the file the first time it
+        # lists it, rather than this migration opening a hundred and fifty files while the
+        # database is mid-upgrade.
+        conn.execute("ALTER TABLE conversations ADD COLUMN last_said TEXT NOT NULL DEFAULT ''")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -580,6 +595,7 @@ def _migrations():
         v32_file_touch_extent,
         v33_task_conversation,
         v34_four_task_statuses,
+        v35_conversation_last_said,
     ]
 
 

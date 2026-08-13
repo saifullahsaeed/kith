@@ -30,6 +30,7 @@ import {
 } from "@/lib/backend";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { useChanges } from "@/hooks/use-changes";
 
 /**
  * A project's roadmap, as the graph it actually is.
@@ -145,8 +146,13 @@ function Canvas({
   // before, which meant a milestone he finished mid-turn — the exact moment the graph
   // changes shape — never appeared until something else happened to refetch it.
   const working = roadmap?.milestones.some((one) => one.tasks_doing > 0) ?? false;
+  // Both kinds: a milestone finishing is a `project` change, and a task moving under one changes the
+  // counts this draws — which is the moment the graph changes shape and the moment it used to miss.
+  useChanges(["project", "task"], () => void load());
   useEffect(() => {
-    const timer = setInterval(load, working ? 4_000 : 15_000);
+    // A backstop. `useChanges` below is what redraws the graph the moment its shape changes;
+    // this covers a dropped stream. (was 4s while a milestone was working, 15s otherwise.)
+    const timer = setInterval(load, 30_000);
     window.addEventListener("focus", load);
     return () => {
       clearInterval(timer);

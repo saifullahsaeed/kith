@@ -49,8 +49,9 @@ def recent(path: Path, limit: int = 50) -> list[dict]:
         return [as_dict(row) for row in rows]
 
 
-def touch(path: Path, conversation_id: str, delta: int = 0) -> None:
-    """Mark it as the most recent, and count a message if one was added."""
+def touch(path: Path, conversation_id: str, delta: int = 0, last_said: str | None = None) -> None:
+    """Mark it as the most recent, count a message if one was added, and record where it
+    was left if he was the one talking."""
     with session(path) as db:
         row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
         if row is None:
@@ -58,6 +59,21 @@ def touch(path: Path, conversation_id: str, delta: int = 0) -> None:
         row.updated_at = utc_now_iso()
         if delta:
             row.messages = int(row.messages or 0) + delta
+        if last_said is not None:
+            row.last_said = last_said
+
+
+def set_last_said(path: Path, conversation_id: str, last_said: str) -> None:
+    """Fill in where a conversation was left, without touching its position in the list.
+
+    Separate from `touch` on purpose: this is used to backfill rows written before the
+    column existed, and a backfill that moved everything it read to the top of the sidebar
+    would rewrite your history by looking at it.
+    """
+    with session(path) as db:
+        row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
+        if row is not None:
+            row.last_said = last_said
 
 
 def rename(path: Path, conversation_id: str, title: str) -> None:

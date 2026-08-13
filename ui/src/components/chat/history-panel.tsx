@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageSquare, Plus, Search, X } from "lucide-react";
+import { ChevronRight, MessageSquare, Plus, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ItemMenu } from "@/components/ui/item-menu";
@@ -42,6 +42,18 @@ const MAX = 500;
  * but not the finding: with two projects running at once, every day interleaves sessions from
  * both, so the one axis that told them apart was the one not in use. The day a session last moved
  * is on its own row now, which is where it was always more useful than in a heading.
+ *
+ * What each row *says* was the thing wrong with it for longer than any of that. It carried the
+ * first line you typed and a count of the messages since — so a hundred and fifty rows read
+ * "hey · 80 msg", and both halves describe the input to a conversation. Nobody opens a history
+ * list to find out how a session started or how long it got; they open it to find where they
+ * left something. So the row is his last word now (`lastSaid`, kept on the index row — see
+ * services/conversations.py), the message count is gone, and so is the "46.6 MB on disk" footer,
+ * which was a fact about his filesystem sitting where a fact about your work should be.
+ *
+ * And only one project is open at a time. A hundred and fifty rows is an archive, not a list:
+ * the one you are working in is expanded, the rest are a name and a count until you ask, and
+ * search is the way into anything older.
  */
 export function HistoryPanel({
   activeId,
@@ -55,18 +67,18 @@ export function HistoryPanel({
   onClose: () => void;
 }) {
   const [items, setItems] = useState<ConversationSummary[]>([]);
-  const [storage, setStorage] = useState<{ files: number; bytes: number } | null>(null);
   const [limit, setLimit] = useState(PAGE);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<TranscriptHit[] | null>(null);
+  // Which project sections you have opened or closed by hand. Held as the *difference* from
+  // what would be open anyway, so the one you are working in stays open as you move between
+  // conversations without a toggle you never pressed being remembered as a preference.
+  const [toggled, setToggled] = useState<Set<string>>(() => new Set());
   const confirm = useConfirm();
 
   const load = useCallback(() => {
     fetchConversations(limit)
-      .then((data) => {
-        setItems(data.conversations);
-        setStorage(data.storage);
-      })
+      .then((data) => setItems(data.conversations))
       .catch(() => {});
   }, [limit]);
 
@@ -128,6 +140,13 @@ export function HistoryPanel({
       .catch(() => {});
   }, [items]);
   const groups = useMemo(() => groupByProject(items, projects), [items, projects]);
+  // Open by default: the project you are in. Failing that — a conversation not yet in the
+  // page, or none active — the most recent, because a panel that opens entirely shut is a
+  // panel that answers nothing until you click.
+  const openByDefault = useMemo(() => {
+    const holding = groups.find((group) => group.items.some((one) => one.id === activeId));
+    return (holding ?? groups[0])?.key;
+  }, [groups, activeId]);
   // A full page back means there are almost certainly more behind it. The alternative was
   // showing 100 of seventeen hundred with nothing on screen saying so, which is a silent
   // truncation dressed as a complete list.
@@ -217,104 +236,165 @@ export function HistoryPanel({
             </p>
           ) : (
             <>
-              {groups.map((group) => (
-                <section key={group.key}>
-                  {/* Sticky, so the day you are looking at is named while you are inside it.
-                      It needs the panel's own backdrop to sit on, which is why the aside has
-                      a background now rather than letting the room show straight through. */}
-                  {/* The app's own label treatment — `SectionLabel` in the control panel uses
+              {groups.map((group) => {
+                // XOR against the default: no effect syncing state to props, and nothing to
+                // go stale when the active conversation moves to another project.
+                const open = (group.key === openByDefault) !== toggled.has(group.key);
+                return (
+                  <section key={group.key}>
+                    {/* Sticky, so the project you are looking at is named while you are inside
+                      it. It needs the panel's own backdrop to sit on, which is why the aside
+                      has a background now rather than letting the room show straight through. */}
+                    {/* The app's own label treatment — `SectionLabel` in the control panel uses
                       `tracking-[0.12em]`, and this used `tracking-wider`, which is a different
                       letterspacing on the same uppercase. Small differences in the one element
                       that repeats down a whole panel are what make a panel look like it came
                       from somewhere else.
-                      
+
                       And one line, always. "SADEEF CAPITAL SERVICES PUBLIC WEBSITE" wrapped to
                       two, which turned a quiet divider into the loudest thing in the sidebar
                       and pushed the conversations it was labelling down the screen. */}
-                  <h3 className="bg-sidebar/80 text-muted-foreground/70 sticky top-0 z-10 flex items-baseline gap-1.5 px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase backdrop-blur-sm">
-                    <span className="min-w-0 truncate" title={group.label}>
-                      {group.label}
-                    </span>
-                    {group.status ? (
-                      <span className="text-muted-foreground/45 shrink-0 font-normal tracking-normal normal-case">
-                        {group.status}
-                      </span>
-                    ) : null}
-                  </h3>
-                  <ul className="space-y-0.5 pb-1">
-                    {group.items.map((item) => (
-                      <li key={item.id}>
-                        <ItemMenu
-                          title={item.title}
-                          copy={item.title}
-                          actions={[
-                            {
-                              label: "Reveal transcript",
-                              hint: "in Finder",
-                              onSelect: () => void openOnHost(item.transcript, true),
-                            },
-                            {
-                              label: "Rename",
-                              onSelect: () => {
-                                const next = window.prompt("Rename this conversation", item.title);
-                                if (next?.trim())
-                                  void renameConversation(item.id, next.trim()).then(load);
+                    <h3 className="bg-sidebar/80 sticky top-0 z-10 backdrop-blur-sm">
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() =>
+                          setToggled((current) => {
+                            const next = new Set(current);
+                            if (!next.delete(group.key)) next.add(group.key);
+                            return next;
+                          })
+                        }
+                        className="text-muted-foreground/70 hover:text-foreground flex w-full items-baseline gap-1.5 px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase transition-colors"
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "size-3 shrink-0 self-center transition-transform",
+                            open && "rotate-90",
+                          )}
+                        />
+                        <span className="min-w-0 truncate" title={group.label}>
+                          {group.label}
+                        </span>
+                        {group.status ? (
+                          <span className="text-muted-foreground/45 shrink-0 font-normal tracking-normal normal-case">
+                            {group.status}
+                          </span>
+                        ) : null}
+                        {/* The count is what makes a closed section honest — a name on its own
+                          gives no reason to open it, and no sense of what is behind it. */}
+                        <span className="text-muted-foreground/45 ms-auto shrink-0 font-normal tabular-nums">
+                          {group.items.length}
+                        </span>
+                        {/* Something still running in a section you cannot see. */}
+                        {!open && group.items.some((one) => one.working) ? (
+                          <span
+                            className="bg-roam size-1.5 shrink-0 animate-pulse self-center rounded-full"
+                            title="Still working in here"
+                          />
+                        ) : null}
+                      </button>
+                    </h3>
+                    <ul className={cn("space-y-0.5 pb-1", !open && "hidden")}>
+                      {group.items.map((item) => (
+                        <li key={item.id}>
+                          <ItemMenu
+                            title={item.title}
+                            copy={item.title}
+                            actions={[
+                              {
+                                label: "Reveal transcript",
+                                hint: "in Finder",
+                                onSelect: () => void openOnHost(item.transcript, true),
                               },
-                            },
-                          ]}
-                          deleteLabel="Remove from list"
-                          onDelete={async () => {
-                            // The file stays. Tidying a list and destroying the only record of
-                            // an afternoon are not the same act, so they are not the same click.
-                            const ok = await confirm({
-                              title: "Remove this conversation?",
-                              subject: item.title,
-                              description:
-                                "It leaves this list. The transcript file stays in his folder.",
-                              confirmLabel: "Remove",
-                            });
-                            if (ok) void deleteConversation(item.id, false).then(load);
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => onOpen(item.id)}
-                            className={cn(
-                              "hover:bg-accent/60 relative flex w-full flex-col items-start gap-0.5 rounded-lg py-2 pr-2.5 pl-3 text-left transition-colors",
-                              item.id === activeId && "bg-kith-soft/50",
-                            )}
+                              {
+                                label: "Rename",
+                                onSelect: () => {
+                                  const next = window.prompt(
+                                    "Rename this conversation",
+                                    item.title,
+                                  );
+                                  if (next?.trim())
+                                    void renameConversation(item.id, next.trim()).then(load);
+                                },
+                              },
+                            ]}
+                            deleteLabel="Remove from list"
+                            onDelete={async () => {
+                              // The file stays. Tidying a list and destroying the only record of
+                              // an afternoon are not the same act, so they are not the same click.
+                              const ok = await confirm({
+                                title: "Remove this conversation?",
+                                subject: item.title,
+                                description:
+                                  "It leaves this list. The transcript file stays in his folder.",
+                                confirmLabel: "Remove",
+                              });
+                              if (ok) void deleteConversation(item.id, false).then(load);
+                            }}
                           >
-                            {/* A bar, not only a tint. The tint alone was invisible the moment
+                            {/* A line, not a card.
+
+                                This was `text-sm` over two clamped lines with the date on a
+                                third, inside a full-width tint — around seventy pixels for one
+                                conversation against twenty-six for a whole project's heading,
+                                so a single row outweighed every project below it. The rule for
+                                a list is that no row may be louder than the thing that groups
+                                it: smaller type, tighter leading, and the stamp moved up beside
+                                the text instead of taking a line of its own. */}
+                            <button
+                              type="button"
+                              onClick={() => onOpen(item.id)}
+                              className={cn(
+                                "hover:bg-accent/50 relative flex w-full items-start gap-2 rounded-md py-1.5 pr-2 pl-3 text-left transition-colors",
+                                item.id === activeId && "bg-kith-soft/40",
+                              )}
+                            >
+                              {/* A bar, not only a tint. The tint alone was invisible the moment
                                 the row scrolled near the edge, so the conversation you were in
                                 was unfindable in the list of the ones you were not. */}
-                            {item.id === activeId ? (
+                              {item.id === activeId ? (
+                                <span
+                                  aria-hidden
+                                  className="bg-kith absolute inset-y-1 left-0 w-0.5 rounded-full"
+                                />
+                              ) : null}
+                              {/* Where he left it, not how you opened it. Two lines, because one
+                                truncates every sentence at the verb; the title is the fallback
+                                only while he has yet to say anything. */}
                               <span
-                                aria-hidden
-                                className="bg-kith absolute inset-y-1.5 left-0 w-0.5 rounded-full"
-                              />
-                            ) : null}
-                            <span className="flex w-full items-center gap-1.5">
-                              <span className="min-w-0 flex-1 truncate text-sm">{item.title}</span>
+                                className={cn(
+                                  "min-w-0 flex-1 text-[12.5px] leading-[1.45]",
+                                  item.lastSaid
+                                    ? "line-clamp-2"
+                                    : "text-muted-foreground truncate italic",
+                                )}
+                              >
+                                {item.lastSaid || item.title}
+                              </span>
                               {/* He carries on by himself in a session you have left. Nothing
-                                  said which ones, so a conversation working away in the
-                                  background looked exactly like one that had finished. */}
+                                said which ones, so a conversation working away in the background
+                                looked exactly like one that had finished. */}
                               {item.working ? (
                                 <span
-                                  className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
+                                  className="bg-roam mt-1.5 size-1.5 shrink-0 animate-pulse rounded-full"
                                   title="Still working in this conversation"
                                 />
                               ) : null}
-                            </span>
-                            <span className="text-muted-foreground/55 text-[11px] tabular-nums">
-                              {item.messages} msg · {dayLabel(item.updatedAt)} {time(item.updatedAt)}
-                            </span>
-                          </button>
-                        </ItemMenu>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ))}
+                              <span
+                                className="text-muted-foreground/45 mt-px shrink-0 text-[10px] tabular-nums"
+                                title={`${dayLabel(item.updatedAt)} ${time(item.updatedAt)}`}
+                              >
+                                {stamp(item.updatedAt)}
+                              </span>
+                            </button>
+                          </ItemMenu>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                );
+              })}
               {more ? (
                 <button
                   type="button"
@@ -333,14 +413,11 @@ export function HistoryPanel({
         </div>
       )}
 
-      {/* The "Hide" button that used to sit under this is gone: the toggle it duplicated is in
-          the header two inches up, and Escape does it too. */}
-      {storage ? (
-        <div className="text-muted-foreground/60 border-border/60 border-t px-4 py-2 font-mono text-[10px] tabular-nums">
-          {storage.files} transcript{storage.files === 1 ? "" : "s"} · {bytes(storage.bytes)} on
-          disk
-        </div>
-      ) : null}
+      {/* Two things used to sit under this and both are gone. The "Hide" button duplicated the
+          toggle in the header two inches up, which Escape also does. And "152 transcripts ·
+          46.6 MB on disk" was the last line of the panel — the most permanent thing on it —
+          spent on how much space his notes take up, which is a question nobody has ever had
+          about their own conversations. */}
     </aside>
   );
 }
@@ -393,9 +470,14 @@ function groupByProject(items: ConversationSummary[], projects: Project[]): Grou
   return [...all.filter((g) => g.key !== "none"), ...all.filter((g) => g.key === "none")];
 }
 
-
-function bytes(count: number): string {
-  if (count < 1024) return `${count} B`;
-  if (count < 1024 * 1024) return `${(count / 1024).toFixed(0)} KB`;
-  return `${(count / 1024 / 1024).toFixed(1)} MB`;
+/**
+ * The whole stamp in the space of one word: the clock for today, the day for anything else.
+ *
+ * "Today 04:03 PM" was both halves at once, and one of them is always the redundant one —
+ * the clock is what separates four of today's sessions from each other, and is noise on
+ * something from August. The full date is in the tooltip for when it is the thing you want.
+ */
+function stamp(iso: string): string {
+  const day = dayLabel(iso);
+  return day === "Today" ? time(iso) : day;
 }

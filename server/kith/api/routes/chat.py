@@ -24,6 +24,8 @@ from kith.config import (
 from kith.domain import clock
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
+from kith.llm import ledger
+from kith.llm.budget import SEED_CHARS_PER_TOKEN
 from kith.schemas import (
     AnswerSchema,
     ChatRequestSchema,
@@ -181,6 +183,15 @@ def fold_now(conversation_id: str):
     """
     messages = conversations.full_messages(conversation_id)
     before = _conversation_chars(messages)
+    # The same categorisation the meter shows, denominated in characters — `chars_per_token=1`
+    # makes `_tokens` the identity, so every line is a raw character count. Characters are the
+    # one unit both sides of a fold can be compared in without knowing what the provider charges
+    # per token; the conversion happens once, at the end, in `_reading_after_fold`.
+    #
+    # Taken before the fold rather than after, because `compact` is free to hand back the list it
+    # was given, and a "before" measured from the same object as the "after" would report that
+    # nothing changed.
+    was = ledger.take(messages, chars_per_token=1.0)
     folded, brief = history.fold(
         messages, default_config(), conversation_id, ollama_host(), AGENT_DB_PATH, force=True
     )
@@ -202,8 +213,90 @@ def fold_now(conversation_id: str):
                 ),
             }
         )
+    # Persisted, which is the entire difference between a fold and an expensive no-op.
+    #
+    # `history.fold` is pure but for the summariser: it hands back the folded list and the brief
+    # it made, and says in its own docstring that the caller persists it. The turn path does
+    # (`_build_messages`). This one did not — so `/fold` paid for a summarisation call, reported
+    # how many characters it had removed, and dropped the brief on the floor. The next turn read
+    # the untouched transcript, found itself under the fold threshold, and replayed the whole
+    # conversation: the meter fell to 25k and came straight back to 612k on the next message,
+    # which is precisely what "no effect at all" looks like from outside.
+    #
+    # Saving it is enough to make it stick. `compact` skips its "short and never folded" exit the
+    # moment a brief exists, and reuses the stored one for as long as the turns since it fit the
+    # budget — so the next turn replays the brief plus the recent tail rather than everything.
+    conversations.record_summary(conversation_id, brief["through"], brief["text"])
     after = _conversation_chars(folded)
-    return jsonify({"folded": True, "fromChars": before, "toChars": after})
+    return jsonify(
+        {
+            "folded": True,
+            "fromChars": before,
+            "toChars": after,
+            "reading": _reading_after_fold(conversation_id, was, ledger.take(folded, chars_per_token=1.0)),
+        }
+    )
+
+
+def _reading_after_fold(conversation_id: str, was: ledger.Ledger, now: ledger.Ledger) -> dict | None:
+    """How full the window is now that the fold has happened.
+
+    A reading has only ever existed as something a turn took on its way past: the loop measures
+    the request it is about to send, and the last such measurement is what the meter shows. A
+    fold is not a turn. It rewrites the stored history and answers, and nothing measures anything
+    — so the meter went on showing a conversation that no longer exists, and the one command
+    whose entire purpose is to make that number smaller left it exactly where it was.
+
+    This does not rebuild the request to find out. Rebuilding means the persona, the live block,
+    the tool schemas as they will be narrowed next turn, and the token ratio the provider's own
+    billing calibrated — four things to get right in order to re-derive a number that is mostly
+    unchanged. A fold moves the stored conversation and nothing else, so: start from the last
+    real reading, subtract what actually left, in the ratio that reading was costed with, and
+    carry the untouched categories across rather than re-estimating them.
+
+    `None` when the conversation has never had a turn, which is the only honest answer — there
+    is no measurement to adjust, and a first reading is the next turn's to take.
+    """
+    taken = conversations.latest_reading(conversation_id)
+    reading = taken.get("context") or taken.get("baseline") or {}
+    if not reading.get("lines"):
+        return None
+    # The seed only for readings recorded before `charsPerToken` was sent. A fold typically
+    # removes hundreds of thousands of characters, so the ratio it is divided by is the whole
+    # difference between "the meter moved by the right amount" and "the meter moved".
+    ratio = float(reading.get("charsPerToken") or 0) or SEED_CHARS_PER_TOKEN
+    previous = {str(line.get("key") or ""): int(line.get("tokens") or 0) for line in reading["lines"]}
+    window = int(reading.get("window") or 0)
+
+    lines = []
+    for line in now.lines:
+        # Signed on purpose: the brief the fold wrote is itself context, and in a category that
+        # may have held nothing before. A fold that summarises 400k characters into 3k has to
+        # show the 3k arriving as well as the 400k leaving, or the meter reads low by the size
+        # of the summary and the next turn appears to grow for no reason.
+        removed = (was.of(line.key) - now.of(line.key)) / ratio
+        tokens = max(0, round(previous.get(line.key, 0) - removed))
+        if tokens > 0:
+            lines.append(
+                {
+                    "key": line.key,
+                    "label": line.label,
+                    "tokens": tokens,
+                    # Zero when the window is unknown, exactly as `Line.share_of` does it: the
+                    # absolute figures are real on a local model, only the percentages are not.
+                    "share": round(tokens / window, 4) if window > 0 else 0.0,
+                }
+            )
+
+    used = sum(line["tokens"] for line in lines)
+    return {
+        "window": window,
+        "used": used,
+        "free": max(0, window - used) if window > 0 else 0,
+        "share": round(used / window, 4) if window > 0 else 0.0,
+        "charsPerToken": ratio,
+        "lines": lines,
+    }
 
 
 @api.post("/chat/<conversation_id>/stop")
@@ -385,11 +478,70 @@ def _with_attachments(message: dict) -> dict:
         note += "\n\nYou cannot be shown images with this model, so open it yourself if it matters."
     text = f"{text}\n\n{note}".strip()
 
+    # Text is given, not referred to.
+    #
+    # Everything above answers "where is this file" — the right answer for a PDF or a spreadsheet,
+    # which he opens with his own tools because he has a computer. It is the wrong answer for text.
+    # The composer lifts a large paste out of the message and carries it alongside as a file, so
+    # pointing at the path would mean the log someone just handed him costs a tool call to read,
+    # on the one kind of attachment whose entire content is already in the request.
+    for attachment, where in saved:
+        block = _text_block(attachment, where)
+        if block:
+            text = f"{text}\n\n{block}".strip()
+
     if not inline:
         return {"role": message["role"], "content": text}
     parts: list[dict] = [{"type": "text", "text": text}] if text else []
     parts += [{"type": "image_url", "image_url": {"url": str(image["data"])}} for image in inline]
     return {"role": message["role"], "content": parts}
+
+
+#: How much of a text attachment rides inside the message.
+#:
+#: Not a limit on what can be attached — the file is written to disk whatever its size, and the
+#: path is always given. This is a limit on what is spent carrying it in the prompt. Twenty
+#: thousand characters is a few thousand tokens: enough for a stack trace, a config, a long
+#: instruction, or most of a source file, and small enough that pasting something enormous costs
+#: a fraction of the window rather than the whole conversation.
+TEXT_INLINE_CHARS = 20_000
+
+
+def _text_block(attachment: dict, where: str) -> str:
+    """A text attachment's actual contents, fenced and named — or "" if this is not one.
+
+    Truncation says so, out loud and in the same breath as the path.
+    A silently shortened file is the worst version of this: he reads what he was given, believes
+    it is the whole thing, and answers confidently about a config whose second half he never saw.
+    """
+    if str(attachment.get("kind")) == "image":
+        return ""
+    media = str(attachment.get("mediaType") or "")
+    if not (media.startswith("text/") or media in ("application/json", "application/xml")):
+        return ""
+
+    data = str(attachment.get("data") or "")
+    if not data:
+        return ""
+    try:
+        payload = data.split(",", 1)[1] if data.startswith("data:") and "," in data else data
+        body = base64.b64decode(payload, validate=False).decode("utf-8", errors="replace")
+    except Exception:
+        # Undecodable means it was never really text. The path above still stands, and he can open
+        # it however he likes — which is a better answer than a block of replacement characters.
+        return ""
+    if not body.strip():
+        return ""
+
+    name = str(attachment.get("name") or "attachment")
+    if len(body) > TEXT_INLINE_CHARS:
+        kept = body[:TEXT_INLINE_CHARS]
+        return (
+            f"`{name}` — the first {TEXT_INLINE_CHARS:,} characters of {len(body):,}. "
+            f"The whole file is at `{where}`; read it if the rest matters.\n"
+            f"```\n{kept}\n```"
+        )
+    return f"`{name}`:\n```\n{body}\n```"
 
 
 #: Where attachments land. Inside his folder on purpose: writing there needs no permission,

@@ -38,6 +38,7 @@ import {
   rename as renameEntry,
 } from "@/lib/files";
 import { cn } from "@/lib/utils";
+import { useChanges } from "@/hooks/use-changes";
 import { EmptyState, PageHeader } from "./chrome";
 import { FIELD } from "./types";
 
@@ -87,13 +88,22 @@ export function WorkspaceFiles() {
       if (editing || creating !== null || busy) return;
       load(path);
     };
-    const timer = window.setInterval(tick, 8_000);
+    // A backstop; `kith:workspace-changed` below is what makes a file he just wrote appear.
+    const timer = window.setInterval(tick, 30_000);
+    const onChange = () => tick();
+    window.addEventListener("kith:workspace-changed", onChange);
     window.addEventListener("focus", tick);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", tick);
+      window.removeEventListener("kith:workspace-changed", onChange);
     };
   }, [editing, creating, busy, path, load]);
+
+  // Through a DOM event rather than calling `tick` directly: `tick` is built inside the effect above,
+  // where the guard against clobbering an in-progress rename lives, and lifting it out to satisfy the
+  // dependency list would separate the guard from the thing it guards.
+  useChanges("workspace", () => window.dispatchEvent(new Event("kith:workspace-changed")));
 
   const join = (name: string) => (path === "." ? name : `${path}/${name}`);
   const crumbs = path === "." ? [] : path.split("/");

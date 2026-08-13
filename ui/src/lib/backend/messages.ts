@@ -12,10 +12,32 @@ export interface KithMessage {
   link?: string | null; // e.g. "/tasks/12" — makes the alert click through to its task
 }
 
-export async function fetchMessages(): Promise<{ messages: KithMessage[]; unread: number }> {
+export interface MessageFeed {
+  messages: KithMessage[];
+  unread: number;
+  /** How many of each kind exist in total, which is not the same as how many came back
+   *  above — the list is a page. The panel's clear options are named from these, so what
+   *  the button says it will remove is what it removes. */
+  counts: Record<string, number>;
+}
+
+export async function fetchMessages(): Promise<MessageFeed> {
   const res = await fetch("/api/messages");
   if (!res.ok) throw new Error(`/api/messages ${res.status}`);
-  return (await res.json()) as { messages: KithMessage[]; unread: number };
+  const data = (await res.json()) as MessageFeed;
+  return { ...data, counts: data.counts ?? {} };
+}
+
+/** Clear alerts in bulk. `kinds` narrows it (e.g. just the notes); omit it to clear the lot.
+ *  Your own replies to him are not the target. */
+export async function clearMessages(kinds?: string[]): Promise<number> {
+  const res = await fetch("/api/messages/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(kinds ? { kinds } : {}),
+  });
+  if (!res.ok) throw new Error("clear failed");
+  return ((await res.json()) as { deleted: number }).deleted;
 }
 
 export async function markAllMessagesRead(): Promise<void> {

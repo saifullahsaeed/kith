@@ -45,6 +45,10 @@ export interface ContextLedger {
   free: number;
   share: number;
   lines: ContextLine[];
+  /** Characters per token, as the provider's own billing calibrated it for the round this was
+   *  taken on. Nothing displays it — `/fold` needs it to convert the characters it removed into
+   *  this reading's own units. Absent on anything recorded before the field existed. */
+  charsPerToken?: number;
 }
 
 /** One event in the server's newline-delimited chat stream. */

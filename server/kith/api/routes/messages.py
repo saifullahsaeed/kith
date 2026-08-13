@@ -20,6 +20,9 @@ def messages_list():
         {
             "messages": repo.messages.list_messages(AGENT_DB_PATH, unread_only=unread_only),
             "unread": repo.messages.unread_message_count(AGENT_DB_PATH),
+            # Per kind, over the whole channel rather than the page above it — what the
+            # panel's clear options promise to remove.
+            "counts": repo.messages.count_messages_by_kind(AGENT_DB_PATH),
         }
     )
 
@@ -40,6 +43,25 @@ def messages_create():
 @api.doc(summary="Mark all read", description="Clear the unread badge.")
 def messages_read_all():
     return jsonify({"marked": repo.messages.mark_all_messages_read(AGENT_DB_PATH)})
+
+
+@api.post("/messages/clear")
+@api.doc(
+    summary="Clear alerts",
+    description=(
+        'Delete his messages in bulk. Pass `kinds` (e.g. ["note"]) to clear only those; omit '
+        "it to clear the lot. Your own replies to him are not the target."
+    ),
+)
+def messages_clear():
+    raw = (request.get_json(silent=True) or {}).get("kinds")
+    if raw is None:
+        kinds = None
+    elif isinstance(raw, list) and all(isinstance(one, str) for one in raw):
+        kinds = [one.strip() for one in raw if one.strip()]
+    else:
+        return jsonify({"error": "kinds must be a list of strings"}), 400
+    return jsonify({"deleted": repo.messages.delete_messages(AGENT_DB_PATH, kinds)})
 
 
 @api.post("/messages/<int:message_id>/read")

@@ -466,3 +466,224 @@
     var(--square) var(--square);
   background-size: calc(var(--square) * 2) calc(var(--square) * 2);
 }
+
+/* The composer's document.
+   
+   A rich editor renders its own nodes, and without this every one of them arrives with the
+   browser's defaults: h1 at 2em with a huge margin, lists indented forty pixels, a table with no
+   borders at all. That reads as a different application inside the composer. The point of these
+   rules is the opposite of decoration — the document should look like the message it will become,
+   at the size the rest of the composer is written at, so what you see while typing is what lands
+   in the bubble.
+
+   Sized down from the reply column deliberately. This is a box you type a paragraph into, not a
+   page: a level-one heading three times the body size would push the input off screen the moment
+   you used one. */
+.kith-composer-doc:focus {
+  outline: none;
+}
+
+.kith-composer-doc > * + * {
+  margin-top: 0.5rem;
+}
+
+.kith-composer-doc h1,
+.kith-composer-doc h2,
+.kith-composer-doc h3 {
+  font-weight: 600;
+  line-height: 1.3;
+}
+.kith-composer-doc h1 {
+  font-size: 1.15em;
+}
+.kith-composer-doc h2 {
+  font-size: 1.08em;
+}
+.kith-composer-doc h3 {
+  font-size: 1em;
+  color: var(--muted-foreground);
+}
+
+.kith-composer-doc ul,
+.kith-composer-doc ol {
+  padding-inline-start: 1.25rem;
+}
+.kith-composer-doc ul {
+  list-style: disc;
+}
+.kith-composer-doc ol {
+  list-style: decimal;
+}
+.kith-composer-doc li > p {
+  margin: 0;
+}
+/* A list is one block of related lines, not a stack of paragraphs. Without this the gap between
+   two bullets is the same as the gap between two paragraphs and the list stops reading as one. */
+.kith-composer-doc li + li {
+  margin-top: 0.125rem;
+}
+
+.kith-composer-doc blockquote {
+  border-inline-start: 2px solid color-mix(in oklab, var(--border) 90%, transparent);
+  padding-inline-start: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.kith-composer-doc code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  border-radius: 0.25rem;
+  padding: 0.05em 0.3em;
+}
+.kith-composer-doc pre {
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  overflow-x: auto;
+}
+/* The block already carries the tint; the code inside it must not carry it a second time. */
+.kith-composer-doc pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+.kith-composer-doc table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+  font-size: 0.9em;
+}
+.kith-composer-doc th,
+.kith-composer-doc td {
+  border: 1px solid color-mix(in oklab, var(--border) 90%, transparent);
+  padding: 0.2rem 0.45rem;
+  vertical-align: top;
+  /* A cell has to be clickable when it is empty, or a table you just pasted has rows you cannot
+     put a caret in. */
+  min-width: 2rem;
+}
+.kith-composer-doc th {
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+  font-weight: 600;
+  text-align: start;
+}
+.kith-composer-doc th > p,
+.kith-composer-doc td > p {
+  margin: 0;
+}
+/* ProseMirror's own selected-cell decoration, which otherwise has no styling and leaves a
+   multi-cell selection invisible. */
+.kith-composer-doc .selectedCell {
+  background: color-mix(in oklab, var(--accent) 70%, transparent);
+}
+
+.kith-composer-doc hr {
+  border: none;
+  border-top: 1px solid color-mix(in oklab, var(--border) 90%, transparent);
+}
+
+.kith-composer-doc a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* A user message, rendered rather than printed.
+   
+   Shares its shape with the composer's own document above — the same list indent, the same table
+   borders, the same code tint — because the promise of a rich composer is that what you typed is
+   what you sent, and a bubble that lays it out differently quietly breaks that. Held apart from
+   `.kith-composer-doc` rather than merged with it: this one sits on the bubble's tinted fill and
+   has to borrow its colour, and merging them would mean one rule serving two backgrounds. */
+.kith-user-markdown > * + * {
+  margin-top: 0.5rem;
+}
+
+.kith-user-markdown h1,
+.kith-user-markdown h2,
+.kith-user-markdown h3 {
+  font-weight: 600;
+  line-height: 1.3;
+}
+.kith-user-markdown h1 {
+  font-size: 1.15em;
+}
+.kith-user-markdown h2 {
+  font-size: 1.08em;
+}
+.kith-user-markdown h3 {
+  font-size: 1em;
+}
+
+.kith-user-markdown ul,
+.kith-user-markdown ol {
+  padding-inline-start: 1.25rem;
+}
+.kith-user-markdown ul {
+  list-style: disc;
+}
+.kith-user-markdown ol {
+  list-style: decimal;
+}
+.kith-user-markdown li + li {
+  margin-top: 0.125rem;
+}
+
+.kith-user-markdown blockquote {
+  border-inline-start: 2px solid color-mix(in oklab, currentColor 25%, transparent);
+  padding-inline-start: 0.75rem;
+  opacity: 0.85;
+}
+
+/* Tinted from the bubble's own text colour rather than `--muted`: the bubble is already a tinted
+   surface, and a grey pulled from the page would read as a hole punched in it. */
+.kith-user-markdown code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9em;
+  background: color-mix(in oklab, currentColor 10%, transparent);
+  border-radius: 0.25rem;
+  padding: 0.05em 0.3em;
+}
+.kith-user-markdown pre {
+  background: color-mix(in oklab, currentColor 8%, transparent);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  overflow-x: auto;
+}
+.kith-user-markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+/* Its own scroll container. A wide table inside a bubble that is itself inside a column must not
+   be what decides the width of the window. */
+.kith-user-markdown table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.kith-user-markdown th,
+.kith-user-markdown td {
+  border: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+  padding: 0.2rem 0.45rem;
+  vertical-align: top;
+  text-align: start;
+}
+.kith-user-markdown th {
+  background: color-mix(in oklab, currentColor 7%, transparent);
+  font-weight: 600;
+}
+
+.kith-user-markdown a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.kith-user-markdown hr {
+  border: none;
+  border-top: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+}

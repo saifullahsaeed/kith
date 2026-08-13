@@ -11,9 +11,16 @@
  * (`unstable_useSlashCommandAdapter`), so this is a table rather than a widget.
  */
 
+import type { ContextLedger } from "@/lib/backend/types";
+
 export interface CommandResult {
   /** Said back in the composer's own status line. Empty when there is nothing to report. */
   note: string;
+  /** The window as the fold left it. The meter reads the last *turn's* reading, and a fold is
+   *  not a turn — so without this the one command whose purpose is to make that number smaller
+   *  leaves it untouched until the next thing you send. Absent when the server had no earlier
+   *  reading to adjust, which on a conversation that has never had a turn is the truth. */
+  reading?: ContextLedger;
 }
 
 export async function foldNow(conversationId: string): Promise<CommandResult> {
@@ -25,12 +32,16 @@ export async function foldNow(conversationId: string): Promise<CommandResult> {
     note?: string;
     fromChars?: number;
     toChars?: number;
+    reading?: ContextLedger | null;
   };
   if (!body.folded) return { note: body.note ?? "Nothing to fold." };
   // Characters, not tokens: it is what the server measured, and dividing by four to sound
   // precise would be inventing a figure.
   const saved = Math.max(0, (body.fromChars ?? 0) - (body.toChars ?? 0));
-  return { note: `Folded — ${saved.toLocaleString()} characters summarised.` };
+  return {
+    note: `Folded — ${saved.toLocaleString()} characters summarised.`,
+    reading: body.reading ?? undefined,
+  };
 }
 
 export async function stopTurn(conversationId: string): Promise<CommandResult> {

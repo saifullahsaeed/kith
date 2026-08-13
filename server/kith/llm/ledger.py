@@ -108,6 +108,13 @@ class Ledger:
             "used": self.used,
             "free": self.free,
             "share": round(self.share, 4),
+            # Sent because a reading is not only read — it is also adjusted. `/fold` changes the
+            # window without taking a turn, so it has to convert the characters it removed into
+            # the tokens this reading is denominated in, and that conversion is only correct in
+            # the ratio this reading was actually costed with. Recomputing from the seed there
+            # would quietly re-price the whole conversation at a guess. Absent on any reading
+            # recorded before this field existed; callers fall back to the seed.
+            "charsPerToken": round(self.chars_per_token, 4),
             "lines": [
                 {
                     "key": line.key,

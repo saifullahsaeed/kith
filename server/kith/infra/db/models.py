@@ -294,6 +294,10 @@ class Conversation(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[str] = mapped_column(Text, nullable=False)
     messages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: The last thing he said here, in a line — where the conversation was left, which is
+    #: what a history list is asked about. Empty until he has spoken, and for rows that
+    #: predate the column (filled from the transcript the first time they are listed).
+    last_said: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class TurnLog(Base):

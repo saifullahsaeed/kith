@@ -3,6 +3,8 @@
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { AskPrompt } from "@/components/assistant-ui/ask-prompt";
+import { RichComposerInput } from "@/components/assistant-ui/composer-input/rich-input";
+import { UserMarkdownText } from "@/components/assistant-ui/user-markdown";
 import { useSlashCommands } from "@/components/assistant-ui/slash-commands";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
@@ -28,6 +30,7 @@ import { PresenceOrb } from "@/components/shell/presence";
 import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { USAGE_PART } from "@/lib/backend/adapter";
+import type { ContextLedger } from "@/lib/backend/types";
 import { summariseRun } from "@/lib/tool-language";
 import { cn } from "@/lib/utils";
 import {
@@ -208,7 +211,7 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
               <ThreadFollowupSuggestions />
               <AskPrompt conversationId={conversationId} />
               <PermissionPrompt />
-              <Composer />
+              <Composer conversationId={conversationId} />
               <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
                 <ThreadSuggestions />
               </AuiIf>
@@ -419,9 +422,13 @@ function SlashDetail() {
   );
 }
 
-const Composer: FC = () => {
-  const composer = useComposerRuntime();
-  const { commands, note } = useSlashCommands();
+/** `conversationId` is not decoration here: `/fold` and `/stop` are addressed to a conversation,
+ *  and without one they short-circuit into a note. `useSlashCommands()` was called bare, so the
+ *  id was always `""` — every `/fold` answered "this conversation has not started" over a window
+ *  that was 58% full, and every `/stop` returned an empty note, which looks exactly like a
+ *  keystroke that did nothing. */
+const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
+  const { commands, note, reading } = useSlashCommands(conversationId);
   const slash = unstable_useSlashCommandAdapter({ commands, removeOnExecute: true });
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
@@ -507,30 +514,26 @@ const Composer: FC = () => {
               </p>
             </SlashPanel>
             </ComposerPrimitive.Unstable_TriggerPopover>
-        <ComposerPrimitive.Input
-          placeholder="say something to Kith…"
-          className="aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
-          rows={1}
-          autoFocus
-          enterKeyHint="send"
-          aria-label="Message input"
-          // A screenshot on the clipboard is the other thing people try after dragging, and
-          // Cmd-V into a textarea otherwise does nothing at all for an image — no error, no
-          // attachment, which reads as the app ignoring you.
-          onPaste={(event) => {
-            const files = Array.from(event.clipboardData?.files ?? []);
-            if (!files.length) return;
-            event.preventDefault();
-            for (const file of files) void composer.addAttachment(file);
-          }}
-        />
+        {/* Not `ComposerPrimitive.Input` any more. The value in the store is still a markdown
+            string — nothing downstream knows the difference — but a textarea cannot show a table
+            as a table, and a message with structure in it was being written blind. The paste
+            handling that used to live here (a screenshot on the clipboard, which Cmd-V otherwise
+            drops silently) moved into `paste.ts` along with the rest of the rules. */}
+        <RichComposerInput placeholder="say something to Kith…" autoFocus />
         </ComposerPrimitive.Unstable_TriggerPopoverRoot>
         <ComposerAction />
       </div>
       {/* A command has no reply to appear in, so it says what it did here. Without this,
           `/fold` was indistinguishable from a keystroke that did nothing. */}
       {note ? <p className="text-muted-foreground/70 px-2 pt-1 text-[11px]">{note}</p> : null}
-      <ComposerMeter />
+      {/* The standing meter moved to the Work panel, itemised — see `chat/context-section`. What
+          stays here is the one thing the panel cannot say: the reading straight after a `/fold`.
+          A fold takes no reading of its own, so the thread's latest usage still describes the
+          conversation as it was *before* the fold until the next turn reports in — which is why
+          `/fold` returns one, and why showing it is the difference between the command looking
+          like it worked and looking like it did nothing. Transient by construction: `reading` is
+          set by the fold and nothing else ever sets it. */}
+      {reading ? <ComposerMeter afterFold={reading} /> : null}
     </ComposerPrimitive.Root>
   );
 };
@@ -555,14 +558,19 @@ const Composer: FC = () => {
  * happened*, which reads as having lost everything it just did. `context` is the number
  * that turn actually ended on; it stays put until the next one has something newer to say.
  */
-const ComposerMeter: FC = () => {
+const ComposerMeter: FC<{ afterFold?: ContextLedger }> = ({ afterFold }) => {
   const messages = useAuiState((s) => s.thread.messages);
   const usage = latestUsage(messages);
-  const reading = usage?.context ?? usage?.baseline;
+  // `afterFold` wins while it exists, and it exists only between a `/fold` finishing and the
+  // next turn starting. Every reading here is taken by a turn on its way past; a fold takes
+  // none, so the last turn's figure went on describing a conversation that had just been
+  // rewritten — the meter sat at 58% of a window the fold had emptied, which reads as the
+  // command having done nothing at all. See `_reading_after_fold` for how the number is got.
+  const reading = afterFold ?? usage?.context ?? usage?.baseline;
   if (!reading) return null;
   return (
     <div className="mt-1.5 flex justify-center">
-      <ContextMeter context={reading} folded={usage?.folded} />
+      <ContextMeter context={reading} folded={afterFold ? true : usage?.folded} />
     </div>
   );
 };
@@ -571,9 +579,9 @@ const ComposerMeter: FC = () => {
  * at most one per turn (see `USAGE_PART`), and an in-progress turn's is exactly as current
  * as the round that just landed.
  *
- * Exported because the Work panel's context section reads the same figure. One reader rather than
- * two: this walks the thread from the end looking for one part shape, and a second copy of that
- * elsewhere is a second thing to get wrong when the shape changes. */
+ * Exported because the Work panel reads the same figure. One reader rather than two: this walks
+ * the thread from the end looking for one part shape, and a second copy of that in the panel is a
+ * second thing to get wrong when the shape changes. */
 export function latestUsage(messages: readonly unknown[]): TurnUsage | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i] as { role?: string; content?: unknown[] };
@@ -1116,7 +1124,9 @@ const UserMessage: FC = () => {
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-kith-soft text-foreground rounded-2xl rounded-br-md border border-[color-mix(in_oklab,var(--kith)_22%,transparent)] px-4 py-2 wrap-break-word empty:hidden">
-          <MessagePrimitive.Parts />
+          {/* Rendered, not printed. The composer can make lists and tables now, and a bubble
+              showing their source is a message that looks nothing like the one you composed. */}
+          <MessagePrimitive.Parts components={{ Text: UserMarkdownText }} />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
           <UserActionBar />

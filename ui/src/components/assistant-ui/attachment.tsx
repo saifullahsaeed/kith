@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogTitle, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { isPastedFile } from "@/components/assistant-ui/composer-input/paste";
 import { cn } from "@/lib/utils";
 
 const useFileSrc = (file: File | undefined) => {
@@ -107,9 +108,60 @@ const AttachmentThumb: FC = () => {
   );
 };
 
+/**
+ * A block of text that was pasted rather than typed.
+ *
+ * Pasting forty thousand characters of a log into the composer makes the composer useless — you
+ * cannot see what you are writing, and the sentence you meant to send is buried at the bottom of
+ * someone else's output. So a large paste is lifted out of the message and shown here instead.
+ *
+ * A preview rather than an icon, because the whole question in the half-second after pasting is
+ * "did it take the right thing", and a 56-pixel square with a document glyph on it cannot answer
+ * that. The badge says PASTED for the same reason: this did not come from the file picker and
+ * calling it `pasted-1.txt` in a tooltip would be the app naming something the person didn't.
+ *
+ * It still reaches him in full — the server inlines text attachments into the message
+ * (`_with_attachments`). This is about where the text sits on screen, not whether it is sent.
+ */
+const PastedCard: FC<{ isComposer: boolean }> = ({ isComposer }) => {
+  const file = useAuiState((s): File | undefined => s.attachment.file);
+  const [preview, setPreview] = useState("");
+
+  useEffect(() => {
+    if (!file) return;
+    let alive = true;
+    // Only the head of it. Reading a ten-megabyte paste in full to show six lines would block the
+    // composer at exactly the moment it has to feel instant.
+    void file
+      .slice(0, 2_000)
+      .text()
+      .then((text) => alive && setPreview(text));
+    return () => {
+      alive = false;
+    };
+  }, [file]);
+
+  const lines = preview.split("\n").filter((line, index) => index < 8 || line.trim());
+
+  return (
+    <AttachmentPrimitive.Root className="aui-attachment-root animate-in fade-in-0 zoom-in-95 relative duration-200 motion-reduce:animate-none">
+      <div className="bg-muted/60 border-border/60 relative w-56 overflow-hidden rounded-[calc(var(--composer-radius)-var(--composer-padding))] border p-2">
+        <p className="text-muted-foreground/80 line-clamp-6 font-mono text-[10px] leading-[1.45] break-all whitespace-pre-wrap">
+          {lines.slice(0, 8).join("\n") || "…"}
+        </p>
+        <span className="border-border/70 text-muted-foreground bg-background/80 mt-1.5 inline-block rounded-md border px-1.5 py-0.5 text-[9px] font-medium tracking-wider">
+          PASTED
+        </span>
+      </div>
+      {isComposer && <AttachmentRemove />}
+    </AttachmentPrimitive.Root>
+  );
+};
+
 export const AttachmentUI: FC = () => {
   const aui = useAui();
   const isComposer = aui.attachment.source !== "message";
+  const isPasted = useAuiState((s) => isPastedFile(s.attachment.name ?? ""));
 
   const isImage = useAuiState((s) => s.attachment.type === "image");
   const typeLabel = useAuiState((s) => {
@@ -141,6 +193,8 @@ export const AttachmentUI: FC = () => {
       ? (s.attachment.status.message ?? "Upload failed")
       : undefined,
   );
+
+  if (isPasted) return <PastedCard isComposer={isComposer} />;
 
   return (
     <Tooltip>

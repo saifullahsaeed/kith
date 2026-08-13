@@ -28,6 +28,7 @@ install kept unrelated chats fighting over the same upstream.
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -65,6 +66,8 @@ class Conversation:
     created_at: str
     updated_at: str
     messages: int
+    #: Where the conversation was left — the opening line of the last thing he said in it.
+    last_said: str = ""
     #: What this session is working on, and whether it keeps going without being asked.
     #: Both are properties of the conversation rather than of the app, which is what makes
     #: two projects at once possible: you switch sessions and the work switches with you.
@@ -79,6 +82,7 @@ class Conversation:
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
             "messages": self.messages,
+            "lastSaid": self.last_said,
             "transcript": str(transcript_path(self.id)),
             "projectId": self.project_id,
             "working": self.working,
@@ -115,7 +119,22 @@ def get(agent_db: Path, conversation_id: str) -> dict:
 
 
 def recent(agent_db: Path, limit: int = 50) -> list[dict]:
-    return [_to_public(row) for row in repo.conversations.recent(agent_db, limit)]
+    """Newest first, each row carrying where its conversation was left.
+
+    A row written before there was a column for that has it read out of its transcript here,
+    once, and written back. Doing it on the way past rather than in the migration keeps the
+    upgrade from opening a hundred and fifty files, and keeps the cost on the list that
+    actually asked — and it is the last line of each file, not the whole of it.
+    """
+    rows = repo.conversations.recent(agent_db, limit)
+    for row in rows:
+        if row.get("last_said") or not int(row.get("messages") or 0):
+            continue
+        said = _last_said(transcript_path(str(row.get("id") or "")))
+        if said:
+            row["last_said"] = said
+            repo.conversations.set_last_said(agent_db, str(row["id"]), said)
+    return [_to_public(row) for row in rows]
 
 
 def session_id(agent_db: Path, conversation_id: str) -> str:
@@ -136,7 +155,16 @@ def record(agent_db: Path, conversation_id: str, role: str, content: str, extra:
     if extra:
         entry.update(extra)
     _append(conversation_id, entry)
-    repo.conversations.touch(agent_db, conversation_id, delta=1)
+    # His word, kept on the index row as well as in the file: the sidebar reads a hundred and
+    # fifty of these at a time and cannot open a hundred and fifty transcripts to do it.
+    repo.conversations.touch(
+        agent_db,
+        conversation_id,
+        delta=1,
+        # `or None` so a reply that is nothing but a code block leaves the last readable
+        # line standing rather than blanking the row.
+        last_said=(outcome_from(content) or None) if role == "assistant" else None,
+    )
     # First real words become the title, replacing the placeholder.
     row = repo.conversations.get(agent_db, conversation_id)
     if row and role == "user" and str(row.get("title") or "") in ("", "New conversation"):
@@ -175,6 +203,24 @@ def latest_summary(conversation_id: str) -> dict:
     for entry in read(conversation_id):
         if entry.get("type") == "summary":
             found = {"through": int(entry.get("through") or 0), "text": str(entry.get("text") or "")}
+    return found
+
+
+def latest_reading(conversation_id: str) -> dict:
+    """The most recent context reading, or ``{}`` on a conversation that has never had a turn.
+
+    Same last-write-wins walk as :func:`latest_summary`, and for the same reason: one of these
+    is written per turn, each describes the window as that turn left it, and only the last one
+    is still true.
+
+    Exists because a reading is only ever taken *by a turn*, and `/fold` is not a turn. Asking a
+    fold to say how full the window is afterwards means starting from the last real measurement
+    rather than inventing a fresh one.
+    """
+    found: dict = {}
+    for entry in read(conversation_id):
+        if entry.get("type") == "context":
+            found = entry
     return found
 
 
@@ -557,6 +603,75 @@ def title_from(text: str) -> str:
     return cut + "…"
 
 
+#: Markdown that opens a line and says nothing about what the line is: heading rules,
+#: bullets, quote marks, list numbers.
+_OPENER = re.compile(r"^(?:#{1,6}\s+|[-*+]\s+|>\s+|\d+[.)]\s+)")
+
+#: How much of his last word a row carries. A line — the row says where you left off, and
+#: reading the rest of it is what opening the conversation is for.
+OUTCOME_CHARS = 130
+
+
+def outcome_from(text: str) -> str:
+    """Where the conversation stands, in a line: the opening of the last thing he said.
+
+    The first *readable* line, not the first line. His replies routinely open with a fenced
+    diff or a heading, and a sidebar row reading "```python" is worse than the message count
+    it replaced. Fences are skipped along with what is inside them, and the markdown that
+    only decorates a line is taken off the front of it.
+    """
+    fenced = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced or not line:
+            continue
+        line = " ".join(_OPENER.sub("", line).replace("*", "").replace("`", "").split())
+        if len(line) < 3:
+            continue
+        if len(line) <= OUTCOME_CHARS:
+            return line
+        cut = line[:OUTCOME_CHARS]
+        if " " in cut[60:]:
+            cut = cut[: cut.rfind(" ")]
+        return cut + "…"
+    return ""
+
+
+def _last_said(path: Path) -> str:
+    """His last word in a transcript, read from the end.
+
+    Backwards because the answer is at the bottom and some of these files are megabytes —
+    `_spoken` parses every line of every one, which is right for a search and wasteful for a
+    single lookup repeated across a whole listing.
+    """
+    if not path.is_file():
+        return ""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        kind, role = entry.get("type"), entry.get("role")
+        if kind == "message" and role == "assistant":
+            said = outcome_from(str(entry.get("content") or ""))
+        elif kind == "said":
+            said = outcome_from(str(entry.get("text") or ""))
+        else:
+            continue
+        if said:
+            return said
+    return ""
+
+
 def storage() -> dict:
     """How much room the transcripts take, for the settings page."""
     place = directory()
@@ -593,6 +708,7 @@ def _to_public(row: dict) -> dict:
         created_at=str(row.get("created_at") or ""),
         updated_at=str(row.get("updated_at") or ""),
         messages=int(row.get("messages") or 0),
+        last_said=str(row.get("last_said") or ""),
         project_id=int(row["project_id"]) if row.get("project_id") else None,
         working=bool(row.get("working")),
     ).public()

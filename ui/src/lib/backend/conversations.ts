@@ -9,6 +9,10 @@ export interface ConversationSummary {
   createdAt: string;
   updatedAt: string;
   messages: number;
+  /** Where the conversation was left: the opening line of the last thing he said in it.
+   *  Empty when he has not spoken yet, which is the only time `title` is worth showing —
+   *  a history list is asked what came of something, and the title is what started it. */
+  lastSaid: string;
   /** Absolute path to the JSONL transcript, so the settings page can reveal it. */
   transcript: string;
   /** What this session is working on. Null for a conversation that has not adopted a

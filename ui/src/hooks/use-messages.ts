@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  clearMessages,
   fetchMessages,
   markAllMessagesRead,
   sendMessage,
@@ -16,6 +17,7 @@ const POLL_MS = 8000;
 export function useMessages() {
   const [messages, setMessages] = useState<KithMessage[]>([]);
   const [unread, setUnread] = useState(0);
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const seen = useRef<Set<number>>(new Set());
   const primed = useRef(false);
 
@@ -24,6 +26,7 @@ export function useMessages() {
       const data = await fetchMessages();
       setMessages(data.messages);
       setUnread(data.unread);
+      setCounts(data.counts);
 
       const canNotify =
         primed.current && "Notification" in window && Notification.permission === "granted";
@@ -65,15 +68,44 @@ export function useMessages() {
     }
   }, []);
 
-  /** Prune one. The panel is the only place that can now, since the browse tab it used to
-   *  live in was a worse version of this list and has gone. */
+  /** Prune one, or a thread's worth. The panel is the only place that can now, since the
+   *  browse tab it used to live in was a worse version of this list and has gone.
+   *
+   *  Deleted together and refreshed once: a five-note thread dismissed one request at a time
+   *  re-rendered the list under the cursor five times, and the rows moved between clicks. */
   const dismiss = useCallback(
-    async (id: number) => {
-      await deleteBrainItem("message", id).catch(() => {});
+    async (ids: number | number[]) => {
+      const many = Array.isArray(ids) ? ids : [ids];
+      // Optimistic, because the poll is 8 seconds away and a row that lingers after you
+      // dismissed it reads as a click that did not land.
+      setMessages((current) => current.filter((one) => !many.includes(one.id)));
+      await Promise.all(many.map((id) => deleteBrainItem("message", id).catch(() => {})));
       await refresh();
     },
     [refresh],
   );
 
-  return { messages, unread, markAllRead, send, refresh, dismiss, enableNotifications };
+  /** Empty the channel, or one kind of thing in it. `kinds` omitted means all of it. */
+  const clear = useCallback(
+    async (kinds?: string[]) => {
+      setMessages((current) =>
+        kinds ? current.filter((one) => one.sender === "user" || !kinds.includes(one.kind)) : [],
+      );
+      await clearMessages(kinds).catch(() => {});
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return {
+    messages,
+    unread,
+    counts,
+    markAllRead,
+    send,
+    refresh,
+    dismiss,
+    clear,
+    enableNotifications,
+  };
 }
