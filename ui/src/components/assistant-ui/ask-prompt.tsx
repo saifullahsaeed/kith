@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import {
   answerQuestion,
   fetchOpenQuestion,
-  onAskRaised,
   type AskedQuestion,
   type OpenQuestion,
   type Reply,
@@ -74,14 +73,19 @@ function asText(open: OpenQuestion, replies: Reply[]): string {
  * so it belongs where answering happens — the same slot the permission prompt uses, for the
  * same reason. Inline it would also scroll away from you mid-turn while he is still talking.
  *
- * Raised by the stream, and polled as a fallback — in that order, and it used to be only the
- * second. The id is minted server-side after the `tool_call` event goes out, so the event
- * cannot carry it and the fetch is still what gets it; but the event can say *when to look*,
- * and that turns out to be the whole difference. An interval is throttled to a crawl in an
- * unfocused window and the stream is not, so on the poll alone the card could take twenty
- * seconds to appear on a turn that was already parked. The interval still earns its place for
- * the cases with no event to key on: attaching to a turn whose call went past before this
- * window was watching, and a question the server recovered after a restart.
+ * Polled rather than pushed. The id is minted server-side when the tool runs, after the
+ * `tool_call` event has gone out, so there is nothing in the stream to key on; and polling
+ * survives the case that matters most — coming back to a conversation whose question was
+ * asked while you were somewhere else.
+ *
+ * Raising the card from the stream event instead was tried, on 2026-08-13, and reverted the
+ * same evening. Calling the fetch synchronously from inside the adapter's event loop — the
+ * `tool_call` for `ask` arriving — correlated exactly with the renderer going dead: last
+ * request of any kind at 20:11:20 UTC, the ask at 20:11:24, and nothing at all for the eleven
+ * minutes after. Machine awake, `backgroundThrottling` already false, and the same ask on the
+ * previous build had left polling running. Whatever it does, it is not safe from there, and
+ * the reason it looked necessary — a card that takes many seconds to appear — is still not
+ * explained. Do not re-add this without understanding the stall first.
  */
 export function AskPrompt({ conversationId }: { conversationId: string }) {
   // Optional, because drawing the card does not need a runtime and only the recovered-question
@@ -124,15 +128,9 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
     // minutes without, so the card could take twenty seconds to appear and the turn looked hung.
     // Quitting and reopening the app fetched immediately, which is why that read as the fix.
     const timer = setInterval(load, 1_200);
-    // The stream is not throttled, so the `ask` call arriving on it is what actually raises the
-    // card. The interval is the fallback: attaching to a turn whose call went past before this
-    // window was watching, and recovering a question the server restored after a restart —
-    // neither of which has an event to key on.
-    const stop = onAskRaised(load);
     return () => {
       alive = false;
       clearInterval(timer);
-      stop();
     };
   }, [conversationId]);
 

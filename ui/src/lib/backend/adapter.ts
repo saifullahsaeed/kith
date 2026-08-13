@@ -8,7 +8,6 @@ import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
 import { foldNow, stopTurn } from "@/lib/commands";
-import { askRaised } from "./questions";
 import { readEvents, toWireMessages } from "./stream";
 import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
@@ -285,11 +284,6 @@ let retried = 0;
           const tool: ToolPart = { id: event.id, name: event.name, args: event.arguments };
           toolById.set(event.id, tool);
           pieces.push({ kind: "tool", tool });
-          // The one tool whose call the interface has to act on rather than just draw: it parks
-          // the turn, and the card that unparks it is polled on an interval a background window
-          // throttles to a crawl. The stream is not throttled, so this is what makes the card
-          // appear when he asks instead of up to twenty seconds later. See `onAskRaised`.
-          if (event.name === "ask") askRaised();
         } else if (event.type === "tool_result") {
           const tool = toolById.get(event.id);
           if (tool) tool.result = event.result;
