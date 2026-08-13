@@ -49,6 +49,36 @@ export async function fetchOpenQuestion(conversationId: string): Promise<OpenQue
   return body?.id ? (body as OpenQuestion) : null;
 }
 
+/**
+ * Told when an `ask` tool call comes down the stream, so the card does not wait for a tick.
+ *
+ * The card is polled, and a poll is a `setInterval`, and Chromium throttles those hard in a
+ * window that is not focused. Measured: 50 polls a minute while the app has focus, and twelve
+ * in three and a half minutes when it does not — one every eighteen seconds. So he asks, and
+ * the card takes anywhere up to twenty seconds to appear, which from the other side is a turn
+ * that has hung. Quitting and reopening the app fetches immediately, which is exactly why
+ * reopening looked like the fix.
+ *
+ * The stream is not throttled — it is an open response being written to. The `tool_call` event
+ * announcing the question is already in it and arrives the instant he asks, so that is what
+ * raises the card; the interval stays as the fallback for attaching to a turn whose call went
+ * past before this window was watching.
+ *
+ * Deliberately a signal rather than the question itself. The id is minted server-side when the
+ * tool runs, after the event has gone out, and answering needs the id — so the event says
+ * "look now" and the existing fetch is what looks.
+ */
+const raised = new Set<() => void>();
+
+export function onAskRaised(listener: () => void): () => void {
+  raised.add(listener);
+  return () => raised.delete(listener);
+}
+
+export function askRaised(): void {
+  for (const listener of [...raised]) listener();
+}
+
 export async function answerQuestion(questionId: string, answers: Reply[]): Promise<boolean> {
   const response = await fetch(`/api/questions/${questionId}/answer`, {
     method: "POST",

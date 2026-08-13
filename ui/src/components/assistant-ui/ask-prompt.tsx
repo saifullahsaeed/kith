@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   answerQuestion,
   fetchOpenQuestion,
+  onAskRaised,
   type AskedQuestion,
   type OpenQuestion,
   type Reply,
@@ -39,6 +40,28 @@ function Step({
   );
 }
 
+/** The answers, written the way the person would have typed them.
+ *
+ *  Only used for a recovered question, where the answer travels as a message rather than as a
+ *  reply — so it has to carry its own question with it. A bare "Use each invoice date" arriving
+ *  on its own is unreadable a day later, and unanswerable by a turn that has to work out what it
+ *  was in aid of. */
+function asText(open: OpenQuestion, replies: Reply[]): string {
+  const blocks = open.questions.map((q, i) => {
+    const reply = replies[i];
+    const said = reply?.skipped
+      ? "(you decide)"
+      : [reply?.chosen?.join(", "), reply?.text].filter(Boolean).join(" — ") || "(no answer)";
+    // Blockquote, and a blank line between the two. Both matter: user messages render as
+    // markdown, where a single newline is not a line break — so the first version of this went
+    // out as "What would you most like to make progress on right now? Something personal", one
+    // run-on line in which the question and the answer are indistinguishable, and which reads
+    // far more like the person asking than answering.
+    return `> ${q.question}\n\n${said}`;
+  });
+  return blocks.join("\n\n");
+}
+
 /**
  * A question he is waiting on, where you would reply to him.
  *
@@ -51,28 +74,15 @@ function Step({
  * so it belongs where answering happens — the same slot the permission prompt uses, for the
  * same reason. Inline it would also scroll away from you mid-turn while he is still talking.
  *
- * Polled rather than pushed. The id is minted server-side when the tool runs, after the
- * `tool_call` event has gone out, so there is nothing in the stream to key on; and polling
- * survives the case that matters most — coming back to a conversation whose question was
- * asked while you were somewhere else.
+ * Raised by the stream, and polled as a fallback — in that order, and it used to be only the
+ * second. The id is minted server-side after the `tool_call` event goes out, so the event
+ * cannot carry it and the fetch is still what gets it; but the event can say *when to look*,
+ * and that turns out to be the whole difference. An interval is throttled to a crawl in an
+ * unfocused window and the stream is not, so on the poll alone the card could take twenty
+ * seconds to appear on a turn that was already parked. The interval still earns its place for
+ * the cases with no event to key on: attaching to a turn whose call went past before this
+ * window was watching, and a question the server recovered after a restart.
  */
-/** The answers, written the way the person would have typed them.
- *
- *  Only used for a recovered question, where the answer travels as a message rather than as a
- *  reply — so it has to carry its own question with it. A bare "Use each invoice date" arriving
- *  on its own is unreadable a day later, and unanswerable by a turn that has to work out what it
- *  was in aid of. */
-function asText(open: OpenQuestion, replies: Reply[]): string {
-  const lines = open.questions.map((q, i) => {
-    const reply = replies[i];
-    const said = reply?.skipped
-      ? "(you decide)"
-      : [reply?.chosen?.join(", "), reply?.text].filter(Boolean).join(" — ") || "(no answer)";
-    return `${q.question}\n${said}`;
-  });
-  return lines.join("\n\n");
-}
-
 export function AskPrompt({ conversationId }: { conversationId: string }) {
   // Optional, because drawing the card does not need a runtime and only the recovered-question
   // path does. Required, it threw "ThreadRuntime is not available" in every test that renders
@@ -108,11 +118,21 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
         })
         .catch(() => {});
     load();
-    // Brisk, because this is the one thing on screen the turn is actually waiting for.
+    // Brisk, because this is the one thing on screen the turn is actually waiting for — and
+    // still not enough on its own. Chromium throttles an interval hard in a window that is not
+    // focused: measured at fifty polls a minute with focus and twelve in three and a half
+    // minutes without, so the card could take twenty seconds to appear and the turn looked hung.
+    // Quitting and reopening the app fetched immediately, which is why that read as the fix.
     const timer = setInterval(load, 1_200);
+    // The stream is not throttled, so the `ask` call arriving on it is what actually raises the
+    // card. The interval is the fallback: attaching to a turn whose call went past before this
+    // window was watching, and recovering a question the server restored after a restart —
+    // neither of which has an event to key on.
+    const stop = onAskRaised(load);
     return () => {
       alive = false;
       clearInterval(timer);
+      stop();
     };
   }, [conversationId]);
 

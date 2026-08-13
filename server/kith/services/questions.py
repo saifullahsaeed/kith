@@ -199,6 +199,14 @@ def answer(question_id: str, replies: list) -> bool:
         if isinstance(reply, dict)
     ]
     question.answered.set()
+    # A live question is cleared by `ask`'s own `finally` as the tool returns. A recovered one
+    # has no `ask` running — that turn died with the last process — so nothing would ever take
+    # it out of `_OPEN`, and the endpoint would go on offering a card that has been answered
+    # until some later turn happened to ask something else and overwrite it.
+    if question.interrupted:
+        with _LOCK:
+            if _OPEN.get(question.conversation_id) is question:
+                del _OPEN[question.conversation_id]
     return True
 
 

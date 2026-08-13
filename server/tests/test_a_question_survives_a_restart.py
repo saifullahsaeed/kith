@@ -156,3 +156,30 @@ class TestPuttingTheCardBack:
         # "the server restarted" result would be a lie — and it would pair off the very call the
         # live turn is about to answer for itself.
         assert not [e for e in _entries(conversation_id) if e.get("type") == "tool_result"]
+
+
+class TestAnsweringARecoveredOne:
+    def test_it_stops_being_offered(self):
+        """`ask`'s own `finally` clears a live question as the tool returns. A recovered one has
+        no `ask` running, so without this the endpoint keeps offering a card already answered."""
+        conversation_id = _parked()
+        questions.recover_interrupted()
+        found = questions.open_question(conversation_id)
+
+        assert questions.answer(found["id"], [{"chosen": ["A fact"], "text": "", "skipped": False}])
+
+        assert questions.open_question(conversation_id) is None
+
+    def test_a_live_one_is_left_to_its_own_turn_to_clear(self):
+        """The turn is still inside `ask` and its `finally` owns the cleanup — taking the entry
+        out from under it would race with the very code that is about to do it."""
+        conversation_id = "live-and-waiting"
+        live = questions.Question(
+            id="liveq", conversation_id=conversation_id, asked=[{"question": "?", "options": []}]
+        )
+        questions._OPEN[conversation_id] = live
+
+        questions.answer("liveq", [{"chosen": [], "text": "yes", "skipped": False}])
+
+        assert questions._OPEN.get(conversation_id) is live
+        assert live.answered.is_set(), "the waiting turn still has to be released"
