@@ -141,17 +141,29 @@ def _current(conversation_id: str) -> threading.Event | None:
 
 
 def _stop(conversation_id: str) -> bool:
-    """Ask the turn running in a conversation to stop. False if there was none."""
-    # A turn parked on a question is not reading the switch — it is inside a tool call, waiting
-    # on an event — so setting the flag alone would leave Stop doing nothing for up to fifteen
-    # minutes. Released first, so the tool returns and the loop reaches its next check.
+    """Ask the turn running in a conversation to stop. False if there was none.
+
+    Order matters here, and it used to be the other way round.
+
+    A turn parked on a question is not reading the switch — it is inside a tool call, waiting on
+    an event — so the waits have to be released or Stop does nothing for up to fifteen minutes.
+    But releasing *first* hands the turn back its next round before it has been told to stop:
+    `ask` returns the moment the event is set, the loop appends the result, `_turn` yields it and
+    only then reads the flag. Lose that race and the flag is still unset, so the turn carries
+    on — one more model call, on the full conversation, after the person pressed Stop. Which is
+    what "I stopped it and it started again" is.
+
+    So the flag goes on first and the waits are released after. The window closes rather than
+    merely being small: by the time anything the release woke can reach a check, the flag it
+    reads is already set.
+    """
+    event = _current(conversation_id)
+    if event is not None:
+        event.set()
+    # Now nothing that wakes up can get past its next check, so it is safe to wake it.
     questions.release(conversation_id)
     permissions.release_waiting()
-    event = _current(conversation_id)
-    if event is None:
-        return False
-    event.set()
-    return True
+    return event is not None
 
 
 @api.get("/chat/<conversation_id>/question")

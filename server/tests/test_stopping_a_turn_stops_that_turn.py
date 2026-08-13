@@ -236,3 +236,40 @@ class TestATurnNobodyStops:
         rows = repo.messages.list_turn_log(db, 10)
         assert len(rows) == 1
         assert rows[0]["outcome"] == "error: provider timed out"
+
+
+class TestTheFlagGoesUpBeforeTheWaitsAreReleased:
+    """Stop has to be true before it is loud, or it hands the turn one more round.
+
+    A turn parked on `ask` is not reading the switch — it is inside a tool call, waiting on an
+    event — so Stop has to release that wait or nothing happens for fifteen minutes. It used to
+    release *first* and set the flag afterwards, which is a race the turn can win: `ask` returns
+    the instant the event is set, the loop appends the result, `_turn` yields it and only then
+    reads the flag. Lose that and the flag is still down, so the turn carries on into another
+    model call — on the full conversation — after the person pressed Stop.
+
+    Both observed stops in a real conversation shut down cleanly, so this is the window being
+    closed rather than a reproduction of it. That is the point: the ordering is what makes the
+    window exist at all, and it costs nothing to not have one.
+    """
+
+    def test_the_switch_is_already_set_when_the_question_is_released(self, conversation, monkeypatch):
+        seen: list[bool] = []
+        event = route._arm(conversation)
+        monkeypatch.setattr(route.questions, "release", lambda _id: seen.append(event.is_set()))
+        monkeypatch.setattr(route.permissions, "release_waiting", lambda: None)
+
+        route._stop(conversation)
+
+        assert seen == [True], (
+            "the question was released while the stop flag was still down — the turn can wake, "
+            "reach its next check, find nothing set, and go round again"
+        )
+
+    def test_it_still_reports_whether_there_was_a_turn(self, conversation, monkeypatch):
+        monkeypatch.setattr(route.questions, "release", lambda _id: None)
+        monkeypatch.setattr(route.permissions, "release_waiting", lambda: None)
+
+        assert route._stop(conversation) is False
+        route._arm(conversation)
+        assert route._stop(conversation) is True
