@@ -17,6 +17,8 @@ there and replays it instead of the conversation it covers.
 
 from __future__ import annotations
 
+import itertools
+
 import flask
 import pytest
 
@@ -39,8 +41,23 @@ def no_model(monkeypatch):
     monkeypatch.setattr(history, "_summarize", lambda text, config, host: BRIEF)
 
 
+#: One id per call, because the transcript is a file and `record_event` appends to it.
+#:
+#: Every test here used the same `"folded-on-purpose"`, and the data directory is session-scoped
+#: — so the second test to run found the first test's twelve turns already in the file and added
+#: twelve more. By the fourth there were forty-eight, which is past the fold threshold, and
+#: `test_without_the_brief_the_next_turn_sends_everything_again` failed because a fold it had
+#: asserted would not happen did. The third test's own docstring says "this conversation sits
+#: well under it", which was true only for whichever test ran first.
+#:
+#: It stayed hidden because `pytest-randomly` shuffles the order, so the run's verdict depended
+#: on the seed — green most times, red when the wrong test drew first place. A counter rather
+#: than a uuid so a failure reproduces on the next run.
+_next_conversation = itertools.count(1)
+
+
 def _conversation(turns: int = 12, size: int = 2_000) -> str:
-    conversation_id = "folded-on-purpose"
+    conversation_id = f"folded-on-purpose-{next(_next_conversation)}"
     for n in range(turns):
         conversations.record_event(
             conversation_id, "message", {"role": "user", "content": f"q{n} " + "x" * size}
