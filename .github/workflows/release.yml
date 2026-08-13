@@ -1,0 +1,193 @@
+# Cut a release when the version number changes, and only then.
+#
+# Every push to the default branch asks one question: is there already a tag for the version
+# in desktop/package.json? If there is, this run stops in about ten seconds. If there is not,
+# it builds a signed-as-far-as-we-can dmg and publishes it.
+#
+# **The tag is the record, not a diff.** The obvious implementation compares package.json
+# between before and after the push, and it is wrong in three ordinary situations: a re-run of
+# a failed job (the diff is empty the second time, so the release never happens), a squash
+# where the version bump is not in the last commit, and the very first run. Asking "does
+# v<version> exist" is the same question asked in a way that has one answer no matter how the
+# commit got here.
+#
+# **The dmg is built on macOS and cannot be cross-compiled.** The server is frozen by
+# PyInstaller into a native arm64 binary and codesigned; neither is something a Linux runner
+# can do. macos-15 runners are arm64, which is also what makes the artifact arm64 — there is
+# no flag doing that, it is the runner's own architecture.
+#
+# **It runs ./check first.** The README's rule is "before shipping anything: ./check", and a
+# release is the one thing that cannot be quietly amended afterwards. It costs a few minutes
+# and it is the difference between a broken build sitting on a downloads page and a red run
+# nobody outside the repository ever sees.
+
+name: release
+
+on:
+  push:
+    branches: [master, main]
+
+# Creating a release and its tag is a write to the repository.
+permissions:
+  contents: write
+
+# Never cancel a release in progress: a half-published release is worse than a slow one, and
+# unlike `check` there is nothing to be gained by racing to the newest commit.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: is this a new version?
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      needed: ${{ steps.decide.outputs.needed }}
+    steps:
+      # fetch-depth: 0 because the decision is "does this tag exist", and a shallow clone
+      # carries no tags — which would make every push look like a new version and republish
+      # the same one forever.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: decide
+        run: |
+          version="$(node -p "require('./desktop/package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse --verify --quiet "refs/tags/v$version" >/dev/null; then
+            echo "needed=no" >> "$GITHUB_OUTPUT"
+            echo "v$version is already tagged — nothing to release."
+          else
+            echo "needed=yes" >> "$GITHUB_OUTPUT"
+            echo "v$version has no tag yet — building a release."
+          fi
+
+  build:
+    name: build and publish
+    needs: version
+    if: needs.version.outputs.needed == 'yes'
+    runs-on: macos-15
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # electron-builder hunts the keychain for a signing identity unless told not to. There
+      # is none on a runner, and the search ends in a confusing failure rather than the
+      # ad-hoc signing scripts/adhoc-sign.js does deliberately.
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            ui/package-lock.json
+            desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches ruff.toml's target-version, and the interpreter that gets frozen into
+          # the app is this one.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      # ./check runs `server/.venv/bin/python` by name, and the freeze runs
+      # `.venv/bin/pyinstaller`, so the venv has to be at that exact path.
+      - name: Create the venv the checks and the freeze expect
+        run: |
+          python -m venv server/.venv
+          server/.venv/bin/pip install --quiet --upgrade pip
+          server/.venv/bin/pip install --quiet -r server/requirements.txt
+
+      - name: Install ui dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      # Also the step that produces ui/dist, which the freeze then refuses to run without.
+      - name: ./check
+        run: ./check
+
+      # The interface is copied inside the frozen server, and the frozen server is copied
+      # inside the app bundle. Out of order means shipping yesterday's interface.
+      - name: Freeze the server
+        working-directory: server
+        run: .venv/bin/pyinstaller kith-server.spec --noconfirm --log-level WARN
+
+      - name: Build the shell
+        working-directory: desktop
+        run: npm run build
+
+      # --publish never because electron-builder will happily create its own GitHub release
+      # the moment it sees a token, which would race the `gh release create` below and leave
+      # two half-populated releases for the same tag.
+      - name: Package the dmg
+        working-directory: desktop
+        run: npx electron-builder --mac dmg --arm64 --publish never
+
+      # Verify the artifact rather than trust the exit code. An app whose signature did not
+      # take still packages fine and fails only on the machine that downloads it.
+      - name: Verify the signature
+        run: |
+          hdiutil attach -nobrowse -quiet "desktop/release/Kith-$VERSION-arm64.dmg"
+          codesign --verify --deep --strict "/Volumes/Kith $VERSION-arm64/Kith.app"
+          hdiutil detach "/Volumes/Kith $VERSION-arm64" -quiet
+          echo "signature ok"
+
+      # Written here rather than kept as a file because the checksum changes every build and
+      # the version appears four times.
+      - name: Write the release notes
+        run: |
+          dmg="desktop/release/Kith-$VERSION-arm64.dmg"
+          {
+            echo "Apple Silicon only. Kith carries its own Python, server and interface —"
+            echo "there is nothing else to install."
+            echo
+            echo "## Opening it the first time"
+            echo
+            echo "Kith is signed, but not *notarized* — that needs a paid Apple Developer"
+            echo "account. macOS will refuse the first launch. This is expected, and it is"
+            echo "once, not every time."
+            echo
+            echo "**Right-click → Open does not work.** That bypass was removed in macOS 15."
+            echo
+            echo "1. Double-click Kith and let it be blocked. Click **Done**."
+            echo "2. **System Settings → Privacy & Security → Security** — there is now a line"
+            echo "   reading *\"Kith\" was blocked to protect your Mac* → **Open Anyway**."
+            echo "3. Authenticate, then **Open Anyway** once more."
+            echo
+            echo "Step 1 is required: the button does not appear until something has been"
+            echo "blocked, and it expires about an hour later."
+            echo
+            echo "## Giving it a model"
+            echo
+            echo "Kith defaults to \`qwen3:4b\` on a local Ollama, so on a fresh Mac it opens"
+            echo "with nothing to think with. In Settings, either paste an OpenRouter key"
+            echo "(nothing to install) or install Ollama and \`ollama pull qwen3:4b\`."
+            echo
+            echo "His data lives in \`~/.kith\`."
+            echo
+            echo "\`\`\`"
+            echo "SHA256  $(shasum -a 256 "$dmg" | cut -d' ' -f1)"
+            echo "\`\`\`"
+          } > notes.md
+
+      # --generate-notes appends the commit list to what is in --notes-file; the tag is
+      # created at this commit as a side effect.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "Kith v$VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            "desktop/release/Kith-$VERSION-arm64.dmg"

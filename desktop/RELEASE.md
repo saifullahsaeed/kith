@@ -4,6 +4,28 @@
 works today: producing `release/Kith-<version>-arm64.dmg` and what the person
 receiving it has to do.
 
+## Letting CI do it
+
+`.github/workflows/release.yml` does all of the below on every push to the default
+branch — but only when the version in `desktop/package.json` has no tag yet. So
+cutting a release is one edit:
+
+```sh
+npm --prefix desktop version patch   # or edit the version by hand
+git push
+```
+
+Push without touching the version and the workflow stops in seconds, having found
+`v<version>` already tagged. That check is deliberately "does the tag exist"
+rather than "did package.json change in this push", because the diff answer is
+wrong on a re-run, on a squash, and on the first run.
+
+Two things it cannot do, both because notarization needs a paid Apple Developer
+account: the download is still ad-hoc signed, and the release notes therefore
+carry the System Settings instructions. And note the runner is `macos-15` because
+the frozen server is a native arm64 binary — this is not cross-compilable, and the
+artifact is arm64 because the runner is.
+
 ## Building it
 
 Three artifacts have to exist, in this order, because each one is baked into the
