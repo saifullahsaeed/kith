@@ -29,6 +29,8 @@ import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/shell/presence";
 import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
+import { copyText } from "@/lib/files";
+import { time, when } from "@/lib/dates";
 import { USAGE_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
 import { summariseRun } from "@/lib/tool-language";
@@ -59,7 +61,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
-  DownloadIcon,
   MicIcon,
   Paperclip,
   MoreHorizontalIcon,
@@ -74,6 +75,7 @@ import {
   createContext,
   useContext,
   useRef,
+  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
@@ -884,6 +886,7 @@ const AssistantMessage: FC = () => {
         <BranchPicker />
         <AssistantActionBar />
         <div className="flex-1" />
+        <MessageTime />
         <TurnUsageFooter />
       </div>
     </MessagePrimitive.Root>
@@ -1021,6 +1024,33 @@ const TurnUsageFooter: FC = () => {
   return <TurnTokens usage={usage} />;
 };
 
+/**
+ * When the turn happened, on the footer row beside what it cost.
+ *
+ * Clock time only — the day is established by the conversation you are in, and a full date on
+ * every message is noise in a thread you have been in all afternoon. The title carries the whole
+ * thing for the one you actually want to pin down.
+ *
+ * Same weight as the token count next to it, deliberately: both are metadata about the turn, and
+ * a timestamp that competes with the reply for attention is a worse timestamp.
+ */
+const MessageTime: FC = () => {
+  const at = useAuiState((s) => s.message.createdAt);
+  if (!at) return null;
+  const iso = at instanceof Date ? at.toISOString() : String(at);
+  const clock = time(iso);
+  if (!clock) return null;
+  return (
+    <span
+      data-slot="kith_message-time"
+      className="text-muted-foreground/45 me-2 font-mono text-[10px] tabular-nums select-none"
+      title={when(iso)}
+    >
+      {clock}
+    </span>
+  );
+};
+
 const AssistantActionBar: FC = () => {
   const { checkpoints, reload, turnOffset } = useCheckpoints();
   const renderedIndex = useAuiState((s) => s.message.index);
@@ -1065,40 +1095,28 @@ const AssistantActionBar: FC = () => {
       autohide="not-last"
       className="aui-assistant-action-bar-root text-muted-foreground animate-in fade-in col-start-3 row-start-2 -ms-1 flex gap-1 duration-200"
     >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy">
-          <AuiIf condition={(s) => s.message.isCopied}>
-            <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-          </AuiIf>
-          <AuiIf condition={(s) => !s.message.isCopied}>
-            <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
-          </AuiIf>
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
+      <CopyMessage />
       <ActionBarPrimitive.Reload asChild>
         <TooltipIconButton tooltip="Refresh">
           <RefreshCwIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.Reload>
-      <ActionBarMorePrimitive.Root>
-        <ActionBarMorePrimitive.Trigger asChild>
-          <TooltipIconButton tooltip="More" className="data-[state=open]:bg-accent">
-            <MoreHorizontalIcon />
-          </TooltipIconButton>
-        </ActionBarMorePrimitive.Trigger>
-        <ActionBarMorePrimitive.Content
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          className="aui-action-bar-more-content bg-popover/95 text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[8rem] overflow-hidden rounded-xl border p-1.5 shadow-lg backdrop-blur-sm"
-        >
-          <ActionBarPrimitive.ExportMarkdown asChild>
-            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none">
-              <DownloadIcon className="size-4" />
-              Export as Markdown
-            </ActionBarMorePrimitive.Item>
-          </ActionBarPrimitive.ExportMarkdown>
-          {candidate ? (
+      {/* Only when there is something in it. The menu's other item was "Export as Markdown",
+          and with that gone a turn with no checkpoint behind it had a `…` that opened an empty
+          box — a control that does nothing is worse than no control. */}
+      {candidate ? (
+        <ActionBarMorePrimitive.Root>
+          <ActionBarMorePrimitive.Trigger asChild>
+            <TooltipIconButton tooltip="More" className="data-[state=open]:bg-accent">
+              <MoreHorizontalIcon />
+            </TooltipIconButton>
+          </ActionBarMorePrimitive.Trigger>
+          <ActionBarMorePrimitive.Content
+            side="bottom"
+            align="start"
+            sideOffset={6}
+            className="aui-action-bar-more-content bg-popover/95 text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[8rem] overflow-hidden rounded-xl border p-1.5 shadow-lg backdrop-blur-sm"
+          >
             <ActionBarMorePrimitive.Item
               onSelect={onRestore}
               className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
@@ -1106,10 +1124,54 @@ const AssistantActionBar: FC = () => {
               <RotateCcw className="size-4" />
               Restore files to here
             </ActionBarMorePrimitive.Item>
-          ) : null}
-        </ActionBarMorePrimitive.Content>
-      </ActionBarMorePrimitive.Root>
+          </ActionBarMorePrimitive.Content>
+        </ActionBarMorePrimitive.Root>
+      ) : null}
     </ActionBarPrimitive.Root>
+  );
+};
+
+/**
+ * Copy the reply, and say so only if it actually happened.
+ *
+ * Not `ActionBarPrimitive.Copy`, which writes through `navigator.clipboard` alone and flips to a
+ * tick on having *tried*. That is the same lie `file-view.tsx` was fixed for: `writeText` throws
+ * "Document is not focused" in exactly the situations an Electron webview gets into, and a
+ * checkmark over an empty clipboard is worse than a button that visibly does nothing. `copyText`
+ * is the shared path everything else here copies through — it falls back to `execCommand` on a
+ * different permission route and returns whether either worked.
+ *
+ * The text comes from the message's own parts rather than the DOM, so reasoning blocks, tool
+ * cards and the token footer stay out of it: what lands on the clipboard is what he said.
+ */
+const CopyMessage: FC = () => {
+  const text = useAuiState((s) =>
+    s.message.content
+      .filter((part): part is { type: "text"; text: string } => part.type === "text")
+      .map((part) => part.text)
+      .join("\n\n")
+      .trim(),
+  );
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const onCopy = async () => {
+    if (!text || !(await copyText(text))) return;
+    setCopied(true);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 2_000);
+  };
+
+  return (
+    <TooltipIconButton tooltip="Copy" onClick={() => void onCopy()} disabled={!text}>
+      {copied ? (
+        <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
+      ) : (
+        <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
+      )}
+    </TooltipIconButton>
   );
 };
 

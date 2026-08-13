@@ -1,5 +1,5 @@
 import type { ContextLedger } from "@/lib/backend/types";
-import { formatTokens, realTokens, sumUsage, usageTitle, type Usage } from "@/lib/tokens";
+import { formatTokens, type Usage } from "@/lib/tokens";
 
 /** Every model request in this turn, in the order they finished. */
 export interface TurnUsage {
@@ -96,45 +96,40 @@ export function TurnStatus({ usage }: { usage: TurnUsage }) {
 }
 
 
+/**
+ * What the footer still has to say about a finished turn, which is now only the awkward part.
+ *
+ * The running token total was here and is gone — it was on screen for every turn in the
+ * conversation, and a figure you are not acting on is a figure competing with the writing. What
+ * it was genuinely good for, "how full am I", is the composer's meter, which is one gauge that
+ * stays put instead of a number per message. The per-round breakdown went with it; the turn log
+ * still has all of it if a turn ever needs accounting for.
+ *
+ * The retry marker stays, because it is not a cost — it is the difference between a turn that
+ * sailed and one that fought its way through six attempts, and those finish looking identical.
+ * `retrying` in `TurnStatus` is the live version and the answer replaces it, which is no use when
+ * a dead network fails name resolution in hundredths of a second.
+ */
 export function TurnTokens({ usage }: { usage: TurnUsage }) {
-  const rounds = usage.rounds ?? [];
   const retried = usage.retried ?? 0;
-  // The footer is what the turn *cost*, and a turn with no rounds has cost nothing yet. What
-  // it is doing meanwhile is `TurnStatus`, inline with the message.
-  //
-  // Retries are the exception to "cost nothing yet", and the exception matters: the turn most
-  // worth telling someone about is the one where the first round never landed, which has no
-  // rounds at all. Gating the whole footer on `rounds` would have hidden the marker in exactly
-  // the case it was added for.
-  if (rounds.length === 0 && !retried) return null;
-  const total = rounds.reduce((sum, one) => sum + realTokens(one), 0);
-  const each = rounds.map((one, i) => `${i + 1}. ${formatTokens(realTokens(one))}`).join("   ");
+  if (!retried) return null;
   return (
     <div
       data-slot="kith_turn-usage"
-      // No top margin: it sits on the message's footer row now, beside the action bar,
-      // rather than as a line of its own at the end of the body.
-      className="text-muted-foreground/45 me-1 flex items-center gap-2 font-mono text-[10px] tabular-nums select-none"
+      // No top margin: it sits on the message's footer row, beside the action bar, rather than
+      // as a line of its own at the end of the body.
+      className="me-1 flex items-center gap-2 font-mono text-[10px] tabular-nums select-none"
     >
-      {retried > 0 ? (
-        <span
-          className="text-amber-600/70 dark:text-amber-400/70"
-          title={
-            `A round failed and was sent again ${retried} time${retried === 1 ? "" : "s"}. ` +
-            "The tools of the rounds before it had already run, so only the model request " +
-            "repeated — nothing was done twice."
-          }
-        >
-          sent again ×{retried}
-        </span>
-      ) : null}
-      {rounds.length > 0 ? (
-        <span
-          title={`${rounds.length} request${rounds.length === 1 ? "" : "s"} · ${usageTitle(sumUsage(rounds))}\n${each}`}
-        >
-          {formatTokens(total)} tokens
-        </span>
-      ) : null}
+      <span
+        className="text-amber-600/70 dark:text-amber-400/70"
+        title={
+          `A round failed and was sent again ${retried} time${retried === 1 ? "" : "s"}. ` +
+          "The tools of the rounds before it had already run, so only the model request " +
+          "repeated — nothing was done twice."
+        }
+      >
+        sent again ×{retried}
+      </span>
     </div>
   );
 }

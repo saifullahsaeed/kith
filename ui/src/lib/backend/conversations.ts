@@ -65,6 +65,9 @@ export type StoredPart =
 export interface StoredTurn {
   role: "user" | "assistant";
   parts: StoredPart[];
+  /** When the turn started, ISO. `timeline()` has always sent it; nothing read it until the
+   *  footer showed a clock. `""` on a turn from before it was recorded. */
+  at?: string;
 }
 
 export async function fetchConversation(id: string): Promise<ConversationDetail> {

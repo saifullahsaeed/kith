@@ -78,14 +78,17 @@ function asText(open: OpenQuestion, replies: Reply[]): string {
  * survives the case that matters most — coming back to a conversation whose question was
  * asked while you were somewhere else.
  *
- * Raising the card from the stream event instead was tried, on 2026-08-13, and reverted the
- * same evening. Calling the fetch synchronously from inside the adapter's event loop — the
- * `tool_call` for `ask` arriving — correlated exactly with the renderer going dead: last
- * request of any kind at 20:11:20 UTC, the ask at 20:11:24, and nothing at all for the eleven
- * minutes after. Machine awake, `backgroundThrottling` already false, and the same ask on the
- * previous build had left polling running. Whatever it does, it is not safe from there, and
- * the reason it looked necessary — a card that takes many seconds to appear — is still not
- * explained. Do not re-add this without understanding the stall first.
+ * Raising the card from the stream event instead was tried on 2026-08-13 and reverted the same
+ * evening, for correlating with the renderer going dead: no request of any kind for the eleven
+ * minutes after an ask. That was a misattribution. The stall is Chromium's connection pool, and
+ * on 2026-08-14 it reproduced on the reverted build, with that change nowhere in the tree — six
+ * sockets held, no request for four minutes, a question open server-side the whole time and no
+ * socket left to fetch it with. `useChanges` was building one `EventSource` per subscriber
+ * against a six-per-origin HTTP/1.1 limit; it shares one now, and `use-changes.ts` carries the
+ * measurements.
+ *
+ * So the stream event is worth reconsidering on its own merits — there are free sockets now. It
+ * was never what froze the renderer, and it was never going to be what fixed it either.
  */
 export function AskPrompt({ conversationId }: { conversationId: string }) {
   // Optional, because drawing the card does not need a runtime and only the recovered-question
@@ -122,11 +125,13 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
         })
         .catch(() => {});
     load();
-    // Brisk, because this is the one thing on screen the turn is actually waiting for — and
-    // still not enough on its own. Chromium throttles an interval hard in a window that is not
-    // focused: measured at fifty polls a minute with focus and twelve in three and a half
-    // minutes without, so the card could take twenty seconds to appear and the turn looked hung.
-    // Quitting and reopening the app fetched immediately, which is why that read as the fix.
+    // Brisk, because this is the one thing on screen the turn is actually waiting for.
+    //
+    // This rate once read as Chromium throttling a background interval: fifty polls a minute with
+    // the app focused, twelve in three and a half minutes without. The interval was innocent. That
+    // is the rate at which a socket came free in a connection pool `useChanges` had exhausted, and
+    // a fetch cannot leave the renderer until one does — which is also why quitting and reopening
+    // fetched immediately, and read as the fix. Fixed in `use-changes.ts`, not here.
     const timer = setInterval(load, 1_200);
     return () => {
       alive = false;

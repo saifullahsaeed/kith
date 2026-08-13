@@ -695,7 +695,18 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
         data: { rounds, context, baseline, folded, retried },
       });
     }
-    if (content.length) out.push({ role: turn.role, content });
+    // `createdAt` from the transcript, never left to default. A `ThreadMessageLike` without one
+    // is stamped with the moment it was converted, so every turn in a conversation reopened now
+    // would read as having happened now — a clock that is wrong on exactly the messages it is
+    // there to date. Omitted rather than guessed when the turn predates the field.
+    const at = turn.at ? new Date(turn.at) : null;
+    if (content.length) {
+      out.push({
+        role: turn.role,
+        content,
+        ...(at && !Number.isNaN(at.getTime()) ? { createdAt: at } : {}),
+      });
+    }
   }
   // One cast, at the boundary: the shapes above are the library's own, and its content
   // union narrows by role in a way that defeats inference through a map.
