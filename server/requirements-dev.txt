@@ -1,0 +1,14 @@
+# What `./check` needs, and nothing the app itself imports.
+#
+# Split out because these were previously undeclared: `make venv` and CI both installed only
+# requirements.txt, so `./check server` passed on a developer's machine — where ruff and pytest
+# had been pip-installed by hand months earlier — and failed in CI with "No module named ruff"
+# on every run since CI was added. A tool that is required but written down nowhere is
+# indistinguishable from a broken checkout.
+#
+# Kept out of requirements.txt so they cannot end up frozen into the shipped binary. The spec
+# already excludes pytest by name; not depending on it in the first place is better than
+# excluding it afterwards.
+
+ruff>=0.16,<0.17
+pytest>=9.1,<10

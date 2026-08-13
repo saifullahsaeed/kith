@@ -34,6 +34,7 @@ help:
 venv: ## create/refresh the server virtualenv
 	@test -d server/.venv || python3 -m venv server/.venv
 	@$(PIP) install -q -r server/requirements.txt
+	@$(PIP) install -q -r server/requirements-dev.txt
 	@echo "venv ready: $$($(PY) --version)"
 
 ui: ## build the interface (the server and the desktop app both serve this output)

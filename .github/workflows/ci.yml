@@ -33,15 +33,22 @@ jobs:
           # Matches `ruff.toml`'s target-version. The suite uses 3.12+ syntax.
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: server/requirements.txt
+          cache-dependency-path: |
+            server/requirements.txt
+            server/requirements-dev.txt
 
       # `./check` runs `server/.venv/bin/python` by name, so the venv has to exist at that
       # exact path. Creating it is cheaper than teaching the script about two layouts.
+      #
+      # requirements-dev.txt is where ruff and pytest live. Installing only requirements.txt
+      # is what made this job fail with "No module named ruff" on every run from the day it
+      # was added — the tools were present on developer machines and declared nowhere.
       - name: Create the venv the checks expect
         run: |
           python -m venv server/.venv
           server/.venv/bin/pip install --quiet --upgrade pip
           server/.venv/bin/pip install --quiet -r server/requirements.txt
+          server/.venv/bin/pip install --quiet -r server/requirements-dev.txt
 
       - run: ./check server
 
