@@ -166,7 +166,12 @@ def _log_configuration() -> None:
     something unexpected. Printing the resolved values means the log answers that
     before anyone starts reading code.
     """
-    for key, value in settings.describe().items():
+    from kith.services import tuning
+
+    # Joined here rather than inside `settings.describe()`. Both halves belong in one entry,
+    # but `settings` is the bottom of the tree and reaching up to `tuning` for the second half
+    # is what forced that import to be written inside the function to hide it from Python.
+    for key, value in {**settings.describe(), "tunables": tuning.describe()}.items():
         if isinstance(value, dict):
             print(f"[kith] {key}:")
             for inner, detail in value.items():

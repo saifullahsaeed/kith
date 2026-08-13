@@ -132,13 +132,18 @@ SEARCH_PROVIDER = _text("KITH_SEARCH_PROVIDER", "auto").lower()
 
 
 def describe() -> dict[str, object]:
-    """This file's values and the tunables', for the startup log.
+    """This file's values, for the startup log.
 
-    Both, in one place, because a misconfigured run should say so once rather than
-    leaving someone to work out which of two settings systems they were fighting.
+    The tunables belong in the same log entry — a misconfigured run should say so once
+    rather than leaving someone to work out which of two settings systems they were
+    fighting — but they are joined on by the caller rather than fetched here.
+
+    This module is the bottom of the tree: it reads the environment and imports nothing
+    from kith, which is what lets every layer above reach for it without a cycle. Asking
+    `services.tuning` for its half made that untrue, and the import had to be written
+    inside the function to stop Python noticing. `_log_configuration` composes the two,
+    which is the composition root's job and costs it two lines.
     """
-    from kith.services import tuning
-
     return {
         "paths": {
             "data_dir": str(DATA_DIR),
@@ -148,5 +153,4 @@ def describe() -> dict[str, object]:
         },
         "search_provider": SEARCH_PROVIDER,
         "searxng": SEARCH_URL,
-        "tunables": tuning.describe(),
     }

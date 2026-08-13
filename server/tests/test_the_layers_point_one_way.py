@@ -80,7 +80,15 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   adapter: the loop takes a tool host rather than importing the registry, and
 #:   `brain/kinds.py` stops reaching into a tool module for two private functions.
 #: * `domain -> infra` is `clock` reading a stored timezone.
-#: * `services -> api` is `scheduler` reaching for the activity feed.
+#: * `services -> api` is `scheduler` importing `_build_messages`, `_Recorder` and `_turn` —
+#:   three *private* functions — out of `api/routes/chat.py`. Not a slip: a reminder firing
+#:   runs the same turn a typed message does, so that machinery was never route-shaped. It
+#:   retires when the turn moves out of the route, not before.
+#:
+#: Struck off so far:
+#:
+#: * `settings -> services`, which was `describe()` fetching the tunables for the startup
+#:   log. The caller joins the two halves now.
 ALLOWED: dict[tuple[str, str], int] = {
     ("infra", "services"): 16,
     ("infra", "config"): 7,
@@ -88,7 +96,6 @@ ALLOWED: dict[tuple[str, str], int] = {
     ("llm", "config"): 3,
     ("llm", "services"): 2,
     ("domain", "services"): 2,
-    ("settings", "services"): 1,
     ("domain", "infra"): 1,
     ("services", "api"): 1,
 }
