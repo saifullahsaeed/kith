@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from kith.kernel import session_context
+
 from .base import WorkspaceError
 from .git import _git, _repo_root, ensure_repo, has_git
 from .paths import base_dir
@@ -131,7 +133,6 @@ def _checkpoint_before_change(trigger: str) -> None:
     the change itself happens. A no-op outside a real turn, and at most once per repo
     per turn — see `session_context.in_turn`/`turn_notes` for why both of those matter.
     """
-    from kith.kernel import session_context
 
     if not session_context.in_turn():
         return

@@ -25,6 +25,7 @@ from typing import Any
 from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
 from kith.domain.tooling import ToolHost
+from kith.kernel import session_context
 from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
 from kith.services import compaction, tuning
@@ -520,7 +521,6 @@ def stream_agent(
     setting a context variable inside a generator sets it in whoever called `next()`, which
     is not the same thing and leaks.
     """
-    from kith.kernel import session_context
 
     with session_context.a_turn():
         yield from _run_turn(

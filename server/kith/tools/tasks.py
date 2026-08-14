@@ -7,6 +7,7 @@ from pathlib import Path
 from kith.domain import stall
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db import repositories as repo
+from kith.kernel import session_context
 from kith.services import project_binding
 from kith.services.tasks import (
     FILED_THIS_TURN,
@@ -62,7 +63,6 @@ _MIN_DONE_CHARS = 24
     required=("goal",),
 )
 def add_task(path: Path, args: dict):
-    from kith.kernel import session_context
     from kith.services import tuning
 
     goal = (args.get("goal") or "").strip()

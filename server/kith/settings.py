@@ -89,6 +89,23 @@ DATA_DIR = Path(_text("KITH_DATA_DIR") or _DEFAULT_DATA_DIR)
 #: Server configuration — chat settings, the tunables, the connection, the MCP server list.
 CONFIG_DB_PATH = DATA_DIR / "config.db"
 
+# **These two are imported inside function bodies on purpose, and it is not a layering marker.**
+#
+# A dozen call sites write `from kith.settings import CONFIG_DB_PATH` inside the function that
+# needs it. That looks exactly like the cycle-dodging this codebase spent a refactor removing,
+# and it is the opposite: `settings` imports nothing and can be imported from anywhere. The
+# reason is binding time.
+#
+# `from X import CONST` copies the value. Hoisted to module scope it is copied once, at import,
+# and a later `monkeypatch.setattr(kith.settings, "CONFIG_DB_PATH", tmp)` changes the name in
+# `settings` and nothing else — every holder keeps the real path. Written inside the function it
+# is re-read per call, so the patch reaches it.
+#
+# That is what the whole test suite's isolation rests on: `tests/conftest.py` redirects these to
+# temp databases so no test reads the developer's real config — which it did until recently,
+# including the API key and the permission mode. Hoisting these imports would silently undo it,
+# and nothing would fail; the tests would simply start reading the real files again.
+
 #: The agent's own memory: tasks, projects, notes, messages, the flight recorder.
 AGENT_DB_PATH = DATA_DIR / "agent.db"
 

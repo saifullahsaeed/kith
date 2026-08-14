@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kith.kernel import session_context
 from kith.services import skills as registry
 from kith.tools.params import STR
 from kith.tools.registry import tool
@@ -54,7 +55,6 @@ def read_skill(path: Path, args: dict):
     a sentence instead of the file, because the file is already above and re-reading it buys
     a duplicate.
     """
-    from kith.kernel import session_context
 
     name = str(args.get("name") or "").strip()
     notes = session_context.turn_notes()

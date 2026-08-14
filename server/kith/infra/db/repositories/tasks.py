@@ -17,44 +17,8 @@ from sqlalchemy.orm import Session
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task
-from kith.infra.db.support import utc_now_iso
-from kith.kernel import changes
-
-
-def _notifies(write):
-    """Publish a `task` change after a write returns.
-
-    A decorator rather than a call at the end of ten functions, because the eleventh is the one
-    somebody forgets — and a board that updates for nine kinds of change and not the tenth is worse
-    than one that never updates, since you stop trusting it.
-    """
-    from functools import wraps
-
-    @wraps(write)
-    def inner(*args, **kwargs):
-        out = write(*args, **kwargs)
-        _changed()
-        return out
-
-    return inner
-
-
-def _changed() -> None:
-    """Tell the interface the board moved.
-
-    In the repository rather than in the tools, because there are three writers — his tools, the
-    control panel's PATCH, and `brain/kinds` — and a notification attached to two of them is a widget
-    that updates unless you were the one who changed it. Swallowed: this is a note about a save, and
-    it must never be the reason one fails.
-
-    The import was local as well, and only the swallow was doing any work — `changes` imports
-    nothing, so there was never a cycle here to dodge.
-    """
-    try:
-        changes.publish("task")
-    except Exception:
-        pass
-
+from kith.infra.db.support import notifies, utc_now_iso
+from kith.kernel import session_context
 
 # Rank for sorting: high first, then normal, then low.
 _PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
@@ -67,7 +31,7 @@ _DELIVERABLE_KINDS = ("text", "file", "link")
 # --------------------------------------------------------------------------- #
 
 
-@_notifies
+@notifies("task")
 def add_task(
     path: Path,
     goal: str,
@@ -121,7 +85,7 @@ def add_task(
         return as_dict(row)
 
 
-@_notifies
+@notifies("task")
 def set_task_milestone(path: Path, task_id: int, milestone_id: int | None) -> dict | None:
     """Link a task to a milestone, inheriting the milestone's project.
 
@@ -152,7 +116,7 @@ def set_task_milestone(path: Path, task_id: int, milestone_id: int | None) -> di
         return as_dict(row)
 
 
-@_notifies
+@notifies("task")
 def set_task_project(path: Path, task_id: int, project_id: int | None) -> dict | None:
     with session(path) as db:
         row = db.get(Task, task_id)
@@ -230,7 +194,7 @@ def waiting_on_the_roadmap(path: Path) -> list[dict]:
     ]
 
 
-@_notifies
+@notifies("task")
 def update_task(
     path: Path,
     task_id: int,
@@ -278,7 +242,6 @@ def _who_is_working() -> str | None:
     and the cycle is real. None is the honest answer for a reminder firing at four in the
     morning — it is working the task, but there is no session for anyone to watch it in.
     """
-    from kith.kernel import session_context
 
     return session_context.current() or None
 
@@ -319,7 +282,7 @@ def _newest_first(task: dict) -> str:
     return "".join(chr(255 - ord(character)) for character in stamp)
 
 
-@_notifies
+@notifies("task")
 def delete_task(path: Path, task_id: int) -> bool:
     with session(path) as db:
         return db.execute(delete(Task).where(Task.id == task_id)).rowcount > 0
@@ -330,7 +293,7 @@ def delete_task(path: Path, task_id: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-@_notifies
+@notifies("task")
 def add_checklist_item(path: Path, task_id: int, text: str) -> dict:
     with session(path) as db:
         next_index = db.scalar(
@@ -360,7 +323,7 @@ def list_checklist(path: Path, task_id: int) -> list[dict]:
         return [as_dict(row) for row in db.scalars(query).all()]
 
 
-@_notifies
+@notifies("task")
 def set_checklist_item(
     path: Path, item_id: int, done: bool | None = None, text: str | None = None
 ) -> dict | None:
@@ -378,13 +341,13 @@ def set_checklist_item(
         return as_dict(row)
 
 
-@_notifies
+@notifies("task")
 def delete_checklist_item(path: Path, item_id: int) -> bool:
     with session(path) as db:
         return db.execute(delete(ChecklistItem).where(ChecklistItem.id == item_id)).rowcount > 0
 
 
-@_notifies
+@notifies("task")
 def add_deliverable(path: Path, task_id: int, kind: str, title: str, content: str) -> dict:
     if kind not in _DELIVERABLE_KINDS:
         kind = "text"
@@ -401,7 +364,7 @@ def list_deliverables(path: Path, task_id: int) -> list[dict]:
         return [as_dict(row) for row in db.scalars(query).all()]
 
 
-@_notifies
+@notifies("task")
 def delete_deliverable(path: Path, deliverable_id: int) -> bool:
     with session(path) as db:
         return db.execute(delete(Deliverable).where(Deliverable.id == deliverable_id)).rowcount > 0

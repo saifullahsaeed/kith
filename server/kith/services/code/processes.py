@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from kith.kernel import changes
+from kith.kernel import changes, session_context
 
 #: Most processes at once. Past a handful something has gone wrong — a loop starting servers,
 #: or work abandoned without stopping anything. Real machines have finite ports and memory.
@@ -493,8 +493,6 @@ def _current_conversation() -> str:
     shape this codebase already rejected for `session_context` generally.
     """
     try:
-        from kith.kernel import session_context
-
         return session_context.current() or ""
     except Exception:
         return ""

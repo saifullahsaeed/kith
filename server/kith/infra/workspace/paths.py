@@ -14,6 +14,7 @@ from pathlib import Path
 
 from kith import settings
 from kith.infra import permissions
+from kith.kernel import session_context
 
 from .base import WorkspaceError
 
@@ -99,7 +100,6 @@ def base_dir() -> Path:
     """
     try:
         from kith.infra.db import repositories as repo
-        from kith.kernel import session_context
         from kith.settings import AGENT_DB_PATH
 
         # The task in hand first, the conversation second. Only the conversation was

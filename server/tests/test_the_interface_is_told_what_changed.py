@@ -185,7 +185,19 @@ def test_every_kind_has_a_publisher_and_every_publisher_a_kind():
                 and isinstance(node.args[0], ast.Constant)
                 and isinstance(node.args[0].value, str)
             )
-            if is_publish:
+            # `notifies("task")` is a publisher too. The repositories used to write the call
+            # out — three copies of one decorator differing only in the string — and now share
+            # `support.notifies`, where the call itself reads `changes.publish(kind)` with a
+            # variable. The kind is at the decorator, so that is where to look for it.
+            is_notifies = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "notifies"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            )
+            if is_publish or is_notifies:
                 published[node.args[0].value].append(f"{path.relative_to(source.parent)}:{node.lineno}")
 
     undeclared = {kind: where for kind, where in published.items() if kind not in changes.KINDS}
