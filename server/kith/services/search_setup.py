@@ -17,14 +17,7 @@ import requests
 
 from kith import settings
 from kith.domain.connection import Connection
-from kith.domain.search import (
-    DEFAULT_SEARX_URL,
-    SEARCH_KIND_KEY,
-    SEARCH_URL_KEY,
-    SearchKind,
-    SearchSetup,
-    as_kind,
-)
+from kith.domain.search import DEFAULT_SEARX_URL, SearchKind, SearchSetup, as_kind
 from kith.infra.db import config_store
 from kith.services import tuning
 
@@ -66,9 +59,13 @@ class SearchManager:
         operator who sets ``KITH_SEARCH_PROVIDER`` expects it to win over a database.
         """
         stored = config_store.load_settings(self.config_db)
-        url = str(stored.get(SEARCH_URL_KEY) or "")
+        url = str(stored.get(settings.SEARCH_URL_KEY) or "")
 
-        raw = settings.SEARCH_PROVIDER if settings.SEARCH_PROVIDER != "auto" else stored.get(SEARCH_KIND_KEY)
+        raw = (
+            settings.SEARCH_PROVIDER
+            if settings.SEARCH_PROVIDER != "auto"
+            else stored.get(settings.SEARCH_KIND_KEY)
+        )
         kind = as_kind(raw)
         if kind is None:
             # Nothing chosen: prefer the free option when it is there, and fall back
@@ -218,6 +215,9 @@ class SearchManager:
         keeps_url = setup.kind is SearchKind.SEARXNG
         config_store.update_settings(
             self.config_db,
-            {SEARCH_KIND_KEY: str(setup.kind), SEARCH_URL_KEY: setup.searx_url if keeps_url else ""},
+            {
+                settings.SEARCH_KIND_KEY: str(setup.kind),
+                settings.SEARCH_URL_KEY: setup.searx_url if keeps_url else "",
+            },
         )
         return setup if keeps_url else SearchSetup(kind=setup.kind)

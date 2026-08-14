@@ -24,7 +24,7 @@ from typing import Any
 import requests
 
 from kith.domain import connection
-from kith.domain.chat import Config
+from kith.domain.chat import Config, Routing
 from kith.llm import budget, caching
 
 #: OpenRouter's full reasoning-effort scale, descending. Confirmed against their own
@@ -62,31 +62,18 @@ def _refuses_reasoning(response: requests.Response) -> bool:
     return "reasoning" in _body(response).lower()
 
 
-def _session_id() -> str:
-    """The persisted stickiness id, read through the config store."""
-    from kith.infra.db import config_store
-    from kith.settings import CONFIG_DB_PATH
-
-    stored = config_store.load_settings(CONFIG_DB_PATH)
-    return caching.session_id(
-        stored,
-        lambda fresh: config_store.update_settings(CONFIG_DB_PATH, {caching.SESSION_KEY: fresh}),
-    )
-
-
-def _routing_options(config: Config) -> dict[str, Any]:
+def _routing_options(config: Config, routing: Routing) -> dict[str, Any]:
     """The OpenRouter routing, fallback and privacy fields, resolved from settings.
 
-    Pure — settings in, payload fragment out — so the policy can be tested without opening a
-    socket. `session_id` is assembled in `stream_once` instead: unlike this and `reasoning`,
-    it touches storage.
+    Pure — routing in, payload fragment out — so the policy can be tested without opening a
+    socket, which it now genuinely is: it used to read all six values out of `services.tuning`
+    through a function-body import, so "pure" was true of the arithmetic and false of the
+    module. The caller resolves them; see `domain.chat.Routing`.
     """
-    from kith.services import tuning
-
     out: dict[str, Any] = {}
     provider: dict[str, Any] = {}
 
-    pinned = _pinned_provider()
+    pinned = routing.pinned
     if pinned:
         # A strong preference, not a lock: fallbacks stay on so availability never breaks,
         # while every round of a turn is steered at the same warm host.
@@ -107,22 +94,22 @@ def _routing_options(config: Config) -> dict[str, Any]:
     # `sort` costs nothing to set and is not a lock: it orders the pool, and fallbacks still
     # apply if the cheapest is down. Combined with the session id it means sticking to a cheap
     # host rather than sticking to an arbitrary one.
-    order_by = str(tuning.value("prefer_provider_by")).strip()
+    order_by = routing.prefer_by.strip()
     if order_by and not pinned:
         provider["sort"] = order_by
 
     # And a ceiling, for the case `sort` cannot cover: every cheap host is busy and the fallback
     # is the $6.59 one. Off by default because the right number is per-model and a figure set too
     # low takes the model off the air entirely — the same "goes dark" trade as the flags below.
-    ceiling = float(tuning.value("max_prompt_price"))
+    ceiling = routing.max_prompt_price
     if ceiling > 0:
         provider["max_price"] = {"prompt": ceiling}
 
-    if tuning.value("require_provider_parameters"):
+    if routing.require_parameters:
         # Only route to upstreams that support everything this request sends — tools,
         # reasoning, caching — so a cheaper host can't silently drop a feature we paid for.
         provider["require_parameters"] = True
-    if tuning.value("zero_data_retention"):
+    if routing.zero_data_retention:
         # For a "runs on your machine" agent reaching the cloud: exclude any provider that
         # may log or train on the request, and restrict routing to zero-data-retention hosts.
         provider["data_collection"] = "deny"
@@ -130,7 +117,7 @@ def _routing_options(config: Config) -> dict[str, Any]:
     if provider:
         out["provider"] = provider
 
-    fallback = str(tuning.value("fallback_model")).strip()
+    fallback = routing.fallback_model.strip()
     if fallback and fallback != config.model:
         # If the primary errors, rate-limits or is down, OpenRouter tries the next model;
         # billing is by whichever actually served. This is what keeps a long turn
@@ -159,23 +146,13 @@ def _reasoning_options(config: Config) -> dict[str, Any]:
     return {"reasoning": {"enabled": bool(config.think)}}
 
 
-def _pinned_provider() -> str:
-    """The upstream to pin OpenRouter to, read per request because it is editable.
-
-    Imported at call time: this module is the transport and importing a service at
-    module scope would make the dependency cycle real.
-    """
-    from kith.services import tuning
-
-    return str(tuning.value("openrouter_provider"))
-
-
 def stream_once(
     messages: list[dict[str, Any]],
     config: Config,
     host: str | None = None,  # unused; kept for a common signature with ollama_client
     tools: list[dict] | None = None,
     tool_choice: str = "auto",
+    routing: Routing | None = None,
 ) -> Iterator[dict]:
     url = f"{config.base_url.rstrip('/')}/chat/completions"
     payload: dict[str, Any] = {
@@ -215,15 +192,19 @@ def stream_once(
         #
         # Per conversation whenever we know which one, and that now covers a session's
         # every turn. It used to cover only some of them: one path passed no
-        # conversation and fell through to the install-wide id below, so one session kept
-        # two copies of the same cached persona warm on two different hosts. The fallback
-        # is still there and still right — a step run with nobody working belongs to no
-        # session, so the install-wide id is the honest answer for it.
-        payload["session_id"] = config.session_id or _session_id()
+        # conversation and fell through to an install-wide id read here, so one session kept
+        # two copies of the same cached persona warm on two different hosts.
+        #
+        # The fallback is still there and still right — a step run with nobody working belongs
+        # to no session, so the install-wide id is the honest answer for it — but it is
+        # resolved by the caller now. Reading it here meant the transport opening the config
+        # database, which was the tree's last `llm -> infra` edge, written as a function-body
+        # import to keep Python from noticing. See `agent_loop._install_session_id`.
+        payload["session_id"] = config.session_id
         # Provider routing (a pinned upstream), model fallback, privacy/capability
         # preferences, and whether/how hard he reasons — all resolved from settings and
         # assembled in one tested place.
-        payload.update(_routing_options(config))
+        payload.update(_routing_options(config, routing or Routing()))
         payload.update(_reasoning_options(config))
     if tools:
         payload["tools"] = tools

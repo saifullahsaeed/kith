@@ -22,7 +22,7 @@ def _drive(monkeypatch, db: Path, config, max_rounds: int) -> list[str]:
     seen: list[str] = []
     calls = 0
 
-    def fake_stream(convo, round_config, host, tools=None, tool_choice="auto"):
+    def fake_stream(convo, round_config, host, tools=None, tool_choice="auto", routing=None):
         nonlocal calls
         seen.append(round_config.effort)
         calls += 1

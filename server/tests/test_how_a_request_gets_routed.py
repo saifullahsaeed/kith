@@ -24,16 +24,16 @@ class TestModelFallback:
         # If the primary errors or is down, OpenRouter tries the next — and bills by
         # whichever actually served. The primary stays first.
         tuning.apply({"fallback_model": "moonshotai/kimi-k2"})
-        assert _routing_options(_config())["models"] == [PRIMARY, "moonshotai/kimi-k2"]
+        assert _routing_options(_config(), tuning.routing())["models"] == [PRIMARY, "moonshotai/kimi-k2"]
 
     def test_no_fallback_leaves_the_request_single_model(self):
         # The default is blank, so nothing changes for anyone who hasn't set one.
-        assert "models" not in _routing_options(_config())
+        assert "models" not in _routing_options(_config(), tuning.routing())
 
     def test_a_fallback_equal_to_the_primary_is_not_sent(self):
         # A models array of [x, x] is just x with extra words and a wasted validation.
         tuning.apply({"fallback_model": PRIMARY})
-        assert "models" not in _routing_options(_config())
+        assert "models" not in _routing_options(_config(), tuning.routing())
 
 
 def _provider(config: Config | None = None) -> dict:
@@ -45,7 +45,7 @@ def _provider(config: Config | None = None) -> dict:
     given a default, reporting a failure in requiring-capable-providers and in zero-data-retention
     for a change that touched neither.
     """
-    return _routing_options(config or _config()).get("provider") or {}
+    return _routing_options(config or _config(), tuning.routing()).get("provider") or {}
 
 
 class TestRequiringACapableProvider:
@@ -70,7 +70,7 @@ class TestZeroDataRetention:
     def test_on_denies_logging_and_restricts_to_zdr_hosts(self):
         # The "runs on your machine" promise, honoured when he reaches the cloud.
         tuning.apply({"zero_data_retention": True})
-        provider = _routing_options(_config())["provider"]
+        provider = _routing_options(_config(), tuning.routing())["provider"]
         assert provider["data_collection"] == "deny"
         assert provider["zdr"] is True
 
@@ -111,7 +111,9 @@ class TestTheOptionsReachTheWire:
             session_id="s",  # set, so the storage-touching id lookup is skipped
         )
 
-        list(openai_compat.stream_once([{"role": "user", "content": "hi"}], cfg))
+        # The routing arrives as an argument now — the transport no longer reads settings
+        # itself, which is what made `llm` import `services`. This is the caller's half.
+        list(openai_compat.stream_once([{"role": "user", "content": "hi"}], cfg, routing=tuning.routing()))
 
         assert captured["json"]["models"] == [PRIMARY, "moonshotai/kimi-k2"]
 
@@ -120,7 +122,7 @@ class TestPinningStillWorks:
     def test_a_pinned_provider_is_a_preference_not_a_lock(self):
         # Unchanged behaviour: order the host first, but keep fallbacks so availability holds.
         tuning.apply({"openrouter_provider": "DeepInfra"})
-        provider = _routing_options(_config())["provider"]
+        provider = _routing_options(_config(), tuning.routing())["provider"]
         assert provider["order"] == ["DeepInfra"]
         assert provider["allow_fallbacks"] is True
 
@@ -132,7 +134,7 @@ class TestPinningStillWorks:
                 "zero_data_retention": True,
             }
         )
-        provider = _routing_options(_config())["provider"]
+        provider = _routing_options(_config(), tuning.routing())["provider"]
         assert provider["order"] == ["DeepInfra"]
         assert provider["require_parameters"] is True
         assert provider["data_collection"] == "deny"

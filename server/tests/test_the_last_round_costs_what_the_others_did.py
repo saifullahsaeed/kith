@@ -36,7 +36,7 @@ class TestTheForcedFinalAnswer:
         # `_run_turn` is the loop; `stream_agent` is now a thin wrapper that opens the
         # turn boundary around it. The invariant below lives in the loop.
         source = inspect.getsource(agent_loop._run_turn)
-        assert "_final_answer(convo, config, host, schemas)" in source, (
+        assert "_final_answer(convo, config, host, schemas" in source, (
             "the forced final answer is building its own tool list again"
         )
         # Code only. The comment above the fix quotes the old call on purpose, and matching
@@ -58,7 +58,7 @@ class TestTheForcedFinalAnswer:
         the transcript as if it were the answer."""
         sent: list = []
 
-        def fake_stream(convo, config, host, tools=None, tool_choice=None):
+        def fake_stream(convo, config, host, tools=None, tool_choice=None, routing=None):
             sent.append((tools, tool_choice))
             return iter(())
 

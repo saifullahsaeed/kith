@@ -171,9 +171,15 @@ def _summarize(text: str, config, host: str) -> str:
 
     prompt = [{"role": "system", "content": _INSTRUCTION}, {"role": "user", "content": text}]
     slim = replace(config, think=False, effort="", num_predict=_SUMMARY_MAX_TOKENS)
+    from kith.services import tuning
+
     try:
         if slim.api_key and slim.base_url:
-            stream = openai_compat.stream_once(prompt, slim, host, tools=None)
+            # The same steering the turn's own rounds get. `stream_once` defaults to
+            # `Routing()` when handed nothing, and defaulting here would quietly stop honouring
+            # a pinned provider or a price ceiling on this one call — a behaviour change hiding
+            # inside a layering fix.
+            stream = openai_compat.stream_once(prompt, slim, host, tools=None, routing=tuning.routing())
         else:
             stream = ollama.stream_once(prompt, slim, host, tools=None)
         parts: list[str] = []

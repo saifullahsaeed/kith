@@ -35,7 +35,7 @@ def _errors(*messages: str):
     responses.append([{"type": "turn", "content": "done", "tool_calls": [], "stats": {}}])
     calls: list[int] = []
 
-    def fake(convo, config, host, tools=None, tool_choice="auto"):
+    def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
         calls.append(1)
         yield from responses[min(len(calls) - 1, len(responses) - 1)]
 
@@ -103,7 +103,7 @@ class TestWhatIsNotWorthRetrying:
         """
         sent: list[str] = []
 
-        def fake(convo, config, host, tools=None, tool_choice="auto"):
+        def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
             sent.append(str((convo[-1] if convo else {}).get("content") or ""))
             if len(sent) == 1:
                 yield {"type": "error", "message": message}
@@ -125,7 +125,7 @@ class TestWhatIsNotWorthRetrying:
         answer followed by all of another. That round is over; land instead."""
         calls: list[int] = []
 
-        def fake(convo, config, host, tools=None, tool_choice="auto"):
+        def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
             calls.append(1)
             if len(calls) == 1:
                 yield {"type": "delta", "role": "text", "text": "I had a look and "}
@@ -149,7 +149,7 @@ class TestGivingUpMeansLandingNotDying:
         tuning.apply({"landing_reserve": 2})
         calls: list[int] = []
 
-        def always_fails(convo, config, host, tools=None, tool_choice="auto"):
+        def always_fails(convo, config, host, tools=None, tool_choice="auto", routing=None):
             calls.append(1)
             if len(calls) <= 3:
                 yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
@@ -170,7 +170,7 @@ class TestGivingUpMeansLandingNotDying:
         """One recovery attempt. A provider that is still refusing during the landing round is
         not going to be talked round, and a loop that never gives up is worse than an error."""
 
-        def always_fails(convo, config, host, tools=None, tool_choice="auto"):
+        def always_fails(convo, config, host, tools=None, tool_choice="auto", routing=None):
             yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
 
         monkeypatch.setattr(agent_loop, "_stream_once", always_fails)
@@ -209,7 +209,7 @@ class TestNothingToLandOnWhenTheNetworkIsDown:
     def test_an_unreachable_provider_does_not_get_a_landing_round(self, db: Path, monkeypatch):
         calls: list[int] = []
 
-        def unreachable(convo, config, host, tools=None, tool_choice="auto"):
+        def unreachable(convo, config, host, tools=None, tool_choice="auto", routing=None):
             calls.append(1)
             yield {"type": "error", "message": _WIFI_OFF}
 
@@ -225,7 +225,7 @@ class TestNothingToLandOnWhenTheNetworkIsDown:
         """The distinction has to hold in both directions, or this is just a disabled retry."""
         calls: list[int] = []
 
-        def flaky(convo, config, host, tools=None, tool_choice="auto"):
+        def flaky(convo, config, host, tools=None, tool_choice="auto", routing=None):
             calls.append(1)
             yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
 
@@ -246,7 +246,7 @@ class TestTheErrorSaysWhatWasTried:
     """
 
     def test_the_failure_carries_the_attempt_count(self, db: Path, monkeypatch):
-        def unreachable(convo, config, host, tools=None, tool_choice="auto"):
+        def unreachable(convo, config, host, tools=None, tool_choice="auto", routing=None):
             yield {"type": "error", "message": _WIFI_OFF}
 
         monkeypatch.setattr(agent_loop, "_stream_once", unreachable)
@@ -267,7 +267,7 @@ class TestTheErrorSaysWhatWasTried:
         of what was spent, not of what the retry policy would have permitted.
         """
 
-        def refused(convo, config, host, tools=None, tool_choice="auto"):
+        def refused(convo, config, host, tools=None, tool_choice="auto", routing=None):
             yield {"type": "error", "message": "Cloud model returned 401: no credit"}
 
         monkeypatch.setattr(agent_loop, "_stream_once", refused)
@@ -285,7 +285,7 @@ class TestTheAttemptNumberCountsUp:
         """It read "attempt 2, attempt 3, attempt 2, attempt 3" — which looks like going
         backwards, not persisting. One count for the turn."""
 
-        def flaky(convo, config, host, tools=None, tool_choice="auto"):
+        def flaky(convo, config, host, tools=None, tool_choice="auto", routing=None):
             yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
 
         monkeypatch.setattr(agent_loop, "_stream_once", flaky)

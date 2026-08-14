@@ -34,7 +34,7 @@ def _config(model: str = "openai/gpt-5.6-luna") -> Config:
 
 def _provider(**settings) -> dict:
     tuning.apply(settings)
-    return _routing_options(_config()).get("provider") or {}
+    return _routing_options(_config(), tuning.routing()).get("provider") or {}
 
 
 class TestPreferringACheapHost:

@@ -45,7 +45,7 @@ class TestATransientFailureKeepsTheTurnWhole:
         """The measured symptom: 69 schemas became 19 because one request timed out."""
         offered: list[set[str]] = []
 
-        def flaky(convo, config, host, tools=None, tool_choice="auto"):
+        def flaky(convo, config, host, tools=None, tool_choice="auto", routing=None):
             offered.append(_tools_offered(tools))
             if len(offered) <= _KILLS_A_ROUND:
                 yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
@@ -68,7 +68,7 @@ class TestATransientFailureKeepsTheTurnWhole:
         """He was on round 2 of 40. The directive is what he acted on, not the toolset."""
         sent: list[str] = []
 
-        def flaky(convo, config, host, tools=None, tool_choice="auto"):
+        def flaky(convo, config, host, tools=None, tool_choice="auto", routing=None):
             sent.append(str((convo[-1] if convo else {}).get("content") or ""))
             if len(sent) <= _KILLS_A_ROUND:
                 yield {
@@ -95,7 +95,7 @@ class TestATransientFailureKeepsTheTurnWhole:
         """Carrying on quietly would make a 30-second stall look like slow thinking."""
         calls: list[int] = []
 
-        def flaky(convo, config, host, tools=None, tool_choice="auto"):
+        def flaky(convo, config, host, tools=None, tool_choice="auto", routing=None):
             calls.append(1)
             if len(calls) <= _KILLS_A_ROUND:
                 yield {"type": "error", "message": "Cloud model returned 429: rate limited"}
@@ -116,7 +116,7 @@ class TestAnOutageStillLands:
         """Absorbing the first is a blip. Absorbing every one is a loop with no way out."""
         sent: list[str] = []
 
-        def dead(convo, config, host, tools=None, tool_choice="auto"):
+        def dead(convo, config, host, tools=None, tool_choice="auto", routing=None):
             sent.append(str((convo[-1] if convo else {}).get("content") or ""))
             yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
 
@@ -138,7 +138,7 @@ class TestAnOutageStillLands:
         now = next(step)
         left = _KILLS_A_ROUND
 
-        def intermittent(convo, config, host, tools=None, tool_choice="auto"):
+        def intermittent(convo, config, host, tools=None, tool_choice="auto", routing=None):
             nonlocal now, left
             sent.append(str((convo[-1] if convo else {}).get("content") or ""))
             if now == "fail":
@@ -177,7 +177,7 @@ class TestWhatTheServerCallsWrongStillLands:
         """
         sent: list[str] = []
 
-        def refused(convo, config, host, tools=None, tool_choice="auto"):
+        def refused(convo, config, host, tools=None, tool_choice="auto", routing=None):
             sent.append(str((convo[-1] if convo else {}).get("content") or ""))
             if len(sent) == 1:
                 yield {"type": "error", "message": "Cloud model returned 400: messages[3] is malformed"}

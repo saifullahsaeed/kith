@@ -98,8 +98,6 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:
 #: Each line is a tranche's worth of work, in the order they are being done:
 #:
-#: * `llm -> services` is the transport reading six routing knobs and a stickiness id it has
-#:   no business resolving.
 #: * `services -> tools` is now three, and all three are the same thing: the loop and the
 #:   history folder want `tool_schemas`, so they must be handed a tool host rather than
 #:   importing the registry. That is the loop decomposition, not a move.
@@ -114,7 +112,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
 #:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far, 38 -> 7:
+#: Struck off so far, 38 -> 4:
 #:
 #: * `settings -> services` (1), which was `describe()` fetching the tunables for the
 #:   startup log. The caller joins the two halves now.
@@ -159,11 +157,17 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   rows are stored under from the module that writes them (now `domain/search.py`, which is
 #:   vocabulary, not storage); and it read two knobs to fill in a payload (now parameters,
 #:   defaulted to the tunables' own defaults, resolved by the adapter).
+#: * `llm -> services` and `llm -> infra` are ZERO. The transport was resolving six routing
+#:   knobs and an install-wide stickiness id — reading settings and opening the config
+#:   database from inside the thing whose job is to put bytes on a socket. It takes a
+#:   `domain.chat.Routing` now, mapped in one place by `services/tuning.routing()` and read
+#:   once per turn like `reserve` and `landing_effort`; the id is resolved by
+#:   `agent_loop._install_session_id`. Every cloud request in a turn is threaded — the fold,
+#:   the summariser and the forced final answer included, because letting those default would
+#:   have quietly stopped honouring a pinned provider on three paths.
 ALLOWED: dict[tuple[str, str], int] = {
     ("services", "tools"): 3,
-    ("llm", "services"): 2,
     ("services", "api"): 1,
-    ("llm", "infra"): 1,
 }
 
 

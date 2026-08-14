@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from kith.domain.chat import Routing
 from kith.domain.tuning import GROUPS, TUNABLES, Tunable, for_key
 from kith.infra.db import config_store
 from kith.settings import CONFIG_DB_PATH
@@ -232,3 +233,21 @@ def data_dir() -> Path:
     from kith import settings
 
     return settings.DATA_DIR
+
+
+def routing() -> Routing:
+    """The six routing knobs, resolved together.
+
+    One place, because there are three callers — the loop, the history fold, and the tests
+    that check a tuned value reaches the wire — and a mapping written out three times is a
+    mapping that drifts once. `llm/openai_compat.py` used to read them itself, which made the
+    transport import this module; it takes a `Routing` now and this is where one comes from.
+    """
+    return Routing(
+        pinned=str(value("openrouter_provider")),
+        prefer_by=str(value("prefer_provider_by")),
+        max_prompt_price=float(value("max_prompt_price")),
+        require_parameters=bool(value("require_provider_parameters")),
+        zero_data_retention=bool(value("zero_data_retention")),
+        fallback_model=str(value("fallback_model")),
+    )

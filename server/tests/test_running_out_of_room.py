@@ -264,7 +264,7 @@ class TestTheLoopActuallyUsesIt:
         seen: list[list[dict]] = []
         calls = {"n": 0}
 
-        def fake_stream(convo, config, host, tools=None, tool_choice="auto"):
+        def fake_stream(convo, config, host, tools=None, tool_choice="auto", routing=None):
             seen.append([dict(m) for m in convo])
             calls["n"] += 1
             stats = {"promptTokens": prompt_tokens, "responseTokens": 10}
@@ -341,7 +341,7 @@ class TestTheMeterMatchesWhatWasActuallySent:
         seen: list[list[dict]] = []
         calls = {"n": 0}
 
-        def fake_stream(convo, config, host, tools=None, tool_choice="auto"):
+        def fake_stream(convo, config, host, tools=None, tool_choice="auto", routing=None):
             seen.append([dict(m) for m in convo])
             calls["n"] += 1
             stats = {"promptTokens": prompt_tokens, "responseTokens": 10}

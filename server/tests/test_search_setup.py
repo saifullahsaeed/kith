@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+from kith import settings
 from kith.domain.connection import Connection
-from kith.domain.search import DEFAULT_SEARX_URL, SEARCH_KIND_KEY, SEARCH_URL_KEY, SearchKind, SearchSetup
+from kith.domain.search import DEFAULT_SEARX_URL, SearchKind, SearchSetup
 from kith.infra.db import config_store
 from kith.services.search_setup import SearchManager, SearchProbe
 
@@ -129,14 +130,14 @@ class TestProbe:
 class TestCurrent:
     def test_a_saved_choice_is_honoured(self, config_db):
         config_store.update_settings(
-            config_db, {SEARCH_KIND_KEY: "searxng", SEARCH_URL_KEY: "http://box.local:8888"}
+            config_db, {settings.SEARCH_KIND_KEY: "searxng", settings.SEARCH_URL_KEY: "http://box.local:8888"}
         )
         current = SearchManager(config_db=config_db).current(OPENROUTER)
         assert current.kind is SearchKind.SEARXNG
         assert current.endpoint == "http://box.local:8888"
 
     def test_the_environment_wins_over_the_database(self, config_db, monkeypatch):
-        config_store.update_settings(config_db, {SEARCH_KIND_KEY: "none"})
+        config_store.update_settings(config_db, {settings.SEARCH_KIND_KEY: "none"})
         monkeypatch.setattr("kith.settings.SEARCH_PROVIDER", "openrouter")
         assert SearchManager(config_db=config_db).current(OPENROUTER).kind is SearchKind.OPENROUTER
 
@@ -197,7 +198,7 @@ class TestStaleAddress:
         saved = manager.adopt(SearchSetup(kind=SearchKind.OPENROUTER, searx_url="http://dead:9"), OPENROUTER)
 
         assert saved.searx_url == ""
-        assert config_store.load_settings(config_db)[SEARCH_URL_KEY] == ""
+        assert config_store.load_settings(config_db)[settings.SEARCH_URL_KEY] == ""
         # Otherwise switching back to SearXNG later would silently reuse the dead one.
-        config_store.update_settings(config_db, {SEARCH_KIND_KEY: "searxng"})
+        config_store.update_settings(config_db, {settings.SEARCH_KIND_KEY: "searxng"})
         assert SearchManager(config_db=config_db).current(OPENROUTER).endpoint == DEFAULT_SEARX_URL

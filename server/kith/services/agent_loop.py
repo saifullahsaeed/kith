@@ -25,7 +25,7 @@ from typing import Any
 from kith import tools
 from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
-from kith.llm import ledger, ollama, openai_compat
+from kith.llm import caching, ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
 from kith.services import compaction, tuning
 
@@ -289,10 +289,28 @@ _LANDING_DIRECTIVE = (
 )
 
 
-def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = "auto"):
+def _install_session_id() -> str:
+    """The install-wide OpenRouter stickiness id, minted once and persisted.
+
+    Lived in `llm/openai_compat._session_id` and opened the config database from inside the
+    transport. Same function, one layer up, where reaching for storage is the job.
+    """
+    from kith.infra.db import config_store
+    from kith.settings import CONFIG_DB_PATH
+
+    stored = config_store.load_settings(CONFIG_DB_PATH)
+    return caching.session_id(
+        stored,
+        lambda fresh: config_store.update_settings(CONFIG_DB_PATH, {caching.SESSION_KEY: fresh}),
+    )
+
+
+def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = "auto", routing=None):
     """Route to the cloud model when a key+endpoint are set, else local Ollama."""
     if config.api_key and config.base_url:
-        return openai_compat.stream_once(messages, config, host, tools=tools, tool_choice=tool_choice)
+        return openai_compat.stream_once(
+            messages, config, host, tools=tools, tool_choice=tool_choice, routing=routing
+        )
     # Ollama has no tool_choice; withholding the schemas is the only lever there.
     return ollama.stream_once(messages, config, host, tools=None if tool_choice == "none" else tools)
 
@@ -558,7 +576,7 @@ def _room_is_tight(convo: list[dict[str, Any]], window: int) -> bool:
     return held > window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE
 
 
-def _summarise(prompt: str, *, config: Config, host: str) -> str:
+def _summarise(prompt: str, *, config: Config, host: str, routing=None) -> str:
     """One text-only model call, for folding a long turn into notes.
 
     Deliberately not the turn's own conversation: the fold is a fresh, tool-less request whose
@@ -577,7 +595,7 @@ def _summarise(prompt: str, *, config: Config, host: str) -> str:
     # cache lineage and should not be pinned to it.
     plain = replace(config, effort="", session_id="")
     text = ""
-    for event in _stream_once(asked, plain, host, tools=None, tool_choice="none"):
+    for event in _stream_once(asked, plain, host, tools=None, tool_choice="none", routing=routing):
         # `delta`/`role: text` is what both providers emit for prose — reasoning arrives on the
         # same event type under a different role and is not the note.
         if event.get("type") == "delta" and event.get("role") == "text":
@@ -731,6 +749,7 @@ def _send_round(
     host: str,
     schemas: list[dict],
     retries: _Retries,
+    routing=None,
 ) -> Iterator[dict]:
     """One round's model call, attempted up to `_ROUND_ATTEMPTS` times.
 
@@ -757,7 +776,7 @@ def _send_round(
         failure = None
         spoke = False
         content, tool_calls, stats = "", [], None
-        for event in _stream_once(convo, config, host, tools=schemas):
+        for event in _stream_once(convo, config, host, tools=schemas, routing=routing):
             kind = event["type"]
             if kind == "delta":
                 spoke = True
@@ -794,6 +813,7 @@ def _make_room(
     config: Config,
     host: str,
     offload=None,
+    routing=None,
 ) -> Iterator[dict]:
     """Reduce the turn's history until the next request fits. Returns the reading after.
 
@@ -836,7 +856,7 @@ def _make_room(
         folded = False
         if compaction.already_folded(convo) < _MAX_FOLDS:
             yield {"type": "compacting", "used": book.used, "window": book.window}
-            folded = compaction.fold(convo, partial(_summarise, config=config, host=host))
+            folded = compaction.fold(convo, partial(_summarise, config=config, host=host, routing=routing))
         if not folded:
             # Either it has been folded as often as is worth paying for, or there was no safe
             # place to cut. Fall back to the older shaving, which is lossy and breaks the
@@ -922,6 +942,12 @@ def _run_turn(
         # spill can refer to nothing and is dead weight. Clear it, then this turn writes fresh.
         offload_svc.clear(conversation_id)
         offload_result = partial(offload_svc.save, conversation_id)
+    if not config.session_id:
+        # A turn with no conversation — a script, a test, a step nobody is working — belongs to
+        # no session, and the install-wide id is the honest answer for it. Resolved here rather
+        # than inside the transport, which had to open the config database to do it: the last
+        # `llm -> infra` edge in the tree, written as a function-body import to hide the cycle.
+        config = replace(config, session_id=_install_session_id())
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
     budget = max_rounds or tuning.value("max_rounds")
@@ -930,6 +956,11 @@ def _run_turn(
     # not a reasoning-heavy phase, and reasoning is billed as output tokens whether or not any
     # of it is shown. Blank means "leave every round exactly as it was" — no override built.
     landing_effort = str(tuning.value("landing_effort") or "").strip().lower()
+    # How this turn's requests should be steered. Read once, for the same reason `reserve` and
+    # `landing_effort` are: these are settings, and a value that changed under a turn would
+    # change the request without anyone asking it to. The transport used to read all six
+    # itself, which made it import the settings service — see `domain.chat.Routing`.
+    routing = tuning.routing()
     # Every MCP tool, frozen for this turn. Taken once rather than per round on purpose: the
     # tools block is part of the cached prompt prefix, so a server dying — or being switched
     # off in another tab — would shrink it mid-turn and discard the whole cache on the next
@@ -1044,6 +1075,7 @@ def _run_turn(
             config=config,
             host=host,
             offload=offload_result,
+            routing=routing,
         )
 
         # Taken last, so it always describes the request about to be sent — not a reading from
@@ -1059,7 +1091,7 @@ def _run_turn(
         round_config = replace(config, effort=landing_effort) if landing and landing_effort else config
 
         content, tool_calls, stats, failure = yield from _send_round(
-            convo, round_config, host, schemas, retries
+            convo, round_config, host, schemas, retries, routing=routing
         )
 
         if failure is not None:
@@ -1231,7 +1263,7 @@ def _run_turn(
                 convo.append(_tool_result_message(convo, step["name"], json.dumps(result)))
 
     # Out of tool budget — force a final answer so there's always a reply.
-    yield from _final_answer(convo, config, host, schemas)
+    yield from _final_answer(convo, config, host, schemas, routing=routing)
 
 
 def _image_from(result: Any) -> str:
@@ -1321,7 +1353,11 @@ def _batches(planned: list[dict]) -> Iterator[list[dict]]:
 
 
 def _final_answer(
-    convo: list[dict[str, Any]], config: Config, host: str, schemas: list[dict] | None = None
+    convo: list[dict[str, Any]],
+    config: Config,
+    host: str,
+    schemas: list[dict] | None = None,
+    routing=None,
 ) -> Iterator[dict]:
     """The last round: he must answer, and may not call anything.
 
@@ -1346,7 +1382,7 @@ def _final_answer(
     # point, so the markup is pure noise — and it would otherwise be stored as if it
     # were his answer. Stateful because a tag can straddle two deltas.
     scrub = ToolMarkupFilter()
-    for event in _stream_once(convo, config, host, tools=schemas, tool_choice="none"):
+    for event in _stream_once(convo, config, host, tools=schemas, tool_choice="none", routing=routing):
         kind = event["type"]
         if kind == "delta":
             if event.get("role") == "text":

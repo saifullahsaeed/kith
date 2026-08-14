@@ -167,6 +167,16 @@ SEARCH_URL = _text("KITH_SEARCH_URL", "http://127.0.0.1:8888").rstrip("/")
 #: ``auto`` tries SearXNG then OpenRouter's web plugin; or force one.
 SEARCH_PROVIDER = _text("KITH_SEARCH_PROVIDER", "auto").lower()
 
+#: What a saved search choice is stored under in the config database — the same names the two
+#: environment variables above use, so a value means one thing wherever it is read from.
+#:
+#: Here rather than in the module that writes them. `services/search_setup.py` does the writing
+#: and `infra/websearch.py` the reading, and the reader was importing the name from the writer
+#: one layer up, through a function-body import. A row's name is not storage, and beside the
+#: env vars it mirrors is where it can be checked at a glance instead of taken on trust.
+SEARCH_KIND_KEY = "search_provider"
+SEARCH_URL_KEY = "search_url"
+
 
 def describe() -> dict[str, object]:
     """This file's values, for the startup log.

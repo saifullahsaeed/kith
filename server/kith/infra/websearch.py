@@ -38,7 +38,7 @@ import requests
 from kith import settings
 from kith.domain import connection
 from kith.domain.chat import Config
-from kith.domain.search import SEARCH_KIND_KEY, SEARCH_URL_KEY, SearchKind, as_kind
+from kith.domain.search import SearchKind, as_kind
 from kith.infra import workspace as sandbox
 from kith.infra.db import config_store
 
@@ -157,7 +157,7 @@ def _chosen(config: Config) -> SearchKind | None:
 
     if _PROVIDER and _PROVIDER != "auto":
         return as_kind(_PROVIDER)
-    return as_kind(config_store.load_settings(CONFIG_DB_PATH).get(SEARCH_KIND_KEY))
+    return as_kind(config_store.load_settings(CONFIG_DB_PATH).get(settings.SEARCH_KIND_KEY))
 
 
 def _openrouter_ready(config: Config) -> bool:
@@ -213,7 +213,7 @@ def _searx_url() -> str:
     """The chosen instance, or the configured default."""
     from kith.settings import CONFIG_DB_PATH
 
-    stored = str(config_store.load_settings(CONFIG_DB_PATH).get(SEARCH_URL_KEY) or "")
+    stored = str(config_store.load_settings(CONFIG_DB_PATH).get(settings.SEARCH_URL_KEY) or "")
     return (stored or settings.SEARCH_URL).rstrip("/")
 
 
