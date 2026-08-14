@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.services.lsp import semantics as service
-from kith.services.lsp.manager import Unavailable, manager
+from kith.engine.code.lsp import semantics as service
+from kith.engine.code.lsp.manager import Unavailable, manager
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -40,7 +40,7 @@ def _resolved(raw: str) -> Path:
 
 def _guarded(call, *args, **kwargs):
     """Run a semantic call, turning the expected failures into readable results."""
-    from kith.services.lsp.client import LSPError
+    from kith.engine.code.lsp.client import LSPError
 
     try:
         return call(*args, **kwargs)

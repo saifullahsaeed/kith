@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from kith.services.lsp.client import LanguageServer, LSPError
+from kith.engine.code.lsp.client import LanguageServer, LSPError
 
 #: Files that mean "a project starts here". Ordered by how specific they are: a `package.json`
 #: beside a file is a better root than the `.git` twelve levels up, and for a monorepo it is
@@ -172,7 +172,7 @@ class Manager:
         return here
 
     def family_for(self, path: str | Path) -> str:
-        from kith.services.code import outline
+        from kith.engine.code import outline
 
         language = outline.language_for(path)
         return _FAMILY.get(language or "", "")
@@ -234,7 +234,7 @@ class Manager:
         """What to tell someone who has no server for this file."""
         family = self.family_for(path)
         if not family:
-            from kith.services.code import outline
+            from kith.engine.code import outline
 
             language = outline.language_for(path)
             if language is None:

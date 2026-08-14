@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kith.services.code.processes import ProcessError, processes
+from kith.engine.run.processes import ProcessError, processes
 
 #: The name this claims in the background-process registry. Fixed, not derived from the
 #: command: there is only ever one suite worth watching at a time, and a fixed name is what

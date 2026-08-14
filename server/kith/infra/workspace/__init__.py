@@ -42,7 +42,7 @@ from .base import ExecResult, SandboxError, WorkspaceError
 from .checkpoints import restore_to_sha
 
 # Underscored and re-exported anyway, which is the honest description of them: `tools/computer`
-# asks whether a suffix is one the model can see, and `services/code/processes` wants the same
+# asks whether a suffix is one the model can see, and `engine/run/processes` wants the same
 # non-interactive environment a foreground command gets. Both were reaching into this module
 # before it was a package, so the name was never really private — only unadvertised.
 from .files import _IMAGE_SUFFIXES as _IMAGE_SUFFIXES

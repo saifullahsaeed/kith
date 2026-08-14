@@ -62,18 +62,24 @@ from pathlib import Path
 #: out: an unranked package is skipped as importer *and* as target, so omitting it would
 #: hand `kith/app.py` the same silent exemption `kith/__init__.py` earns by being empty,
 #: except that `app.py` is not empty and would stop being checked at all.
+#: `engine` sits between storage and the service layer, and the gap is the point of it. An
+#: engine is handed a path and some arguments, computes, and returns a value; it never reads a
+#: setting, resolves a project or decides that work is due. Ranking it below `services` is what
+#: makes that enforceable rather than aspirational — an analysis that wants a setting cannot
+#: reach for one, so it has to be handed the value.
 RANK = {
     "kernel": 0,
     "settings": 0,
     "domain": 1,
     "infra": 2,
     "llm": 2,
-    "services": 3,
-    "config": 3,
-    "schemas": 3,
-    "api": 4,
-    "tools": 4,
-    "app": 5,
+    "engine": 3,
+    "services": 4,
+    "config": 4,
+    "schemas": 4,
+    "api": 5,
+    "tools": 5,
+    "app": 6,
 }
 
 #: Packages that share a rank and still may not import each other.

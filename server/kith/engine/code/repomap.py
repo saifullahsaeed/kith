@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kith.services.code import outline
+from kith.engine.code import outline
 
 #: Folders that are never the answer. Walking them is slow and mapping them is noise: a
 #: node_modules with 40,000 files would consume the whole budget and describe none of the

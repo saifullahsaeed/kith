@@ -668,7 +668,7 @@ const Locations: FC<{ text: string }> = ({ text }) => {
 };
 
 /** `outline`'s rendered text, one row per definition: a right-aligned line number, then the
- *  signature indented by nesting depth. Parsed back out of `services/code/outline.render`'s
+ *  signature indented by nesting depth. Parsed back out of `engine/code/outline.render`'s
  *  own format (`" 27  class Foo"`, two spaces per depth) rather than given structured, since
  *  the plain-text form is also what he reads — one format, not two that can drift apart. */
 const OUTLINE_ROW = /^(\s*\d+)(\s\s+)(.*)$/;

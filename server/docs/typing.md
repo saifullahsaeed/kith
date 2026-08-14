@@ -12,7 +12,7 @@ tool stops being read.
 That mattered. On 14 Aug 2026 two real bugs shipped in a commit that 2,250 passing tests signed
 off on, and pyright had flagged both:
 
-* `services/code/processes.py` called `scheduler._continue()` with the old two-argument
+* `engine/run/processes.py` called `scheduler._continue()` with the old two-argument
   signature after it grew a third. It would have raised `TypeError` the moment a background
   task finished. The test covering that path patches `_continue` with a two-argument lambda —
   it stubs out the exact thing that changed, so the suite could not see it.

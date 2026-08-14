@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.services.code import outline as outline_service
-from kith.services.code import processes as process_service
-from kith.services.code import repomap as repomap_service
-from kith.services.code import testing as testing_service
+from kith.engine.code import outline as outline_service
+from kith.engine.code import repomap as repomap_service
+from kith.engine.run import processes as process_service
+from kith.engine.run import testing as testing_service
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 

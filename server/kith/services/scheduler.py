@@ -15,6 +15,7 @@ import threading
 import traceback
 from collections.abc import Callable
 
+from kith.engine.run import processes
 from kith.infra.db import repositories as repo
 from kith.kernel import clock, session_context
 from kith.services import local_time
@@ -34,6 +35,26 @@ _EVERY_SECONDS = 30.0
 
 _thread: threading.Thread | None = None
 _stop = threading.Event()
+
+
+def wake_finished(resume: Resume) -> list[str]:
+    """Wake every conversation with a background task that has finished. Returns the ids woken.
+
+    The sibling of `fire_due`, and deliberately shaped like it. `engine` reports *what finished*;
+    deciding that a finish is worth a turn is scheduling, which is this module's job.
+
+    It used to be the other way round — `processes` took a `resume` and called `_continue` itself,
+    so the scheduler called down and the callee called back up into a private function here. That
+    round trip was the last thing tying the code-intelligence packages to `services/`, and it hid a
+    signature drift that a passing suite could not see, because the test patched the very function
+    that changed. Both ends of that are gone: the reporting half returns a dict, and the call to
+    `_continue` now sits in the same file as `_continue`.
+    """
+    woken: list[str] = []
+    for conversation_id, notes in processes.finished_since_last_look().items():
+        _continue(conversation_id, notes, resume)
+        woken.append(conversation_id)
+    return woken
 
 
 def fire_due(now_iso: str, resume: Resume) -> list[str]:
@@ -116,9 +137,7 @@ def start(resume: Resume) -> None:
             # is asked here rather than on a second timer. The docstring above warns against "and
             # while we're awake, also…", and this is not that: it is due-work, in a different coat.
             try:
-                from kith.services.code import processes
-
-                processes.finished_since_last_look(resume)
+                wake_finished(resume)
             except Exception:
                 traceback.print_exc()
 

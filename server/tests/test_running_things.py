@@ -21,8 +21,8 @@ import time
 
 import pytest
 
-from kith.services.code import testing
-from kith.services.code.processes import ProcessError, Processes, processes
+from kith.engine.run import testing
+from kith.engine.run.processes import ProcessError, Processes, processes
 
 
 @pytest.fixture
@@ -361,7 +361,7 @@ class TestBackgroundProcesses:
         running.start("for i in $(seq 1 4000); do echo 'a line of output here'; done", "verbose")
         time.sleep(1.2)
 
-        from kith.services.code import processes as module
+        from kith.engine.run import processes as module
 
         whole = running.full_output("verbose")
 
@@ -485,7 +485,7 @@ class TestBackgroundProcesses:
         assert "real" in str(caught.value)
 
     def test_there_is_a_ceiling(self, running):
-        from kith.services.code import processes as module
+        from kith.engine.run import processes as module
 
         for i in range(module.MAX_RUNNING):
             running.start("sleep 20", f"p{i}")
@@ -494,7 +494,7 @@ class TestBackgroundProcesses:
         assert "already running" in str(caught.value)
 
     def test_a_torrent_of_output_is_capped_and_says_so(self, running):
-        from kith.services.code import processes as module
+        from kith.engine.run import processes as module
 
         running.start("for i in $(seq 1 4000); do echo 'a line of output here'; done", "noisy")
         time.sleep(1.2)

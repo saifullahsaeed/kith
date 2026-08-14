@@ -28,7 +28,7 @@ pyinstaller>=6.10
 # --- optional, discovered if present -----------------------------------------------------
 #
 # Language servers power `diagnostics`, `references`, `definition` and `rename_symbol`. None
-# of them is required: `services/lsp/manager.py` looks in the project's own node_modules and
+# of them is required: `engine/code/lsp/manager.py` looks in the project's own node_modules and
 # virtualenv, then beside this interpreter, then on PATH, and when it finds nothing those four
 # tools are left out of the prompt entirely rather than offered and failing.
 #

@@ -25,8 +25,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from kith.services.lsp import client as lsp
-from kith.services.lsp.manager import Unavailable, manager
+from kith.engine.code.lsp import client as lsp
+from kith.engine.code.lsp.manager import Unavailable, manager
 
 #: Cap on references returned. A common helper in a large codebase has hundreds, and the
 #: hundredth is not what he is looking for — the count is, and it is reported separately.

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from kith.services.code import outline, repomap
+from kith.engine.code import outline, repomap
 
 PY_SOURCE = '''\
 """A module."""

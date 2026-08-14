@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from kith.services.lsp.manager import CANDIDATES, Manager, Unavailable
+from kith.engine.code.lsp.manager import CANDIDATES, Manager, Unavailable
 from kith.tools import registry, tool_schemas
 from kith.tools.semantics import NEEDS_A_LANGUAGE_SERVER
 
@@ -40,7 +40,7 @@ def workspace_root(tmp_path, monkeypatch):
 def fresh_manager(monkeypatch):
     """A manager of its own, so a test never inherits another test's warm server.
 
-    Reached through `sys.modules` because `from kith.services.lsp import manager` gives the
+    Reached through `sys.modules` because `from kith.engine.code.lsp import manager` gives the
     *instance* — the package re-exports it under the same name as its module, so the module
     is only reachable this way. `conftest.py` has the same note about `kith.autonomy.runner`;
     it is the second time this shape has caught something in this codebase.
@@ -246,7 +246,7 @@ class TestWhenTheServerWillNotStart:
 
         # The module, not the singleton that shares its name — the same trap conftest
         # documents for `kith.autonomy.runner`, and the third time it has bitten here.
-        module = sys.modules["kith.services.lsp.manager"]
+        module = sys.modules["kith.engine.code.lsp.manager"]
 
         binary = tmp_path / "node_modules" / ".bin" / "typescript-language-server"
         binary.parent.mkdir(parents=True)

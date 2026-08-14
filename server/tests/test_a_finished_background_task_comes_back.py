@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import pytest
 
+from kith.engine.run import processes as process_service
 from kith.kernel import session_context
 from kith.services import scheduler
-from kith.services.code import processes as process_service
 
 
 def _resume(conversation_id: str, trigger: str) -> None:
@@ -38,7 +38,13 @@ def a_clean_registry(tmp_path, monkeypatch):
 
 @pytest.fixture
 def woken(monkeypatch):
-    """Every `(conversation_id, notes)` a completion would have woken, instead of a real turn."""
+    """Every `(conversation_id, notes)` a completion would have woken, instead of a real turn.
+
+    Only the wiring test below needs this now. Everything else asks
+    `finished_since_last_look()` what it found and reads the answer, because that function
+    returns its result rather than calling anything — see the note in its docstring about what
+    patching `_continue` used to hide.
+    """
     calls: list[tuple[str, list[str]]] = []
     monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: calls.append((cid, list(notes))))
     return calls
@@ -57,51 +63,67 @@ def _finished(name: str, command: str = "true") -> None:
     raise AssertionError(f"{name} never exited")
 
 
-class TestFinishingWakesTheChat:
-    def test_a_finished_process_wakes_the_conversation_that_started_it(self, woken):
-        _finished("quick")
-        process_service.finished_since_last_look(_resume)
-        assert [cid for cid, _ in woken] == ["c-1"]
+class TestWhatFinishingReports:
+    """What `finished_since_last_look` found, read from its return value.
 
-    def test_the_note_says_what_finished_and_how(self, woken):
+    No patching. These assert on the reported dict, so they cannot pass because a stub happened
+    to accept the arguments it was given.
+    """
+
+    def test_a_finished_process_is_reported_against_the_conversation_that_started_it(self):
         _finished("quick")
-        process_service.finished_since_last_look(_resume)
-        note = woken[0][1][0]
+        assert list(process_service.finished_since_last_look()) == ["c-1"]
+
+    def test_the_note_says_what_finished_and_how(self):
+        _finished("quick")
+        note = process_service.finished_since_last_look()["c-1"][0]
         assert "quick" in note, "which task"
         assert "finished" in note, "and how it ended — a clean exit needs no number"
 
-    def test_a_failure_says_so(self, woken):
+    def test_a_failure_says_so(self):
         _finished("bad", command="exit 3")
-        process_service.finished_since_last_look(_resume)
-        assert "3" in woken[0][1][0]
+        assert "3" in process_service.finished_since_last_look()["c-1"][0]
 
-    def test_it_only_wakes_once(self, woken):
+    def test_it_only_reports_once(self):
         """The watcher runs every thirty seconds. A process that finished stays finished, and
         reporting it on every pass would wake the conversation for ever."""
         _finished("quick")
-        process_service.finished_since_last_look(_resume)
-        process_service.finished_since_last_look(_resume)
-        assert len(woken) == 1
+        assert process_service.finished_since_last_look() != {}
+        assert process_service.finished_since_last_look() == {}
 
-    def test_two_finishing_together_are_one_turn(self, woken):
+    def test_two_finishing_together_are_one_entry(self):
         """Grouped the way reminders are: two completions in one chat should be one continuation
         with both notes, not two replies talking past each other."""
         _finished("one")
         _finished("two")
-        process_service.finished_since_last_look(_resume)
-        assert len(woken) == 1
+        reported = process_service.finished_since_last_look()
+        assert list(reported) == ["c-1"]
+        assert len(reported["c-1"]) == 2
+
+
+class TestReportingBecomesATurn:
+    """The other half: the scheduler turns a report into a continuation.
+
+    One test, because there is one thing to check — that every reported conversation is passed to
+    `_continue`. The grouping and the wording are covered above without a stub.
+    """
+
+    def test_each_reported_conversation_is_woken_once(self, woken):
+        _finished("one")
+        _finished("two")
+        assert scheduler.wake_finished(_resume) == ["c-1"]
+        assert len(woken) == 1, "one continuation, both notes"
         assert len(woken[0][1]) == 2
 
 
-class TestWhatDoesNotWakeAnything:
-    def test_something_still_running_does_not(self, woken):
+class TestWhatIsNotReported:
+    def test_something_still_running_is_not(self):
         with session_context.working_in("c-1"):
             process_service.processes.start("sleep 30", "slow")
-        process_service.finished_since_last_look(_resume)
-        assert woken == []
+        assert process_service.finished_since_last_look() == {}
         process_service.processes.stop("slow")
 
-    def test_one_started_outside_a_conversation_does_not(self, woken):
+    def test_one_started_outside_a_conversation_is_not(self):
         """A script, a test, the setup for something else — there is no chat to wake."""
         process_service.processes.start("true", "orphan")
         import time
@@ -110,16 +132,14 @@ class TestWhatDoesNotWakeAnything:
             if not process_service.processes._find("orphan", "").running:
                 break
             time.sleep(0.01)
-        process_service.finished_since_last_look(_resume)
-        assert woken == []
+        assert process_service.finished_since_last_look() == {}
 
-    def test_one_you_stopped_yourself_does_not(self, woken):
+    def test_one_you_stopped_yourself_is_not(self):
         """You already know: you are the one who stopped it."""
         with session_context.working_in("c-1"):
             process_service.processes.start("sleep 30", "cancelled")
         process_service.processes.stop("cancelled")
-        process_service.finished_since_last_look(_resume)
-        assert woken == []
+        assert process_service.finished_since_last_look() == {}
 
 
 class TestTheProcessRemembersItsChat:

@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from kith.services.lsp import client as lsp
-from kith.services.lsp.client import LanguageServer, LSPError
+from kith.engine.code.lsp import client as lsp
+from kith.engine.code.lsp.client import LanguageServer, LSPError
 
 FAKE = Path(__file__).parent / "fake_language_server.py"
 

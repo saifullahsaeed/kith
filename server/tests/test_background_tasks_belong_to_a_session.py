@@ -20,8 +20,8 @@ import time
 
 import pytest
 
+from kith.engine.run import processes as process_service
 from kith.kernel import session_context
-from kith.services.code import processes as process_service
 
 
 @pytest.fixture(autouse=True)

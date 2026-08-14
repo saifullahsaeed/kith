@@ -28,7 +28,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from kith.kernel import changes, session_context
 
@@ -498,16 +498,23 @@ def _current_conversation() -> str:
         return ""
 
 
-if TYPE_CHECKING:
-    from kith.services.scheduler import Resume
+def finished_since_last_look() -> dict[str, list[str]]:
+    """Every background process that has finished, grouped by the chat that started it.
 
+    Returns `{conversation_id: notes}` — what happened, not what to do about it. Called by the
+    scheduler's timer, the same one that asks whether a reminder is due, because this is that
+    question wearing a different coat: something completed, and the conversation it belongs to
+    should hear about it.
 
-def finished_since_last_look(resume: Resume) -> list[str]:
-    """Report every background process that has finished, to the chat that started it.
+    **Reporting rather than waking.** This used to take a `resume` and call `scheduler._continue`
+    itself, which made a round trip: the scheduler called down here, and here called back up into
+    a private function of the scheduler. Two deferred imports held it together, and they were the
+    last thing tying this package to `services/`.
 
-    Returns the conversations woken, in order. Called by the scheduler's timer — the same one that
-    asks whether a reminder is due, because this is the same question in a different coat: something
-    completed, and the conversation it belongs to should hear about it.
+    That shape also could not be tested honestly. The covering test patched `_continue`, so when
+    that function grew a third argument the suite went on passing and the real call would have
+    raised `TypeError` on the first background task to finish. A returned dict cannot drift from
+    its caller that way — which is the reason for the shape, not a side effect of it.
 
     Waking rather than waiting, deliberately. Holding the tool call open until the command returned
     was the other option and is worse for exactly the case this is for: a half-hour test suite would
@@ -515,13 +522,7 @@ def finished_since_last_look(resume: Resume) -> list[str]:
     putting it in the background.
 
     A stopped process is not reported. You already know how that ended — you stopped it.
-
-    `resume` is how to wake a conversation, handed in for the same reason the scheduler takes
-    one: running a turn belongs to the chat route, and a service reaching up for it is the
-    arrow the layering work exists to stop.
     """
-    from kith.services import scheduler
-
     by_chat: dict[str, list[str]] = {}
     for background in list(processes._running.values()):
         if background._reported or background._stopped or background.running:
@@ -538,10 +539,8 @@ def finished_since_last_look(resume: Resume) -> list[str]:
         by_chat.setdefault(background.conversation_id, []).append(note)
 
     if by_chat:
-        # Before the turns, so the panel drops the finished task from its list at the same moment the
-        # conversation starts talking about it.
+        # Before the caller runs its turns, so the panel drops the finished task from its list at
+        # the same moment the conversation starts talking about it.
         for conversation_id in by_chat:
             _changed(conversation_id)
-    for conversation_id, notes in by_chat.items():
-        scheduler._continue(conversation_id, notes, resume)
-    return list(by_chat)
+    return by_chat

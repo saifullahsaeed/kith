@@ -60,9 +60,9 @@ class TestNothingReturnsWithoutABound:
         if body:
             source = source[body.start() :]
 
+        from kith.engine.code import outline as outline_service
+        from kith.engine.code import repomap as repomap_service
         from kith.infra import websearch
-        from kith.services.code import outline as outline_service
-        from kith.services.code import repomap as repomap_service
 
         # `registry` is how kith/tools/skills.py spells the skills service — an alias, not a
         # different module. Getting that wrong made this test fail on an ImportError rather
