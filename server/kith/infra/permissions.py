@@ -263,6 +263,27 @@ _pending: dict[str, Request] = {}
 _session_grants: set[str] = set()
 _next_id = 0
 
+#: One lock over every mutable thing in this module.
+#:
+#: There was none, and this is a gate: `require_path` and `require_command` run on tool
+#: threads — several at once, since a round's network-bound calls go out through a pool — while
+#: `approve`, `deny` and `revoke` run on Flask request threads. Five pieces of shared state were
+#: being read-modify-written from both with nothing between them. `_next_id += 1` is the
+#: clearest: two refusals racing there get the same `p<n>`, so the second overwrites the first
+#: in `_pending` and the first turn waits out its full fifteen-minute deadline for an answer
+#: that can no longer reach it.
+#:
+#: **Re-entrant, because the reads nest.** `granted()` holds it and calls `always_grants()`,
+#: which reads the settings store; `check_path` holds it and asks `_inside_linked_project`. A
+#: plain `Lock` would deadlock on the first of those.
+#:
+#: **Never held across a wait.** `_wait_for` blocks on `request.settled` for up to fifteen
+#: minutes, and the thread that would set that event is the one calling `approve`. Holding the
+#: lock across the wait would deadlock the gate against the only thing that can open it. Same
+#: for `_tell_them`, which writes a message and posts a desktop notification: slow, and it
+#: cannot be allowed to serialise every other permission check behind it.
+_state = threading.RLock()
+
 
 def _store():
     from kith.infra.db import config_store
@@ -305,9 +326,11 @@ def granted(signature: str) -> bool:
     ``~/Downloads`` and then being asked again for every file in it is the kind of gate
     people turn off entirely.
     """
-    if signature in _session_grants:
-        return True
-    for grant in _session_grants | always_grants():
+    with _state:
+        if signature in _session_grants:
+            return True
+        allowed = _session_grants | always_grants()
+    for grant in allowed:
         if grant.startswith("path:") and signature.startswith("path:"):
             if signature[5:].startswith(grant[5:]):
                 return True
@@ -427,11 +450,12 @@ def check_command(command: str, root: Path) -> Decision:
 
 def _refuse(kind: Kind, what: str, why: str, signature: str) -> Decision:
     global _next_id
-    _next_id += 1
-    request = Request(id=f"p{_next_id}", kind=kind, what=what, why=why)
-    _pending[request.id] = request
-    while len(_pending) > MAX_PENDING:
-        _pending.pop(next(iter(_pending)))
+    with _state:
+        _next_id += 1
+        request = Request(id=f"p{_next_id}", kind=kind, what=what, why=why)
+        _pending[request.id] = request
+        while len(_pending) > MAX_PENDING:
+            _pending.pop(next(iter(_pending)))
     return Decision(
         False,
         reason=(
@@ -496,9 +520,13 @@ def _wait_for(decision: Decision) -> None:
     # and an unattended one still raised the alert the guard exists to suppress.
     _tell_them(request)
 
+    # Deliberately outside the lock: this blocks for up to fifteen minutes and the thread that
+    # ends the wait is the one in `approve`, which needs the lock to do it.
     if not request.settled.wait(timeout=_DEADLINE_SECONDS):
         raise Denied(decision)
-    if not _answered.get(request.id):
+    with _state:
+        answered = _answered.get(request.id)
+    if not answered:
         raise Denied(decision)
 
 
@@ -551,8 +579,12 @@ def require_command(command: str, root: Path) -> None:
 def release_waiting() -> None:
     """Stop waiting on every open request, without allowing any. Called when a turn is stopped —
     a turn parked on a permission is not reading the stop switch."""
-    for request in list(_pending.values()):
-        _answered[request.id] = False
+    with _state:
+        waiting = list(_pending.values())
+        for request in waiting:
+            _answered[request.id] = False
+    # Woken outside the lock: each `set()` releases a thread that will immediately want it.
+    for request in waiting:
         request.settled.set()
 
 
@@ -562,28 +594,37 @@ def release_waiting() -> None:
 
 
 def pending() -> list[dict]:
-    return [request.public() for request in _pending.values()]
+    with _state:
+        return [request.public() for request in _pending.values()]
 
 
 def approve(request_id: str, scope: str = "session") -> dict:
-    """Allow a pending request. ``once``/``session`` last until restart; ``always`` persists."""
-    request = _pending.pop(request_id, None)
-    if request is None:
-        raise KeyError(request_id)
-    signature = _signature(request)
-    if scope == "always":
-        _remember_always(signature)
-    _session_grants.add(signature)
-    _answered[request.id] = True
+    """Allow a pending request. ``once``/``session`` last until restart; ``always`` persists.
+
+    Taking the request out of `_pending` and recording the verdict happen together, so two
+    approvals of the same id cannot both succeed — the second finds nothing and raises, which
+    is what the interface already expects.
+    """
+    with _state:
+        request = _pending.pop(request_id, None)
+        if request is None:
+            raise KeyError(request_id)
+        signature = _signature(request)
+        if scope == "always":
+            _remember_always(signature)
+        _session_grants.add(signature)
+        _answered[request.id] = True
+    # Outside: waking the waiter hands it a thread that wants this lock immediately.
     request.settled.set()
     return request.public()
 
 
 def deny(request_id: str) -> dict:
-    request = _pending.pop(request_id, None)
-    if request is None:
-        raise KeyError(request_id)
-    _answered[request.id] = False
+    with _state:
+        request = _pending.pop(request_id, None)
+        if request is None:
+            raise KeyError(request_id)
+        _answered[request.id] = False
     request.settled.set()
     return request.public()
 
@@ -591,7 +632,8 @@ def deny(request_id: str) -> dict:
 def revoke_all() -> None:
     path, store = _store()
     store.update_settings(path, {GRANTS_KEY: ""})
-    _session_grants.clear()
+    with _state:
+        _session_grants.clear()
 
 
 def revoke(signature: str) -> bool:
@@ -612,9 +654,10 @@ def revoke(signature: str) -> bool:
         path, store = _store()
         store.update_settings(path, {GRANTS_KEY: "\n".join(sorted(remaining))})
     # A grant can be standing, session-only, or both; dropping it should mean dropping it.
-    if wanted in _session_grants:
-        _session_grants.discard(wanted)
-        found = True
+    with _state:
+        if wanted in _session_grants:
+            _session_grants.discard(wanted)
+            found = True
     return found
 
 
@@ -647,6 +690,12 @@ def _is_sensitive(resolved: Path) -> bool:
     return any(_inside(resolved, home / name) for name in _SENSITIVE_DIRS)
 
 
+def _session_snapshot() -> list[str]:
+    """The session grants, copied under the lock so the caller cannot iterate a live set."""
+    with _state:
+        return sorted(_session_grants)
+
+
 def snapshot() -> dict:
     """Everything the interface needs to show the current stance."""
     return {
@@ -654,7 +703,7 @@ def snapshot() -> dict:
         "modes": [str(one) for one in Mode],
         "pending": pending(),
         "grants": sorted(always_grants()),
-        "sessionGrants": sorted(_session_grants),
+        "sessionGrants": _session_snapshot(),
     }
 
 
@@ -670,7 +719,8 @@ _LINKED_TTL = 5.0
 def forget_linked_projects() -> None:
     """Drop the cache. Called when a project's folder or status changes."""
     global _linked
-    _linked = None
+    with _state:
+        _linked = None
 
 
 def linked_project_roots() -> tuple[Path, ...]:
@@ -683,8 +733,9 @@ def linked_project_roots() -> tuple[Path, ...]:
     """
     global _linked
     now = time.monotonic()
-    if _linked is not None and now - _linked[0] < _LINKED_TTL:
-        return _linked[1]
+    with _state:
+        if _linked is not None and now - _linked[0] < _LINKED_TTL:
+            return _linked[1]
     roots: list[Path] = []
     try:
         from kith.infra.db import repositories as repo
@@ -699,8 +750,13 @@ def linked_project_roots() -> tuple[Path, ...]:
         # Imported by nearly everything and consulted on every write: a permission check
         # must not fail because a lookup did. No linked folders is the safe answer.
         roots = []
-    _linked = (now, tuple(roots))
-    return _linked[1]
+    # Filled under the lock, but the lookup above is not: it opens the database, and holding a
+    # gate's lock across that would serialise every file operation behind one query. Two threads
+    # arriving together do the read twice and agree on the answer, which costs a query and
+    # cannot be wrong — where a lock held across the I/O could stall a whole round.
+    with _state:
+        _linked = (now, tuple(roots))
+        return _linked[1]
 
 
 def _inside_linked_project(resolved: Path) -> bool:
