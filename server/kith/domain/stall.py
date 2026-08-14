@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import re
 
-# Near-identical steps in a row before he is forced to break out; a couple beyond
-# that and the stuck thing is set aside for him.
+# Near-identical steps in a row before he is forced to break out.
+#
+# `STALL_GIVEUP = 4` stood beside this — "a couple beyond that and the stuck thing is set aside
+# for him" — and went with the self-directed loop that did the setting aside. Nothing has read
+# it since.
 STALL_BREAK = 2
-STALL_GIVEUP = 4
 
 # Word-overlap threshold for journal prose.
 PROSE_MATCH = 0.6

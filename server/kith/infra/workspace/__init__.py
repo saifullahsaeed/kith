@@ -80,7 +80,7 @@ from .paths import (
 )
 from .shell import _NON_INTERACTIVE as _NON_INTERACTIVE
 from .shell import run_command
-from .web import browse_page, fetch_url, searx_search
+from .web import browse_page, fetch_url
 
 __all__ = [
     "DEFAULT_ROOT",
@@ -118,7 +118,6 @@ __all__ = [
     "restore_to_sha",
     "root",
     "run_command",
-    "searx_search",
     "set_root",
     "status",
     "trash_path",

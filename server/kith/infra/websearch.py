@@ -39,7 +39,6 @@ from kith import settings
 from kith.domain import connection
 from kith.domain.chat import Config
 from kith.domain.search import SearchKind, as_kind
-from kith.infra import workspace as sandbox
 from kith.infra.db import config_store
 
 # Exa charges one flat fee for up to ten results and only then bills per extra
@@ -64,11 +63,13 @@ _PROVIDER = settings.SEARCH_PROVIDER
 # prompt tokens (~2.5k per search) and those bill at the carrier's rate.
 
 
-# Probing a blocked SearXNG costs ~2s (a docker exec into the sandbox plus the
-# request) and it is blocked for hours at a time, so paying that on *every* search
-# is pure waste — a research turn fires dozens. Remember the verdict for a while
-# and skip straight to the fallback; the TTL means it still self-heals on its own
+# Probing a blocked SearXNG costs a request each time and it is blocked for hours at a stretch,
+# so paying that on *every* search is pure waste — a research turn fires dozens. Remember the
+# verdict for a while and skip straight to the next provider; the TTL means it still self-heals
 # once the upstream engines recover.
+#
+# The figure here used to be "~2s (a docker exec into the sandbox plus the request)", from when
+# the search ran inside the container. It does not any more.
 _SEARX_BLOCKED_TTL = 600.0
 _searx_blocked_until = 0.0
 
@@ -172,12 +173,14 @@ def _openrouter_ready(config: Config) -> bool:
 
 
 def _searx(query: str, limit: int, config: Config) -> list[dict]:
-    """Ask the instance from here, falling back to the sandbox if that fails.
+    """Ask the instance directly.
 
-    Direct first because routing every search through ``docker exec`` made free
-    search depend on Docker for no reason a user could have guessed — and cost about
-    two seconds a call. The sandbox path stays as a fallback for the setup where the
-    instance is only on Docker's network and not published to the host.
+    It used to route through ``docker exec`` into the sandbox, which made free search depend on
+    Docker for no reason a user could have guessed and cost about two seconds a call. Direct
+    replaced that, with the sandbox kept as a fallback for an instance published only on
+    Docker's network — and then the container went entirely (`fb55331`), taking the
+    `docker_available` check with it and leaving the fallback reachable only through an
+    AttributeError. Unreachable is unreachable now, and says so.
     """
     url = _searx_url()
     try:
@@ -189,9 +192,13 @@ def _searx(query: str, limit: int, config: Config) -> list[dict]:
         response.raise_for_status()
         data = response.json()
     except (requests.exceptions.RequestException, ValueError) as direct_failure:
-        if not sandbox.docker_available():
-            raise RuntimeError(f"SearXNG at {url} is unreachable: {direct_failure}") from None
-        return sandbox.searx_search(query, limit)
+        # Unreachable is unreachable. There used to be a second attempt here — if Docker was
+        # available, run the same search from inside the container SearXNG lived in. The
+        # container went in `fb55331` ("He works on your computer now, not in a container") and
+        # `docker_available` went with it; this call site was missed, so the branch raised
+        # AttributeError instead of the message below, and the model was told
+        # "searx: AttributeError: module ... has no attribute 'docker_available'".
+        raise RuntimeError(f"SearXNG at {url} is unreachable: {direct_failure}") from None
 
     hits = [
         {

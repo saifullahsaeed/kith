@@ -7,16 +7,14 @@ clipping and its shell — `browse_page` shells out to a real browser — and no
 from __future__ import annotations
 
 import html
-import json
 import re
 import shlex
-import urllib.parse
 
 from kith import settings
 from kith.infra import renderer
 
 from .base import WorkspaceError, _clip
-from .shell import _capture, run_command
+from .shell import _capture
 
 SEARCH_URL = settings.SEARCH_URL
 
@@ -76,35 +74,6 @@ def browse_page(url: str) -> str:
         "No browser renderer available — the desktop app provides it, so this needs Kith "
         "running in the app rather than a bare server. Try fetch_url for a static page."
     )
-
-
-def searx_search(query: str, limit: int = 5) -> list[dict]:
-    """Search via a SearXNG instance (JSON API), if one is reachable."""
-    encoded = urllib.parse.quote(query)
-    result = run_command(f"curl -sL --max-time 10 '{SEARCH_URL}/search?q={encoded}&format=json'", timeout=15)
-    try:
-        data = json.loads(result.output)
-    except (ValueError, TypeError):
-        raise WorkspaceError(
-            f"SearXNG at {SEARCH_URL} did not return JSON (is it up, with the JSON format enabled?)"
-        ) from None
-    hits = [
-        {
-            "title": item.get("title", ""),
-            "url": item.get("url", ""),
-            "snippet": (item.get("content") or "")[:300],
-        }
-        for item in (data.get("results") or [])[:limit]
-    ]
-    if hits:
-        return hits
-    blocked = data.get("unresponsive_engines") or []
-    if blocked:
-        detail = ", ".join(
-            f"{item[0]}: {item[1]}" for item in blocked if isinstance(item, list) and len(item) > 1
-        )
-        raise WorkspaceError(f"every SearXNG engine was blocked ({detail})")
-    return []
 
 
 def _html_to_text(markup: str) -> str:

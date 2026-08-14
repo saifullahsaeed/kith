@@ -27,6 +27,8 @@ import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
+from kith.kernel import changes
+
 #: Pushed to a watcher's queue to mean "the turn is over, stop reading".
 _END = object()
 
@@ -82,8 +84,6 @@ def _announce(conversation_id: str) -> None:
     """Local import and swallowed: `live_turns` is imported by the chat route on every turn, and a
     notification must not be able to stop one starting."""
     try:
-        from kith.kernel import changes
-
         changes.publish("turn", conversation_id)
     except Exception:
         pass

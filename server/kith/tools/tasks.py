@@ -324,6 +324,8 @@ def _mirror_brief(path: Path, task_id: int | None) -> None:
         if directory and Path(directory).is_dir():
             project_files.write_brief(directory, detail)
     except Exception:
+        # The task is saved; this is the readable copy of it in the project folder. A brief
+        # that could not be written is worth less than a task that could not be created.
         pass
 
 

@@ -42,7 +42,6 @@ export type ChangeKind =
   | "project"
   | "message"
   | "process"
-  | "conversation"
   | "workspace";
 
 interface Change {

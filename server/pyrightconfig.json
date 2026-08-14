@@ -1,0 +1,8 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["kith", "tests", "scripts", "app.py"],
+  "exclude": ["**/__pycache__", "**/node_modules", "data", "build", "dist", ".venv"],
+  "typeCheckingMode": "standard",
+  "reportMissingImports": "error"
+}

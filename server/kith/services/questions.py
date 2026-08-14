@@ -159,6 +159,8 @@ def _tell_them(conversation_id: str, asked: list[dict]) -> None:
             kind="asked",
         )
     except Exception:
+        # Same as the permission gate's: the turn is already parked waiting for an answer.
+        # Failing to raise the alert about it must not also take down the thread that parked.
         pass
 
 

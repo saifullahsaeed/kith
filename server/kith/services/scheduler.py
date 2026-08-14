@@ -118,7 +118,7 @@ def start(resume: Resume) -> None:
             try:
                 from kith.services.code import processes
 
-                processes.finished_since_last_look()
+                processes.finished_since_last_look(resume)
             except Exception:
                 traceback.print_exc()
 

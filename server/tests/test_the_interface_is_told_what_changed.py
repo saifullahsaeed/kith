@@ -22,6 +22,8 @@ exists and is already correct. Say what changed; let them ask.
 from __future__ import annotations
 
 import json
+from collections import defaultdict
+from pathlib import Path
 
 import pytest
 
@@ -143,3 +145,56 @@ class TestWhatPublishes:
         repo.messages.add_message(db, "look at this", kind="asked")
 
         assert any(e["kind"] == "message" for e in _drain(subscription))
+
+
+def test_every_kind_has_a_publisher_and_every_publisher_a_kind():
+    """`changes.KINDS` promises something `publish()` cannot enforce, so assert it here.
+
+    The comment on `KINDS` says the tuple exists "so a typo in a publisher is a test failure
+    here rather than a widget that silently never updates". Nothing made that true: `publish`
+    takes a `str` and always has, so a misspelled kind was published cheerfully to nobody.
+
+    Both directions fail silently, which is why both are checked:
+
+    * a publisher naming a kind that is not declared updates no widget;
+    * a declared kind nobody publishes is a subscription that can never fire, and reads from
+      the interface as a feature that is merely quiet.
+
+    `conversation` was the second case — declared here and in the interface's `ChangeKind`,
+    published by no one — and is gone.
+    """
+    import ast
+
+    source = Path(__file__).resolve().parent.parent / "kith"
+    published: dict[str, list[str]] = defaultdict(list)
+    for path in sorted(source.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            # `changes.publish` specifically. `services/activity.py` has a `publish` of its
+            # own with a different vocabulary — "done", "reminder" — and matching on the
+            # method name alone swept those in.
+            is_publish = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "publish"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "changes"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            )
+            if is_publish:
+                published[node.args[0].value].append(f"{path.relative_to(source.parent)}:{node.lineno}")
+
+    undeclared = {kind: where for kind, where in published.items() if kind not in changes.KINDS}
+    assert not undeclared, "published but not in KINDS — nothing is listening:\n" + "\n".join(
+        f"  {kind!r} at {', '.join(where)}" for kind, where in sorted(undeclared.items())
+    )
+
+    unpublished = [kind for kind in changes.KINDS if kind not in published]
+    assert not unpublished, (
+        f"declared in KINDS but nothing publishes them: {unpublished}. A widget subscribing to "
+        "one would never update, and would look merely quiet rather than broken."
+    )

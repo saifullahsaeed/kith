@@ -27,7 +27,14 @@ from datetime import UTC, datetime
 
 #: What can change. Kept as a tuple rather than free strings so a typo in a publisher is a test
 #: failure here rather than a widget that silently never updates.
-KINDS = ("turn", "task", "project", "message", "process", "conversation", "workspace")
+#:
+#: That was a promise nothing kept until `test_every_kind_has_a_publisher_and_every_publisher_a
+#: _kind` existed: `publish()` takes a `str` and always did, so a misspelled kind was published
+#: happily to nobody. The test asserts both directions, because both fail silently — a typo
+#: means a widget that never updates, and a declared kind nobody publishes means a subscription
+#: that can never fire. `conversation` was the second case, declared here and in the interface's
+#: `ChangeKind` and published by no one.
+KINDS = ("turn", "task", "project", "message", "process", "workspace")
 
 #: How many events a subscriber may fall behind before the oldest are dropped. A window that has been
 #: asleep does not need the whole backlog: every event means "go and ask", and one ask covers all of

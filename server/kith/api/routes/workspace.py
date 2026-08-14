@@ -37,6 +37,9 @@ def _anchor(path: str, project_id: str | None) -> str:
         if directory:
             return str(Path(directory) / path)
     except Exception:
+        # A path that cannot be resolved against its project is still a path. Falling through
+        # to the one given is the honest answer, and better than refusing to show a file
+        # because a lookup about *where* it lives went wrong.
         pass
     return path
 

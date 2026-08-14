@@ -530,6 +530,9 @@ def _tell_them(request: Request) -> None:
             kind="asked",
         )
     except Exception:
+        # The refusal stands either way. This is the note telling them a decision is waiting,
+        # and a failed write must not turn "I need your say-so" into an unhandled exception on
+        # the thread that was already refusing something.
         pass
 
 

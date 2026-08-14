@@ -119,6 +119,9 @@ def base_dir() -> Path:
             if directory and Path(directory).is_dir():
                 return Path(directory)
     except Exception:
+        # Where he is working is a question with a safe default — his own folder. A database
+        # hiccup while resolving a project's directory should land work somewhere predictable
+        # rather than raise from underneath whatever was about to write a file.
         pass
     return root()
 

@@ -260,6 +260,10 @@ def build(
         except outline.OutlineError:
             continue
         except Exception:
+            # A file that will not parse is one file missing from the map, not a reason to have
+            # no map. `OutlineError` is the expected refusal (an unsupported language, a
+            # binary); the broad catch is for a parser that crashes on one pathological file,
+            # which on a 20,000-file tree is a matter of time.
             continue
         parsed += 1
         all_symbols = one.get("symbols") or []

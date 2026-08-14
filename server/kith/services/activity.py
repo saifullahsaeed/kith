@@ -206,6 +206,9 @@ class Feed:
             )
             self.publish("done", short, conversation=conversation_id)
         except Exception:
+            # The session is already capped — `_session_capped` was added above, and that is
+            # what actually stops the spending. This is the part that tells someone it
+            # happened, and failing to say so must not undo having done it.
             pass
         return True
 

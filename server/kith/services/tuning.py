@@ -228,13 +228,6 @@ def _folder_size(path: Path) -> int:
         return 0
 
 
-def data_dir() -> Path:
-    """Convenience for callers that only want the one path."""
-    from kith import settings
-
-    return settings.DATA_DIR
-
-
 def routing() -> Routing:
     """The six routing knobs, resolved together.
 

@@ -943,6 +943,8 @@ class _MindFeed:
                 tokens_uncached=self.tokens_uncached,
             )
         except Exception:
+            # Accounting. The turn already happened and the person already has the answer;
+            # failing to write down what it cost must not retroactively fail it.
             pass
 
 

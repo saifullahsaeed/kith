@@ -28,7 +28,9 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from kith.kernel import changes
 
 #: Most processes at once. Past a handful something has gone wrong — a loop starting servers,
 #: or work abandoned without stopping anything. Real machines have finite ports and memory.
@@ -478,8 +480,6 @@ def _changed(conversation_id: str = "") -> None:
     """Tell the interface a background task started or ended. Swallowed: a note about a process, not
     a reason to fail starting one."""
     try:
-        from kith.kernel import changes
-
         changes.publish("process", conversation_id)
     except Exception:
         pass
@@ -500,7 +500,11 @@ def _current_conversation() -> str:
         return ""
 
 
-def finished_since_last_look() -> list[str]:
+if TYPE_CHECKING:
+    from kith.services.scheduler import Resume
+
+
+def finished_since_last_look(resume: Resume) -> list[str]:
     """Report every background process that has finished, to the chat that started it.
 
     Returns the conversations woken, in order. Called by the scheduler's timer — the same one that
@@ -513,6 +517,10 @@ def finished_since_last_look() -> list[str]:
     putting it in the background.
 
     A stopped process is not reported. You already know how that ended — you stopped it.
+
+    `resume` is how to wake a conversation, handed in for the same reason the scheduler takes
+    one: running a turn belongs to the chat route, and a service reaching up for it is the
+    arrow the layering work exists to stop.
     """
     from kith.services import scheduler
 
@@ -537,5 +545,5 @@ def finished_since_last_look() -> list[str]:
         for conversation_id in by_chat:
             _changed(conversation_id)
     for conversation_id, notes in by_chat.items():
-        scheduler._continue(conversation_id, notes)
+        scheduler._continue(conversation_id, notes, resume)
     return list(by_chat)

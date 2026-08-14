@@ -10,14 +10,14 @@ Everything here either resolves the zone or needs it to answer.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kith.kernel import clock
 from kith.services import tuning
 
 
-def local_tz() -> ZoneInfo | type[UTC]:
+def local_tz() -> tzinfo:
     """His zone, read per call because it is editable in settings.
 
     Falls back to UTC on an unknown name rather than raising: a mistyped zone should
@@ -26,6 +26,12 @@ def local_tz() -> ZoneInfo | type[UTC]:
     Read per call rather than resolved once and held. A snapshot would be wrong from the
     moment someone changed the setting until the process restarted, and this is a desktop
     app where the settings page is two clicks away.
+
+    Returns `tzinfo`, which is what both branches actually are. It was annotated
+    `ZoneInfo | type[UTC]` — carried over from `domain/clock.py` — and that is not a type the
+    fallback satisfies: `UTC` is a `timezone` *instance*, so `type[UTC]` describes its class
+    rather than it. Every caller passing the result to `astimezone` or `replace(tzinfo=...)`
+    was type-checking against a lie.
     """
     try:
         return ZoneInfo(str(tuning.value("timezone")))
