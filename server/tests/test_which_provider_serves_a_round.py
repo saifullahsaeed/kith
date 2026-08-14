@@ -109,7 +109,7 @@ class TestRecordingWhoServedIt:
         carry it, and asserting on the transport's row alone would have been testing half the
         path that every surface actually reads.
         """
-        from kith.services.agent_loop import measured
+        from kith.services.turn.meter import measured
 
         row = measured(
             _stats(

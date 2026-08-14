@@ -32,6 +32,7 @@ import json
 from typing import Any
 
 from kith.services import agent_loop
+from kith.services.turn import history
 
 #: A million-token model, as configured on this install.
 BIG = 1_050_000
@@ -142,14 +143,14 @@ class TestTheValveStillOpens:
         """The relief valve. Past 80% of the window, losing the cache beats losing the turn."""
         convo = _convo(350)
         held = sum(len(str(m.get("content") or "")) for m in convo)
-        assert held > BIG * agent_loop._CHARS_PER_TOKEN * agent_loop._FOLD_ABOVE_SHARE
+        assert held > BIG * history._CHARS_PER_TOKEN * history._FOLD_ABOVE_SHARE
         assert agent_loop._room_is_tight(convo, BIG) is True
         _compact_as_the_loop_does(convo, BIG)
         assert sum(len(str(m.get("content") or "")) for m in convo) < held
 
     def test_the_threshold_is_where_it_claims_to_be(self):
         """Just under and just over, so the boundary is pinned rather than implied."""
-        budget_chars = BIG * agent_loop._CHARS_PER_TOKEN * agent_loop._FOLD_ABOVE_SHARE
+        budget_chars = BIG * history._CHARS_PER_TOKEN * history._FOLD_ABOVE_SHARE
         under = [{"role": "tool", "content": "x" * int(budget_chars * 0.9)}]
         over = [{"role": "tool", "content": "x" * int(budget_chars * 1.1)}]
         assert agent_loop._room_is_tight(under, BIG) is False

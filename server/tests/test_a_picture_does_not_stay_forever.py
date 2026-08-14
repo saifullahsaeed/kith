@@ -28,12 +28,8 @@ import json
 import pytest
 
 from kith.services import tuning
-from kith.services.agent_loop import (
-    _carries_image,
-    _compact_images,
-    _image_from,
-    _without_image,
-)
+from kith.services.agent_loop import _image_from, _without_image
+from kith.services.turn.history import _carries_image, _compact_images
 
 BIG = "data:image/jpeg;base64," + "A" * 228_000
 
@@ -185,7 +181,7 @@ class TestAnOldWriteLetsGoOfTheFile:
         return json.loads(message["tool_calls"][0]["function"]["arguments"])
 
     def test_an_old_write_keeps_its_path_and_drops_its_content(self):
-        from kith.services.agent_loop import _compact_call_arguments
+        from kith.services.turn.history import _compact_call_arguments
 
         tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
         convo = [self.call("/big.py", "x" * 40_000), self.call("/small.py", "y" * 40_000)]
@@ -201,7 +197,7 @@ class TestAnOldWriteLetsGoOfTheFile:
     def test_the_arguments_stay_valid_json(self):
         """A provider rejects the whole request otherwise, which would turn a saving into
         an outage."""
-        from kith.services.agent_loop import _compact_call_arguments
+        from kith.services.turn.history import _compact_call_arguments
 
         tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
         convo = [self.call("/x.py", "z" * 5_000), self.call("/y.py", "z" * 5_000)]
@@ -210,7 +206,7 @@ class TestAnOldWriteLetsGoOfTheFile:
         assert "5,000 characters" in self.args(convo[0])["content"]
 
     def test_a_small_write_is_left_alone(self):
-        from kith.services.agent_loop import _compact_call_arguments
+        from kith.services.turn.history import _compact_call_arguments
 
         tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 1_200})
         convo = [self.call("/tiny.py", "print('hi')"), self.call("/other.py", "pass")]
@@ -219,7 +215,7 @@ class TestAnOldWriteLetsGoOfTheFile:
         assert json.dumps(convo) == before
 
     def test_an_edit_drops_both_halves_of_the_replacement(self):
-        from kith.services.agent_loop import _compact_call_arguments
+        from kith.services.turn.history import _compact_call_arguments
 
         tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
         edit = {
@@ -242,7 +238,7 @@ class TestAnOldWriteLetsGoOfTheFile:
         assert args["path"] == "/a.py"
 
     def test_unparseable_arguments_are_left_alone_rather_than_corrupted(self):
-        from kith.services.agent_loop import _compact_call_arguments
+        from kith.services.turn.history import _compact_call_arguments
 
         tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 10})
         convo = [
@@ -260,7 +256,7 @@ class TestAnOldWriteLetsGoOfTheFile:
         assert json.dumps(convo) == before
 
     def test_running_it_twice_changes_nothing(self):
-        from kith.services.agent_loop import _compact_call_arguments
+        from kith.services.turn.history import _compact_call_arguments
 
         tuning.apply({"keep_full_tool_results": 1, "tool_stub_chars": 100})
         convo = [self.call("/x.py", "q" * 20_000), self.call("/later.py", "x")]

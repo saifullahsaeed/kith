@@ -28,7 +28,7 @@ from kith import tools
 from kith.domain.tooling import ToolHost
 from kith.llm import budget
 from kith.llm.budget import ContextBudget, conversation_chars, message_chars
-from kith.services.agent_loop import _DROPPED_NOTE, _drop_oldest_exchange
+from kith.services.turn.history import _DROPPED_NOTE, _drop_oldest_exchange
 
 
 def replace_host(db, run):

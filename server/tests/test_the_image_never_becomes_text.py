@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 
-from kith.services.agent_loop import _carries_image, _image_from, _without_image
+from kith.services.agent_loop import _image_from, _without_image
+from kith.services.turn.history import _carries_image
 
 
 def an_image_result(size: int = 44_019) -> dict:

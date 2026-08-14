@@ -24,6 +24,7 @@ import itertools
 import json
 
 from kith.services import agent_loop
+from kith.services.turn import history
 
 BIG = json.dumps({"path": "/ModelsSettings.tsx", "text": "x" * 4_000})
 ALSO_BIG = json.dumps({"path": "/api.ts", "text": "y" * 4_000})
@@ -101,7 +102,7 @@ class TestWhatItRefusesToCollapse:
         convo: list[dict] = []
         _appended(convo, "read_file", BIG)
         _appended(convo, "read_file", BIG)
-        assert agent_loop._already_in(convo, "read_file", BIG) == 0  # the whole one, at index 0
+        assert history._already_in(convo, "read_file", BIG) == 0  # the whole one, at index 0
         assert convo[0]["content"] == BIG
 
     def test_index_zero_is_found_rather_than_read_as_absent(self):
@@ -109,8 +110,8 @@ class TestWhatItRefusesToCollapse:
         prompt occupies it so a tool result never does, which would have made a falsy sentinel
         correct in production and silently broken everywhere else."""
         convo: list[dict] = [{"role": "tool", "tool_name": "read_file", "content": BIG}]
-        assert agent_loop._already_in(convo, "read_file", BIG) == 0
-        assert agent_loop._already_in([], "read_file", BIG) is None
+        assert history._already_in(convo, "read_file", BIG) == 0
+        assert history._already_in([], "read_file", BIG) is None
         assert agent_loop._tool_result_message(convo, "read_file", BIG)["_deduped"] is True
 
 

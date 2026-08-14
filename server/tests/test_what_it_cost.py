@@ -14,6 +14,7 @@ number was off by whatever the cache happened to save that day.
 from __future__ import annotations
 
 from kith.llm.openai_compat import _stats
+from kith.services.turn import meter
 
 #: The exact usage object OpenRouter returned for a one-word completion, copied from the
 #: wire rather than invented. Fields we do not read are kept so this fails if the shape
@@ -85,15 +86,14 @@ class TestTheLocalPathIsAttributableToo:
 
 class TestTheCacheRatioThatWasNotARatio:
     def _snapshot(self, **totals):
-        from kith.services import agent_loop
 
-        saved = dict(agent_loop._usage)
+        saved = dict(meter._usage)
         try:
-            agent_loop._usage.update(totals)
-            return agent_loop.usage_snapshot()
+            meter._usage.update(totals)
+            return meter.usage_snapshot()
         finally:
-            agent_loop._usage.clear()
-            agent_loop._usage.update(saved)
+            meter._usage.clear()
+            meter._usage.update(saved)
 
     def test_with_no_writes_it_declines_to_answer(self):
         """It used to divide by `writes or 1` and return the read count unchanged.
