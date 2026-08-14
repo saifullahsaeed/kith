@@ -77,6 +77,11 @@ LANGUAGE_IDS: dict[str, str] = {
     ".mts": "typescript",
     ".cts": "typescript",
     ".tsx": "typescriptreact",
+    # Nearly the same table as `services/code/outline.py`, and deliberately not shared: these
+    # are **LSP language identifiers**, that one holds **tree-sitter grammar names**. They agree
+    # on most extensions and disagree where it matters — `.jsx` is `javascriptreact` to a
+    # language server and `javascript` to a parser. Merging them would look like tidying and
+    # would silently hand one of the two the wrong vocabulary.
     ".js": "javascript",
     ".mjs": "javascript",
     ".cjs": "javascript",

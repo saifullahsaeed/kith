@@ -158,27 +158,14 @@ def active_tasks(path: Path) -> list[dict]:
 
     Tasks with no milestone are unaffected: a one-off errand should not need a roadmap.
     """
-    from kith.infra.db.repositories.projects import blocked_milestone_ids
-
-    with session(path) as db:
-        parked = set(db.scalars(select(Project.id).where(Project.status != "active")).all())
-    blocked = blocked_milestone_ids(path)
-    return [
-        task
-        for task in list_tasks(path)
-        if task["status"] in TASK_ACTIVE
-        and task.get("project_id") not in parked
-        and task.get("milestone_id") not in blocked
-    ]
+    return _actionable(path, held_back=False)
 
 
-def waiting_on_the_roadmap(path: Path) -> list[dict]:
-    """Actionable tasks held back only because their milestone is waiting.
+def _actionable(path: Path, *, held_back: bool) -> list[dict]:
+    """Tasks that could be worked, split by whether their milestone's turn has come.
 
-    Kept separate from ``active_tasks`` so "there is nothing to do" and "there is plenty to
-    do but it is not this milestone's turn" are different sentences. He needs to be able to
-    say which, and so does the interface — a blocked board that looks identical to an empty
-    one is how someone concludes the thing is broken.
+    One query, because the two callers differed by a single `not` and nothing kept the rest of
+    the filter — active status, project not parked — in step between the copies.
     """
     from kith.infra.db.repositories.projects import blocked_milestone_ids
 
@@ -190,8 +177,19 @@ def waiting_on_the_roadmap(path: Path) -> list[dict]:
         for task in list_tasks(path)
         if task["status"] in TASK_ACTIVE
         and task.get("project_id") not in parked
-        and task.get("milestone_id") in blocked
+        and (task.get("milestone_id") in blocked) is held_back
     ]
+
+
+def waiting_on_the_roadmap(path: Path) -> list[dict]:
+    """Actionable tasks held back only because their milestone is waiting.
+
+    Kept separate from ``active_tasks`` so "there is nothing to do" and "there is plenty to
+    do but it is not this milestone's turn" are different sentences. He needs to be able to
+    say which, and so does the interface — a blocked board that looks identical to an empty
+    one is how someone concludes the thing is broken.
+    """
+    return _actionable(path, held_back=True)
 
 
 @notifies("task")
