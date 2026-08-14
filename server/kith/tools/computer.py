@@ -38,11 +38,20 @@ def shell(path: Path, args: dict):
     "read_file",
     "Read a file from your computer (relative paths are under your own folder). Output "
     "is line-numbered. A screenshot or image is shown to you as a picture instead, so "
-    "you can judge what you actually made. For anything big, don't read it whole — grep to find the "
-    "line you want, then read a window with `offset`/`limit`. A read without a "
+    "you can judge what you actually made. For anything big, don't read it whole — pass "
+    "`symbol` to get one function or class by name, or grep to find the line you want and "
+    "read a window with `offset`/`limit`. A read without a "
     "range returns the first 400 lines and tells you if there's more.",
     {
         "path": STR,
+        "symbol": {
+            **STR,
+            "description": (
+                "Read just this definition — 'server_for', or 'Manager.server_for' when several "
+                "classes have one by that name. Cheaper than reading the file and then finding "
+                "it. Ignores offset/limit."
+            ),
+        },
         "offset": {**INT, "description": "1-based line to start at (optional)."},
         "limit": {**INT, "description": "How many lines to return (optional; default 400)."},
     },
@@ -64,7 +73,38 @@ def read_file(path: Path, args: dict):
                 "way — its dimensions, or the DOM you rendered it from.",
             }
         return sandbox.read_image(str(wanted))
+    symbol = str(args.get("symbol") or "").strip()
+    if symbol:
+        return _read_symbol(wanted, symbol)
     return sandbox.read_file(wanted, args.get("offset"), args.get("limit"))
+
+
+def _read_symbol(wanted: str, symbol: str) -> str:
+    """One definition, read through the same reader as everything else.
+
+    `locate` answers *where*, and `read_file` does the reading — so the permission check, the
+    numbering, the output budget and the "there is more, ask with offset=" sentence are the
+    ones already in use rather than a second set of them here.
+
+    The header exists because a window with no context is disorienting: a method arriving as
+    lines 180-210 of a file whose length he does not know could be most of it or a rounding
+    error, and that changes whether reading the rest is worth a round.
+    """
+    from kith.engine.code import excerpt, outline
+    from kith.infra import permissions
+    from kith.infra import workspace as sandbox
+
+    target = Path(sandbox.resolve(wanted))
+    permissions.require_path("read", target, sandbox.root())
+    try:
+        span = excerpt.locate(target, symbol)
+    except (excerpt.ExcerptError, outline.OutlineError) as exc:
+        # Returned rather than raised: every one of these messages names what to do instead —
+        # the definitions that do exist, the ones that matched, or "grep it" — and that is
+        # worth more to him than a failed tool call.
+        return str(exc)
+    body = sandbox.read_file(wanted, span.line, span.count)
+    return f"{span.qualified} — {span.kind}, lines {span.line}-{span.end_line} of {span.of_lines}\n{body}"
 
 
 @tool(

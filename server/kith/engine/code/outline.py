@@ -184,12 +184,21 @@ class Symbol:
     line: int
     depth: int
     signature: str
+    #: Last line of the definition, inclusive — the other end of `line`.
+    #:
+    #: Carried because the parser already knows it and nothing else can recover it. Guessing
+    #: from the next symbol's start is wrong in both directions: it swallows whatever sits
+    #: between two definitions, and it has no answer at all for the last one in a file. With
+    #: both ends, `excerpt.locate` can hand `read_file` a window that is exactly one
+    #: definition, which is the difference between reading a method and reading its module.
+    end_line: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
             "name": self.name,
             "line": self.line,
+            "end_line": self.end_line,
             "depth": self.depth,
             "signature": self.signature,
         }
@@ -315,6 +324,7 @@ def of_source(source: bytes, language: str) -> list[Symbol]:
                             kind=_kind_of(child.type),
                             name=name,
                             line=child.start_point[0] + 1,
+                            end_line=child.end_point[0] + 1,
                             depth=depth,
                             signature=_signature(source, child),
                         )
@@ -331,11 +341,14 @@ def of_source(source: bytes, language: str) -> list[Symbol]:
     return found
 
 
-def of_file(path: str | Path) -> dict[str, Any]:
-    """The outline of one file on disk.
+def source_of(path: str | Path) -> tuple[bytes, str]:
+    """The bytes of a file and the grammar to read it with, or `OutlineError` saying why not.
 
-    Raises `OutlineError` with something actionable rather than returning an empty outline,
-    which would read as "this file has no functions in it".
+    Split out of `of_file` so that everything parsing a file refuses it for the same reasons
+    and in the same words. Each check below ends in a next step — grep it, read it another
+    way, check the install — and a second copy of them would drift from this one the first
+    time either was edited. `excerpt.locate` is the first other caller; it will not be the
+    last, which is what makes this worth a function rather than a duplication.
     """
     target = Path(str(path))
     language = language_for(target)
@@ -369,6 +382,16 @@ def of_file(path: str | Path) -> dict[str, Any]:
             "(check the install, or the network if it fetches on demand). grep still works."
         )
 
+    return source, language
+
+
+def of_file(path: str | Path) -> dict[str, Any]:
+    """The outline of one file on disk.
+
+    Raises `OutlineError` with something actionable rather than returning an empty outline,
+    which would read as "this file has no functions in it".
+    """
+    source, language = source_of(path)
     symbols = of_source(source, language)
     return {
         "path": str(path),
