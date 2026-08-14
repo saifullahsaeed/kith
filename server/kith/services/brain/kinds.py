@@ -23,6 +23,7 @@ from typing import Any
 
 from kith.infra.db import repositories as repo
 from kith.services import embeddings
+from kith.services import reminders as reminder_service
 
 # A key arrives from a URL, so it is always a string. Most tables use integer ids;
 # custom tools are keyed by name. This is the only difference between them, and it
@@ -71,19 +72,17 @@ def _task_edit(path, task_id, data: dict):
 def _make_reminder(path, data: dict) -> dict:
     """A reminder from the panel, through the same code his own tool uses.
 
-    Imported here rather than at module scope because kith.tools imports this package: a
-    top-level import would close the loop and neither module would load.
+    Both callers are adapters over `services/reminders.py` now. This used to import
+    `kith.tools.time._set_reminder` inside the function, because `kith.tools` imports this
+    package and a top-level import would have closed the loop — a service reaching into a
+    tool module for its delegate, which is the arrow pointing the wrong way.
     """
-    from kith.tools.time import _set_reminder
-
-    return _set_reminder(path, data)
+    return reminder_service.set_reminder(path, data)
 
 
 def _make_schedule(path, data: dict) -> dict:
     """A schedule from the panel, through the same code his own tool uses."""
-    from kith.tools.time import _schedule
-
-    return _schedule(path, data)
+    return reminder_service.schedule(path, data)
 
 
 def _milestone_add(path: Path, data: dict) -> dict:

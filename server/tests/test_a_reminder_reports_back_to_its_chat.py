@@ -20,7 +20,7 @@ import pytest
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
 from kith.services import conversations
-from kith.tools.time import _schedule, _set_reminder
+from kith.services.reminders import schedule, set_reminder
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ class TestSetReminderCapturesItsConversation:
     def test_a_reminder_set_mid_chat_remembers_which_chat(self, db):
         conv = conversations.start(db, "hi")["id"]
         with session_context.working_in(conv):
-            result = _set_reminder(db, {"note": "check on it", "in_minutes": 5})
+            result = set_reminder(db, {"note": "check on it", "in_minutes": 5})
 
         stored = repo.reminders.list_reminders(db)
         assert len(stored) == 1
@@ -51,13 +51,13 @@ class TestSetReminderCapturesItsConversation:
     def test_a_reminder_set_with_nothing_current_has_none(self, db):
         """A tool called from a test or a script with no `working_in` block open — the
         honest "nobody asked" case, not a conversation named ''."""
-        _set_reminder(db, {"note": "check on it", "in_minutes": 5})
+        set_reminder(db, {"note": "check on it", "in_minutes": 5})
 
         assert repo.reminders.list_reminders(db)[0]["conversation_id"] is None
 
     def test_a_standing_schedule_captures_it_too(self, db):
         conv = conversations.start(db, "hi")["id"]
         with session_context.working_in(conv):
-            _schedule(db, {"note": "daily check", "every_minutes": 60})
+            schedule(db, {"note": "daily check", "every_minutes": 60})
 
         assert repo.schedules.list_schedules(db)[0]["conversation_id"] == conv

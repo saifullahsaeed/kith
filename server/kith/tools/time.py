@@ -4,27 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.domain import clock
 from kith.infra.db import repositories as repo
+from kith.kernel import clock
+from kith.services import reminders as reminder_service
 from kith.tools import paging
 from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
-
-
-def _set_reminder(path: Path, a: dict) -> dict:
-    from kith.kernel import session_context
-
-    note = (a.get("note") or "").strip()
-    if not note:
-        raise ValueError("note is required")
-    fire_at = clock.resolve_fire_at(a.get("in_minutes"), a.get("at"))
-    # Captured, not asked for: the model has no reason to think about which conversation it
-    # is in, and a required argument it has to remember is one it will eventually forget.
-    # This is what lets firing report back to the actual chat instead of whichever session
-    # whichever conversation happens to be open at the time.
-    reminder = repo.reminders.add_reminder(path, fire_at, note, conversation_id=session_context.current())
-    return {**reminder, "fires": clock.humanize_until(fire_at)}
 
 
 def _list_reminders(path: Path) -> list[dict]:
@@ -32,20 +18,6 @@ def _list_reminders(path: Path) -> list[dict]:
         {**r, "fires": clock.humanize_until(r["fire_at"])}
         for r in repo.reminders.list_reminders(path, status="pending")
     ]
-
-
-def _schedule(path: Path, a: dict) -> dict:
-    from kith.kernel import session_context
-
-    note = (a.get("note") or "").strip()
-    if not note:
-        raise ValueError("note is required")
-    every, daily = a.get("every_minutes"), a.get("daily_at")
-    next_fire = clock.next_fire_after(every, daily)
-    sched = repo.schedules.add_schedule(
-        path, note, next_fire, every, daily, conversation_id=session_context.current()
-    )
-    return {**sched, "fires": clock.humanize_until(next_fire)}
 
 
 @tool(
@@ -65,7 +37,7 @@ def _schedule(path: Path, a: dict) -> dict:
     required=("note",),
 )
 def set_reminder(path: Path, args: dict):
-    return _set_reminder(path, args)
+    return reminder_service.set_reminder(path, args)
 
 
 @tool(
@@ -102,7 +74,7 @@ def cancel_reminder(path: Path, args: dict):
     required=("note",),
 )
 def schedule(path: Path, args: dict):
-    return _schedule(path, args)
+    return reminder_service.schedule(path, args)
 
 
 @tool(

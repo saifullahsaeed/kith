@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.domain import clock
 from kith.infra.db import repositories as repo
+from kith.kernel import clock
 
 _LIMIT = 2000
 

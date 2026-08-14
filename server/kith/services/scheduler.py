@@ -15,10 +15,9 @@ import threading
 import traceback
 
 from kith.config import default_config
-from kith.domain import clock
 from kith.infra.db import repositories as repo
-from kith.kernel import session_context
-from kith.services import conversations
+from kith.kernel import clock, session_context
+from kith.services import conversations, local_time
 from kith.services.activity import feed
 from kith.settings import AGENT_DB_PATH
 
@@ -65,7 +64,7 @@ def fire_due(now_iso: str) -> list[str]:
         repo.reminders.set_reminder_status(AGENT_DB_PATH, r["id"], "done")
         feed.publish("reminder", r["note"], conversation=r["conversation_id"])
     for s in schedules:
-        nxt = clock.next_fire_after(s.get("every_minutes"), s.get("daily_at"))
+        nxt = local_time.next_fire_after(s.get("every_minutes"), s.get("daily_at"))
         repo.schedules.reschedule(AGENT_DB_PATH, s["id"], nxt)
         feed.publish("reminder", f"(standing) {s['note']}", conversation=s["conversation_id"])
     return woken

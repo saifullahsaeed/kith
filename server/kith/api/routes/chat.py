@@ -20,10 +20,9 @@ from kith.config import (
     model_capabilities,
     ollama_host,
 )
-from kith.domain import clock
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
-from kith.kernel import live_turns, session_context
+from kith.kernel import clock, live_turns, session_context
 from kith.llm import ledger
 from kith.llm.budget import SEED_CHARS_PER_TOKEN
 from kith.schemas import (
@@ -610,7 +609,7 @@ def _present_state(conversation_id: str = "") -> str:
     """Everything about him that is true only at this moment."""
     blocks = [
         memory_context.self_block(AGENT_DB_PATH),
-        clock.presence_block(AGENT_DB_PATH),
+        memory_context.presence_block(AGENT_DB_PATH),
         memory_context.people_block(AGENT_DB_PATH),
         memory_context.messages_block(AGENT_DB_PATH),
         memory_context.projects_block(AGENT_DB_PATH),

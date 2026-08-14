@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
+from kith.kernel import clock
+from kith.services.local_time import clock_line
 
 
 def context_block(path: Path, core_limit: int = 30, recent_limit: int = 8) -> str:
@@ -112,4 +114,41 @@ def people_block(path: Path) -> str:
         lines.append(header)
         if person["profile"]:
             lines += [f"  {line}" for line in person["profile"].splitlines()]
+    return "\n".join(lines)
+
+
+def presence_block(path: Path) -> str:
+    """The '[Right now]' block injected each turn: the time, how long since he
+    last acted, and any reminders waiting or newly due.
+
+    Moved here from `domain/clock.py`, where it was the sole reason that module imported
+    `kith.infra.db.repositories` at module scope — the one `domain -> infra` edge in the tree.
+    It is not a time primitive. It is a system-prompt fragment that happens to open with the
+    time, and it sits between `self_block` and `people_block` at the one call site that builds
+    the prompt, which is what this module is for.
+    """
+    lines = ["[Right now]", clock_line()]
+
+    mood = repo.self_model.get_mood(path)
+    if mood.get("label"):
+        felt = f"You feel {mood['label']} (energy {mood['energy']}/100)"
+        felt += f" — {mood['note']}." if mood.get("note") else "."
+        lines.append(felt)
+
+    last = repo.activity.last_activity_at(path)
+    since = clock.humanize_since(last)
+    if since:
+        lines.append(f"You last acted {since}.")
+
+    pending = repo.reminders.list_reminders(path, status="pending")
+    now = clock.now_iso()
+    due = [r for r in pending if r["fire_at"] <= now]
+    waiting = [r for r in pending if r["fire_at"] > now]
+    if due:
+        lines.append("Reminders that have come due — deal with them:")
+        lines += [f"- (#{r['id']}) {r['note']}" for r in due]
+    if waiting:
+        nxt = waiting[0]
+        extra = f" (+{len(waiting) - 1} more)" if len(waiting) > 1 else ""
+        lines.append(f"Next reminder {clock.humanize_until(nxt['fire_at'])}: {nxt['note']}{extra}.")
     return "\n".join(lines)

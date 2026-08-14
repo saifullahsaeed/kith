@@ -100,10 +100,9 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:
 #: * `infra -> services` and `llm -> services` are `session_context`, `permissions`,
 #:   `changes` and `tuning` — runtime primitives filed as orchestration.
-#: * `services -> tools` is the five edges that have to invert before `tools/` can be an
-#:   adapter: the loop takes a tool host rather than importing the registry, and
-#:   `brain/kinds.py` stops reaching into a tool module for two private functions.
-#: * `domain -> infra` is `clock` reading a stored timezone.
+#: * `services -> tools` is now three, and all three are the same thing: the loop and the
+#:   history folder want `tool_schemas`, so they must be handed a tool host rather than
+#:   importing the registry. That is the loop decomposition, not a move.
 #: * `services -> api` is `scheduler` importing `_build_messages`, `_Recorder` and `_turn` —
 #:   three *private* functions — out of `api/routes/chat.py`. Not a slip: a reminder firing
 #:   runs the same turn a typed message does, so that machinery was never route-shaped. It
@@ -115,7 +114,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
 #:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far, 38 -> 22:
+#: Struck off so far, 38 -> 17:
 #:
 #: * `settings -> services` (1), which was `describe()` fetching the tunables for the
 #:   startup log. The caller joins the two halves now.
@@ -133,12 +132,23 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #: * `infra -> services` 12 -> 9, from `session_context` moving to the kernel. It split 13
 #:   pure names from 3 that resolve a project through the repositories; the three went to
 #:   `services/project_binding.py`, whose only callers were already in `tools/`.
+#: * `domain -> services` (2) and `domain -> infra` (1) — the whole of `domain/`, gone. The
+#:   clock split on the line the zone drew: the UTC half is `kernel/clock.py`, the half that
+#:   reads a stored timezone is `services/local_time.py`, and `presence_block` — a
+#:   system-prompt fragment that merely opens with the time — moved to
+#:   `services/memory_context.py`, which was the sole reason `domain` imported a repository.
+#:   `stall._threshold` is deleted: its docstring said the deferred import kept the module
+#:   "free of service imports", but it was only free of them *at import time* while the call
+#:   itself opened `config.db`. The thresholds are keyword arguments now, defaulted to the
+#:   tunables' own declared defaults, with the live value passed by the adapter.
+#: * `services -> tools` 5 -> 3. `brain/kinds.py` reached into `tools/time.py` for two
+#:   private functions, under a comment naming the loop exactly — "a top-level import would
+#:   close the loop and neither module would load". The shared half is `services/reminders.py`
+#:   and both callers are adapters over it.
 ALLOWED: dict[tuple[str, str], int] = {
     ("infra", "services"): 9,
-    ("services", "tools"): 5,
+    ("services", "tools"): 3,
     ("llm", "services"): 2,
-    ("domain", "services"): 2,
-    ("domain", "infra"): 1,
     ("services", "api"): 1,
     ("infra", "llm"): 1,
     ("llm", "infra"): 1,

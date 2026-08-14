@@ -51,33 +51,39 @@ def signature(text: str) -> frozenset[str]:
     return frozenset(word for word in words if len(word) >= _MIN_WORD)
 
 
-def similar(a: frozenset[str], b: frozenset[str]) -> bool:
-    """Do two prose fingerprints overlap enough to call them the same step?"""
+def similar(a: frozenset[str], b: frozenset[str], *, threshold: float = PROSE_MATCH) -> bool:
+    """Do two prose fingerprints overlap enough to call them the same step?
+
+    The threshold arrives as an argument. It used to be fetched — `_threshold("prose_match")`,
+    with a function-body import of `kith.services.tuning` under a docstring explaining that the
+    import was deferred "to keep this module free of service imports". It was not free of them;
+    it was free of them *at import time*, which is a different and much weaker property, and the
+    file's own header claims "no database, no clock, no IO" while that call opened `config.db`.
+
+    The default is the declared default of the `prose_match` tunable, so nothing changes for a
+    caller that has not tuned it, and `tools/tasks.py` — an adapter, at the layer where reading
+    a setting is allowed — passes the live value so nothing changes for one that has.
+    """
     if not a or not b:
         return False
     union = len(a | b)
-    return union > 0 and len(a & b) / union >= _threshold("prose_match")
+    return union > 0 and len(a & b) / union >= threshold
 
 
-def same_shape(a: frozenset[str], b: frozenset[str]) -> bool:
+def same_shape(
+    a: frozenset[str],
+    b: frozenset[str],
+    *,
+    threshold: float = SHAPE_MATCH,
+    min_tools: int = SHAPE_MIN_TOOLS,
+) -> bool:
     """Did two ticks reach for the same kinds of tool?"""
-    if len(a) < _threshold("shape_min_tools") or len(b) < _threshold("shape_min_tools"):
+    if len(a) < min_tools or len(b) < min_tools:
         return False
     union = len(a | b)
-    return union > 0 and len(a & b) / union >= _threshold("shape_match")
+    return union > 0 and len(a & b) / union >= threshold
 
 
 def advanced(tools_used: frozenset[str]) -> bool:
     """Did this round leave the work further along than it found it?"""
     return bool(tools_used & ADVANCE_TOOLS)
-
-
-def _threshold(key: str) -> float:
-    """A tuning value, imported lazily to keep this module free of service imports.
-
-    This file is the pure loop-detection logic and is tested without a database; the
-    import happens at call time so that stays true.
-    """
-    from kith.services import tuning
-
-    return tuning.value(key)

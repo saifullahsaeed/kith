@@ -418,7 +418,7 @@ def add_task(path: Path, args: dict):
         if existing.get("status") in TASK_SETTLED or existing.get("project_id") != project_id:
             continue
         prior = stall.signature(f"{existing['goal']} {existing.get('description') or ''}")
-        if stall.similar(new_sig, prior):
+        if stall.similar(new_sig, prior, threshold=tuning.value("prose_match")):
             return {
                 "ok": True,
                 "id": existing["id"],
