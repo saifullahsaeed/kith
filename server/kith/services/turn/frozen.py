@@ -6,14 +6,13 @@ together and the round loop can get on with rounds.
 
 **The theme is that a value which changed under a turn would change the request without anyone
 asking it to.** A settings knob re-read per round means a turn that starts with one budget and
-finishes with another. A tool snapshot re-taken per round means the tools block — which is part
-of the cached prompt prefix — shrinking the moment an MCP server dies in another tab, and the
-whole prefix being re-billed on the next round. Freezing is not an optimisation here; it is
-what makes a turn one thing rather than N loosely related requests.
+finishes with another. Freezing is not an optimisation here; it is what makes a turn one thing
+rather than N loosely related requests.
 
-Building this touches the database three times (the conversation's session id, the install-wide
-fallback, the custom-tool names) and the MCP manager once. All four happen here, before the
-first round, and never again inside the request path.
+The tools are frozen the same way and are deliberately *not* here: `domain.tooling.ToolHost` is
+that object, built by the adapter that has one. This module held an MCP snapshot and two name
+sets derived from it for a while, which meant two objects with an opinion about which tools
+exist and nothing making them agree.
 """
 
 from __future__ import annotations
@@ -43,12 +42,6 @@ class Turn:
     landing_effort: str
     #: How the cloud requests should be steered.
     routing: Routing
-    #: Every MCP tool, as it was when the turn began.
-    mcp_tools: list[dict[str, Any]]
-    #: Which of those names came from MCP, so the ledger can tell three costs apart.
-    mcp_names: frozenset[str]
-    #: And which are tools he built himself.
-    custom_names: frozenset[str]
     #: How much room is left, learned from what the provider charges each round. Mutable by
     #: design — it calibrates — which is why it is a reference held here rather than a value.
     room: ContextBudget
@@ -81,20 +74,6 @@ def begin(
     # of it is shown. Blank means "leave every round exactly as it was" — no override built.
     landing_effort = str(tuning.value("landing_effort") or "").strip().lower()
 
-    # Every MCP tool, frozen for this turn. Taken once rather than per round on purpose: the
-    # tools block is part of the cached prompt prefix, so a server dying — or being switched
-    # off in another tab — would shrink it mid-turn and discard the whole cache on the next
-    # round. Held even when the server has gone; the *call* then fails with something
-    # readable, which costs one tool result instead of the entire prefix.
-    from kith.services.mcp import manager as mcp_manager
-
-    mcp_tools = mcp_manager.snapshot()
-    # Which schemas came from where, so the ledger can tell three costs apart that look
-    # identical once they are all in the tools block. Resolved once per turn for the same reason
-    # the snapshot is: these are inputs to a per-round accounting and must not touch a database
-    # inside the request path.
-    mcp_names = frozenset(str(((schema.get("function") or {}).get("name")) or "") for schema in mcp_tools)
-
     # How much room is left, learned from what the provider charges each round.
     #
     # `num_predict` is -1 on a default install — the sentinel for "no limit" — so it cannot
@@ -109,9 +88,6 @@ def begin(
         reserve=reserve,
         landing_effort=landing_effort,
         routing=tuning.routing(),
-        mcp_tools=mcp_tools,
-        mcp_names=mcp_names,
-        custom_names=_custom_names(agent_db_path),
         room=ContextBudget(window=config.context_window, reserve=int(wanted_out)),
         offload=offload,
     )
@@ -154,21 +130,6 @@ def _spill_for(conversation_id: str):
 
     offload_svc.clear(conversation_id)
     return partial(offload_svc.save, conversation_id)
-
-
-def _custom_names(agent_db_path: Path) -> frozenset[str]:
-    """The names of the tools he has built for himself, for the ledger's accounting."""
-    try:
-        from kith.services import custom_tools as custom_tools_svc
-
-        return frozenset(
-            str(((schema.get("function") or {}).get("name")) or "")
-            for schema in custom_tools_svc.schemas(agent_db_path)
-        )
-    except Exception:
-        # Accounting. A ledger that cannot separate his own tools from the built-ins is still
-        # a useful ledger, and must not be able to take down the turn.
-        return frozenset()
 
 
 def install_session_id() -> str:

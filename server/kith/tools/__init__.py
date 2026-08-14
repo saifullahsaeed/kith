@@ -174,21 +174,52 @@ def _hint(name: str, agent_db_path: Path) -> str:
     return f" Did you mean: {', '.join(near)}?"
 
 
-def host(agent_db_path: Path, *, language_server: bool | None = None) -> ToolHost:
-    """The tool layer as the loop needs it, with the per-turn answers already bound.
+def host(
+    agent_db_path: Path,
+    *,
+    language_server: bool | None = None,
+    mcp: list[dict] | None = None,
+) -> ToolHost:
+    """The whole tool layer, frozen for one turn.
 
-    `agent_db_path` and `language_server` are resolved once here rather than every round, for
-    the reason `tool_schemas` documents at length: both are inputs to a block that is part of
-    the cached prompt prefix, and one that changed mid-turn would discard the whole cache.
-    Resolving them at the edge of the turn is what makes that structural instead of remembered.
+    Everything that can change between rounds is resolved here, once, and the reasons are the
+    same reason: the tools block is part of the cached prompt prefix, so anything that shrank
+    or grew mid-turn would discard the entire cache on the next round. That was documented on
+    `tool_schemas` and left to each caller to honour; it is a property of this object now.
 
-    `language_server=None` means "ask" — a handful of `stat` calls, once. Pass a bool to skip
-    even that, which is what a test with no language server on the machine wants.
+    * `mcp` — every MCP tool as it stands. Taken here when not supplied, so a caller cannot
+      forget to snapshot and cannot take two snapshots that disagree. Held even when a server
+      has since died: the *call* then fails with something readable, which costs one tool
+      result rather than the whole prefix.
+    * `language_server` — whether the four semantic tools are worth their schema. `None` asks,
+      which is a handful of `stat` calls; pass a bool to skip even that.
+    * `agent_db_path` — bound, so the tools he built for himself are read once.
+
+    The provenance sets come back on the host for the same reason: the turn used to rebuild
+    them from a snapshot it was also holding, so two objects had an opinion about which tools
+    existed and nothing made them agree.
     """
+    if mcp is None:
+        from kith.services.mcp import manager as mcp_manager
+
+        mcp = mcp_manager.snapshot()
     available = language_server if language_server is not None else _language_server_available()
     return ToolHost(
-        schemas=lambda only=None, mcp=None: tool_schemas(
-            agent_db_path, only=only, mcp=mcp, language_server=available
-        ),
+        schemas=lambda only=None: tool_schemas(agent_db_path, only=only, mcp=mcp, language_server=available),
         run=lambda name, arguments, allow=None: run_tool(name, arguments, agent_db_path, allow=allow),
+        mcp_names=frozenset(str(((one.get("function") or {}).get("name")) or "") for one in mcp),
+        custom_names=_custom_names(agent_db_path),
     )
+
+
+def _custom_names(agent_db_path: Path) -> frozenset[str]:
+    """The names of the tools he has built for himself, for the ledger's accounting."""
+    try:
+        return frozenset(
+            str(((one.get("function") or {}).get("name")) or "")
+            for one in custom_tools.schemas(agent_db_path)
+        )
+    except Exception:
+        # Accounting. A ledger that cannot separate his own tools from the built-ins is still
+        # a useful ledger, and must not be able to take down the turn.
+        return frozenset()

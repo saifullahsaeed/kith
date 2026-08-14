@@ -559,8 +559,8 @@ def _run_turn(
     turn = frozen.begin(config, agent_db_path, conversation_id, max_rounds)
     config, room, offload_result = turn.config, turn.room, turn.offload
     budget, reserve, landing_effort = turn.budget, turn.reserve, turn.landing_effort
-    routing, mcp_tools = turn.routing, turn.mcp_tools
-    mcp_names, custom_names = turn.mcp_names, turn.custom_names
+    routing = turn.routing
+    mcp_names, custom_names = tool_host.mcp_names, tool_host.custom_names
 
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
@@ -586,7 +586,7 @@ def _run_turn(
         # tool block. The old ordering reduced first and counted `content` lengths only, which
         # missed 11,000 tokens of schemas — the single largest fixed cost in the prompt — and
         # therefore decided how tight the room was from roughly half the evidence.
-        schemas = tool_host.schemas(only=allow, mcp=mcp_tools)
+        schemas = tool_host.schemas(only=allow)
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:

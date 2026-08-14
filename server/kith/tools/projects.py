@@ -9,19 +9,11 @@ from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import project_binding
+from kith.services.tasks import _out_of_scope
 from kith.tools import paging
 from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
-
-
-def _out_of_scope(path: Path, project_id: int | None) -> dict | None:
-    """A refusal when this conversation may not write to that project, or None."""
-
-    reason = project_binding.foreign_project(path, project_id)
-    if not reason:
-        return None
-    return {"blocked": reason, "next": "Tell them, and work on this conversation's project instead."}
 
 
 @tool(

@@ -37,3 +37,12 @@ class ToolHost:
     #: where execution happens rather than where declarations are built — a model that names a
     #: tool it was not offered still gets refused.
     run: Callable[..., dict[str, Any]]
+
+    #: Which of the declared names came from an MCP server, and which he built himself.
+    #:
+    #: Provenance, for the ledger: once every schema is in one tools block, three costs that
+    #: are worth telling apart look identical. It rides here because this is the object that
+    #: knows — the alternative was the turn re-deriving both from a snapshot it also had to
+    #: hold, which meant two places that could disagree about which tools exist.
+    mcp_names: frozenset[str] = frozenset()
+    custom_names: frozenset[str] = frozenset()
