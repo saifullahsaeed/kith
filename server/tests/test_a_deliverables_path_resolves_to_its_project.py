@@ -31,6 +31,18 @@ def workspace_root(tmp_path, monkeypatch):
 def _get(monkeypatch, db, path, project_id=None):
     from flask import Flask
 
+    from kith.infra import permissions
+
+    # This file is about which folder a path anchors to, not about the gate. The read is of a
+    # project folder outside the workspace, which `check_path` allows only through
+    # `_inside_linked_project` — and that resolves against the *global* AGENT_DB_PATH, which
+    # conftest points at a safe empty database, not the `db` this test registered its project
+    # in. So the read is refused and the route answers 400.
+    #
+    # It passed before only because the suite was reading the developer's real config database,
+    # where `permission_mode` happened to be `bypass`. That is now isolated, so a test that
+    # needs the gate open has to say so rather than inherit it.
+    monkeypatch.setattr(permissions, "mode", lambda: permissions.Mode.BYPASS)
     monkeypatch.setattr(route, "AGENT_DB_PATH", db)
     args = {"path": path}
     if project_id is not None:

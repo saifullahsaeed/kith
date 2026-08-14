@@ -118,6 +118,67 @@ def never_the_real_data_folder(_safe_data_dir, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def never_the_real_config(tmp_path_factory, monkeypatch):
+    """No test can read `server/data/config.db`, which holds the developer's API key.
+
+    The third of these, and it was missing for the same reason the other two were: the value it
+    guards is computed at import and copied by whoever imports it. `never_the_real_database`
+    redirects `AGENT_DB_PATH` and `never_the_real_data_folder` redirects `DATA_DIR`, but
+    `CONFIG_DB_PATH` is `DATA_DIR / "config.db"` resolved once at import of `kith.settings` —
+    so patching `DATA_DIR` afterwards does nothing to it, and the suite has been reading the
+    real file all along.
+
+    Two things follow from that, and the second is why this is not merely hygiene:
+
+    * **It can see the key.** `SELECT key FROM settings` on a developer's config database
+      returns `api_key`, `base_url`, `model`, `model_capabilities`. Any test that reaches
+      `default_config()` without patching the path itself — most of them — resolves against
+      whatever that developer happens to have configured, so a suite that passes here can fail
+      on a machine with a different model selected.
+    * **It is why a clean checkout fails.** There is no `server/data/config.db` on a fresh
+      clone, and `config_store.load_settings` on a database that was never `init`-ed raises
+      `sqlite3.OperationalError: no such table: settings`. That is the "~200 tests fail on
+      environment" that `./check`'s own header describes and that `./check lint` exists to work
+      around.
+
+    Initialised rather than merely redirected, because an empty path is the clean-checkout
+    failure with extra steps.
+    """
+    path = tmp_path_factory.mktemp("never-real-config") / "config.db"
+    config_store.init(path)
+    for name, module in list(sys.modules.items()):
+        if name.startswith("kith.") and hasattr(module, "CONFIG_DB_PATH"):
+            monkeypatch.setattr(module, "CONFIG_DB_PATH", path, raising=False)
+    yield path
+
+
+@pytest.fixture(autouse=True)
+def never_a_stale_permission_cache():
+    """No test inherits another's idea of which folders are linked projects.
+
+    `permissions._linked` caches `linked_directories(AGENT_DB_PATH)` for `_LINKED_TTL` — five
+    seconds — so that a permission check on every write does not re-query the database. Nothing
+    reset it between tests, and each test gets its own database, so a test that ran within five
+    seconds of one that populated the cache was answered from the *previous* test's projects.
+
+    The failure is a refusal, not an error: writing inside your own linked project is allowed by
+    `_inside_linked_project`, and a stale cache says the folder is not one. Reproduced by running
+    `test_work_lands_in_the_linked_folder.py` immediately before `test_checkpoints.py` — ten
+    checkpoint tests refuse with "he wants to write to something outside his workspace".
+
+    **It is timing-dependent, which is the worst part.** Five seconds is long enough to cover a
+    neighbouring file and short enough to expire while someone is watching a slow run, so the
+    same commit passes or fails depending on how fast the tests before it happened to be. Any
+    "works on my machine" in this suite should be suspected of being this.
+    """
+    from kith.infra import permissions
+
+    permissions.forget_linked_projects()
+    yield
+    permissions.forget_linked_projects()
+
+
+@pytest.fixture(autouse=True)
 def no_stray_background_threads(monkeypatch):
     """No test starts a background thread unless it asks for one. None of them ask.
 

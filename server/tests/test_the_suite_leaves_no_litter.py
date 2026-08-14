@@ -63,12 +63,18 @@ def test_skills_are_still_reachable_through_the_redirect():
     """
     linked = Path(settings.DATA_DIR) / "skills"
     real = _real_data_dir() / "skills"
-    if not real.is_dir():
+    # Whether anything is *installed*, not whether the folder exists. `skills.root()` does
+    # `mkdir(parents=True, exist_ok=True)`, so merely asking where skills live conjures an
+    # empty directory — and on a fresh clone that is exactly what happens, several tests before
+    # this one runs. An existence check therefore passed, found nothing to copy, and failed on
+    # `assert copied` with a message about the fixture isolating too much. The fixture was fine;
+    # there were no skills.
+    installed = {one.name for one in real.iterdir()} if real.is_dir() else set()
+    if not installed:
         return  # A checkout with no skills installed; nothing to link.
     assert linked.is_dir()
 
-    copied = {p.name for p in linked.iterdir()}
-    installed = {p.name for p in real.iterdir()}
+    copied = {one.name for one in linked.iterdir()}
 
     # A subset, not an exact match. The copy is made once per session and the real folder is
     # live — installing a skill while the suite runs made this fail on set equality, which is

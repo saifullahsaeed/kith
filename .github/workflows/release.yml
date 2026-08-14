@@ -115,16 +115,12 @@ jobs:
         working-directory: desktop
         run: npm ci
 
-      # `lint` rather than the whole of `./check`, because pytest does not currently pass on a
-      # machine that is not a developer's — it wants a settings table, a workspace root and a
-      # skills directory that a clean checkout does not have, and fails ~200 tests on
-      # environment rather than on behaviour. Gating releases on that would mean never
-      # releasing. `check` runs the real suite on every push and is where that shows up.
-      #
-      # This is temporary. When the suite is hermetic this becomes `./check` and the `lint`
-      # mode goes away.
-      - name: ./check lint
-        run: ./check lint
+      # The real suite, because it now runs on a machine that is not a developer's. It did
+      # not until the three things in `check`'s header were fixed — chiefly that the tests
+      # were reading the developer's own config database, so a release was being cut against
+      # a suite that had never proven anything about a clean checkout.
+      - name: ./check server
+        run: ./check server
 
       # Also the step that produces ui/dist, which the freeze then refuses to run without.
       - name: ./check ui
