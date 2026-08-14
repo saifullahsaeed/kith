@@ -199,7 +199,7 @@ def stream_once(
         # to no session, so the install-wide id is the honest answer for it — but it is
         # resolved by the caller now. Reading it here meant the transport opening the config
         # database, which was the tree's last `llm -> infra` edge, written as a function-body
-        # import to keep Python from noticing. See `agent_loop._install_session_id`.
+        # import to keep Python from noticing. See `services/turn/frozen.install_session_id`.
         payload["session_id"] = config.session_id
         # Provider routing (a pinned upstream), model fallback, privacy/capability
         # preferences, and whether/how hard he reasons — all resolved from settings and

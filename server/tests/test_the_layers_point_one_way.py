@@ -156,7 +156,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   database from inside the thing whose job is to put bytes on a socket. It takes a
 #:   `domain.chat.Routing` now, mapped in one place by `services/tuning.routing()` and read
 #:   once per turn like `reserve` and `landing_effort`; the id is resolved by
-#:   `agent_loop._install_session_id`. Every cloud request in a turn is threaded — the fold,
+#:   `turn/frozen.install_session_id`. Every cloud request in a turn is threaded — the fold,
 #:   the summariser and the forced final answer included, because letting those default would
 #:   have quietly stopped honouring a pinned provider on three paths.
 ALLOWED: dict[tuple[str, str], int] = {}

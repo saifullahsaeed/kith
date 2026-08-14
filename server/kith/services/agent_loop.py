@@ -25,9 +25,10 @@ from typing import Any
 from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
 from kith.domain.tooling import ToolHost
-from kith.llm import caching, ledger, ollama, openai_compat
+from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
 from kith.services import compaction, tuning
+from kith.services.turn import frozen
 from kith.services.turn.history import (
     _FOLD_ABOVE_SHARE,
     _MAX_FOLDS,
@@ -300,22 +301,6 @@ _LANDING_DIRECTIVE = (
 )
 
 
-def _install_session_id() -> str:
-    """The install-wide OpenRouter stickiness id, minted once and persisted.
-
-    Lived in `llm/openai_compat._session_id` and opened the config database from inside the
-    transport. Same function, one layer up, where reaching for storage is the job.
-    """
-    from kith.infra.db import config_store
-    from kith.settings import CONFIG_DB_PATH
-
-    stored = config_store.load_settings(CONFIG_DB_PATH)
-    return caching.session_id(
-        stored,
-        lambda fresh: config_store.update_settings(CONFIG_DB_PATH, {caching.SESSION_KEY: fresh}),
-    )
-
-
 def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = "auto", routing=None):
     """Route to the cloud model when a key+endpoint are set, else local Ollama."""
     if config.api_key and config.base_url:
@@ -567,66 +552,18 @@ def _run_turn(
     so keeping one conversation on one upstream is what keeps its cache warm.
     """
     convo = list(messages)
-    # Spills an aged-out tool result to a file this turn can read back, instead of trimming
-    # its tail away. None when there is no conversation to file it under, in
-    # which case the compactor falls back to the older in-place trim.
-    offload_result = None
-    if conversation_id:
-        from kith.services import conversations
-        from kith.services import offload as offload_svc
+    # Everything this turn settles before its first round — the session id, the spill target,
+    # the budget and reserve, the routing, the MCP snapshot and the ledger's name sets. Each is
+    # read once and never re-read, and `services/turn/frozen.py` holds the reasons why. Unpacked
+    # into locals here rather than reached through, so the round loop below reads as it did.
+    turn = frozen.begin(config, agent_db_path, conversation_id, max_rounds)
+    config, room, offload_result = turn.config, turn.room, turn.offload
+    budget, reserve, landing_effort = turn.budget, turn.reserve, turn.landing_effort
+    routing, mcp_tools = turn.routing, turn.mcp_tools
+    mcp_names, custom_names = turn.mcp_names, turn.custom_names
 
-        session = conversations.session_id(agent_db_path, conversation_id)
-        if session:
-            config = replace(config, session_id=session)
-        # Per-turn: a past turn's tool output never re-enters the prompt, so last turn's
-        # spill can refer to nothing and is dead weight. Clear it, then this turn writes fresh.
-        offload_svc.clear(conversation_id)
-        offload_result = partial(offload_svc.save, conversation_id)
-    if not config.session_id:
-        # A turn with no conversation — a script, a test, a step nobody is working — belongs to
-        # no session, and the install-wide id is the honest answer for it. Resolved here rather
-        # than inside the transport, which had to open the config database to do it: the last
-        # `llm -> infra` edge in the tree, written as a function-body import to hide the cycle.
-        config = replace(config, session_id=_install_session_id())
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
-    budget = max_rounds or tuning.value("max_rounds")
-    reserve = min(tuning.value("landing_reserve"), max(2, budget // 3))
-    # Read once, same as `reserve` above: recording, delivering, ticking off, handing back is
-    # not a reasoning-heavy phase, and reasoning is billed as output tokens whether or not any
-    # of it is shown. Blank means "leave every round exactly as it was" — no override built.
-    landing_effort = str(tuning.value("landing_effort") or "").strip().lower()
-    # How this turn's requests should be steered. Read once, for the same reason `reserve` and
-    # `landing_effort` are: these are settings, and a value that changed under a turn would
-    # change the request without anyone asking it to. The transport used to read all six
-    # itself, which made it import the settings service — see `domain.chat.Routing`.
-    routing = tuning.routing()
-    # Every MCP tool, frozen for this turn. Taken once rather than per round on purpose: the
-    # tools block is part of the cached prompt prefix, so a server dying — or being switched
-    # off in another tab — would shrink it mid-turn and discard the whole cache on the next
-    # round. Held even when the server has gone; the *call* then fails with something
-    # readable, which costs one tool result instead of the entire prefix.
-    from kith.services.mcp import manager as mcp_manager
-
-    mcp_tools = mcp_manager.snapshot()
-    # Which schemas came from where, so the ledger can tell three costs apart that look
-    # identical once they are all in the tools block. Resolved once per turn for the same reason
-    # the snapshot is: these are inputs to a per-round accounting and must not touch a database
-    # inside the request path.
-    mcp_names = frozenset(str(((schema.get("function") or {}).get("name")) or "") for schema in mcp_tools)
-    try:
-        from kith.services import custom_tools as custom_tools_svc
-
-        custom_names = frozenset(
-            str(((schema.get("function") or {}).get("name")) or "")
-            for schema in custom_tools_svc.schemas(agent_db_path)
-        )
-    except Exception:
-        # Accounting. A ledger that cannot separate his own tools from the built-ins is still
-        # a useful ledger, and must not be able to take down the turn.
-        custom_names = frozenset()
-    wanted_out = config.num_predict if config.num_predict > 0 else tuning.value("max_answer_tokens")
-    room = ContextBudget(window=config.context_window, reserve=int(wanted_out))
     # The tool list as the last round actually saw it, kept for the forced final answer.
     # That request used to build its own with `tool_schemas(agent_db_path)` and no `only`,
     # so a narrowed round offering six tools ended by sending all fifty-nine — a different
