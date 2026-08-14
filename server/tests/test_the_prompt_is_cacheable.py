@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import json
 
-from kith.api.routes.chat import _build_messages
 from kith.config import default_config
+from kith.services.turn.prompt import _build_messages
 from kith.tools import tool_schemas
 
 

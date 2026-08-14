@@ -19,8 +19,8 @@ import base64
 
 import pytest
 
-from kith.api.routes import chat as chat_route
-from kith.api.routes.chat import TEXT_INLINE_CHARS, _with_attachments
+from kith.services.turn import prompt
+from kith.services.turn.prompt import TEXT_INLINE_CHARS, _with_attachments
 
 
 def _attachment(body: str, name: str = "pasted-1.txt", media: str = "text/plain") -> dict:
@@ -39,12 +39,12 @@ def _message(*attachments: dict, text: str = "have a look at this") -> dict:
 @pytest.fixture(autouse=True)
 def _no_vision(monkeypatch):
     """Images are a different path entirely, and one that asks the model config a question."""
-    monkeypatch.setattr(chat_route, "model_capabilities", lambda: {"images": False})
+    monkeypatch.setattr(prompt, "model_capabilities", lambda: {"images": False})
 
 
 class TestTextIsGiven:
     def test_the_contents_arrive_in_the_message(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment("the log line that matters")))
 
@@ -53,7 +53,7 @@ class TestTextIsGiven:
     def test_it_is_fenced_and_named(self, tmp_path, monkeypatch):
         """Named because he is going to talk about it back to them, and fenced because a paste
         dropped into the prose is indistinguishable from the prose."""
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment("body", name="pasted-1.txt")))
 
@@ -63,7 +63,7 @@ class TestTextIsGiven:
     def test_the_path_is_still_given(self, tmp_path, monkeypatch):
         """Inlining replaces nothing. The file is on disk either way, and the path is what makes
         it something they can open again from his reply."""
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment("body")))
 
@@ -73,14 +73,14 @@ class TestTextIsGiven:
     def test_what_they_actually_wrote_comes_first(self, tmp_path, monkeypatch):
         """The message is the message; the paste is the material. Putting the material first
         buries the instruction under it."""
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment("x" * 100), text="what is wrong here"))
 
         assert out["content"].index("what is wrong here") < out["content"].index("```")
 
     def test_json_counts_as_text(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment('{"a": 1}', "conf.json", "application/json")))
 
@@ -89,7 +89,7 @@ class TestTextIsGiven:
 
 class TestTheCeiling:
     def test_a_huge_paste_is_cut(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment("y" * (TEXT_INLINE_CHARS * 3))))
 
@@ -99,7 +99,7 @@ class TestTheCeiling:
         """Out loud, with both numbers and the path. A silently shortened file is the worst
         version of this: he reads what he was given, believes it is everything, and answers with
         confidence about a second half he never saw."""
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
         body = "y" * (TEXT_INLINE_CHARS + 500)
 
         out = _with_attachments(_message(_attachment(body)))
@@ -108,7 +108,7 @@ class TestTheCeiling:
         assert "inbox/pasted-1.txt" in out["content"]
 
     def test_a_file_that_fits_is_not_described_as_cut(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment("short enough")))
 
@@ -119,7 +119,7 @@ class TestWhatIsNotText:
     def test_a_binary_file_is_still_only_pointed_at(self, tmp_path, monkeypatch):
         """Unchanged, and deliberately. A spreadsheet is something he opens with python; inlining
         its bytes would fill the window with nothing readable."""
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
         sheet = _attachment("ignored", "books.xlsx", "application/vnd.ms-excel")
 
         out = _with_attachments(_message(sheet))
@@ -129,7 +129,7 @@ class TestWhatIsNotText:
 
     def test_an_empty_file_says_nothing_at_all(self, tmp_path, monkeypatch):
         """An empty fence is noise that looks like a mistake he has to account for."""
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments(_message(_attachment("   ")))
 
@@ -137,7 +137,7 @@ class TestWhatIsNotText:
 
     def test_bytes_that_are_not_really_text_fall_back_to_the_path(self, tmp_path, monkeypatch):
         """A block of replacement characters is worse than a path — the path he can act on."""
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
         broken = {
             "kind": "file",
             "name": "weird.txt",
@@ -150,7 +150,7 @@ class TestWhatIsNotText:
         assert "inbox/weird.txt" in out["content"]
 
     def test_a_message_with_no_attachments_is_untouched(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(chat_route.sandbox, "root", lambda: tmp_path)
+        monkeypatch.setattr(prompt.sandbox, "root", lambda: tmp_path)
 
         out = _with_attachments({"role": "user", "content": "just a sentence"})
 

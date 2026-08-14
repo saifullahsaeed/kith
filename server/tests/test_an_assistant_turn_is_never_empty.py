@@ -69,7 +69,13 @@ class TestReplayingHistory:
         if built is None:
             import inspect
 
-            source = inspect.getsource(chat)
+            # `prompt`, not `chat`. The guard lives in `_build_messages`, which moved to
+            # `services/turn/prompt.py` — and this assertion would have gone on passing
+            # against a module that no longer contained the code, because it only asks
+            # whether the text appears *somewhere* in the file it is handed.
+            from kith.services.turn import prompt
+
+            source = inspect.getsource(prompt)
             assert 'message.get("role") == "assistant" and not str' in source
             return
         roles = [m["role"] for m in built if m["role"] != "system"]

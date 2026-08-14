@@ -32,7 +32,7 @@ rule here is narrower and true: a condition you can check is not a blocker.
 
 from __future__ import annotations
 
-from kith.api.routes.chat import CHAT_DIRECTIVE
+from kith.services.turn.prompt import CHAT_DIRECTIVE
 from kith.tools import registry
 
 

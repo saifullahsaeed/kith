@@ -25,8 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from kith.api.routes import chat
 from kith.infra import workspace as ws
+from kith.services.turn import prompt
 
 #: A one-pixel PNG, as the composer sends it.
 PNG = base64.b64encode(
@@ -45,7 +45,7 @@ def workspace_root(tmp_path, monkeypatch):
 
 
 def _sees_images(monkeypatch, answer: bool):
-    monkeypatch.setattr(chat, "model_capabilities", lambda: {"images": answer, "known": True})
+    monkeypatch.setattr(prompt, "model_capabilities", lambda: {"images": answer, "known": True})
 
 
 def image(name="shot.png"):
@@ -65,12 +65,12 @@ def spreadsheet(name="budget.xlsx"):
 class TestItLandsOnDisk:
     def test_a_file_is_written_where_he_can_read_it(self, workspace_root, monkeypatch):
         _sees_images(monkeypatch, False)
-        chat._with_attachments({"role": "user", "content": "have a look", "attachments": [spreadsheet()]})
+        prompt._with_attachments({"role": "user", "content": "have a look", "attachments": [spreadsheet()]})
         assert (workspace_root / "inbox" / "budget.xlsx").is_file()
 
     def test_the_path_he_is_given_is_the_path_that_exists(self, workspace_root, monkeypatch):
         _sees_images(monkeypatch, False)
-        out = chat._with_attachments({"role": "user", "content": "", "attachments": [spreadsheet()]})
+        out = prompt._with_attachments({"role": "user", "content": "", "attachments": [spreadsheet()]})
         # The exact failure being fixed: he used to be told to read a file by name, with no
         # path and nothing on disk. Whatever the message names has to resolve.
         assert "`inbox/budget.xlsx`" in out["content"]
@@ -78,13 +78,13 @@ class TestItLandsOnDisk:
 
     def test_the_bytes_are_intact(self, workspace_root, monkeypatch):
         _sees_images(monkeypatch, True)
-        chat._with_attachments({"role": "user", "content": "", "attachments": [image()]})
+        prompt._with_attachments({"role": "user", "content": "", "attachments": [image()]})
         written = (workspace_root / "inbox" / "shot.png").read_bytes()
         assert written.startswith(b"\x89PNG"), "not a PNG — the data URL was decoded wrong"
 
     def test_an_image_is_saved_even_when_he_can_see_it(self, workspace_root, monkeypatch):
         _sees_images(monkeypatch, True)
-        chat._with_attachments({"role": "user", "content": "", "attachments": [image()]})
+        prompt._with_attachments({"role": "user", "content": "", "attachments": [image()]})
         # Both, not either: seeing it now does not help the tick tomorrow that wants to measure
         # it, and a file on disk is the only version that outlives this turn.
         assert (workspace_root / "inbox" / "shot.png").is_file()
@@ -96,8 +96,8 @@ class TestItLandsOnDisk:
             **spreadsheet(),
             "data": "data:application/octet-stream;base64," + base64.b64encode(b"different").decode(),
         }
-        chat._with_attachments({"role": "user", "content": "", "attachments": [first]})
-        out = chat._with_attachments({"role": "user", "content": "", "attachments": [second]})
+        prompt._with_attachments({"role": "user", "content": "", "attachments": [first]})
+        out = prompt._with_attachments({"role": "user", "content": "", "attachments": [second]})
         # Overwriting would silently replace something they sent earlier and may still be
         # talking about.
         assert (workspace_root / "inbox" / "budget.xlsx").read_bytes() == b"PK\x03\x04 not really a workbook"
@@ -106,13 +106,13 @@ class TestItLandsOnDisk:
     def test_the_same_file_twice_is_not_duplicated(self, workspace_root, monkeypatch):
         _sees_images(monkeypatch, False)
         for _ in range(3):
-            chat._with_attachments({"role": "user", "content": "", "attachments": [spreadsheet()]})
+            prompt._with_attachments({"role": "user", "content": "", "attachments": [spreadsheet()]})
         assert sorted(p.name for p in (workspace_root / "inbox").iterdir()) == ["budget.xlsx"]
 
     def test_a_name_cannot_escape_the_folder(self, workspace_root, monkeypatch):
         _sees_images(monkeypatch, False)
         evil = {**spreadsheet(), "name": "../../.zshrc"}
-        chat._with_attachments({"role": "user", "content": "", "attachments": [evil]})
+        prompt._with_attachments({"role": "user", "content": "", "attachments": [evil]})
         assert not (workspace_root.parent.parent / ".zshrc").exists()
         assert list((workspace_root / "inbox").iterdir()), "it should still have saved something"
 
@@ -120,7 +120,7 @@ class TestItLandsOnDisk:
 class TestWhatTheModelIsShown:
     def test_an_image_is_inlined_when_the_model_has_vision(self, monkeypatch):
         _sees_images(monkeypatch, True)
-        out = chat._with_attachments({"role": "user", "content": "what is this", "attachments": [image()]})
+        out = prompt._with_attachments({"role": "user", "content": "what is this", "attachments": [image()]})
         parts = out["content"]
         assert isinstance(parts, list)
         assert [p["type"] for p in parts] == ["text", "image_url"]
@@ -128,7 +128,7 @@ class TestWhatTheModelIsShown:
 
     def test_it_is_not_inlined_when_the_model_cannot_see(self, monkeypatch):
         _sees_images(monkeypatch, False)
-        out = chat._with_attachments({"role": "user", "content": "what is this", "attachments": [image()]})
+        out = prompt._with_attachments({"role": "user", "content": "what is this", "attachments": [image()]})
         # A string, not parts: sending image_url to a text-only model is either dropped
         # silently or a 400, and both are worse than telling him where the file is.
         assert isinstance(out["content"], str)
@@ -136,19 +136,19 @@ class TestWhatTheModelIsShown:
 
     def test_and_he_is_told_why_he_cannot_see_it(self, monkeypatch):
         _sees_images(monkeypatch, False)
-        out = chat._with_attachments({"role": "user", "content": "", "attachments": [image()]})
+        out = prompt._with_attachments({"role": "user", "content": "", "attachments": [image()]})
         # Otherwise he describes a picture he was never shown, which is the worst outcome
         # available here.
         assert "cannot be shown images" in out["content"]
 
     def test_a_spreadsheet_is_never_inlined(self, monkeypatch):
         _sees_images(monkeypatch, True)
-        out = chat._with_attachments({"role": "user", "content": "", "attachments": [spreadsheet()]})
+        out = prompt._with_attachments({"role": "user", "content": "", "attachments": [spreadsheet()]})
         assert isinstance(out["content"], str), "a workbook was sent as an image"
 
     def test_a_mixed_message_does_both(self, workspace_root, monkeypatch):
         _sees_images(monkeypatch, True)
-        out = chat._with_attachments(
+        out = prompt._with_attachments(
             {"role": "user", "content": "these two", "attachments": [image(), spreadsheet()]}
         )
         parts = out["content"]
@@ -158,13 +158,13 @@ class TestWhatTheModelIsShown:
 
     def test_a_message_with_no_attachments_is_untouched(self, monkeypatch):
         _sees_images(monkeypatch, True)
-        out = chat._with_attachments({"role": "user", "content": "just talking"})
+        out = prompt._with_attachments({"role": "user", "content": "just talking"})
         assert out == {"role": "user", "content": "just talking"}
 
     def test_a_save_that_fails_does_not_lose_the_turn(self, monkeypatch):
         _sees_images(monkeypatch, False)
         broken = {"kind": "file", "name": "x.bin", "mediaType": "application/octet-stream", "data": ""}
-        out = chat._with_attachments({"role": "user", "content": "here", "attachments": [broken]})
+        out = prompt._with_attachments({"role": "user", "content": "here", "attachments": [broken]})
         # Their words still reach him, and the failure is named rather than swallowed.
         assert "here" in out["content"]
         assert "could not be saved" in out["content"]

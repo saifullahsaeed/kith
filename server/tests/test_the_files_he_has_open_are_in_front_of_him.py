@@ -15,11 +15,11 @@ from __future__ import annotations
 import pytest
 
 from kith import tools
-from kith.api.routes.chat import _build_messages
 from kith.config import default_config
 from kith.infra import workspace
 from kith.kernel import session_context
 from kith.services import touched
+from kith.services.turn.prompt import _build_messages
 
 
 @pytest.fixture
