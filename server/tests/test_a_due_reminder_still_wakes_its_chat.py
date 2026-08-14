@@ -14,15 +14,21 @@ from kith.infra.db import repositories as repo
 from kith.services import conversations, scheduler
 
 
+def _resume(conversation_id: str, trigger: str) -> None:
+    """The turn a due reminder would run. Injected now rather than imported: `fire_due` is
+    handed how to wake a conversation, so a test that only cares *which* one was woken
+    supplies a no-op instead of stubbing a route's private functions."""
+
+
 class TestWhatIsDueWakesItsOwnChat:
     def test_a_due_reminder_continues_that_conversation(self, db: Path, monkeypatch):
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         woken: list[str] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes: woken.append(cid))
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: woken.append(cid))
         conv = conversations.start(db, "hi")["id"]
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "check it", conversation_id=conv)
 
-        scheduler.fire_due("2030-01-01T00:00:00+00:00")
+        scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
 
         assert woken == [conv]
 
@@ -31,10 +37,10 @@ class TestWhatIsDueWakesItsOwnChat:
         would eventually pick it up on a generic step; there is no generic step now."""
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         woken: list[str] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes: woken.append(cid))
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: woken.append(cid))
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "no chat")
 
-        scheduler.fire_due("2030-01-01T00:00:00+00:00")
+        scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
 
         assert woken == []
 
@@ -42,22 +48,22 @@ class TestWhatIsDueWakesItsOwnChat:
         """Not two replies talking past each other — one turn, told about both."""
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         seen: list[tuple[str, int]] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes: seen.append((cid, len(notes))))
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: seen.append((cid, len(notes))))
         conv = conversations.start(db, "hi")["id"]
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "first", conversation_id=conv)
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "second", conversation_id=conv)
 
-        scheduler.fire_due("2030-01-01T00:00:00+00:00")
+        scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
 
         assert seen == [(conv, 2)]
 
     def test_nothing_due_wakes_nobody(self, db: Path, monkeypatch):
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         woken: list[str] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes: woken.append(cid))
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: woken.append(cid))
         conversations.start(db, "hi")
 
-        scheduler.fire_due("2030-01-01T00:00:00+00:00")
+        scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
 
         assert woken == []
 
@@ -65,11 +71,11 @@ class TestWhatIsDueWakesItsOwnChat:
         """Fires once, whether or not the continuation worked. One that keeps failing is a
         bug to find in the traceback, not a reason to retry it forever."""
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes: None)
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: None)
         conv = conversations.start(db, "hi")["id"]
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "check it", conversation_id=conv)
 
-        scheduler.fire_due("2030-01-01T00:00:00+00:00")
+        scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
 
         assert repo.reminders.due_reminders(db, "2030-01-01T00:00:00+00:00") == []
 
@@ -78,7 +84,7 @@ class TestWhatIsDueWakesItsOwnChat:
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         reached: list[str] = []
 
-        def explode(cid, notes):
+        def explode(cid, notes, resume):
             reached.append(cid)
             raise RuntimeError("provider is down")
 
@@ -88,7 +94,7 @@ class TestWhatIsDueWakesItsOwnChat:
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "a", conversation_id=first)
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "b", conversation_id=second)
 
-        scheduler.fire_due("2030-01-01T00:00:00+00:00")
+        scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
 
         assert sorted(reached) == sorted([first, second])
 

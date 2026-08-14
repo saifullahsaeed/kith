@@ -16,6 +16,7 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
+from kith.domain.tooling import ToolHost
 from kith.infra import permissions
 from kith.services import custom_tools, touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
@@ -40,8 +41,9 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas
 from kith.tools.semantics import NEEDS_A_LANGUAGE_SERVER
+from kith.tools.semantics import available as _language_server_available
 
-__all__ = ["all_tools", "get", "names", "run_tool", "tool_schemas"]
+__all__ = ["all_tools", "get", "host", "names", "run_tool", "tool_schemas"]
 
 
 def tool_schemas(
@@ -170,3 +172,23 @@ def _hint(name: str, agent_db_path: Path) -> str:
     if not near:
         return " Use one of the tools you were given."
     return f" Did you mean: {', '.join(near)}?"
+
+
+def host(agent_db_path: Path, *, language_server: bool | None = None) -> ToolHost:
+    """The tool layer as the loop needs it, with the per-turn answers already bound.
+
+    `agent_db_path` and `language_server` are resolved once here rather than every round, for
+    the reason `tool_schemas` documents at length: both are inputs to a block that is part of
+    the cached prompt prefix, and one that changed mid-turn would discard the whole cache.
+    Resolving them at the edge of the turn is what makes that structural instead of remembered.
+
+    `language_server=None` means "ask" — a handful of `stat` calls, once. Pass a bool to skip
+    even that, which is what a test with no language server on the machine wants.
+    """
+    available = language_server if language_server is not None else _language_server_available()
+    return ToolHost(
+        schemas=lambda only=None, mcp=None: tool_schemas(
+            agent_db_path, only=only, mcp=mcp, language_server=available
+        ),
+        run=lambda name, arguments, allow=None: run_tool(name, arguments, agent_db_path, allow=allow),
+    )

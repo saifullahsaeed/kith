@@ -4,7 +4,7 @@ This is a test about the tests, and it earns its place because the mistake it gu
 merely slow — it pointed a live loop at the real database.
 
 It was written for the autonomy loop, and the loop is gone. The hazard is not. It belonged to
-*having a timer at all* rather than to what the timer did: `scheduler.start()` runs a daemon
+*having a timer at all* rather than to what the timer did: `scheduler.start(lambda cid, trigger: None)` runs a daemon
 thread that wakes every thirty seconds for the rest of the process, reads `AGENT_DB_PATH` out
 of its module, and can reach `stream_agent` when something is due. A thread started in one
 test would go on firing through the next, against whatever database that one had patched in.
@@ -32,8 +32,8 @@ from kith.services import scheduler
 class TestNothingStartsATimer:
     def test_start_is_stubbed_by_the_autouse_fixture(self):
         """If this ever fails, the fixture has been renamed or dropped and every test in the
-        suite is one `scheduler.start()` away from a live timer on the real database."""
-        scheduler.start()
+        suite is one `scheduler.start(lambda cid, trigger: None)` away from a live timer on the real database."""
+        scheduler.start(lambda cid, trigger: None)
         assert scheduler._thread is None
 
     def test_importing_the_module_starts_nothing(self):

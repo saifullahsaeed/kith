@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from kith import tools
 from kith.config import default_config
 from kith.services import agent_loop, tuning
 
@@ -48,7 +49,11 @@ class TestARetryableFailureIsRetried:
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=3))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=3
+            )
+        )
 
         assert len(calls) == 2, "the round should have been attempted twice"
         assert not [e for e in events if e["type"] == "error"], "a retried round is not an error"
@@ -68,7 +73,11 @@ class TestARetryableFailureIsRetried:
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=3))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=3
+            )
+        )
 
         assert len(calls) == 2, f"{message!r} should have been retried"
 
@@ -79,7 +88,11 @@ class TestARetryableFailureIsRetried:
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda s: waits.append(s))
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=3))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=3
+            )
+        )
 
         assert waits == sorted(waits) and len(waits) >= 2, f"should back off, waited {waits}"
         assert waits[1] > waits[0], "each wait should be longer than the last"
@@ -113,7 +126,11 @@ class TestWhatIsNotWorthRetrying:
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=3))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=3
+            )
+        )
 
         repeats = [one for one in sent[1:] if one == sent[0]]
         assert not repeats, f"{message!r} was re-sent unchanged: {sent}"
@@ -136,7 +153,11 @@ class TestWhatIsNotWorthRetrying:
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=6))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=6
+            )
+        )
 
         assert calls, "the round ran"
         # It may go on to land, but it must not have re-sent the same round.
@@ -159,7 +180,11 @@ class TestGivingUpMeansLandingNotDying:
         monkeypatch.setattr(agent_loop, "_stream_once", always_fails)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=8
+            )
+        )
 
         assert len(calls) > 3, "it gave up entirely instead of landing"
         assert not [e for e in events if e["type"] == "error"], (
@@ -176,7 +201,11 @@ class TestGivingUpMeansLandingNotDying:
         monkeypatch.setattr(agent_loop, "_stream_once", always_fails)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=8
+            )
+        )
 
         assert [e for e in events if e["type"] == "error"], "it must surface the failure eventually"
 
@@ -216,7 +245,11 @@ class TestNothingToLandOnWhenTheNetworkIsDown:
         monkeypatch.setattr(agent_loop, "_stream_once", unreachable)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=8
+            )
+        )
 
         assert len(calls) == 3, f"three attempts and no landing round, got {len(calls)}"
         assert [e for e in events if e["type"] == "error"], "it must still surface the failure"
@@ -232,7 +265,11 @@ class TestNothingToLandOnWhenTheNetworkIsDown:
         monkeypatch.setattr(agent_loop, "_stream_once", flaky)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=8
+            )
+        )
 
         assert len(calls) > 3, "a 502 is still worth landing after"
 
@@ -252,7 +289,11 @@ class TestTheErrorSaysWhatWasTried:
         monkeypatch.setattr(agent_loop, "_stream_once", unreachable)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=8
+            )
+        )
 
         errors = [e for e in events if e["type"] == "error"]
         assert errors, "it must surface the failure"
@@ -273,7 +314,11 @@ class TestTheErrorSaysWhatWasTried:
         monkeypatch.setattr(agent_loop, "_stream_once", refused)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=8
+            )
+        )
 
         errors = [e for e in events if e["type"] == "error"]
         assert errors and "tried 2 times" in errors[0]["message"], errors[0]["message"]
@@ -291,7 +336,11 @@ class TestTheAttemptNumberCountsUp:
         monkeypatch.setattr(agent_loop, "_stream_once", flaky)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=8))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=8
+            )
+        )
 
         attempts = [e["attempt"] for e in events if e["type"] == "retrying"]
         assert attempts == sorted(attempts), f"the count went backwards: {attempts}"

@@ -98,13 +98,6 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:
 #: Each line is a tranche's worth of work, in the order they are being done:
 #:
-#: * `services -> tools` is now three, and all three are the same thing: the loop and the
-#:   history folder want `tool_schemas`, so they must be handed a tool host rather than
-#:   importing the registry. That is the loop decomposition, not a move.
-#: * `services -> api` is `scheduler` importing `_build_messages`, `_Recorder` and `_turn` —
-#:   three *private* functions — out of `api/routes/chat.py`. Not a slip: a reminder firing
-#:   runs the same turn a typed message does, so that machinery was never route-shaped. It
-#:   retires when the turn moves out of the route, not before.
 #: * `infra <-> llm` are the two peer edges, and they were invisible until `PEERS` existed:
 #:   the rank rule only ever fires downward-to-upward, so two packages declared equal could
 #:   import each other freely while the docstring said they must not. `websearch` reaches for
@@ -112,7 +105,8 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
 #:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far, 38 -> 4:
+#: Struck off, 38 -> 0. The list below is the record of how, kept because each entry is a
+#: shape rather than a one-off — the next upward import will be one of these again:
 #:
 #: * `settings -> services` (1), which was `describe()` fetching the tunables for the
 #:   startup log. The caller joins the two halves now.
@@ -165,10 +159,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `agent_loop._install_session_id`. Every cloud request in a turn is threaded — the fold,
 #:   the summariser and the forced final answer included, because letting those default would
 #:   have quietly stopped honouring a pinned provider on three paths.
-ALLOWED: dict[tuple[str, str], int] = {
-    ("services", "tools"): 3,
-    ("services", "api"): 1,
-}
+ALLOWED: dict[tuple[str, str], int] = {}
 
 
 def _package(module: str) -> str:

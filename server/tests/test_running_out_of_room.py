@@ -24,9 +24,22 @@ from dataclasses import replace
 
 import pytest
 
+from kith import tools
+from kith.domain.tooling import ToolHost
 from kith.llm import budget
 from kith.llm.budget import ContextBudget, conversation_chars, message_chars
 from kith.services.agent_loop import _DROPPED_NOTE, _drop_oldest_exchange
+
+
+def replace_host(db, run):
+    """A host whose `run` is ours and whose `schemas` is the real one.
+
+    The loop is handed its tool layer now, so a test that wants a giant tool result supplies
+    one instead of reaching into `agent_loop.tools` — an attribute that no longer exists,
+    because the loop importing the registry was the last `services -> tools` edge.
+    """
+    real = tools.host(db, language_server=False)
+    return ToolHost(schemas=real.schemas, run=run)
 
 
 def exchange(call_id: str, size: int = 100) -> list[dict]:
@@ -287,15 +300,22 @@ class TestTheLoopActuallyUsesIt:
             )
 
         monkeypatch.setattr(agent_loop, "_stream_once", fake_stream)
-        monkeypatch.setattr(
-            agent_loop.tools,
-            "run_tool",
-            lambda *a, **k: {"ok": True, "result": "y" * 40_000},
-        )
+        # Through the host the loop is handed, not through a module attribute on the loop.
+        # `agent_loop` no longer imports the registry — that was the last `services -> tools`
+        # edge — so there is nothing on it to patch.
         from kith.config import default_config
 
         config = replace(default_config(), context_window=window, num_predict=2_000)
-        list(agent_loop.stream_agent([{"role": "user", "content": "go"}], config, "", db, max_rounds=rounds))
+        list(
+            agent_loop.stream_agent(
+                [{"role": "user", "content": "go"}],
+                config,
+                "",
+                db,
+                replace_host(db, lambda *a, **k: {"ok": True, "result": "y" * 40_000}),
+                max_rounds=rounds,
+            )
+        )
         return seen
 
     def test_a_roomy_window_is_never_trimmed(self, db, monkeypatch):
@@ -364,16 +384,21 @@ class TestTheMeterMatchesWhatWasActuallySent:
             )
 
         monkeypatch.setattr(agent_loop, "_stream_once", fake_stream)
-        monkeypatch.setattr(
-            agent_loop.tools,
-            "run_tool",
-            lambda *a, **k: {"ok": True, "result": "y" * 40_000},
-        )
+        # Through the host the loop is handed, not through a module attribute on the loop.
+        # `agent_loop` no longer imports the registry — that was the last `services -> tools`
+        # edge — so there is nothing on it to patch.
         from kith.config import default_config
 
         config = replace(default_config(), context_window=window, num_predict=2_000)
         events = list(
-            agent_loop.stream_agent([{"role": "user", "content": "go"}], config, "", db, max_rounds=rounds)
+            agent_loop.stream_agent(
+                [{"role": "user", "content": "go"}],
+                config,
+                "",
+                db,
+                replace_host(db, lambda *a, **k: {"ok": True, "result": "y" * 40_000}),
+                max_rounds=rounds,
+            )
         )
         contexts = [e["context"] for e in events if e.get("type") == "context"]
         return seen, contexts

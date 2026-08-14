@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kith import tools
 from kith.config import default_config
 from kith.services import agent_loop
 
@@ -55,7 +56,11 @@ class TestATransientFailureKeepsTheTurnWhole:
         monkeypatch.setattr(agent_loop, "_stream_once", flaky)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=40))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=40
+            )
+        )
 
         after = offered[_KILLS_A_ROUND:]
         assert after, "the turn should have gone again after the dead round"
@@ -81,7 +86,11 @@ class TestATransientFailureKeepsTheTurnWhole:
         monkeypatch.setattr(agent_loop, "_stream_once", flaky)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=40))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=40
+            )
+        )
 
         after = sent[_KILLS_A_ROUND:]
         assert after, "the turn should have gone again after the dead round"
@@ -105,7 +114,11 @@ class TestATransientFailureKeepsTheTurnWhole:
         monkeypatch.setattr(agent_loop, "_stream_once", flaky)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=40))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=40
+            )
+        )
 
         assert [e for e in events if e["type"] == "retrying"], "the retry must still be visible"
         assert not [e for e in events if e["type"] == "error"], "a turn that carried on is not errored"
@@ -123,7 +136,11 @@ class TestAnOutageStillLands:
         monkeypatch.setattr(agent_loop, "_stream_once", dead)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        events = list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=40))
+        events = list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=40
+            )
+        )
 
         assert any(agent_loop._LANDING_DIRECTIVE in one for one in sent), "it never tried to land"
         assert [e for e in events if e["type"] == "error"], "it must surface the failure eventually"
@@ -161,7 +178,11 @@ class TestAnOutageStillLands:
         monkeypatch.setattr(agent_loop, "_stream_once", intermittent)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=40))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=40
+            )
+        )
 
         assert not [one for one in sent if agent_loop._LANDING_DIRECTIVE in one], (
             "three separated blips were treated as one outage — the count is not being reset"
@@ -187,7 +208,11 @@ class TestWhatTheServerCallsWrongStillLands:
         monkeypatch.setattr(agent_loop, "_stream_once", refused)
         monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
 
-        list(agent_loop._run_turn([], default_config(), "host", db, max_rounds=40))
+        list(
+            agent_loop._run_turn(
+                [], default_config(), "host", db, tools.host(db, language_server=False), max_rounds=40
+            )
+        )
 
         assert len(sent) >= 2
         assert agent_loop._LANDING_DIRECTIVE in sent[1], "a 400 is not a blip to carry on from"

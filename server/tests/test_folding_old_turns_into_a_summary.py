@@ -227,7 +227,7 @@ class TestTheBudgetScalesToTheRealWindow:
 
         tuning.apply({"history_max_chars": 9000})
 
-        assert history._budget_chars(self._cfg(0), None) == 9000
+        assert history._budget_chars(self._cfg(0), 0) == 9000
 
     def test_a_known_window_ignores_the_flat_setting(self, db):
         from kith.services import tuning
@@ -235,11 +235,11 @@ class TestTheBudgetScalesToTheRealWindow:
         tuning.apply({"history_max_chars": 5_000_000})  # would swamp a small window if it won
 
         # ~1,000 tokens * 3.7 chars/token * 80% share.
-        assert history._budget_chars(self._cfg(1_000), None) == pytest.approx(2_960, abs=1)
+        assert history._budget_chars(self._cfg(1_000), 0) == pytest.approx(2_960, abs=1)
 
     def test_a_bigger_window_buys_a_bigger_budget(self, db):
-        small = history._budget_chars(self._cfg(1_000), None)
-        big = history._budget_chars(self._cfg(1_000_000), None)
+        small = history._budget_chars(self._cfg(1_000), 0)
+        big = history._budget_chars(self._cfg(1_000_000), 0)
 
         assert big > small * 100
 
@@ -247,7 +247,7 @@ class TestTheBudgetScalesToTheRealWindow:
         bare = self._cfg(10_000)
         with_persona = replace(bare, system="x" * 2_000)
 
-        assert history._budget_chars(with_persona, None) == history._budget_chars(bare, None) - 2_000
+        assert history._budget_chars(with_persona, 0) == history._budget_chars(bare, 0) - 2_000
 
     def test_a_tiny_window_folds_a_conversation_the_flat_default_would_have_left_alone(self, db, monkeypatch):
         # A conversation well under the old 120,000-char default, on a model whose real window

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from flask import Response, jsonify
 
+from kith import tools
 from kith.api.blueprint import api
 from kith.config import (
     default_config,
@@ -214,7 +215,7 @@ def fold_now(conversation_id: str):
     # nothing changed.
     was = ledger.take(messages, chars_per_token=1.0)
     folded, brief = history.fold(
-        messages, default_config(), conversation_id, ollama_host(), AGENT_DB_PATH, force=True
+        messages, default_config(), conversation_id, ollama_host(), _tool_block_chars(), force=True
     )
     if brief is None:
         # Two different answers, and telling them apart is the point. `fold` declines either
@@ -361,6 +362,39 @@ def attach_turn(conversation_id: str):
     )
 
 
+def continue_conversation(conversation_id: str, trigger: str) -> None:
+    """Run one turn in `conversation_id`, started by something other than a typed message.
+
+    Everything downstream of the trigger is the machinery a real chat turn uses, which is the
+    whole point: the result becomes an actual message in the transcript rather than a line in
+    a live feed that is gone the moment nobody is looking at it.
+
+    Public, and here rather than in `services/scheduler.py`, which used to reach in and import
+    `_build_messages`, `_Recorder` and `_turn` — three *private* functions — out of this
+    module. That was the last upward import in the tree. A reminder firing is not a scheduling
+    concern that happens to need a turn; it is a turn, started differently, and the turn lives
+    here until it moves out of the route entirely.
+    """
+    config = default_config()
+    history = [*conversations.full_messages(conversation_id), {"role": "user", "content": trigger}]
+    messages = _build_messages(history, config, conversation_id)
+    conversations.record(AGENT_DB_PATH, conversation_id, "user", trigger)
+
+    recorder = _Recorder(conversation_id)
+    for _ in _turn(recorder, messages, config, conversation_id, opening=trigger):
+        pass  # driving the generator is the point — nothing is streaming this anywhere
+
+
+def _tool_block_chars() -> int:
+    """How many characters the tool declarations take in a request.
+
+    Measured here because this is an adapter and `kith.tools` is one too — the fold needs the
+    number, not the registry, and taking a database path in order to go and total the schemas
+    itself is what made `services/history.py` import the adapter layer.
+    """
+    return sum(len(json.dumps(schema)) for schema in tools.tool_schemas(AGENT_DB_PATH))
+
+
 def _conversation_chars(messages) -> int:
     """How much prose a message list carries — the number the fold is deciding about."""
     return sum(len(str(m.get("content") or "")) for m in messages)
@@ -396,7 +430,7 @@ def _build_messages(messages, config, conversation_id: str = "", _folded: dict |
     # is persisted so a fold is not re-run every turn. Below the size threshold this returns the
     # history untouched, so a short conversation is byte-for-byte what it was.
     folded, fresh = history.fold(
-        messages, config, conversation_id, ollama_host(), agent_db_path=AGENT_DB_PATH
+        messages, config, conversation_id, ollama_host(), tool_chars=_tool_block_chars()
     )
     if fresh is not None and conversation_id:
         conversations.record_summary(conversation_id, fresh["through"], fresh["text"])
@@ -1107,6 +1141,13 @@ def _turn(
             config,
             ollama_host(),
             AGENT_DB_PATH,
+            # The loop is handed what it needs from the tool layer rather than importing it.
+            # `kith.tools` is an adapter like this module, and an adapter is the right place to
+            # reach for another one; a service reaching down for it was the arrow pointing the
+            # wrong way. Built once per turn, which is also where the language-server question
+            # and the database path get answered once — both are inputs to the cached prompt
+            # prefix and must not change under a turn.
+            tools.host(AGENT_DB_PATH),
             conversation_id=conversation_id,
             # Rounds stay on the declared knob (max_rounds, 40). A conversation wants real
             # room: you are here, so a long turn is one you can watch and stop.

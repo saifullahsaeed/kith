@@ -15,16 +15,16 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
 
-from kith import tools
 from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
+from kith.domain.tooling import ToolHost
 from kith.llm import caching, ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
 from kith.services import compaction, tuning
@@ -882,6 +882,7 @@ def stream_agent(
     config: Config,
     host: str,
     agent_db_path: Path,
+    tool_host: ToolHost,
     max_rounds: int | None = None,
     allow: set[str] | None = None,
     conversation_id: str = "",
@@ -905,6 +906,7 @@ def stream_agent(
             config,
             host,
             agent_db_path,
+            tool_host,
             max_rounds=max_rounds,
             allow=allow,
             conversation_id=conversation_id,
@@ -916,6 +918,7 @@ def _run_turn(
     config: Config,
     host: str,
     agent_db_path: Path,
+    tool_host: ToolHost,
     max_rounds: int | None = None,
     allow: set[str] | None = None,
     conversation_id: str = "",
@@ -985,18 +988,6 @@ def _run_turn(
         # Accounting. A ledger that cannot separate his own tools from the built-ins is still
         # a useful ledger, and must not be able to take down the turn.
         custom_names = frozenset()
-    # Whether the four semantic tools are worth their schema, resolved once for the same
-    # reason and with the same consequence if it changed mid-turn. A handful of `stat` calls,
-    # not a server start — see `manager.any_available`.
-    from kith.tools.semantics import available as language_server_available
-
-    has_language_server = language_server_available()
-    # How much room is left, learned from what the provider charges each round.
-    #
-    # `num_predict` is -1 on a default install — the sentinel for "no limit" — so it cannot
-    # be used as the answer reserve directly. Falling back to the answer cap gives a real
-    # number, and a real number is the whole point: the threshold is absolute, because a
-    # percentage of the window is wrong at both ends.
     wanted_out = config.num_predict if config.num_predict > 0 else tuning.value("max_answer_tokens")
     room = ContextBudget(window=config.context_window, reserve=int(wanted_out))
     # The tool list as the last round actually saw it, kept for the forced final answer.
@@ -1021,9 +1012,7 @@ def _run_turn(
         # tool block. The old ordering reduced first and counted `content` lengths only, which
         # missed 11,000 tokens of schemas — the single largest fixed cost in the prompt — and
         # therefore decided how tight the room was from roughly half the evidence.
-        schemas = tools.tool_schemas(
-            agent_db_path, only=allow, mcp=mcp_tools, language_server=has_language_server
-        )
+        schemas = tool_host.schemas(only=allow, mcp=mcp_tools)
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:
@@ -1223,7 +1212,7 @@ def _run_turn(
                 }
 
             if len(batch) == 1:
-                results = [_run(batch[0], agent_db_path, permitted)]
+                results = [_run(batch[0], tool_host.run, permitted)]
             else:
                 # He asks for six searches at once and each takes seconds; run them
                 # together. Order of the *results* is still the order he asked in, so
@@ -1234,7 +1223,7 @@ def _run_turn(
                     # the gate is the one value in here that must never be read from the
                     # wrong round.
                     results = list(
-                        pool.map(lambda step, allow=permitted: _run(step, agent_db_path, allow), batch)
+                        pool.map(lambda step, allow=permitted: _run(step, tool_host.run, allow), batch)
                     )
 
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
@@ -1318,13 +1307,13 @@ def _without_image(result: Any) -> Any:
 _SHOWN = "(shown to you as a picture below)"
 
 
-def _run(step: dict, agent_db_path: Path, allow: set[str] | None = None) -> Any:
+def _run(step: dict, run: Callable[..., Any], allow: set[str] | None = None) -> Any:
     if step["repeat"]:
         return {
             "note": "You've already made this exact call twice and it didn't move things "
             "forward. Stop repeating it — take a different approach, or give your final answer."
         }
-    return tools.run_tool(step["name"], step["arguments"], agent_db_path, allow=allow)
+    return run(step["name"], step["arguments"], allow)
 
 
 def _batches(planned: list[dict]) -> Iterator[list[dict]]:

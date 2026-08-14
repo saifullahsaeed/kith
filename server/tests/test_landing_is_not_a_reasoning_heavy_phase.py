@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+from kith import tools
 from kith.config import default_config
 from kith.services import agent_loop, tuning
 
@@ -37,7 +38,11 @@ def _drive(monkeypatch, db: Path, config, max_rounds: int) -> list[str]:
             yield {"type": "turn", "content": "done", "tool_calls": [], "stats": {}}
 
     monkeypatch.setattr(agent_loop, "_stream_once", fake_stream)
-    list(agent_loop._run_turn([], config, "host", db, max_rounds=max_rounds))
+    list(
+        agent_loop._run_turn(
+            [], config, "host", db, tools.host(db, language_server=False), max_rounds=max_rounds
+        )
+    )
     return seen
 
 

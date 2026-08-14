@@ -13,13 +13,20 @@ from __future__ import annotations
 
 import threading
 import traceback
+from collections.abc import Callable
 
-from kith.config import default_config
 from kith.infra.db import repositories as repo
 from kith.kernel import clock, session_context
-from kith.services import conversations, local_time
+from kith.services import local_time
 from kith.services.activity import feed
 from kith.settings import AGENT_DB_PATH
+
+#: How to wake a conversation: given its id and an opening line, run one turn in it.
+#:
+#: A parameter rather than an import. Continuing a conversation is the chat route's job and
+#: this is a service; reaching up for it is the arrow this exists to stop. `kith/app.py`, which
+#: is allowed to know about both, supplies the real one at startup.
+Resume = Callable[[str, str], None]
 
 #: How often to ask. Reminders are minute-grained at best, so this is comfortably finer than
 #: anything anyone can set, and cheap: two indexed reads against SQLite.
@@ -29,7 +36,7 @@ _thread: threading.Thread | None = None
 _stop = threading.Event()
 
 
-def fire_due(now_iso: str) -> list[str]:
+def fire_due(now_iso: str, resume: Resume) -> list[str]:
     """Wake every conversation with something due. Returns the ids woken, in order.
 
     Grouped, so two reminders due for the same chat at once become one continuation with both
@@ -51,7 +58,7 @@ def fire_due(now_iso: str) -> list[str]:
         woken.append(conversation_id)
         with session_context.working_in(conversation_id), session_context.nobody_watching():
             try:
-                _continue(conversation_id, notes)
+                _continue(conversation_id, notes, resume)
             except Exception:
                 # A reminder that fails to report back must not take the rest down — every
                 # other conversation waiting on one still gets its turn.
@@ -70,30 +77,23 @@ def fire_due(now_iso: str) -> list[str]:
     return woken
 
 
-def _continue(conversation_id: str, notes: list[str]) -> None:
-    """Run one turn in `conversation_id`, triggered by a reminder instead of a message typed
-    in — but everything downstream of that is the same machinery a real chat turn uses. That
-    is the whole point: the result becomes an actual message in the transcript, not a line in
-    the live feed that is gone the moment nobody is looking at it.
-    """
-    from kith.api.routes.chat import _build_messages, _Recorder, _turn
+def _continue(conversation_id: str, notes: list[str], resume: Resume) -> None:
+    """Wake a conversation because one of its reminders came due.
 
-    config = default_config()
+    The prose is this module's — it is what a reminder firing should sound like. Running the
+    turn is not, and `resume` is handed in for that: this used to import `_build_messages`,
+    `_Recorder` and `_turn` out of `api/routes/chat.py`, a service reaching up into an
+    adapter for three private functions, and the last upward import in the tree.
+    """
     trigger = (
         "One of your reminders just fired. Check on it and tell them what changed — "
         "briefly, the way you would mid-conversation, not a report — or that nothing "
         "has, if that's the honest answer.\n\n" + "\n".join(f"- {note}" for note in notes)
     )
-    history = [*conversations.full_messages(conversation_id), {"role": "user", "content": trigger}]
-    messages = _build_messages(history, config, conversation_id)
-    conversations.record(AGENT_DB_PATH, conversation_id, "user", trigger)
-
-    recorder = _Recorder(conversation_id)
-    for _ in _turn(recorder, messages, config, conversation_id, opening=trigger):
-        pass  # driving the generator is the point — nothing is streaming this anywhere
+    resume(conversation_id, trigger)
 
 
-def start() -> None:
+def start(resume: Resume) -> None:
     """Begin asking. Called when the app boots, never at import.
 
     Import-time threads are how a test suite ends up with a loop pointed at the real
@@ -108,7 +108,7 @@ def start() -> None:
     def run() -> None:
         while not _stop.wait(_EVERY_SECONDS):
             try:
-                fire_due(clock.now_iso())
+                fire_due(clock.now_iso(), resume)
             except Exception:
                 traceback.print_exc()
             # A background task that has finished is the same question this thread already asks —

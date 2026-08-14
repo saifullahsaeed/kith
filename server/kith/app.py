@@ -85,7 +85,11 @@ def _start_background() -> None:
         return
     # The one thing that still runs unasked: checking whether a reminder or a schedule has
     # come due. Started here rather than at import, so a test suite never inherits it.
-    scheduler.start()
+    # The scheduler is told how to wake a conversation rather than importing the way. This is
+    # the composition root, which is allowed to know about both halves; the service is not.
+    from kith.api.routes.chat import continue_conversation
+
+    scheduler.start(continue_conversation)
 
 
 def create_app() -> APIFlask:

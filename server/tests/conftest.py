@@ -146,7 +146,7 @@ def no_stray_background_threads(monkeypatch):
     """
     from kith.services import scheduler
 
-    monkeypatch.setattr(scheduler, "start", lambda: None)
+    monkeypatch.setattr(scheduler, "start", lambda resume: None)
     yield
 
 

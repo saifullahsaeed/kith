@@ -22,10 +22,8 @@ brief; see ``services.history_context`` / ``routes.chat``.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from kith.llm.budget import message_chars
@@ -89,7 +87,7 @@ def _fold_input_ceiling(window: int) -> float:
     return window * _CHARS_PER_TOKEN * 0.5
 
 
-def _budget_chars(config, agent_db_path: Path | None) -> float:
+def _budget_chars(config, tool_chars: int = 0) -> float:
     """How many characters of conversation prose may accumulate before folding.
 
     Scaled to the model's real window when one is known. The persona and the tool schemas
@@ -97,6 +95,11 @@ def _budget_chars(config, agent_db_path: Path | None) -> float:
     counting only the conversation and ignoring everything else in the same request is the
     exact mistake `llm/ledger`'s docstring calls out (schemas alone have run to ~11k tokens on
     a full toolset). What is left over is the conversation's actual slice of the 80%.
+
+    `tool_chars` is how big that tool block is, measured by the caller. It used to be an
+    `agent_db_path` this function took *solely* to reach the tool registry and total the
+    schemas itself — which made the module that folds a conversation import the adapter layer.
+    A number is what it wanted; the path was how it went to get one.
 
     Falls back to the flat `history_max_chars` knob when the window is unknown (a local model,
     or one adopted before its window was recorded) — an unknown window means there is no share
@@ -109,13 +112,9 @@ def _budget_chars(config, agent_db_path: Path | None) -> float:
 
         return float(tuning.value("history_max_chars"))
 
-    persona = (config.system or "").strip()
-    overhead = len(persona)
-    if agent_db_path is not None:
-        from kith import tools
-
-        overhead += sum(len(json.dumps(schema)) for schema in tools.tool_schemas(agent_db_path))
-    return max(0.0, window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE - overhead)
+    return max(
+        0.0, window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE - len((config.system or "").strip()) - tool_chars
+    )
 
 
 def fold(
@@ -123,7 +122,7 @@ def fold(
     config,
     conversation_id: str,
     host: str = "",
-    agent_db_path: Path | None = None,
+    tool_chars: int = 0,
     force: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Compact ``history`` using the settings' thresholds and the conversation's stored brief.
@@ -146,7 +145,7 @@ def fold(
     # Asked for, the budget becomes one character: everything but `keep_recent` is old enough to
     # summarise. Nothing else about the fold changes — same summariser, same brief, same
     # accumulation onto the previous one.
-    max_chars = 1 if force else _budget_chars(config, agent_db_path)
+    max_chars = 1 if force else _budget_chars(config, tool_chars)
     keep_recent = int(tuning.value("history_keep_recent"))
     prior = conversations.latest_summary(conversation_id) if conversation_id else {}
     window = int(getattr(config, "context_window", 0) or 0)
