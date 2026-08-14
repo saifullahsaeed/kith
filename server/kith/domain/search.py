@@ -6,7 +6,12 @@ same key he thinks with, so that option only exists when he thinks through OpenR
 Encoding that dependency here, once, is what keeps the UI from offering an option that
 cannot work.
 
-Pure: no network, no database, no config.
+Pure: no network, no database, no config. It owns the *names* a choice is stored under —
+`SEARCH_KIND_KEY`, `SEARCH_URL_KEY` — which is vocabulary rather than storage: knowing what a
+row is called is not reading one. They live here because two packages need them and neither
+should have to ask the other. `services/search_setup.py` writes those rows and
+`infra/websearch.py` reads them, and until now the reader imported the name from the writer,
+one layer up, through a function-body import.
 """
 
 from __future__ import annotations
@@ -26,6 +31,29 @@ class SearchKind(StrEnum):
     OPENROUTER = "openrouter"
     #: No search. He can still read a page you hand him.
     NONE = "none"
+
+
+#: What a search choice is stored under, in the config database and in the environment alike —
+#: the same name in both, so a value means one thing wherever it is read from.
+SEARCH_KIND_KEY = "search_provider"
+SEARCH_URL_KEY = "search_url"
+
+
+def as_kind(raw: object) -> SearchKind | None:
+    """Read a stored or env value as a kind, tolerating the older `searx` spelling.
+
+    Returns None for blank or "auto", which is a real answer rather than a failure: it means
+    "try them in order", and is what an unset preference looks like.
+    """
+    text = str(raw or "").strip().lower()
+    if not text or text == "auto":
+        return None
+    if text == "searx":
+        return SearchKind.SEARXNG
+    try:
+        return SearchKind(text)
+    except ValueError:
+        return None
 
 
 #: Where a SearXNG instance usually lives. Part of what the option *means*, rather

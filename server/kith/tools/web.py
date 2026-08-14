@@ -7,6 +7,7 @@ from pathlib import Path
 from kith.config import default_config
 from kith.infra import websearch
 from kith.infra import workspace as sandbox
+from kith.services import tuning
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -21,7 +22,16 @@ from kith.tools.registry import tool
     required=("query",),
 )
 def web_search(path: Path, args: dict):
-    return websearch.search(args["query"], default_config(), args.get("limit") or 5)
+    # The adapter resolves what the search needs, which is what an adapter is for: `websearch`
+    # talks to providers and should not be reading the settings service to find out which
+    # engine to name.
+    return websearch.search(
+        args["query"],
+        default_config(),
+        args.get("limit") or 5,
+        engine=str(tuning.value("search_engine")),
+        carrier=str(tuning.value("search_model")),
+    )
 
 
 @tool(

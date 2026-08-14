@@ -17,14 +17,16 @@ import requests
 
 from kith import settings
 from kith.domain.connection import Connection
-from kith.domain.search import DEFAULT_SEARX_URL, SearchKind, SearchSetup
+from kith.domain.search import (
+    DEFAULT_SEARX_URL,
+    SEARCH_KIND_KEY,
+    SEARCH_URL_KEY,
+    SearchKind,
+    SearchSetup,
+    as_kind,
+)
 from kith.infra.db import config_store
 from kith.services import tuning
-
-#: Stored under the same names the environment uses, so a value means one thing
-#: wherever it is read from.
-KIND_KEY = "search_provider"
-URL_KEY = "search_url"
 
 #: A search anyone would recognise the results of — a probe should fail because the
 #: instance is broken, never because the query was odd.
@@ -64,10 +66,10 @@ class SearchManager:
         operator who sets ``KITH_SEARCH_PROVIDER`` expects it to win over a database.
         """
         stored = config_store.load_settings(self.config_db)
-        url = str(stored.get(URL_KEY) or "")
+        url = str(stored.get(SEARCH_URL_KEY) or "")
 
-        raw = settings.SEARCH_PROVIDER if settings.SEARCH_PROVIDER != "auto" else stored.get(KIND_KEY)
-        kind = _as_kind(raw)
+        raw = settings.SEARCH_PROVIDER if settings.SEARCH_PROVIDER != "auto" else stored.get(SEARCH_KIND_KEY)
+        kind = as_kind(raw)
         if kind is None:
             # Nothing chosen: prefer the free option when it is there, and fall back
             # to the metered one only if he can actually use it.
@@ -216,19 +218,6 @@ class SearchManager:
         keeps_url = setup.kind is SearchKind.SEARXNG
         config_store.update_settings(
             self.config_db,
-            {KIND_KEY: str(setup.kind), URL_KEY: setup.searx_url if keeps_url else ""},
+            {SEARCH_KIND_KEY: str(setup.kind), SEARCH_URL_KEY: setup.searx_url if keeps_url else ""},
         )
         return setup if keeps_url else SearchSetup(kind=setup.kind)
-
-
-def _as_kind(raw: object) -> SearchKind | None:
-    """Read a stored or env value, tolerating the older `searx` spelling."""
-    text = str(raw or "").strip().lower()
-    if not text or text == "auto":
-        return None
-    if text == "searx":
-        return SearchKind.SEARXNG
-    try:
-        return SearchKind(text)
-    except ValueError:
-        return None

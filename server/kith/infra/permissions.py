@@ -42,6 +42,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
+from kith import settings
+
 #: How each request was answered, by id. Separate from `Request` because that is frozen —
 #: it describes what he wanted, which does not change, and the verdict is a different fact.
 _answered: dict[str, bool] = {}
@@ -154,13 +156,13 @@ def _skills_root() -> str:
     write. The skill told him to run it and the person installed it deliberately; prompting
     there is the gate crying wolf about the feature working correctly.
 
-    Imported lazily and defensively: this module is imported by nearly everything, and a
-    permission check must not fail because a settings lookup did.
+    Defensive, and no longer lazy: this used to call `services.skills.root()` through a
+    function-body import, which was a gate at the bottom of the tree reaching to the top to
+    ask where a folder is. `settings.skills_dir()` answers the same question one rank below
+    everything. The `try` stays — a permission check must not fail because a lookup did.
     """
     try:
-        from kith.services import skills
-
-        return str(skills.root())
+        return str(settings.skills_dir())
     except Exception:
         return ""
 

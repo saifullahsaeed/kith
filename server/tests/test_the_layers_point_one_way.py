@@ -98,8 +98,8 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:
 #: Each line is a tranche's worth of work, in the order they are being done:
 #:
-#: * `infra -> services` and `llm -> services` are `session_context`, `permissions`,
-#:   `changes` and `tuning` — runtime primitives filed as orchestration.
+#: * `llm -> services` is the transport reading six routing knobs and a stickiness id it has
+#:   no business resolving.
 #: * `services -> tools` is now three, and all three are the same thing: the loop and the
 #:   history folder want `tool_schemas`, so they must be handed a tool host rather than
 #:   importing the registry. That is the loop decomposition, not a move.
@@ -114,7 +114,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
 #:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far, 38 -> 11:
+#: Struck off so far, 38 -> 7:
 #:
 #: * `settings -> services` (1), which was `describe()` fetching the tunables for the
 #:   startup log. The caller joins the two halves now.
@@ -152,8 +152,14 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `domain/connection.py` already owned that question and said in its docstring that three
 #:   places had grown their own answer and nothing owned it. The `infra <-> llm` peering is
 #:   retired outright — `websearch` no longer imports the transport for anything.
+#: * `infra -> services` is ZERO. The last three were all the same mistake in different
+#:   clothes: what was being reached for upward was a *value*, not a service. `permissions`
+#:   asked `services.skills` where a folder is (now `settings.skills_dir()`, still a function
+#:   because two fixtures set the variable after import); `websearch` imported the *names* its
+#:   rows are stored under from the module that writes them (now `domain/search.py`, which is
+#:   vocabulary, not storage); and it read two knobs to fill in a payload (now parameters,
+#:   defaulted to the tunables' own defaults, resolved by the adapter).
 ALLOWED: dict[tuple[str, str], int] = {
-    ("infra", "services"): 4,
     ("services", "tools"): 3,
     ("llm", "services"): 2,
     ("services", "api"): 1,

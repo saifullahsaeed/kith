@@ -127,6 +127,26 @@ DEFAULT_PERSONA_DIR = SERVER_ROOT / "persona"
 #: enforced by kith.infra.permissions instead.
 WORKSPACE_DIR = _text("KITH_WORKSPACE")
 
+#: The env var naming the skills folder, and where it resolves to.
+#:
+#: Here rather than in `services/skills.py` because `infra/permissions.py` needs the answer —
+#: it must know whether a path is inside the skills folder before allowing a write — and a
+#: permission check reaching up into a service to find out was the last `infra -> services`
+#: edge that was not really about behaviour at all.
+#:
+#: A function, emphatically not a constant. `root()` read the environment at CALL time and two
+#: fixtures depend on that: they set `KITH_SKILLS_DIR` after this module is imported, which a
+#: constant resolved at import would ignore. It also does no `mkdir` — `skills.root()` still
+#: owns creating the folder, because asking where something is should not make it exist.
+SKILLS_DIR_KEY = "KITH_SKILLS_DIR"
+
+
+def skills_dir() -> Path:
+    """Where skills are installed. Read per call; does not create anything."""
+    configured = _text(SKILLS_DIR_KEY)
+    return Path(configured).expanduser() if configured else DATA_DIR / "skills"
+
+
 #: Replaces the whole persona with one inline prompt. For experiments — it bypasses
 #: the ``persona/`` fragments entirely rather than adding to them.
 SYSTEM_PROMPT_OVERRIDE = _text("KITH_SYSTEM")

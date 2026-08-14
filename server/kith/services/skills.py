@@ -50,7 +50,7 @@ MANIFEST = "SKILL.md"
 #: Where installed skills live. Beside the databases rather than in his workspace: a skill is
 #: part of what he can do, not part of what he has made, and the workspace is a folder
 #: someone may move — which must not take his capabilities with it.
-DIR_KEY = "KITH_SKILLS_DIR"
+DIR_KEY = settings.SKILLS_DIR_KEY
 
 #: Spec limits. Enforced on install so a broken skill is refused at the door with a reason,
 #: rather than silently half-working later.
@@ -134,11 +134,13 @@ class Skill:
 
 
 def root() -> Path:
-    """The skills folder, created if it is not there."""
-    import os
+    """The skills folder, created if it is not there.
 
-    configured = str(os.environ.get(DIR_KEY) or "").strip()
-    place = Path(configured).expanduser() if configured else settings.DATA_DIR / "skills"
+    Where it *is* comes from `settings.skills_dir()`; making it exist is this function's half.
+    The split is because `infra/permissions.py` needs the location and must not reach up here
+    to get it, and because a permission check has no business creating a directory.
+    """
+    place = settings.skills_dir()
     place.mkdir(parents=True, exist_ok=True)
     return place
 

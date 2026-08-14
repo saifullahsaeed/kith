@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import requests
@@ -37,10 +38,9 @@ import requests
 from kith import settings
 from kith.domain import connection
 from kith.domain.chat import Config
-from kith.domain.search import SearchKind
+from kith.domain.search import SEARCH_KIND_KEY, SEARCH_URL_KEY, SearchKind, as_kind
 from kith.infra import workspace as sandbox
 from kith.infra.db import config_store
-from kith.services import tuning
 
 # Exa charges one flat fee for up to ten results and only then bills per extra
 # result, so there is never a reason to ask for more than ten.
@@ -73,7 +73,9 @@ _SEARX_BLOCKED_TTL = 600.0
 _searx_blocked_until = 0.0
 
 
-def search(query: str, config: Config, limit: int = 5) -> list[dict]:
+def search(
+    query: str, config: Config, limit: int = 5, *, engine: str = "exa", carrier: str = ""
+) -> list[dict]:
     """Search the web through the first provider that actually answers.
 
     `config` is passed in rather than resolved here, and that is the only reason this module
@@ -82,18 +84,32 @@ def search(query: str, config: Config, limit: int = 5) -> list[dict]:
     persona with the skill index in order to find out which search provider to try first.
     The caller is `tools/web.py`, an adapter, and resolving a request's parameters is exactly
     what an adapter is for.
+
+    `engine` and `carrier` arrive the same way and for the same reason. They were
+    `tuning.value("search_engine")` and `tuning.value("search_model")`, read from inside the
+    OpenRouter path — which made this file, whose whole job is to talk to search providers,
+    import the settings service to find out which engine to name in a payload. The defaults
+    here are the tunables' own declared defaults ("exa", and blank meaning "whatever he
+    thinks with"), so a caller that passes nothing behaves exactly as before.
     """
     global _searx_blocked_until
 
     limit = max(1, min(int(limit or 5), _MAX_RESULTS))
     misses: list[str] = []
+    # Bound per call rather than at module scope, because two of the three arguments are now
+    # the caller's. `_searx` does not take them and must not be handed them, so the OpenRouter
+    # one is the only entry that closes over anything.
+    providers: dict[str, Callable[[str, int, Config], list[dict]]] = {
+        "searx": _searx,
+        "openrouter": partial(_openrouter, engine=engine, carrier=carrier),
+    }
 
     for name in _order(config):
         if name == "searx" and time.monotonic() < _searx_blocked_until:
             misses.append("searx: skipped (blocked recently)")
             continue
         try:
-            hits = _PROVIDERS[name](query, limit, config)
+            hits = providers[name](query, limit, config)
         except Exception as exc:
             if name == "searx":
                 _searx_blocked_until = time.monotonic() + _SEARX_BLOCKED_TTL
@@ -137,12 +153,11 @@ def _order(config: Config) -> list[str]:
 
 def _chosen(config: Config) -> SearchKind | None:
     """The saved preference, or None when it was left on auto."""
-    from kith.services.search_setup import KIND_KEY, _as_kind
     from kith.settings import CONFIG_DB_PATH
 
     if _PROVIDER and _PROVIDER != "auto":
-        return _as_kind(_PROVIDER)
-    return _as_kind(config_store.load_settings(CONFIG_DB_PATH).get(KIND_KEY))
+        return as_kind(_PROVIDER)
+    return as_kind(config_store.load_settings(CONFIG_DB_PATH).get(SEARCH_KIND_KEY))
 
 
 def _openrouter_ready(config: Config) -> bool:
@@ -196,21 +211,20 @@ def _searx(query: str, limit: int, config: Config) -> list[dict]:
 
 def _searx_url() -> str:
     """The chosen instance, or the configured default."""
-    from kith.services.search_setup import URL_KEY
     from kith.settings import CONFIG_DB_PATH
 
-    stored = str(config_store.load_settings(CONFIG_DB_PATH).get(URL_KEY) or "")
+    stored = str(config_store.load_settings(CONFIG_DB_PATH).get(SEARCH_URL_KEY) or "")
     return (stored or settings.SEARCH_URL).rstrip("/")
 
 
-def _openrouter(query: str, limit: int, config: Config) -> list[dict]:
+def _openrouter(query: str, limit: int, config: Config, engine: str = "exa", carrier: str = "") -> list[dict]:
     if not _openrouter_ready(config):
         raise RuntimeError("no OpenRouter key configured (Settings → base URL + API key)")
 
     payload: dict[str, Any] = {
-        "model": tuning.value("search_model") or config.model,
+        "model": carrier or config.model,
         "messages": [{"role": "user", "content": query}],
-        "plugins": [{"id": "web", "engine": tuning.value("search_engine"), "max_results": limit}],
+        "plugins": [{"id": "web", "engine": engine, "max_results": limit}],
         # We only want the citations the plugin attaches, never the model's prose.
         # Not 1: some providers reject a max_tokens that small.
         "max_tokens": 16,
@@ -253,9 +267,3 @@ def _openrouter(query: str, limit: int, config: Config) -> list[dict]:
             }
         )
     return hits[:limit]
-
-
-_PROVIDERS: dict[str, Callable[[str, int, Config], list[dict]]] = {
-    "searx": _searx,
-    "openrouter": _openrouter,
-}
