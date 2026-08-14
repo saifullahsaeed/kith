@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from kith.services import permissions
+from kith.infra import permissions
 
 
 @pytest.fixture

@@ -311,7 +311,7 @@ def _mirror_brief(path: Path, task_id: int | None) -> None:
     if not task_id:
         return
     try:
-        from kith.services import project_files
+        from kith.infra import project_files
 
         detail = repo.tasks.task_detail(path, int(task_id))
         if not detail:

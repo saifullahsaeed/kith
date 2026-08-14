@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import pytest
 
+from kith.infra import permissions
 from kith.infra import workspace as ws
 from kith.infra.workspace import paths
-from kith.services import permissions
 
 
 @pytest.fixture

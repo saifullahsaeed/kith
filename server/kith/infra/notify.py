@@ -1,5 +1,11 @@
 """What is allowed to interrupt you.
 
+In `infra/` rather than `services/`, because what it does is read a stored threshold and
+post to the desktop shell — a setting and an outbound call, both of which this layer owns.
+Filing it as orchestration is what made `infra/db/repositories/messages.py` reach upward to
+ask whether a message may light the badge, with the import written inside the function so
+Python would not notice. That call is sideways now and the import is at the top.
+
 Everything he wrote reached you identically: a note on a task, a question he was blocked on,
 and "I'm stuck and I've set this aside" all arrived as one stream, all unread, all worth a
 notification. The routine messages are by far the most numerous, so the ones that actually

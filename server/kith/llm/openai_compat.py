@@ -23,6 +23,7 @@ from typing import Any
 
 import requests
 
+from kith.domain import connection
 from kith.domain.chat import Config
 from kith.llm import budget, caching
 
@@ -38,16 +39,6 @@ REASONING_EFFORTS: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "
 # prefix caching rarely hits. Pinning a caching-capable host keeps every round on
 # the same warm cache. Set e.g. KITH_OR_PROVIDER=DeepInfra ; watch the effect in
 # /api/usage → cacheHitRate. Empty = OpenRouter's default routing.
-
-
-def is_openrouter(config: Config) -> bool:
-    """Is this endpoint OpenRouter?
-
-    Decides whether the vendor extensions above are safe to send. Also used by the
-    search module, which needs OpenRouter's `web` plugin — so the check lives here
-    once rather than being spelled slightly differently in two places.
-    """
-    return "openrouter.ai" in (config.base_url or "")
 
 
 def _body(response) -> str:
@@ -212,7 +203,7 @@ def stream_once(
     # "Validation: Unsupported parameter(s): `usage`, `provider`". Sending them
     # unconditionally made this module OpenRouter-only in practice while claiming to
     # support any compatible endpoint.
-    if is_openrouter(config):
+    if connection.is_openrouter(config.base_url):
         # Usage accounting — cache-hit tokens and real cost — is how we confirm prompt
         # caching is working. It used to be opted into with `usage: {include: true}`;
         # OpenRouter now returns the full breakdown on every response automatically and

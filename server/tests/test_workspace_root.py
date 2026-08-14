@@ -1,7 +1,7 @@
 """Choosing the folder he works in.
 
 The folder is not a preference, it is the security boundary. Inside it he acts without
-asking — that is the entire design of :mod:`kith.services.permissions` — so whatever
+asking — that is the entire design of :mod:`kith.infra.permissions` — so whatever
 folder this setting names is, by definition, the region where nothing prompts. Which
 makes one mistake catastrophic and silent: picking your home folder does not give him a
 roomy workspace, it grants him every file you own with no prompt ever again, and there is

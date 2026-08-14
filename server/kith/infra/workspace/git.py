@@ -11,7 +11,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from kith.services import permissions
+from kith.infra import permissions
 
 from .base import ExecResult, WorkspaceError, _clip
 from .paths import base_dir, resolve, root

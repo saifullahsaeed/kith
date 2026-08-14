@@ -53,7 +53,8 @@ def create_project(path: Path, args: dict):
     Not every project has code, though, and one that does not should not be handed a pretend
     directory: a shortlist or a piece of research is a project with rows and no folder.
     """
-    from kith.services import project_files, project_memory
+    from kith.infra import project_files
+    from kith.services import project_memory
 
     # A conversation gets one project. `_adoption_note` used to be the whole answer to a session
     # starting a second one: the project was created, the binding silently refused, and the reply
@@ -164,7 +165,7 @@ def update_project(path: Path, args: dict):
     # Pausing or archiving a project takes back the freedom its folder came with, and that
     # has to land now rather than whenever a cache happens to expire.
     if status:
-        from kith.services import permissions
+        from kith.infra import permissions
 
         permissions.forget_linked_projects()
     # Parking a project is the one update that should *not* claim it: a session whose
@@ -357,7 +358,8 @@ def link_folder(path: Path, args: dict):
     anywhere outside the workspace with no record of why. This is one named folder, named by
     them, revoked when the work ends.
     """
-    from kith.services import permissions, project_files, project_memory
+    from kith.infra import permissions, project_files
+    from kith.services import project_memory
 
     folder = str(args.get("folder") or "").strip()
     if not folder:

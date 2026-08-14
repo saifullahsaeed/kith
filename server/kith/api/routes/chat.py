@@ -20,6 +20,7 @@ from kith.config import (
     model_capabilities,
     ollama_host,
 )
+from kith.infra import permissions
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.kernel import clock, live_turns, session_context
@@ -29,7 +30,7 @@ from kith.schemas import (
     AnswerSchema,
     ChatRequestSchema,
 )
-from kith.services import conversations, history, memory_context, permissions, questions, touched
+from kith.services import conversations, history, memory_context, questions, touched
 from kith.services.activity import describe_call, short_args
 from kith.services.agent_loop import stream_agent
 from kith.settings import AGENT_DB_PATH

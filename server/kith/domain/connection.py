@@ -40,6 +40,21 @@ _OPENROUTER_HOST = "openrouter.ai"
 _OPENROUTER_URL = "https://openrouter.ai/api/v1"
 
 
+def is_openrouter(base_url: str) -> bool:
+    """Is this endpoint OpenRouter?
+
+    The check the module docstring above is about. It gates the `web` plugin and the
+    `provider`/`usage` extensions, and other OpenAI-compatible hosts do not ignore those
+    keys — they reject the whole request — so getting it wrong is a 400, not a no-op.
+
+    It lived in `llm/openai_compat.py` and was called from `infra/websearch.py`, which was
+    the tree's one `infra -> llm` edge: storage reaching sideways into the transport to ask
+    a question about a string. Takes the URL rather than a `Config` so it stays answerable
+    by anything holding one, which is the property that made it worth owning here.
+    """
+    return _OPENROUTER_HOST in (base_url or "")
+
+
 @dataclass(frozen=True)
 class ModelInfo:
     """One model a provider offers, in the shape a picker needs.

@@ -9,7 +9,7 @@ a dependency nobody should have to install to run a desktop app.
 
 So he works here instead, in one folder you choose (``~/Kith`` by default), with your
 shell, your PATH, and your installed programs. What used to be enforced by a container
-boundary is now enforced by :mod:`kith.services.permissions`: inside the workspace he is
+boundary is now enforced by :mod:`kith.infra.permissions`: inside the workspace he is
 unrestricted, and outside it — or anything destructive anywhere — needs your yes.
 
 Two things worth knowing:

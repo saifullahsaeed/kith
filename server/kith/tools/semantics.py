@@ -30,8 +30,8 @@ _NEAR = {
 
 
 def _resolved(raw: str) -> Path:
+    from kith.infra import permissions
     from kith.infra import workspace as sandbox
-    from kith.services import permissions
 
     target = Path(sandbox.resolve(raw))
     permissions.require_path("read", target, sandbox.root())
@@ -110,8 +110,8 @@ def definition(path: Path, args: dict):
     required=("path", "symbol", "new_name"),
 )
 def rename_symbol(path: Path, args: dict):
+    from kith.infra import permissions
     from kith.infra import workspace as sandbox
-    from kith.services import permissions
 
     target = Path(sandbox.resolve(args["path"]))
     # A rename writes, and it writes to files other than this one. The gate has to be the

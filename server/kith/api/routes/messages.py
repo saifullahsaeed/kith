@@ -79,7 +79,7 @@ def message_read(message_id):
     ),
 )
 def get_notify():
-    from kith.services import notify
+    from kith.infra import notify
 
     return jsonify(notify.snapshot())
 
@@ -87,7 +87,7 @@ def get_notify():
 @api.post("/notify")
 @api.doc(summary="Set the threshold", description="One of all, needs_you, reachout.")
 def set_notify():
-    from kith.services import notify
+    from kith.infra import notify
 
     payload = request.get_json(silent=True) or {}
     try:

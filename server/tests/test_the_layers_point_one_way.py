@@ -114,7 +114,7 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   `config_store` to read a stickiness id. Each is one edge, and each is the beginning of
 #:   the cycle the pairing exists to prevent.
 #:
-#: Struck off so far, 38 -> 17:
+#: Struck off so far, 38 -> 11:
 #:
 #: * `settings -> services` (1), which was `describe()` fetching the tunables for the
 #:   startup log. The caller joins the two halves now.
@@ -145,12 +145,18 @@ SOURCE = Path(__file__).resolve().parent.parent / "kith"
 #:   private functions, under a comment naming the loop exactly — "a top-level import would
 #:   close the loop and neither module would load". The shared half is `services/reminders.py`
 #:   and both callers are adapters over it.
+#: * Four modules were simply filed in the wrong folder, and moving them retired 6 edges
+#:   between them. `permissions` and `notify` read a stored setting and act on it, which is
+#:   what `infra/` is; `project_files` manipulates paths and imports nothing at all;
+#:   `is_openrouter` was a one-line predicate on a URL living in the transport, while
+#:   `domain/connection.py` already owned that question and said in its docstring that three
+#:   places had grown their own answer and nothing owned it. The `infra <-> llm` peering is
+#:   retired outright — `websearch` no longer imports the transport for anything.
 ALLOWED: dict[tuple[str, str], int] = {
-    ("infra", "services"): 9,
+    ("infra", "services"): 4,
     ("services", "tools"): 3,
     ("llm", "services"): 2,
     ("services", "api"): 1,
-    ("infra", "llm"): 1,
     ("llm", "infra"): 1,
 }
 

@@ -13,8 +13,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from kith.infra import permissions
 from kith.kernel import changes
-from kith.services import permissions
 
 from .base import _EXEC_TIMEOUT, WorkspaceError, _clip
 from .checkpoints import _checkpoint_before_change
@@ -865,7 +865,7 @@ def remove(path: str) -> str:
     The Trash rather than ``unlink``, and this was ``unlink`` until it mattered. Asked to
     delete a file from the Desktop, he did it with ``rm`` and the file was simply gone —
     no prompt, and nothing to undo. The prompt is fixed separately, in
-    :mod:`kith.services.permissions`; this fixes the other half, which is that a delete
+    :mod:`kith.infra.permissions`; this fixes the other half, which is that a delete
     anyone can get wrong should not be the one operation on the machine with no way back.
     macOS has a recoverable delete and every other app on the machine uses it.
 

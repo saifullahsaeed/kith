@@ -16,7 +16,7 @@ from typing import ClassVar
 
 import pytest
 
-from kith.services import permissions
+from kith.infra import permissions
 
 
 @pytest.fixture(autouse=True)

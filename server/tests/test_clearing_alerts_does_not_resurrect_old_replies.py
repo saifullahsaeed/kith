@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 
+from kith.infra import notify
 from kith.infra.db import repositories as repo
-from kith.services import notify
 
 
 @pytest.fixture(autouse=True)

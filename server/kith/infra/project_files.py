@@ -1,5 +1,10 @@
 """His own folder *inside* someone's project, so the work survives being handed over.
 
+In `infra/` because that is what it is: paths and files on a disk. It imports nothing from
+kith at all — it never did — and sat in `services/` only because the first thing to need it
+was a service. `infra/db/repositories/tasks.py` reaching up for it was one of the tree's
+upward edges, and the whole fix was noticing which folder it belonged in.
+
 Everything he produces about a project used to land in one of two wrong places. Before
 `base_dir` was fixed it went to `~/Kith/work/` — his private scratch space, invisible to
 anyone who cloned the repository, which is how a real project ended up with a memory file

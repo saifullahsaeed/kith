@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from kith.services import project_files
+from kith.infra import project_files
 
 
 class TestTheFolderInsideAProject:

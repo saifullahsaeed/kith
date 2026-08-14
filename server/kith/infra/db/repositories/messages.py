@@ -7,6 +7,7 @@ from pathlib import Path
 
 from sqlalchemy import delete, func, select, update
 
+from kith.infra import notify
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import Message, TurnLog
 from kith.infra.db.support import utc_now_iso
@@ -61,8 +62,6 @@ def add_message(
     notification, so "quieter" never means "you did not find out". `link` (e.g. "/tasks/12")
     makes the notification clickable straight to what it is about.
     """
-    from kith.services import notify
-
     loud = sender != "user" and notify.interrupts(kind)
     with session(path) as db:
         row = Message(

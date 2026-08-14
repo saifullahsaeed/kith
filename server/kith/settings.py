@@ -124,7 +124,7 @@ DEFAULT_PERSONA_DIR = SERVER_ROOT / "persona"
 #: run without installing anything, and "first install Docker" was the single largest thing
 #: standing between the project and that — while also being what stopped him reading a file
 #: you pointed at or using a program you already have. What the container enforced is now
-#: enforced by kith.services.permissions instead.
+#: enforced by kith.infra.permissions instead.
 WORKSPACE_DIR = _text("KITH_WORKSPACE")
 
 #: Replaces the whole persona with one inline prompt. For experiments — it bypasses

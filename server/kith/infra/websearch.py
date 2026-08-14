@@ -35,11 +35,11 @@ from typing import Any
 import requests
 
 from kith import settings
+from kith.domain import connection
 from kith.domain.chat import Config
 from kith.domain.search import SearchKind
 from kith.infra import workspace as sandbox
 from kith.infra.db import config_store
-from kith.llm import openai_compat
 from kith.services import tuning
 
 # Exa charges one flat fee for up to ten results and only then bills per extra
@@ -148,7 +148,7 @@ def _chosen(config: Config) -> SearchKind | None:
 def _openrouter_ready(config: Config) -> bool:
     """The plugin is an OpenRouter extension; other OpenAI-compatible hosts reject
     the ``plugins`` key outright. Same endpoint test the chat client uses."""
-    return bool(config.api_key) and openai_compat.is_openrouter(config)
+    return bool(config.api_key) and connection.is_openrouter(config.base_url)
 
 
 # --------------------------------------------------------------------------- #

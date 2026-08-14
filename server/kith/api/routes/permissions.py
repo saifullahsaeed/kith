@@ -5,8 +5,7 @@ from __future__ import annotations
 from flask import jsonify, request
 
 from kith.api.blueprint import api
-from kith.infra import workspace
-from kith.services import permissions
+from kith.infra import permissions, workspace
 
 
 @api.get("/permissions")

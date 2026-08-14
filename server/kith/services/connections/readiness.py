@@ -70,7 +70,7 @@ def _computer() -> Check:
     created on first use — so the check answers the question someone actually has: where
     are his files, and what is he allowed to do with them.
     """
-    from kith.services import permissions
+    from kith.infra import permissions
 
     status = sandbox.status()
     root = status.get("root", "")

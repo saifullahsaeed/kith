@@ -14,8 +14,8 @@ from typing import ClassVar
 
 import pytest
 
+from kith.infra import notify
 from kith.infra.db import repositories as repo
-from kith.services import notify
 
 
 class _Store:

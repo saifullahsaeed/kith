@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-from kith.services import permissions
+from kith.infra import permissions
 
 from .base import _EXEC_TIMEOUT, ExecResult, WorkspaceError, _clip
 from .checkpoints import _checkpoint_before_change

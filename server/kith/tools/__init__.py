@@ -16,7 +16,8 @@ from __future__ import annotations
 import difflib
 from pathlib import Path
 
-from kith.services import custom_tools, permissions, touched, tuning
+from kith.infra import permissions
+from kith.services import custom_tools, touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
     asking,
     code,

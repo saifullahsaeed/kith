@@ -166,8 +166,8 @@ class Processes:
         return [one for one in everything if one.conversation_id == chat]
 
     def start(self, command: str, name: str, cwd: str | Path | None = None) -> dict[str, Any]:
+        from kith.infra import permissions
         from kith.infra import workspace as sandbox
-        from kith.services import permissions
 
         wanted = _clean_name(name)
         command = str(command or "").strip()

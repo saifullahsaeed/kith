@@ -449,8 +449,8 @@ def _plan_for(path: Path, task: dict) -> str:
     one kind of task that never has one — the standalone errand — the one kind that could not
     carry a plan at all.
     """
+    from kith.infra import project_files
     from kith.infra.workspace import paths
-    from kith.services import project_files
 
     try:
         directory = ""

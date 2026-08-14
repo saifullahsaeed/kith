@@ -188,8 +188,8 @@ class TestTheDiffItGivesBack:
 
 class TestPermissions:
     def test_editing_outside_his_folder_needs_a_yes(self, workspace_root, tmp_path, monkeypatch):
+        from kith.infra import permissions
         from kith.infra.db import config_store
-        from kith.services import permissions
 
         db = tmp_path / "config.db"
         config_store.init(db)

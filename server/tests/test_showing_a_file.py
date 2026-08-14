@@ -90,8 +90,8 @@ class TestServingTheBytes:
 
     def test_it_is_gated_like_every_other_read(self, workspace_root, tmp_path, monkeypatch):
         """Serving raw bytes over HTTP is how a file viewer becomes "read any file"."""
+        from kith.infra import permissions
         from kith.infra.db import config_store
-        from kith.services import permissions
 
         db = tmp_path / "config.db"
         config_store.init(db)
@@ -301,8 +301,8 @@ class TestAskingAboutASkillRatherThanAPath:
     """
 
     def _ask(self, kind, target):
+        from kith.infra import permissions
         from kith.infra import workspace as ws
-        from kith.services import permissions
 
         before = permissions.mode()
         try:

@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 
 from kith import settings
-from kith.services import permissions
+from kith.infra import permissions
 
 from .base import WorkspaceError
 

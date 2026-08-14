@@ -32,8 +32,8 @@ from kith.tools.registry import tool
     required=("path",),
 )
 def outline(path: Path, args: dict):
+    from kith.infra import permissions
     from kith.infra import workspace as sandbox
-    from kith.services import permissions
 
     target = Path(sandbox.resolve(args["path"]))
     permissions.require_path("read", target, sandbox.root())
@@ -72,8 +72,8 @@ def outline(path: Path, args: dict):
     required=(),
 )
 def repo_map(path: Path, args: dict):
+    from kith.infra import permissions
     from kith.infra import workspace as sandbox
-    from kith.services import permissions
 
     target = Path(sandbox.resolve(args.get("path") or "."))
     permissions.require_path("read", target, sandbox.root())
@@ -122,8 +122,8 @@ def repo_map(path: Path, args: dict):
     required=(),
 )
 def run_tests(path: Path, args: dict):
+    from kith.infra import permissions
     from kith.infra import workspace as sandbox
-    from kith.services import permissions
 
     target = Path(sandbox.resolve(args.get("path") or "."))
     permissions.require_path("read", target, sandbox.root())
