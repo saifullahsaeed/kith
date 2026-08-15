@@ -153,6 +153,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   outline: { verb: "read the shape of", of: "path", group: "reading" },
   repo_map: { verb: "got his bearings in", of: "path", group: "reading" },
   find_symbol: { verb: "traced every use of", of: "name", group: "search" },
+  install_language_support: { verb: "set up language support for", of: "confirm", group: "shell" },
   diagnostics: { verb: "checked for problems in", of: "path", group: "shell" },
   references: { verb: "found everywhere that uses", of: "symbol", group: "search" },
   definition: { verb: "looked up where to find", of: "symbol", group: "search" },

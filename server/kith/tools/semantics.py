@@ -22,6 +22,13 @@ from kith.tools.registry import tool
 #: installed" is exactly the waste the toolset lists exist to prevent.
 NEEDS_A_LANGUAGE_SERVER = frozenset({"diagnostics", "references", "definition", "rename_symbol"})
 
+#: The mirror image, and it has to be one or the pair is incoherent. `install_language_support`
+#: is worth its schema exactly when the four above are hidden — offering "install a language
+#: server" on a machine that already has one is a line of prompt paid on every round to suggest
+#: something with no effect, and offering it *only* when servers exist would be a tool that can
+#: never fix the thing it is for.
+OFFERED_WITHOUT_A_LANGUAGE_SERVER = frozenset({"install_language_support"})
+
 _SYMBOL = {**STR, "description": "The name to ask about, exactly as it is written in the code."}
 _NEAR = {
     **INT,
@@ -134,3 +141,79 @@ def available(root: str | Path | None = None) -> bool:
         return manager.any_available(root or sandbox.root())
     except Exception:
         return False
+
+
+@tool(
+    "install_language_support",
+    "Get the language server for what this project is written in, so the semantic tools "
+    "(references, definition, rename_symbol, diagnostics) start working here. Installs only "
+    "what this project actually needs — never every language — into Kith's own folder, never "
+    "globally. It asks first. Offer this when you find yourself grepping for callers because "
+    "the semantic tools are not available; do not run it speculatively.",
+    {
+        "path": {**STR, "description": "The project folder (default: where you are working)."},
+        "confirm": {
+            **STR,
+            "description": (
+                "Leave empty to see what would be installed and how big it is. Pass the "
+                "language name from that answer to actually install it."
+            ),
+        },
+    },
+    required=(),
+)
+def install_language_support(path: Path, args: dict):
+    """Report what is missing, or install one family of it.
+
+    Two steps on purpose. Called without `confirm` it only *looks* — which languages this
+    project is written in, which of those have no server, and which of those we can install.
+    That answer is what he shows the person. Called with a family name it installs that one,
+    through the ordinary command gate, so what gets approved is the literal command that runs.
+    """
+    from kith.engine.code.lsp import install
+    from kith.infra import permissions
+    from kith.infra import workspace as sandbox
+
+    target = Path(sandbox.resolve(args.get("path") or "."))
+    permissions.require_path("read", target, sandbox.root())
+
+    def served(family: str) -> bool:
+        try:
+            return manager.find_binary(family, target) is not None
+        except Exception:
+            return False
+
+    wanted = install.wanted_for(target, served)
+    confirm = str(args.get("confirm") or "").strip().lower()
+
+    if not confirm:
+        if not wanted:
+            return {
+                "needed": [],
+                "note": "Nothing to install — either every language here is already served, or "
+                "it is one I do not install (Go, Rust, Ruby and C come from their own package "
+                "managers; ask and I will tell you the command).",
+            }
+        return {
+            "needed": wanted,
+            "note": "Ask them before installing. "
+            + "; ".join(f"{family}: `{install.command_for(family)}`" for family in wanted)
+            + ". Then call this again with confirm set to the language.",
+        }
+
+    if confirm not in wanted:
+        return {
+            "error": f"{confirm} is not something to install here. "
+            + (f"This project wants: {', '.join(wanted)}." if wanted else "Nothing is missing.")
+        }
+
+    command = install.command_for(confirm)
+    # The gate sees the exact string that will run, so the thing approved and the thing
+    # executed cannot drift apart.
+    permissions.require_command(command, sandbox.root())
+    worked, said = install.run(confirm)
+    if not worked:
+        return {"error": said}
+    # Discovery caches nothing about absence except a short "this one would not start" note,
+    # so the newly installed server is found on the next call without a restart.
+    return {"installed": confirm, "where": said}

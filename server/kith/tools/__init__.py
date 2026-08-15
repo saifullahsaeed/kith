@@ -40,7 +40,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
 )
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas
-from kith.tools.semantics import NEEDS_A_LANGUAGE_SERVER
+from kith.tools.semantics import NEEDS_A_LANGUAGE_SERVER, OFFERED_WITHOUT_A_LANGUAGE_SERVER
 from kith.tools.semantics import available as _language_server_available
 
 __all__ = ["all_tools", "get", "host", "names", "run_tool", "tool_schemas"]
@@ -71,7 +71,14 @@ def tool_schemas(
     caller for the same cache reason as ``mcp`` — `None` means "do not filter", which is what
     every caller that has no opinion passes.
     """
-    hide = set() if language_server is not False else set(NEEDS_A_LANGUAGE_SERVER)
+    # Two sets, moving in opposite directions on the same fact. With no server the semantic
+    # tools are hidden and the one that installs one is offered; with a server, the reverse.
+    # `None` means nobody has an opinion, and nothing is hidden.
+    hide: set[str] = set()
+    if language_server is False:
+        hide |= set(NEEDS_A_LANGUAGE_SERVER)
+    elif language_server is True:
+        hide |= set(OFFERED_WITHOUT_A_LANGUAGE_SERVER)
     wanted = None if only is None else set(only) - hide
     builtins = [one for one in schemas(wanted) if one.get("function", {}).get("name") not in hide]
     extra = list(mcp or [])

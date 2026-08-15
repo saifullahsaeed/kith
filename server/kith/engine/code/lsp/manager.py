@@ -178,12 +178,27 @@ class Manager:
         return _FAMILY.get(language or "", "")
 
     def find_binary(self, family: str, root: Path) -> tuple[Candidate, str] | None:
-        """The best available server for this family, looked for in the project first."""
+        """The best available server for this family, looked for in the project first.
+
+        Four places, in this order, and the order is the priority. The project's own binaries
+        win because they are the version it pins. What we installed comes next — chosen by
+        someone, for this. Then Kith's environment, then `PATH`.
+        """
+        from kith.engine.code.lsp import install
+
+        ours = install.prefix()
         for candidate in CANDIDATES.get(family, ()):
             for folder in _PROJECT_BINS:
                 found = root / folder / candidate.binary
                 if found.is_file():
                     return candidate, str(found)
+            # Anything we installed on request. `npm --prefix` puts binaries in
+            # `node_modules/.bin`, which is why this reuses the same folder names rather than
+            # inventing a layout — installing a server needed to teach discovery nothing.
+            for folder in _PROJECT_BINS:
+                mine = ours / folder / candidate.binary
+                if mine.is_file():
+                    return candidate, str(mine)
             # Kith's own environment. In development that is where a `pip install pyright`
             # lands; in a packaged build it is where a bundled server would sit.
             import sys
