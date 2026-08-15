@@ -104,13 +104,15 @@ class TestResolution:
         tuning.reload()
         assert tuning.value("max_rounds") == for_key("max_rounds").default
 
-    def test_a_saved_value_is_clamped_on_the_way_out_too(self, config_db):
+    def test_a_saved_value_is_clamped_on_the_way_out_too(self, tmp_path):
         # Written before a bound was tightened, or by hand. It must not escape the
-        # range the code is written to expect.
-        from kith.infra.db import config_store
+        # range the code is written to expect — and "by hand" is now the ordinary case,
+        # because the file is a thing people are invited to edit.
+        import json
 
-        config_store.update_settings(config_db, {tuning.PREFIX + "max_rounds": 99_999})
-        tuning.use_database(config_db)
+        path = tmp_path / "settings.json"
+        path.write_text(json.dumps({"max_rounds": 99_999}))
+        tuning.use_file(path)
         assert tuning.value("max_rounds") == for_key("max_rounds").maximum
 
 
@@ -138,17 +140,18 @@ class TestWriting:
         tuning.reset(["max_rounds"])
         assert tuning.value("max_rounds") == for_key("max_rounds").default
 
-    def test_reset_removes_the_row_rather_than_storing_the_default(self, isolated_tuning):
+    def test_reset_removes_the_key_rather_than_storing_the_default(self, isolated_tuning):
         """So "default" keeps meaning whatever the code says today.
 
         A stored copy would freeze this version's number and quietly diverge the next
-        time a default is reconsidered.
+        time a default is reconsidered. It is also what keeps the file readable: what is
+        in it is what somebody chose, not a dump of all thirty-one knobs.
         """
-        from kith.infra.db import config_store
+        import json
 
         tuning.apply({"max_rounds": 12})
         tuning.reset(["max_rounds"])
-        assert tuning.PREFIX + "max_rounds" not in config_store.load_settings(isolated_tuning)
+        assert "max_rounds" not in json.loads(isolated_tuning.read_text())
 
     def test_reset_with_no_argument_clears_everything(self):
         tuning.apply({"max_rounds": 12, "history_keep_recent": 9.0})

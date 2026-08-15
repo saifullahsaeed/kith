@@ -143,6 +143,14 @@ def create_app() -> APIFlask:
 
     config_store.init(CONFIG_DB_PATH)
     migrations.init(AGENT_DB_PATH)
+    # Settings live in a file now, and the database has been released from that duty rather
+    # than kept as a mirror. This carries an existing installation across on the first start
+    # after upgrading and does nothing on every start after that. Before anything can serve a
+    # request, so no reader ever sees the half-moved state.
+    from kith.services import tuning as _tuning
+
+    _tuning._migrate_from_database()
+    _tuning.ensure_exists()
     # Questions the last process died holding. A parked turn is a daemon thread waiting on an
     # in-memory event, so a restart took both and wrote nothing down — see
     # `questions.recover_interrupted` for the measurements. Done here, before anything can

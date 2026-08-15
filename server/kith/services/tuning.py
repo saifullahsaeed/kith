@@ -1,64 +1,144 @@
 """Resolving a tunable's effective value, and changing it.
 
-Precedence is **environment > stored > default**, matching how chat config already
+Precedence is **environment > file > default**, matching how chat config already
 resolves. An operator who exported ``KITH_MAX_ROUNDS`` expects it to win over anything
 a UI wrote, and expects to be told the UI can't override it rather than watching a
 setting silently not apply.
 
 Values are read live rather than snapshotted at import, which is what makes them
 editable at all — the previous arrangement (module constants assigned once) meant even
-changing the environment needed a restart. Live reads happen inside a tool loop, so
-they are cached; only a write through here invalidates the cache, and writes only come
-from this process.
+changing the environment needed a restart.
+
+**One file, and nothing else.** ``settings.json`` beside the databases, and the database
+has been released from this duty entirely rather than kept as a mirror. Two stores that
+both claim to hold a setting is the shape where someone edits one, reads the other, and
+cannot work out why the app disagrees with the file in front of them — and the whole
+reason for having a file is to be able to trust it. The one-time move out of the
+database is in `_migrate_from_database`, which runs once and then has nothing to do.
+
+Three things a file buys that a database row does not, and they are the reason for the
+change rather than tidiness:
+
+* It can be fixed when the app will not start. A bad value used to need sqlite.
+* It can be copied between machines, and read in a diff.
+* Kith can edit it himself, with the file tools he already has.
+
+**External edits are picked up without a restart**, because the cache is keyed on the
+file's modification time rather than merely being invalidated by our own writes. Editing
+the file in another window and watching nothing happen is the failure everyone has had
+with a config file once, and checking an `mtime` is cheaper than the read it guards.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
 from kith.domain.chat import Routing
 from kith.domain.tuning import GROUPS, TUNABLES, Tunable, for_key
-from kith.infra.db import config_store
-from kith.settings import CONFIG_DB_PATH
+from kith.settings import DATA_DIR
 
-#: Stored keys are prefixed so they cannot collide with chat config ("model",
-#: "think") in the same key/value table.
+#: The prefix rows used to carry in the settings table, kept only so the one-time move
+#: can find them. Nothing writes this any more.
 PREFIX = "tune."
 
+#: Written whenever the file is created, because a file a person is invited to edit
+#: should say what it is. JSON has no comments, so this is a real key — ignored on read
+#: like any key that is not a tunable.
+_BANNER = "//"
+_BANNER_TEXT = "Kith settings. Every key here is optional; delete one to go back to its default. Environment variables win over this file."
+
 _cache: dict[str, Any] | None = None
+_cache_stamp: tuple[float, int] | None = None
+_lock = threading.RLock()
 
-#: Which database to resolve against. ``None`` means the real one. A seam rather than
-#: a parameter because ``value()`` is called from inside pure loop-detection code,
-#: where threading a path through would defeat the point of it being pure — and
-#: because tests must not read whichever values a developer happens to have set.
-_db: Path | None = None
+#: Which file to resolve against. ``None`` means the real one. A seam rather than a
+#: parameter because ``value()`` is called from inside pure loop-detection code, where
+#: threading a path through would defeat the point of it being pure — and because tests
+#: must not read whichever values a developer happens to have set.
+_file: Path | None = None
 
 
-def use_database(path: Path | None) -> None:
-    """Resolve against a different config database from now on."""
-    global _db
-    _db = path
+def use_file(path: Path | None) -> None:
+    """Resolve against a different settings file from now on."""
+    global _file
+    with _lock:
+        _file = path
     reload()
 
 
-def _database() -> Path:
-    return _db or CONFIG_DB_PATH
+def settings_file() -> Path:
+    """Where settings live. One place, and the only place."""
+    return _file or (DATA_DIR / "settings.json")
+
+
+def _stamp(path: Path) -> tuple[float, int] | None:
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return (info.st_mtime, info.st_size)
 
 
 def _stored() -> dict[str, Any]:
-    global _cache
-    if _cache is None:
-        raw = config_store.load_settings(_database())
-        _cache = {k[len(PREFIX) :]: v for k, v in raw.items() if k.startswith(PREFIX)}
-    return _cache
+    """What the file says, re-read when the file has changed underneath us."""
+    global _cache, _cache_stamp
+    path = settings_file()
+    now = _stamp(path)
+    with _lock:
+        if _cache is not None and now == _cache_stamp:
+            return _cache
+        _cache = _read(path)
+        _cache_stamp = now
+        return _cache
+
+
+def _read(path: Path) -> dict[str, Any]:
+    """The file as a dict, or an empty one.
+
+    A malformed file resolves to defaults rather than raising. Refusing to start because
+    someone left a trailing comma in a settings file is a worse outcome than running on
+    the documented defaults — and every value in here has one.
+    """
+    try:
+        raw = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        # Said once, loudly, rather than swallowed: a file being ignored is exactly the
+        # thing someone needs to be told, since the symptom is "my setting does nothing".
+        print(f"[tuning] {path} is not readable JSON — using defaults until it is fixed")
+        return {}
+    if not isinstance(raw, dict):
+        print(f"[tuning] {path} is not a JSON object — using defaults")
+        return {}
+    return {key: item for key, item in raw.items() if key != _BANNER}
+
+
+def _write(values: dict[str, Any]) -> None:
+    """Replace the file, atomically.
+
+    Temp-and-rename because the alternative is a window in which the file is half
+    written, and the thing most likely to read it in that window is the app restarting
+    after whatever made you edit it.
+    """
+    path = settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {_BANNER: _BANNER_TEXT, **dict(sorted(values.items()))}
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(body, indent=2) + "\n")
+    temp.replace(path)
 
 
 def reload() -> None:
     """Forget the cache. Called after a write, and safe to call at any time."""
-    global _cache
-    _cache = None
+    global _cache, _cache_stamp
+    with _lock:
+        _cache = None
+        _cache_stamp = None
 
 
 def value(key: str) -> Any:
@@ -134,7 +214,11 @@ def apply(updates: dict[str, Any]) -> dict[str, Any]:
         knob = for_key(key)  # raises ValueError on an unknown key
         cleaned[key] = knob.coerce(raw)
 
-    config_store.update_settings(_database(), {PREFIX + k: v for k, v in cleaned.items()})
+    # Read-modify-write under the lock. Two saves arriving together — the settings page
+    # is one request per section — would otherwise each write the file from the state
+    # they read at the start, and the second would drop the first.
+    with _lock:
+        _write({**_read(settings_file()), **cleaned})
     reload()
     return {key: value(key) for key in cleaned}
 
@@ -144,19 +228,82 @@ def reset(keys: list[str] | None = None) -> dict[str, Any]:
 
     Removed rather than written-as-default so "default" keeps meaning whatever the
     code says today — a stored copy would freeze this version's number and quietly
-    diverge the next time a default is reconsidered.
+    diverge the next time a default is reconsidered. It is also what makes the file
+    readable: what is in it is what someone chose, not a dump of every knob.
     """
-    import sqlite3
-
     targets = [for_key(key).key for key in keys] if keys else [knob.key for knob in TUNABLES]
-    conn = sqlite3.connect(_database())
-    try:
-        conn.executemany("DELETE FROM settings WHERE key = ?", [(PREFIX + key,) for key in targets])
-        conn.commit()
-    finally:
-        conn.close()
+    with _lock:
+        remaining = {k: v for k, v in _read(settings_file()).items() if k not in set(targets)}
+        _write(remaining)
     reload()
     return {key: value(key) for key in targets}
+
+
+def ensure_exists() -> Path:
+    """Write an empty settings file if there is not one yet, and return where it is.
+
+    A file nobody has created is a file nobody can edit, and "fix it when the app will not
+    start" is the main reason for having one — so it exists from the first launch rather than
+    from the first time somebody changes something in the UI. It also makes the Reveal button
+    on the settings page work, which otherwise refuses a path that is not there.
+
+    Empty but for its own explanation. Writing all thirty-one knobs out would freeze this
+    version's defaults into somebody's file and quietly diverge the next time one is
+    reconsidered — the same reason `reset` removes a key rather than storing the default.
+    """
+    path = settings_file()
+    if not path.exists():
+        _write({})
+    return path
+
+
+def _migrate_from_database() -> int:
+    """Move settings out of the config database, once. Returns how many moved.
+
+    The database has been released from this duty rather than kept as a mirror, so this
+    runs once on the first start after upgrading and then has nothing left to find.
+
+    **Order matters and is the whole care here.** The file is written and read back
+    before a single row is deleted, so a failure at any point leaves the values in the
+    database where the next start will find them again. Deleting first and writing after
+    is the version of this that loses somebody's configuration.
+    """
+    path = settings_file()
+    if path.exists():
+        return 0  # the file is the store now; nothing to move
+
+    from kith.infra.db import config_store
+    from kith.settings import CONFIG_DB_PATH
+
+    try:
+        raw = config_store.load_settings(CONFIG_DB_PATH)
+    except Exception:
+        return 0  # no database yet, or not readable — a fresh install has nothing to move
+    carried = {k[len(PREFIX) :]: v for k, v in raw.items() if k.startswith(PREFIX)}
+    if not carried:
+        return 0
+
+    _write(carried)
+    if _read(path) != carried:
+        print("[tuning] could not write settings.json — leaving the old values in the database")
+        return 0
+
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(CONFIG_DB_PATH)
+        try:
+            conn.executemany("DELETE FROM settings WHERE key = ?", [(PREFIX + key,) for key in carried])
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        # The file is already correct and is what gets read, so a failure to tidy the old
+        # rows is untidy rather than wrong. They are never read again either way.
+        pass
+    reload()
+    print(f"[tuning] moved {len(carried)} setting(s) into {path}")
+    return len(carried)
 
 
 def describe() -> dict:
@@ -196,6 +343,16 @@ def _paths() -> list[dict]:
             "bytes": _folder_size(settings.DATA_DIR),
             "open": True,
             "note": "Memory, tasks, notes, the flight recorder.",
+        },
+        {
+            # Listed because being able to find it is most of the point. Everything on this
+            # page writes here, and it is the copy to reach for when the app will not start.
+            "label": "These settings",
+            "value": str(settings_file()),
+            "env": "",
+            "bytes": _stamp(settings_file())[1] if _stamp(settings_file()) else 0,
+            "open": True,
+            "note": "Everything on this page, as JSON you can edit. Only what you changed is in it.",
         },
         {
             "label": "Conversations",

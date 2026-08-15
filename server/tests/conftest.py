@@ -219,11 +219,9 @@ def isolated_tuning(tmp_path_factory):
     the developer running them happens to have saved — so a thoughtful change to, say,
     the stall threshold would break the suite on one machine and not another.
     """
-    from kith.infra.db import config_store
     from kith.services import tuning
 
-    path = tmp_path_factory.mktemp("tuning") / "config.db"
-    config_store.init(path)
-    tuning.use_database(path)
+    path = tmp_path_factory.mktemp("tuning") / "settings.json"
+    tuning.use_file(path)
     yield path
-    tuning.use_database(None)
+    tuning.use_file(None)
