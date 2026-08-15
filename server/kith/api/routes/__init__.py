@@ -18,6 +18,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     config,
     conversations,
     health,
+    language_servers,
     mcp,
     messages,
     permissions,

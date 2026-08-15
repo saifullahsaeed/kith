@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Check, CircleDashed, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { MCPServers } from "@/components/settings/mcp-servers";
 import { SearchStep } from "@/components/onboarding/search-step";
 import {
+  fetchLanguageServers,
+  installLanguageServer,
   saveSearch,
+  type LanguageServers,
   type ReadinessCheck,
   type SearchKind,
   type SearchOption,
@@ -107,6 +110,8 @@ export function ToolsTab({
 
       <MCPServers />
 
+      <CodeIntelligence />
+
       <section>
         <div className="mb-3">
           <h2 className="text-sm font-semibold">Everything else</h2>
@@ -123,6 +128,115 @@ export function ToolsTab({
         </div>
       </section>
     </div>
+  );
+}
+
+/**
+ * Which languages this folder is written in, and what can answer questions about meaning.
+ *
+ * Reading code as *structure* — outlines, the repo map, finding a name by what it is —
+ * ships with the app and always works. Reading it for *meaning* needs a language server,
+ * which most machines do not have. Two tiers, and this section only exists for the second.
+ *
+ * One click, and no permission dialog: the gate is there to stop him changing your machine
+ * without asking, and pressing this button is the asking. It installs only what this folder
+ * is written in — never every language — into a folder you can delete.
+ *
+ * Go, Rust, Ruby and C come from their own package managers, so those show the command
+ * instead of a button. Fetching four package managers into our own folder to save one line
+ * of typing would be fighting the tools rather than using them.
+ */
+function CodeIntelligence() {
+  const [state, setState] = useState<LanguageServers | null>(null);
+  const [busy, setBusy] = useState("");
+  const [failed, setFailed] = useState("");
+
+  const read = useCallback(() => {
+    void fetchLanguageServers()
+      .then(setState)
+      .catch(() => setState({ root: "", languages: [] }));
+  }, []);
+
+  useEffect(read, [read]);
+
+  async function install(family: string) {
+    setBusy(family);
+    setFailed("");
+    try {
+      await installLanguageServer(family);
+      read();
+    } catch (err: unknown) {
+      setFailed(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  // Nothing to say about a folder with no code in it, and an empty box saying so is worse
+  // than no box — this page is already long.
+  if (!state || state.languages.length === 0) return null;
+
+  return (
+    <section>
+      <div className="mb-3">
+        <h2 className="text-sm font-semibold">Understanding code</h2>
+        <p className="text-muted-foreground text-xs">
+          He reads structure — outlines, the map of a repository, where a name is used — with
+          nothing installed. Answering <em>who calls this</em> and <em>what breaks if I rename
+          it</em> needs a language server for that language.
+        </p>
+      </div>
+      <div className="divide-y rounded-xl border">
+        {state.languages.map((one) => (
+          <div key={one.family} className="flex items-start gap-3 p-3">
+            <span
+              className={`mt-0.5 shrink-0 ${one.served ? "text-roam" : "text-muted-foreground/60"}`}
+            >
+              {one.served ? <Check className="size-4" /> : <CircleDashed className="size-4" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium capitalize">
+                {one.family}
+                <span className="text-muted-foreground ml-2 text-xs font-normal">
+                  {one.files} file{one.files === 1 ? "" : "s"}
+                </span>
+              </p>
+              <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
+                {one.served
+                  ? "A language server is available — the semantic tools work here."
+                  : one.installable
+                    ? `No language server. He can fetch one (${one.size}).`
+                    : "No language server. This one comes from its own package manager:"}
+              </p>
+              {!one.served && !one.installable && one.manual ? (
+                <p className="text-muted-foreground/80 mt-1.5 flex gap-1.5 text-xs">
+                  <AlertTriangle className="mt-px size-3 shrink-0" />
+                  <code className="bg-muted rounded px-1.5 py-0.5 font-mono text-[11px]">
+                    {one.manual}
+                  </code>
+                </p>
+              ) : null}
+            </div>
+            {!one.served && one.installable ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                disabled={busy !== ""}
+                onClick={() => void install(one.family)}
+              >
+                {busy === one.family ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                {busy === one.family ? "Installing…" : "Install"}
+              </Button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {failed ? <p className="text-destructive mt-2 text-xs">{failed}</p> : null}
+      {state.root ? (
+        <p className="text-muted-foreground/70 mt-2 text-[11px]">Looked at {state.root}</p>
+      ) : null}
+    </section>
   );
 }
 

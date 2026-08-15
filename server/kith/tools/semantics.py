@@ -209,8 +209,17 @@ def install_language_support(path: Path, args: dict):
 
     command = install.command_for(confirm)
     # The gate sees the exact string that will run, so the thing approved and the thing
-    # executed cannot drift apart.
-    permissions.require_command(command, sandbox.root())
+    # executed cannot drift apart — and it is told what the command is *for*, because
+    # otherwise the dialog is a path under ~/.kith and a sentence about writing outside the
+    # workspace, which is accurate and impossible to make a decision from.
+    permissions.require_command(
+        command,
+        sandbox.root(),
+        purpose=(
+            f"he wants to install the {confirm} language server ({install.download_size(confirm)}) "
+            f"from npm, into {install.prefix()} — delete that folder to undo it"
+        ),
+    )
     worked, said = install.run(confirm)
     if not worked:
         return {"error": said}

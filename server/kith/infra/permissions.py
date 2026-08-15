@@ -287,6 +287,21 @@ _state = threading.RLock()
 
 
 def _store():
+    """The database, and deliberately not `settings.json`.
+
+    Every other adjustable value moved to a file, and this one did not follow on purpose.
+    The whole case for that file is that it can be edited by hand when the app will not
+    start — and that **Kith can edit it himself**, with the file tools he already has.
+
+    Which is exactly why the gate must not live in it. The permission mode and the
+    always-approved list are the things standing between him and the rest of the machine,
+    and a safety control the guarded party can rewrite is not a control. He has no
+    database tool and no reason for one; that asymmetry is the point rather than an
+    accident of where this was first written.
+
+    So: if you are here to tidy up the last two settings that are not in the file, this is
+    the note saying don't.
+    """
     from kith.infra.db import config_store
     from kith.settings import CONFIG_DB_PATH
 
@@ -345,7 +360,7 @@ def granted(signature: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def check_path(kind: Kind, target: Path, root: Path) -> Decision:
+def check_path(kind: Kind, target: Path, root: Path, purpose: str = "") -> Decision:
     """Is he allowed to touch this path?"""
     if mode() is Mode.BYPASS:
         return Decision(True)
@@ -401,7 +416,7 @@ def check_path(kind: Kind, target: Path, root: Path) -> Decision:
 
     where = "somewhere sensitive" if sensitive else "outside his workspace"
     verb = {"read": "read", "write": "write to", "delete": "delete", "command": "use"}[kind]
-    return _refuse(kind, str(resolved), f"he wants to {verb} something {where}", signature)
+    return _refuse(kind, str(resolved), f"he wants to {verb} something {where}", signature, purpose)
 
 
 def _skill_named(target: Path, skills_dir: str) -> str:
@@ -411,7 +426,7 @@ def _skill_named(target: Path, skills_dir: str) -> str:
     return f"the `{first}` skill" if first else "his skills folder"
 
 
-def check_command(command: str, root: Path) -> Decision:
+def check_command(command: str, root: Path, purpose: str = "") -> Decision:
     """Is he allowed to run this?"""
     if mode() is Mode.BYPASS:
         return Decision(True)
@@ -422,7 +437,11 @@ def check_command(command: str, root: Path) -> Decision:
             if granted(signature):
                 return Decision(True)
             return _refuse(
-                "command", command.strip()[:200], f"that command involves {description}", signature
+                "command",
+                command.strip()[:200],
+                f"that command involves {description}",
+                signature,
+                purpose,
             )
 
     # A command that destroys something gets read for what it points at, and anything
@@ -441,7 +460,7 @@ def check_command(command: str, root: Path) -> Decision:
         for target in paths_named(command):
             if str(target).startswith(skip):
                 continue
-            decision = check_path(intent, target, root)
+            decision = check_path(intent, target, root, purpose)
             if not decision.allowed:
                 return decision
 
@@ -449,19 +468,36 @@ def check_command(command: str, root: Path) -> Decision:
     return Decision(True)
 
 
-def _refuse(kind: Kind, what: str, why: str, signature: str) -> Decision:
+def _refuse(kind: Kind, what: str, why: str, signature: str, purpose: str = "") -> Decision:
+    """Park a refusal and describe it.
+
+    `purpose` replaces the derived `why` when a caller knows something the check cannot
+    work out for itself. The check reads a command and reports what it *does* — "he wants
+    to write to something outside his workspace" — which is accurate and, in front of a
+    person deciding, close to useless: what they see is a path they have to interpret.
+    A caller that already knows it is fetching a language server can say so, and then the
+    dialog reads like a question rather than a hex dump.
+
+    Only ever supplied in code, never from anything a model composed. It is shown to a
+    person about to grant something, which makes it exactly the wrong place to let a
+    caller write its own justification.
+    """
     global _next_id
     with _state:
         _next_id += 1
-        request = Request(id=f"p{_next_id}", kind=kind, what=what, why=why)
+        request = Request(id=f"p{_next_id}", kind=kind, what=what, why=purpose or why)
         _pending[request.id] = request
         while len(_pending) > MAX_PENDING:
             _pending.pop(next(iter(_pending)))
     return Decision(
         False,
         reason=(
-            f"Not allowed yet: {why}. Tell your person what you want to do and why, and ask them "
-            f"to allow it — there is an Allow button on this message. Don't try to work around it."
+            # The same words the dialog shows. He is asked to tell his person what he wants and
+            # why, so handing him a different sentence than the one on their screen is how the
+            # two of them end up describing different things to each other.
+            f"Not allowed yet: {purpose or why}. Tell your person what you want to do and why, and "
+            f"ask them to allow it — there is an Allow button on this message. Don't try to work "
+            f"around it."
         ),
         request=request,
     )
@@ -569,8 +605,8 @@ def require_path(kind: Kind, target: Path, root: Path) -> None:
         _wait_for(decision)
 
 
-def require_command(command: str, root: Path) -> None:
-    decision = check_command(command, root)
+def require_command(command: str, root: Path, purpose: str = "") -> None:
+    decision = check_command(command, root, purpose)
     if not decision.allowed:
         _wait_for(decision)
 

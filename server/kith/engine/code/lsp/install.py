@@ -49,6 +49,17 @@ _NPM_PACKAGES: dict[str, str] = {
     "php": "intelephense",
 }
 
+#: Roughly what lands on disk, measured by installing each into an empty prefix and running
+#: `du -sh`. Shown to whoever is being asked to approve it, because "install a language
+#: server" and "install 148 MB" are different questions and only one of them can be answered.
+#: Approximate on purpose — it moves with every release of the package, and the point is the
+#: order of magnitude rather than a number to hold anyone to.
+_SIZES: dict[str, str] = {
+    "pyright": "about 34 MB",
+    "typescript-language-server typescript": "about 32 MB",
+    "intelephense": "about 148 MB",
+}
+
 #: How long an install may take. npm fetching pyright is 34 MB over a network someone else
 #: owns; a minute is optimistic and five is patient enough not to fail on a hotel connection.
 INSTALL_TIMEOUT = 300.0
@@ -66,6 +77,11 @@ def prefix() -> Path:
 def installable(family: str) -> str | None:
     """The npm package serving this family, or None when we do not install it."""
     return _NPM_PACKAGES.get(family)
+
+
+def download_size(family: str) -> str:
+    """Roughly how much this one costs on disk, in words. "" when we do not install it."""
+    return _SIZES.get(installable(family) or "", "")
 
 
 def command_for(family: str) -> str | None:
