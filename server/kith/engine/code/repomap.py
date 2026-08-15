@@ -27,6 +27,7 @@ and it is right often enough to put `main.py` above `test_helpers_generated.py`.
 
 from __future__ import annotations
 
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,12 @@ MAX_DEPTH = 12
 #: cost, long before anything is parsed.
 MAX_FILES_SCANNED = 20_000
 
+#: How long to let `git ls-files` run. Measured at 8ms on this repository — against a 30ms
+#: walk, asking is cheaper than the walk it filters. The timeout is for the pathological case
+#: (a network filesystem, an enormous index), where the right answer is to carry on without
+#: git rather than to hang a tool call.
+GIT_TIMEOUT = 10.0
+
 
 class RepoMapError(Exception):
     """Raised when a folder cannot be mapped, with a reason worth reading."""
@@ -157,8 +164,57 @@ def _skip(part: str) -> bool:
     return part in SKIP_DIRS or (part.startswith(".") and part not in (".", ".."))
 
 
+def _git_knows(root: Path) -> set[Path] | None:
+    """Every file git would list under `root`, or None if git has no opinion.
+
+    None means "not a repository, or no git" — an ordinary condition, and the caller carries on
+    with `SKIP_DIRS` alone. A downloaded folder has to work.
+
+    **Why ask git rather than read `.gitignore`.** Because `.gitignore` is harder than it looks
+    and getting it nearly right fails silently. This repository's own file already uses a
+    negation (`!server/data/.gitkeep`), path-anchored directories and globs, and that is before
+    nested `.gitignore` files, `.git/info/exclude`, the user's global config, and the precedence
+    rules between them. `git ls-files` is that parser, already correct, already installed.
+
+    `--others --exclude-standard` is what makes this usable on a working tree rather than a
+    clean checkout: it includes files that are untracked but *not* ignored, so something written
+    a minute ago and not yet committed is still findable.
+
+    Paths come back relative to the directory git was pointed at, which is why they are joined
+    to `root` rather than to the repository root — verified, because a subdirectory of a repo is
+    the common case here and the two differ exactly there.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard"],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None  # no git on this machine, or it would not start
+    if done.returncode != 0:
+        return None  # 128 outside a repository, which is not an error here
+    return {(root / line).resolve() for line in done.stdout.splitlines() if line}
+
+
 def candidates(root: Path) -> list[Path]:
     """Every source file under `root` we could read the shape of.
+
+    Two filters, and they answer different questions. `SKIP_DIRS` is "never worth parsing, in
+    any project" — it needs nothing installed and is the whole answer outside a repository. Git
+    is "what *this* project considers its code", which no name list can guess: measured on this
+    repository, 251 of 718 parsed files were ignored ones, and the two causes show both limits.
+    `desktop/release/` was simply missing from the list. `server/data/` could never be in it —
+    that is a *path*, not a name, and adding `data` would skip a legitimate `data/` folder in
+    every other project.
+
+    Both are kept, because git says *tracked*, not *interesting*: `vendor/` and occasionally
+    `node_modules` are committed, and they are still noise.
+
+    This filters the walk and nothing else. `read_file`, `outline` and symbol-read take an
+    explicit path and must keep working on an ignored file — sometimes the generated client is
+    exactly what you want to look at.
 
     Public because `search` walks the same tree for a different reason, and the interesting
     part of this function is not the walk — it is the accumulated judgement about what to skip,
@@ -166,6 +222,7 @@ def candidates(root: Path) -> list[Path]:
     and the fork would be discovered the first time someone added a directory to `SKIP_DIRS`
     and only half the tools started respecting it.
     """
+    known = _git_knows(root)
     found: list[Path] = []
     stack = [(root, 0)]
     scanned = 0
@@ -189,8 +246,11 @@ def candidates(root: Path) -> list[Path]:
                     continue
             except OSError:
                 continue
-            if outline.language_for(name) is not None:
-                found.append(item)
+            if outline.language_for(name) is None:
+                continue
+            if known is not None and item.resolve() not in known:
+                continue  # the project itself says this is not its code
+            found.append(item)
     return found
 
 

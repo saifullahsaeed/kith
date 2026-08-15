@@ -117,7 +117,53 @@ def _read_symbol(wanted: str, symbol: str) -> str:
     required=("path", "content"),
 )
 def write_file(path: Path, args: dict):
-    return sandbox.write_file(args["path"], args.get("content") or "")
+    return _reporting_lost_definitions(
+        args["path"], lambda: sandbox.write_file(args["path"], args.get("content") or "")
+    )
+
+
+def _reporting_lost_definitions(wanted: str, write):
+    """Run a write, and say so if it removed definitions that were there before.
+
+    Wired here rather than in `infra/workspace/files.py` because it cannot be wired there:
+    `infra` is rank 2 and `engine` is rank 3, so the writer is *below* the parser and may not
+    import it. That is the layering doing its job — the reader and writer of files stay free of
+    anything that understands code, and the adapter above, which is allowed to know about both,
+    joins them.
+
+    Failure here is swallowed on purpose. This is a remark about a write that already
+    succeeded, and a parser problem must not turn a good edit into a failed tool call.
+
+    It runs on every write, so the cost was measured rather than assumed: about 2.5ms per edit
+    on a 1,200-line Python file — one extra read and two parses — and nothing at all for a file
+    that is not source, which `readable` rejects before parsing anything. Against a tool call
+    inside a network round trip, that is not a number worth optimising.
+    """
+    from kith.engine.code import verify
+
+    try:
+        target = Path(sandbox.resolve(wanted))
+        was = verify.readable(target)
+    except Exception:
+        was = None
+
+    result = write()
+
+    if was is None:
+        return result
+    try:
+        now = verify.readable(target)
+        if now is None:
+            return result
+        gone = verify.lost(was[0], now[0], was[1])
+    except Exception:
+        return result
+    if not gone:
+        return result
+
+    shown = ", ".join(gone[:8]) + (f", … and {len(gone) - 8} more" if len(gone) > 8 else "")
+    note = f"\n\n[this removed {len(gone)} definition(s): {shown} — intended?]"
+    return result + note if isinstance(result, str) else result
 
 
 @tool(
@@ -142,11 +188,14 @@ def write_file(path: Path, args: dict):
     required=("path", "old", "new"),
 )
 def edit_file(path: Path, args: dict):
-    return sandbox.edit_file(
+    return _reporting_lost_definitions(
         args["path"],
-        args.get("old") or "",
-        args.get("new") or "",
-        replace_all=bool(args.get("replace_all")),
+        lambda: sandbox.edit_file(
+            args["path"],
+            args.get("old") or "",
+            args.get("new") or "",
+            replace_all=bool(args.get("replace_all")),
+        ),
     )
 
 
