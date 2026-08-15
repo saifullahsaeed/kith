@@ -209,12 +209,17 @@ def language_for(path: str | Path) -> str | None:
     return LANGUAGES.get(Path(str(path)).suffix.lower())
 
 
-def _parser(language: str):
+def parser_for(language: str):
     """The parser for a grammar, or None when the pack cannot supply one.
 
     Some grammars in the pack are fetched on demand, so this can fail at runtime on a machine
     with no network even though the language is in `LANGUAGES`. That is a reason to skip the
     file, not to take down the caller.
+
+    Public because `search` parses for a different question than this module asks. Reaching
+    across a module boundary for an underscore is how the last tangle started, and the three
+    things `search` needs — this, `source_of`, `repomap.candidates` — were all worth naming
+    rather than borrowing.
     """
     try:
         from tree_sitter_language_pack import get_parser
@@ -307,7 +312,7 @@ def _signature(source: bytes, node) -> str:
 
 def of_source(source: bytes, language: str) -> list[Symbol]:
     """Symbols in already-loaded bytes. Split out so the repo map can reuse the walk."""
-    parser = _parser(language)
+    parser = parser_for(language)
     if parser is None:
         return []
     tree = parser.parse(source)
@@ -373,7 +378,7 @@ def source_of(path: str | Path) -> tuple[bytes, str]:
     if b"\x00" in source[:8192]:
         raise OutlineError(f"{path} looks like a binary file, not source.")
 
-    if _parser(language) is None:
+    if parser_for(language) is None:
         # Distinguished from an empty outline on purpose. `of_source` returns `[]` when it
         # cannot parse, and rendered that reads as "this file has no definitions in it" —
         # a confident wrong answer about somebody's code, produced by a missing dependency.

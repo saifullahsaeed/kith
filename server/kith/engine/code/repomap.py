@@ -157,8 +157,15 @@ def _skip(part: str) -> bool:
     return part in SKIP_DIRS or (part.startswith(".") and part not in (".", ".."))
 
 
-def _candidates(root: Path) -> list[Path]:
-    """Every source file under `root` we could read the shape of."""
+def candidates(root: Path) -> list[Path]:
+    """Every source file under `root` we could read the shape of.
+
+    Public because `search` walks the same tree for a different reason, and the interesting
+    part of this function is not the walk — it is the accumulated judgement about what to skip,
+    how deep to go, and when to stop counting. A second copy would be that judgement forked,
+    and the fork would be discovered the first time someone added a directory to `SKIP_DIRS`
+    and only half the tools started respecting it.
+    """
     found: list[Path] = []
     stack = [(root, 0)]
     scanned = 0
@@ -232,7 +239,7 @@ def build(
     if not here.is_dir():
         raise RepoMapError(f"{root} is not a folder to map")
 
-    files = _candidates(here)
+    files = candidates(here)
     if not files:
         raise RepoMapError(
             f"no source files under {root} that I can read the shape of — "

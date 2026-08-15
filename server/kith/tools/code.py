@@ -14,6 +14,7 @@ from pathlib import Path
 
 from kith.engine.code import outline as outline_service
 from kith.engine.code import repomap as repomap_service
+from kith.engine.code import search as search_service
 from kith.engine.run import processes as process_service
 from kith.engine.run import testing as testing_service
 from kith.tools.params import INT, STR
@@ -95,6 +96,39 @@ def repo_map(path: Path, args: dict):
         "filesShown": mapped["files_shown"],
         "filesFound": mapped["files_found"],
         "map": repomap_service.render(mapped),
+    }
+
+
+@tool(
+    "find_symbol",
+    "Where a name is defined and where it is called, across a project — by what the code "
+    "means, not by matching characters. Use this instead of grep for any function, class or "
+    "method name: grep also returns the word in comments, in strings, inside longer names, and "
+    "in every unrelated local variable that happens to share it. This returns definitions and "
+    "call sites, separately, and tells you how many files it read. Needs nothing installed and "
+    "works in 19 languages.",
+    {
+        "name": {**STR, "description": "The exact function, class or method name."},
+        "path": {**STR, "description": "The folder to search (default: your whole folder)."},
+    },
+    required=("name",),
+)
+def find_symbol(path: Path, args: dict):
+    from kith.infra import permissions
+    from kith.infra import workspace as sandbox
+
+    target = Path(sandbox.resolve(args.get("path") or "."))
+    permissions.require_path("read", target, sandbox.root())
+    try:
+        found = search_service.find(target, str(args.get("name") or ""))
+    except search_service.SearchError as exc:
+        return {"error": str(exc)}
+    return {
+        "name": found["name"],
+        "definitions": len(found["definitions"]),
+        "calls": len(found["calls"]),
+        "filesSearched": found["files_searched"],
+        "found": search_service.render(found),
     }
 
 
