@@ -7,11 +7,12 @@ he pays for in reading. This answers the question actually being asked: **where 
 defined, and where is it called.**
 
 That distinction is worth more here than it looks, for a reason that has nothing to do with
-elegance. `read_text`-and-regex is the fallback when ripgrep is missing, and in the packaged
-application ripgrep is *always* missing — `shutil.which("rg")` cannot find it under the
-environment a GUI-launched macOS app inherits, so every user has been getting `grep -E`
-semantics rather than ripgrep's. A structural search does not care which binary is installed,
-because it does not run one.
+elegance. Text search runs a binary, and which binary it finds is a property of the *launcher*
+rather than the machine: a GUI-launched macOS app inherits `launchd`'s `PATH`, where ripgrep is
+not, so every shipped copy silently fell back to `grep -E` and its basic-regex semantics.
+`infra/executables.py` repairs that now. This does not depend on the repair, because it runs no
+binary at all — which is the more durable answer to a class of problem that will recur the next
+time something is discovered on `PATH`.
 
 **How a call is recognised, across nineteen grammars.** One flat set of node types, the way
 `outline._WANTED` is one flat set, and for the same reason: a table per language is the same
@@ -75,6 +76,38 @@ MAX_FILES = 2_000
 #: Longest source line returned with a hit. A minified bundle that slipped past the extension
 #: check should not spend the whole result on one line.
 _LINE_CHARS = 200
+
+#: Directory names that mean "this is a test", and filename shapes that mean the same. Covers
+#: the conventions of the languages here: `test_x.py`, `x_test.go`, `x.test.ts`, `x.spec.ts`,
+#: and the folders every ecosystem agrees on.
+_TEST_DIRS: frozenset[str] = frozenset({"tests", "test", "__tests__", "spec", "e2e", "testing"})
+_TEST_MARKS: tuple[str, ...] = ("test_", "_test.", ".test.", ".spec.", "spec_", "_spec.")
+
+
+def is_test(relative: str) -> bool:
+    """Whether a hit is in test code, from its path alone.
+
+    Not a judgement about quality — a split. "Four call sites" and "four call sites, three of
+    them tests" are different facts about how safe a change is, and the second one is the
+    question actually being asked before an edit: who depends on this, and is any of it
+    covering me.
+
+    From the path rather than the content on purpose. Reading files to classify them would
+    double the cost of a search to answer something the convention already states, and every
+    ecosystem here states it the same way.
+    """
+    parts = relative.replace("\\", "/").split("/")
+    if any(one in _TEST_DIRS for one in parts[:-1]):
+        return True
+    name = parts[-1]
+    # `test_x.py`, `x_test.go`, `x.test.ts` — but deliberately not a bare `startswith("test")`.
+    # That matched `engine/run/testing.py`, which *runs* tests and is production code, and the
+    # misclassification made this module claim a symbol had no test coverage when it had four
+    # tests one directory over. A heuristic that is wrong in the direction of "safe to delete"
+    # is worse than no heuristic.
+    if any(mark in name for mark in _TEST_MARKS):
+        return True
+    return name.rsplit(".", 1)[0] in ("test", "tests", "spec")
 
 
 class SearchError(Exception):
@@ -177,6 +210,11 @@ def find(root: str | Path, name: str) -> dict[str, Any]:
     unsupported: set[str] = set()
     searched = 0
     truncated = 0
+    #: Whether any test file was in scope at all. Without this, "0 in tests" is ambiguous
+    #: between "nothing covers this" and "no tests were looked at" — and reporting the first
+    #: when the second is true invites deleting something that is covered. Searching `kith/`
+    #: rather than the folder above it produces exactly that, which is how this was found.
+    saw_tests = False
 
     files = repomap.candidates(here)[:MAX_FILES]
     for seen_files, path in enumerate(files, 1):
@@ -186,6 +224,7 @@ def find(root: str | Path, name: str) -> dict[str, Any]:
             continue  # unreadable, too big, binary — the map skips these too
         searched += 1
         relative = str(path.relative_to(here)) if path.is_relative_to(here) else str(path)
+        saw_tests = saw_tests or is_test(relative)
         text_lines = source.decode(errors="replace").splitlines()
 
         for symbol in outline.of_source(source, language):
@@ -210,6 +249,7 @@ def find(root: str | Path, name: str) -> dict[str, Any]:
         "files_searched": searched,
         "files_unsearched": truncated,
         "unsupported": sorted(unsupported),
+        "saw_tests": saw_tests,
     }
 
 
@@ -235,15 +275,35 @@ def render(found: dict[str, Any]) -> str:
             note += f" (Calls are not searchable in: {', '.join(found['unsupported'])}.)"
         return note
 
-    rows: list[str] = [f"{name} — {len(definitions)} definition(s), {len(calls)} call(s)"]
+    # The blast radius, in one line. Before changing something the question is not only "how
+    # many places use this" but "is any of that a test" — four call sites of which three are
+    # tests is a safe change with cover; four with none is a change nothing is watching.
+    from_tests = [one for one in calls if is_test(one["path"])]
+    from_code = [one for one in calls if not is_test(one["path"])]
+    head = f"{name} — {len(definitions)} definition(s), {len(calls)} call(s)"
+    if calls and found.get("saw_tests"):
+        head += f": {len(from_code)} in code, {len(from_tests)} in tests"
+        if not from_tests:
+            head += " — nothing covering it"
+    elif calls:
+        # No test file was in scope, so the split would be an accident of where the search
+        # started rather than a fact about the code. Saying "0 in tests" here is how somebody
+        # deletes a covered function.
+        head += " — no tests were in scope, so this says nothing about coverage"
+
+    rows: list[str] = [head]
     if definitions:
         rows.append("")
         rows.append("defined")
         rows += [f"  {one['path']}:{one['line']}  {one['kind']}  {one['text']}" for one in definitions]
-    if calls:
+    if from_code:
         rows.append("")
-        rows.append("called")
-        rows += [f"  {one['path']}:{one['line']}  {one['text']}" for one in calls]
+        rows.append("called from code")
+        rows += [f"  {one['path']}:{one['line']}  {one['text']}" for one in from_code]
+    if from_tests:
+        rows.append("")
+        rows.append("called from tests")
+        rows += [f"  {one['path']}:{one['line']}  {one['text']}" for one in from_tests]
 
     tail: list[str] = []
     if len(definitions) + len(calls) >= MAX_HITS:

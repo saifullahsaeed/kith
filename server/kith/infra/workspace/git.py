@@ -7,11 +7,10 @@ change — and the other is about the net underneath him.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
-from kith.infra import permissions
+from kith.infra import executables, permissions
 
 from .base import ExecResult, WorkspaceError, _clip
 from .paths import base_dir, resolve, root
@@ -90,7 +89,11 @@ def _git(
     here = cwd or base_dir()
     proc = subprocess.run(
         [
-            "git",
+            # Resolved rather than named. `/usr/bin/git` happens to be on the minimal `PATH` a
+            # GUI-launched app inherits, so this one was never actually broken — but relying on
+            # that is relying on Apple shipping a shim, and someone with a newer git in
+            # Homebrew should get theirs rather than the one that came with Xcode.
+            executables.which("git") or "git",
             "-c",
             f"user.name={_GIT_AUTHOR[0]}",
             "-c",
@@ -109,7 +112,7 @@ def _git(
 
 
 def has_git() -> bool:
-    return shutil.which("git") is not None
+    return executables.which("git") is not None
 
 
 def _repo_root(here: Path) -> Path | None:

@@ -38,13 +38,13 @@ from __future__ import annotations
 import json
 import re
 import shlex
-import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from kith.engine.run.processes import ProcessError, processes
+from kith.infra import executables
 
 #: The name this claims in the background-process registry. Fixed, not derived from the
 #: command: there is only ever one suite worth watching at a time, and a fixed name is what
@@ -193,7 +193,7 @@ def python_for(root: Path) -> str:
         found = root / candidate
         if found.is_file():
             return str(found)
-    return shutil.which("python3") or shutil.which("python") or "python3"
+    return executables.which("python3") or executables.which("python") or "python3"
 
 
 def _looks_like_a_path(text: str) -> bool:

@@ -284,22 +284,66 @@ def _score(path: Path, root: Path, now: float) -> float:
     return recency + shallow + entry + substance + tests
 
 
+def changed_against(root: Path, ref: str) -> set[Path] | None:
+    """Files that differ from `ref`, or None if the question cannot be asked here.
+
+    Both halves of "what changed": `diff --name-only <ref>` covers everything committed since
+    and everything modified in the working tree, and `ls-files --others --exclude-standard`
+    adds the files that are new and not yet added. Without the second, a review of work in
+    progress omits precisely the files that were just created.
+    """
+    common = ["git", "-C", str(root)]
+    try:
+        diffed = subprocess.run(
+            [*common, "diff", "--name-only", ref], capture_output=True, text=True, timeout=GIT_TIMEOUT
+        )
+        if diffed.returncode != 0:
+            return None  # not a repo, or a ref that does not exist
+        fresh = subprocess.run(
+            [*common, "ls-files", "--others", "--exclude-standard"],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = diffed.stdout.splitlines() + (fresh.stdout.splitlines() if fresh.returncode == 0 else [])
+    return {(root / one).resolve() for one in lines if one}
+
+
 def build(
     root: str | Path,
     budget_tokens: int = DEFAULT_TOKENS,
     focus: str = "",
+    changed_since: str = "",
 ) -> dict[str, Any]:
     """Map a folder within a token budget.
 
     `focus` is a substring; when given, files whose path contains it are ranked first. That is
     the difference between "show me this repo" and "show me the auth code in this repo", and
     it costs one `in` per file rather than a second mechanism.
+
+    `changed_since` is a git ref, and it narrows the map to what differs from it. A whole-repo
+    map is the right answer for orientation and the wrong one for review: reviewing a
+    twelve-file change against a map of three hundred files spends the budget describing code
+    nobody touched. Asking for a ref nobody has is reported rather than silently ignored — a
+    map that quietly widened back to everything would be read as "the change is enormous".
     """
     here = Path(str(root)).expanduser()
     if not here.is_dir():
         raise RepoMapError(f"{root} is not a folder to map")
 
     files = candidates(here)
+    if changed_since:
+        touched = changed_against(here, changed_since)
+        if touched is None:
+            raise RepoMapError(
+                f"cannot compare against {changed_since!r} here — either this is not a git "
+                "repository or that is not a ref it knows."
+            )
+        files = [one for one in files if one.resolve() in touched]
+        if not files:
+            raise RepoMapError(f"nothing has changed against {changed_since} that I can read the shape of.")
     if not files:
         raise RepoMapError(
             f"no source files under {root} that I can read the shape of — "

@@ -69,6 +69,14 @@ def outline(path: Path, args: dict):
             **INT,
             "description": "Roughly how much context to spend (default 3000).",
         },
+        "changed_since": {
+            **STR,
+            "description": (
+                "A git ref — 'main', 'HEAD~3'. Narrows the map to what differs from it, "
+                "including files not yet committed. Use this to review a change instead of "
+                "mapping the whole repository."
+            ),
+        },
     },
     required=(),
 )
@@ -88,7 +96,12 @@ def repo_map(path: Path, args: dict):
     budget = max(300, min(budget, repomap_service.MAX_BUDGET_TOKENS))
 
     try:
-        mapped = repomap_service.build(target, budget_tokens=budget, focus=str(args.get("focus") or ""))
+        mapped = repomap_service.build(
+            target,
+            budget_tokens=budget,
+            focus=str(args.get("focus") or ""),
+            changed_since=str(args.get("changed_since") or ""),
+        )
     except repomap_service.RepoMapError as exc:
         return {"error": str(exc)}
     return {

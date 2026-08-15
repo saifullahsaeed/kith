@@ -167,6 +167,57 @@ class TestAcrossLanguages:
         assert len(found["calls"]) == 2, f"{suffix}: {found['calls']}"
 
 
+class TestTheBlastRadius:
+    """Before changing something: who depends on it, and is any of that covering me.
+
+    "Four call sites" and "four call sites, three of them tests" are different facts about how
+    safe a change is, and the second is the question actually being asked.
+    """
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("tests/test_x.py", True),
+            ("a/b_test.go", True),
+            ("ui/x.test.ts", True),
+            ("ui/x.spec.ts", True),
+            ("__tests__/a.js", True),
+            ("src/test.py", True),
+            ("kith/tools/code.py", False),
+            # The one that was wrong. `testing.py` *runs* tests and is production code; a bare
+            # startswith("test") called it a test, and that made a covered symbol report as
+            # uncovered.
+            ("kith/engine/run/testing.py", False),
+        ],
+    )
+    def test_what_counts_as_a_test_file(self, path, expected):
+        assert search.is_test(path) is expected
+
+    def test_calls_are_split_between_code_and_tests(self, tmp_path):
+        (tmp_path / "a.py").write_text("def target(): pass\ndef caller(): return target()\n")
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_a.py").write_text("def test_it(): return target()\n")
+        rendered = search.render(search.find(tmp_path, "target"))
+        assert "1 in code, 1 in tests" in rendered
+        assert "called from code" in rendered and "called from tests" in rendered
+
+    def test_something_nothing_tests_is_named_as_such(self, tmp_path):
+        (tmp_path / "a.py").write_text("def target(): pass\ndef caller(): return target()\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_other.py").write_text("def test_nothing(): pass\n")
+        assert "nothing covering it" in search.render(search.find(tmp_path, "target"))
+
+    def test_no_coverage_claim_is_made_when_no_test_was_in_scope(self, tmp_path):
+        """The bug this guards. Searching a package directory rather than the folder above it
+        looks at no tests at all, and reporting "0 in tests" there reads as "safe to delete"
+        about something with four tests one directory over."""
+        (tmp_path / "a.py").write_text("def target(): pass\ndef caller(): return target()\n")
+        rendered = search.render(search.find(tmp_path, "target"))
+        assert "nothing covering it" not in rendered
+        assert "no tests were in scope" in rendered
+
+
 class TestThroughTheTool:
     @pytest.fixture(autouse=True)
     def workspace_root(self, tmp_path, monkeypatch):

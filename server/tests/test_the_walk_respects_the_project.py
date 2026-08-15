@@ -117,6 +117,97 @@ class TestWhenThereIsARepository:
 
 
 @needs_git
+class TestMappingOnlyWhatChanged:
+    """A whole-repo map is right for orientation and wrong for review — reviewing a twelve-file
+    change against three hundred files spends the budget describing code nobody touched."""
+
+    def test_only_the_changed_files_are_mapped(self, tmp_path):
+        _repo(tmp_path)
+        (tmp_path / "old.py").write_text("def untouched(): pass\n")
+        (tmp_path / "also_old.py").write_text("def also(): pass\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "first",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "old.py").write_text("def untouched(): pass\ndef added_later(): pass\n")
+
+        mapped = repomap.build(tmp_path, changed_since="HEAD")
+        assert [one["path"] for one in mapped["entries"]] == ["old.py"]
+
+    def test_a_file_written_and_never_added_still_counts_as_changed(self, tmp_path):
+        """Without `--others` a review of work in progress omits exactly the files just
+        created, which are the ones most worth looking at."""
+        _repo(tmp_path)
+        (tmp_path / "committed.py").write_text("def a(): pass\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "first",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "brand_new.py").write_text("def fresh(): pass\n")
+        mapped = repomap.build(tmp_path, changed_since="HEAD")
+        assert [one["path"] for one in mapped["entries"]] == ["brand_new.py"]
+
+    def test_a_ref_that_does_not_exist_is_refused_rather_than_ignored(self, tmp_path):
+        """Silently widening back to the whole repository would be read as "the change is
+        enormous", which is a worse answer than an error."""
+        _repo(tmp_path)
+        (tmp_path / "a.py").write_text("def a(): pass\n")
+        with pytest.raises(repomap.RepoMapError) as caught:
+            repomap.build(tmp_path, changed_since="no-such-ref")
+        assert "no-such-ref" in str(caught.value)
+
+    def test_nothing_changed_says_so(self, tmp_path):
+        _repo(tmp_path)
+        (tmp_path / "a.py").write_text("def a(): pass\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "first",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        with pytest.raises(repomap.RepoMapError) as caught:
+            repomap.build(tmp_path, changed_since="HEAD")
+        assert "nothing has changed" in str(caught.value)
+
+
+@needs_git
 class TestWhatItDoesNotFilter:
     def test_search_stops_reporting_ignored_files(self, tmp_path):
         _repo(tmp_path)

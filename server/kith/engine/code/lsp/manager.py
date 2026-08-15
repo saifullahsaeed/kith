@@ -23,13 +23,13 @@ always answer "not installed" is precisely the waste the toolset lists exist to 
 
 from __future__ import annotations
 
-import shutil
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from kith.engine.code.lsp.client import LanguageServer, LSPError
+from kith.infra import executables
 
 #: Files that mean "a project starts here". Ordered by how specific they are: a `package.json`
 #: beside a file is a better root than the `.git` twelve levels up, and for a monorepo it is
@@ -191,7 +191,7 @@ class Manager:
             beside = Path(sys.executable).parent / candidate.binary
             if beside.is_file():
                 return candidate, str(beside)
-            on_path = shutil.which(candidate.binary)
+            on_path = executables.which(candidate.binary)
             if on_path:
                 return candidate, on_path
         return None

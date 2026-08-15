@@ -13,7 +13,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from kith.infra import permissions
+from kith.infra import executables, permissions
 from kith.kernel import changes
 
 from .base import _EXEC_TIMEOUT, WorkspaceError, _clip
@@ -260,8 +260,14 @@ def grep(pattern: str, path: str = ".", glob: str | None = None, max_matches: in
     if not target.exists():
         return f"There is nothing at {path} to search."
 
-    if shutil.which("rg"):
-        args = ["rg", "--line-number", "--no-heading", "--color", "never", "--max-columns", "300"]
+    # The **absolute** path, not the bare name, and that is the whole fix. This command is
+    # assembled into a string and handed to a shell, so a bare `rg` would be resolved again
+    # against the process `PATH` — the one a Finder-launched app inherits from launchd, where
+    # ripgrep is not. Finding it here and then naming it `rg` there would have looked correct
+    # and changed nothing.
+    ripgrep = executables.which("rg")
+    if ripgrep:
+        args = [ripgrep, "--line-number", "--no-heading", "--color", "never", "--max-columns", "300"]
         if glob:
             args += ["--glob", glob]
         args += ["-e", pattern, str(target)]
