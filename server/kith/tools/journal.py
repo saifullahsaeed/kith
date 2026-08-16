@@ -13,7 +13,12 @@ from kith.tools.registry import tool
 
 @tool(
     "journal",
-    "Add an entry to your journal — a running log of your own thoughts and actions.",
+    "Add an entry to your journal — a running log of your own thoughts and actions. "
+    "This is the one for narration: what you did, what you were thinking, how it went. "
+    "It is a record in time order, and you read it back to remember a stretch of work. "
+    "For a FACT that should still be true in a month — how they like something, what a "
+    "system is for, a decision and its reason — use `remember` instead: that is retrieved "
+    "by relevance and surfaces on its own, and a fact buried in a day's narration will not.",
     {"entry": STR},
     required=("entry",),
 )

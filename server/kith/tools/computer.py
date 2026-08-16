@@ -215,7 +215,11 @@ def _reporting_lost_definitions(wanted: str, write):
     "from a read. If it appears more than once you will be told how many times, and you "
     "should either include more surrounding lines to pin down the one you mean or pass "
     "replace_all. You get back a diff of what changed — read it, that is how you check you "
-    "changed what you intended.",
+    "changed what you intended. "
+    "Copy `old` from the read you did THIS turn, not from what you remember of the file. "
+    "Both ways this fails are that: text that is not there, and text that is there three "
+    "times. `read_file` with `symbol` gets you one definition exactly as it is on disk, which "
+    "is the cheapest way to be sure the text you are pasting still exists.",
     {
         "path": STR,
         "old": {**STR, "description": "The exact text to replace, copied verbatim."},

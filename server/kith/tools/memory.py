@@ -16,7 +16,11 @@ from kith.tools.registry import tool
     "Keep something in memory. It carries across conversations. Its 'level' sets "
     "how present it is: 'core' stays at the front of your mind (always with you); "
     "'recall' (default) is kept, and comes back when you recall it. Your recent "
-    "memories also surface on their own.",
+    "memories also surface on their own. "
+    "This is for FACTS that outlive the conversation — a preference, a decision and why, "
+    "what something is for. For what you did today and how it went, use `journal`: that is "
+    "a log in time order, and a running narration kept here would crowd out the things you "
+    "actually need to find again.",
     {
         "content": {**STR, "description": "The thing to remember."},
         "tags": {"type": "array", "items": STR, "description": "Optional labels."},
