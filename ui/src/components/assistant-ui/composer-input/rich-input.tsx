@@ -22,6 +22,7 @@ import {
 } from "@assistant-ui/react";
 import { type FC, useCallback, useEffect, useRef } from "react";
 
+import { queueNextSend } from "@/lib/queued-send";
 import { cn } from "@/lib/utils";
 
 import { COMPOSER_EXTENSIONS, fromMarkdown, markdownOffset, toMarkdown } from "./markdown";
@@ -120,6 +121,15 @@ export const RichComposerInput: FC<{
         }
         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
+          // ⌘⏎ (⌃⏎ elsewhere) means "after you finish", not "instead of what you are doing".
+          // Enter mid-turn steers — the text lands in the running turn and changes it, which is
+          // what a correction wants. A follow-up is the other intent, and steering it would make
+          // him abandon the thing he is in the middle of to start the next one.
+          //
+          // Set before `send`, because the adapter reads the flag on the very next send and the
+          // two are separated by the runtime, which carries text and attachments and nowhere to
+          // put an intent.
+          if (event.metaKey || event.ctrlKey) queueNextSend();
           // Flushed first: with a pending debounce the store still holds the text as it was one
           // keystroke ago, and sending would post that instead of what is on screen.
           flush(self.current);

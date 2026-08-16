@@ -509,6 +509,7 @@ def stream_agent(
     max_rounds: int | None = None,
     allow: set[str] | None = None,
     conversation_id: str = "",
+    steer: Callable[[], str] | None = None,
 ) -> Iterator[dict]:
     """Run the tool loop for one turn.
 
@@ -532,6 +533,7 @@ def stream_agent(
             max_rounds=max_rounds,
             allow=allow,
             conversation_id=conversation_id,
+            steer=steer,
         )
 
 
@@ -544,12 +546,23 @@ def _run_turn(
     max_rounds: int | None = None,
     allow: set[str] | None = None,
     conversation_id: str = "",
+    steer: Callable[[], str] | None = None,
 ) -> Iterator[dict]:
     """Run the tool loop.
 
     ``conversation_id`` picks the OpenRouter stickiness id. A conversation is the right
     unit for it: every round in it shares a prompt prefix, and shares it with nothing else,
     so keeping one conversation on one upstream is what keeps its cache warm.
+
+    ``steer`` is asked at the top of each round for anything the person has said since the
+    turn began, and is a callable rather than a queue this module reaches into for the same
+    reason ``resume`` is: taking new input is the adapter's business, and a loop that imported
+    the store would be the loop deciding where messages come from.
+
+    Nothing arrives mid-round on purpose. A round is the only moment ``convo`` is a list a
+    provider will accept — inside one there is a half-read stream and a tool call announced but
+    not yet answered — so the wait is at most one round, and a torn message list costs more
+    than the seconds.
     """
     convo = list(messages)
     # Everything this turn settles before its first round — the session id, the spill target,
@@ -587,6 +600,17 @@ def _run_turn(
         # missed 11,000 tokens of schemas — the single largest fixed cost in the prompt — and
         # therefore decided how tight the room was from roughly half the evidence.
         schemas = tool_host.schemas(only=allow)
+
+        # Anything the person has said since this turn began, delivered before the model is
+        # asked anything. Appended as an ordinary user message rather than a directive,
+        # because that is what it is — and putting it here makes it the freshest thing in the
+        # prompt, which is the whole point: the failure this fixes was a question arriving
+        # under a quarter of a million tokens of the previous task and losing to it.
+        if steer is not None:
+            said = steer()
+            if said:
+                convo.append({"role": "user", "content": said})
+                yield {"type": "steered", "text": said}
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:

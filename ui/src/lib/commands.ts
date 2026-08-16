@@ -51,6 +51,34 @@ export async function stopTurn(conversationId: string): Promise<CommandResult> {
   return { note: body.stopping ? "Stopping." : "Nothing is running." };
 }
 
+/**
+ * Say something to the turn already running, instead of killing it.
+ *
+ * Returns whether it landed. `false` means nothing was running — not a failure, and the caller
+ * should send the text as an ordinary message, which is the same thing the person meant one
+ * round later.
+ *
+ * The alternative until now was Stop, which throws away everything the turn had worked out and
+ * starts the next one from a cold prompt. That is a fire alarm; this is a steering wheel.
+ */
+export async function steerTurn(conversationId: string, message: string): Promise<boolean> {
+  if (!conversationId || !message.trim()) return false;
+  try {
+    const response = await fetch(`/api/chat/${conversationId}/steer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as { steering?: boolean };
+    return Boolean(body.steering);
+  } catch {
+    // A steer that cannot be delivered is not worth failing a send over — the caller falls
+    // back to posting it as a normal message.
+    return false;
+  }
+}
+
 export interface SkillSummary {
   name: string;
   description?: string;

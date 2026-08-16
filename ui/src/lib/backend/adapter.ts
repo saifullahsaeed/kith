@@ -7,7 +7,8 @@ import type {
 import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
-import { foldNow, stopTurn } from "@/lib/commands";
+import { foldNow, steerTurn, stopTurn } from "@/lib/commands";
+import { takeQueuedFlag, waitUntilIdle } from "@/lib/queued-send";
 import { readEvents, toWireMessages } from "./stream";
 import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
@@ -104,6 +105,30 @@ export function createBackendAdapter(conversation?: {
       if (command) {
         const result = await command.run(conversation?.get() ?? "");
         yield { content: [{ type: "text", text: result }] };
+        return;
+      }
+
+      /* Typing while he is working steers the turn rather than starting a second one.
+       *
+       * Until now the only lever mid-turn was Stop, which throws away everything the run had
+       * worked out. So a correction cost you the work it was correcting.
+       *
+       * The server answers `{steering: false}` when nothing is running, and then this falls
+       * through to the ordinary path below — which is the same thing the person meant, and the
+       * check-then-send race resolves the right way in both directions.
+       *
+       * Held back by `queueSend`: ⌘⏎ means "wait your turn", so it skips this and posts
+       * normally once the run is over.
+       */
+      const current = conversation?.get() ?? "";
+      const queued = takeQueuedFlag();
+      if (queued) {
+        // ⌘⏎ — hold it until he is done, then send it as an ordinary message. Waiting rather
+        // than posting now, because a second turn beside the first shares a stop switch with
+        // it and the loser of that race is a run nobody can stop.
+        await waitUntilIdle(current);
+      } else if (current && (await steerTurn(current, typed))) {
+        yield { content: [{ type: "text", text: "" }] };
         return;
       }
 
