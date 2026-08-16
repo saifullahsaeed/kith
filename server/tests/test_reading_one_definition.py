@@ -168,6 +168,36 @@ class TestThroughTheTool:
         out = computer.read_file(workspace_root, {"path": "m.py"})
         assert "def top_level" in out and "class Other" in out
 
+    def test_the_name_wins_over_a_line_range_he_also_guessed(self, workspace_root):
+        """Measured across 1,286 real tool calls: he passed a range alongside the name on all
+        seventy-four symbol reads. The name is the better answer — asked for one component he
+        guessed lines 95-260 when the definition ran to 361, and the range would have stopped
+        a hundred lines in, silently."""
+        (workspace_root / "m.py").write_text(PY_SOURCE)
+        out = computer.read_file(
+            workspace_root, {"path": "m.py", "symbol": "Thing.method", "offset": 1, "limit": 3}
+        )
+        assert out.startswith("Thing.method"), out.split("\n")[0]
+        assert "def method" in out, "the definition, not the first three lines"
+
+    def test_a_range_he_also_gave_is_used_when_the_name_misses(self, workspace_root):
+        """The range is a hedge rather than redundancy, so refusing when he has already handed
+        us a usable second answer throws away the better half of what he asked."""
+        (workspace_root / "m.py").write_text(PY_SOURCE)
+        out = computer.read_file(
+            workspace_root, {"path": "m.py", "symbol": "not_a_real_name", "offset": 1, "limit": 4}
+        )
+        assert "no definition called not_a_real_name" in out, "still told what went wrong"
+        assert "top_level" in out, "and what the file does define"
+        assert "Reading the lines you asked for instead" in out
+        assert '"""A module."""' in out, "plus the window he asked for"
+
+    def test_a_miss_with_no_range_still_just_explains(self, workspace_root):
+        (workspace_root / "m.py").write_text(PY_SOURCE)
+        out = computer.read_file(workspace_root, {"path": "m.py", "symbol": "not_a_real_name"})
+        assert "no definition called" in out
+        assert "Reading the lines you asked for" not in out
+
 
 class TestQualifyingNames:
     def test_nesting_comes_from_the_depth_column(self, module):

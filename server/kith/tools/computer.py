@@ -48,8 +48,9 @@ def shell(path: Path, args: dict):
             **STR,
             "description": (
                 "Read just this definition — 'server_for', or 'Manager.server_for' when several "
-                "classes have one by that name. Cheaper than reading the file and then finding "
-                "it. Ignores offset/limit."
+                "classes have one by that name. You do not need to know where it is, and it "
+                "gets you the whole thing rather than a window that might stop halfway. If you "
+                "also pass offset/limit they are used only if the name is not found."
             ),
         },
         "offset": {**INT, "description": "1-based line to start at (optional)."},
@@ -75,11 +76,11 @@ def read_file(path: Path, args: dict):
         return sandbox.read_image(str(wanted))
     symbol = str(args.get("symbol") or "").strip()
     if symbol:
-        return _read_symbol(wanted, symbol)
+        return _read_symbol(wanted, symbol, args.get("offset"), args.get("limit"))
     return sandbox.read_file(wanted, args.get("offset"), args.get("limit"))
 
 
-def _read_symbol(wanted: str, symbol: str) -> str:
+def _read_symbol(wanted: str, symbol: str, offset=None, limit=None) -> str:
     """One definition, read through the same reader as everything else.
 
     `locate` answers *where*, and `read_file` does the reading — so the permission check, the
@@ -89,6 +90,16 @@ def _read_symbol(wanted: str, symbol: str) -> str:
     The header exists because a window with no context is disorienting: a method arriving as
     lines 180-210 of a file whose length he does not know could be most of it or a rounding
     error, and that changes whether reading the rest is worth a round.
+
+    **`offset`/`limit` are a fallback, and used to be ignored.** Watched across 1,286 tool
+    calls of real work: he passed a line range alongside the name on *all seventy-four* symbol
+    reads, having worked one out from an outline first. That is not redundancy, it is hedging —
+    and the hedge was worth honouring, because the four names that missed returned a refusal
+    when he had already handed us a usable second answer.
+
+    It is also evidence for the feature rather than against it. Asked for `ConnectionCard` he
+    guessed lines 95-260; the definition is 101-361. His window would have stopped a hundred
+    lines into a component, and silently — which is the failure the name exists to prevent.
     """
     from kith.engine.code import excerpt, outline
     from kith.infra import permissions
@@ -99,10 +110,13 @@ def _read_symbol(wanted: str, symbol: str) -> str:
     try:
         span = excerpt.locate(target, symbol)
     except (excerpt.ExcerptError, outline.OutlineError) as exc:
-        # Returned rather than raised: every one of these messages names what to do instead —
-        # the definitions that do exist, the ones that matched, or "grep it" — and that is
-        # worth more to him than a failed tool call.
-        return str(exc)
+        # Every one of these messages names what to do instead — the definitions that do
+        # exist, the ones that matched, or "grep it" — so it is kept whether or not there is
+        # a window to fall back to.
+        if offset is None and limit is None:
+            return str(exc)
+        window = sandbox.read_file(wanted, offset, limit)
+        return f"{exc}\n\nReading the lines you asked for instead:\n{window}"
     body = sandbox.read_file(wanted, span.line, span.count)
     return f"{span.qualified} — {span.kind}, lines {span.line}-{span.end_line} of {span.of_lines}\n{body}"
 
@@ -346,7 +360,11 @@ def list_files(path: Path, args: dict):
     "Search files for a pattern (ripgrep) and get back matching lines with "
     "file:line numbers — your way to find the needle without loading whole "
     "haystacks into your head. Then read_file just that slice. Supports a glob "
-    "filter like '*.py'.",
+    "filter like '*.py'. "
+    "If the thing you are looking for is the NAME of a function, class or method, use "
+    "find_symbol instead: this matches characters, so it also returns the word in comments, "
+    "in strings, inside longer names, and every unrelated variable that happens to share it — "
+    "and you pay for reading all of that to find out which is which.",
     {
         "pattern": {**STR, "description": "Regex or literal to search for."},
         "path": {**STR, "description": "File or directory to search (default: home)."},
