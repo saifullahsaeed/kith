@@ -10,8 +10,24 @@ from kith.tools.registry import tool
 
 
 def _shell(command: str) -> dict:
+    """Run it, and say something if the command was carrying a credential.
+
+    A remark rather than a refusal. Putting a key in a command is sometimes the only way to do
+    a thing once, and a gate here would be one more thing to work around — but 136 commands in
+    one conversation each carried the same Odoo key, and every one of them is now in a
+    transcript on disk. The note points at the fix, which is to write the connection to a file
+    once instead of retyping it.
+
+    Said after the command has already run, for the same reason the post-edit note is: this is
+    an observation about what happened, and it must not turn a working command into a failure.
+    """
+    from kith.domain import secrets
+
     result = sandbox.run_command(command)
-    return {"exitCode": result.exit_code, "output": result.output}
+    out = {"exitCode": result.exit_code, "output": result.output}
+    if secrets.carries_a_secret(command):
+        out["note"] = secrets.ADVICE
+    return out
 
 
 @tool(
@@ -26,7 +42,17 @@ def _shell(command: str) -> dict:
     "a watcher goes to start_process, and a test suite to run_tests. Don't reach for "
     "`nohup … &` — it is refused here, because it would hand you a pid and nothing else. "
     "Nothing can answer a prompt either, so pass the flag that avoids the question "
-    "(`-y`, `--yes`, `--no-input`) rather than hoping.",
+    "(`-y`, `--yes`, `--no-input`) rather than hoping. "
+    "\n\n"
+    "WRITE A SCRIPT INSTEAD OF PIPING ONE IN, whenever you are going to do the same kind of "
+    "thing more than once, or anything that CHANGES a live system — a database, an accounting "
+    "system, someone's account. Put it in `.kith/scratch/` and run it by name. "
+    "`python3 - <<'PY'` runs the moment you send it: there is nothing to read first, nothing "
+    "to check, and nothing to run again. A file can be looked at before it runs, fixed and "
+    "re-run, and shown to them. "
+    "Put the connection and credentials in that file ONCE and import it afterwards. Repeating "
+    "them in every command retypes the same setup over and over and writes the key into the "
+    "record every single time.",
     {"command": {**STR, "description": "The shell command to run."}},
     required=("command",),
 )
