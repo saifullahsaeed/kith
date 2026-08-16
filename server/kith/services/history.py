@@ -159,6 +159,48 @@ def fold(
     )
 
 
+def fold_dry(
+    history: list[dict[str, Any]],
+    config,
+    conversation_id: str = "",
+    *,
+    tool_chars: int = 0,
+) -> tuple[list[dict[str, Any]], bool]:
+    """What the fold would leave behind, without paying for one.
+
+    The read-only twin of :func:`fold`, for showing someone the prompt their next turn will send.
+    Same knobs, same stored brief, same :func:`compact` — and a summariser that always comes back
+    empty, so no model is called and nothing is persisted.
+
+    That is not a trick played on `compact`: an empty summary is its documented fail-safe ("a big
+    prompt beats a broken turn"), so this is the path it already takes whenever the summariser is
+    down. The preview is therefore byte-exact in the two cases that cover almost every
+    conversation — under the budget, or a stored brief that still covers the tail — and in the
+    third it declines to invent one.
+
+    The second value is that third case: a fold is due, and the next real turn will pay for one
+    before it sends. The caller has to say so out loud, because a screen whose whole purpose is
+    that its numbers are the real numbers must not quietly show a prompt about to be replaced.
+    """
+    from kith.services import conversations, tuning
+
+    max_chars = _budget_chars(config, tool_chars)
+    prior = conversations.latest_summary(conversation_id) if conversation_id else {}
+    folded, fresh = compact(
+        history,
+        lambda _text: "",  # never summarise — see above
+        prior,
+        max_chars=max_chars,
+        keep_recent=int(tuning.value("history_keep_recent")),
+        max_fold_chars=_fold_input_ceiling(int(getattr(config, "context_window", 0) or 0)),
+    )
+    # `compact` returns the list untouched both when nothing needed folding and when a fold was
+    # due but went unpaid for. Only the second is worth reporting, and what separates them is
+    # whether the conversation is over the budget at all.
+    unchanged = fresh is None and len(folded) == len(history)
+    return folded, bool(unchanged and sum(message_chars(m) for m in history) > max_chars)
+
+
 def _summarize(text: str, config, host: str) -> str:
     """Ask the model for a brief. Returns "" on any failure — a fold must never break a turn.
 
@@ -249,7 +291,7 @@ def compact(
     # accumulated text was nowhere near what the window could hold.
     tail_chars = sum(message_chars(m) for m in history[covered:])
     if brief and 0 <= covered <= count and tail_chars <= max_chars:
-        return [_summary_message(brief), *history[covered:]], None
+        return [_summary_message(brief), *_what_they_asked(history, covered), *history[covered:]], None
 
     # (Re)fold everything but the most recent `keep_recent` turns.
     cut = _turn_aware_cut(history, keep_recent)
@@ -272,7 +314,53 @@ def compact(
     fresh = (summarize(text) or "").strip()
     if not fresh:
         return history, None  # summariser failed — a big prompt beats a broken turn
-    return [_summary_message(fresh), *history[cut:]], {"through": cut, "text": fresh}
+    # The brief covers what he did; these are the questions it was not allowed to compress.
+    return (
+        [_summary_message(fresh), *_what_they_asked(history, cut), *history[cut:]],
+        {"through": cut, "text": fresh},
+    )
+
+
+#: Ceiling on the verbatim questions carried past a fold, in characters.
+#:
+#: Generous on purpose, because the measurement says it never binds: across two of the longest
+#: real conversations here — 3,133 messages and 2.27M characters, and 453 messages and 1.03M —
+#: everything the person said came to 1.10% and 0.45% of the total. This exists for the one
+#: shape that could break that, someone pasting a document per message, and it keeps the most
+#: recent rather than the first: an old question that has been answered is the one worth losing.
+_KEEP_ASKED_CHARS = 60_000
+
+
+def _what_they_asked(history: list[dict[str, Any]], upto: int) -> list[dict[str, Any]]:
+    """The person's own messages from the part being folded away, kept word for word.
+
+    **A fold may compress what he said and did. It may not compress what they asked.**
+
+    The summariser is handed a transcript that is overwhelmingly his own output — measured on a
+    real conversation, tool results 38%, his prose 27%, and the person's words 0.3% — so it
+    faithfully summarises the work and drops the questions. One fold turned six turns into
+    "CI optimization is pushed in ce06d61", which was true, and lost a question about milestones
+    that had never been answered. The instruction it runs under asks it to preserve "unfinished
+    threads"; it cannot weigh a thread it can barely see.
+
+    This is the same failure as a new message losing to the previous task in the live prompt,
+    one layer down. Both are the person being outweighed by volume, and neither is fixed by
+    asking the model to try harder — so the questions are not offered to the summariser's
+    judgement at all.
+
+    Costs about one per cent, which is the number that makes this obvious rather than clever.
+    """
+    asked = [m for m in history[:upto] if m.get("role") == "user"]
+    kept: list[dict[str, Any]] = []
+    spent = 0
+    for message in reversed(asked):  # newest first, so a ceiling drops the oldest
+        size = message_chars(message)
+        if spent + size > _KEEP_ASKED_CHARS and kept:
+            break
+        kept.append(message)
+        spent += size
+    kept.reverse()
+    return kept
 
 
 def _summary_message(brief: str) -> dict[str, Any]:

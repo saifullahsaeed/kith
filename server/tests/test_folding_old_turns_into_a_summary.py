@@ -52,10 +52,16 @@ class TestFoldingWhenItGrows:
 
         messages, summary = compact(history, lambda t: "THE BRIEF", max_chars=5000, keep_recent=2)
 
-        # A leading summary system message, then exactly the last 4 turns, verbatim and in order.
+        # A leading summary system message, then what the person asked in the folded part,
+        # then exactly the last 4 turns, verbatim and in order.
+        #
+        # The questions in the middle are not padding. A fold may compress what he said and
+        # did; it may not compress what they asked — see `history._what_they_asked` and the
+        # real summary that lost an unanswered question about milestones. They cost ~1%.
         assert messages[0]["role"] == "system"
         assert "THE BRIEF" in messages[0]["content"]
-        assert messages[1:] == history[-4:]
+        asked = [m for m in history[:8] if m["role"] == "user"]
+        assert messages[1:] == [*asked, *history[-4:]]
         assert summary == {"through": 8, "text": "THE BRIEF"}
 
     def test_the_brief_summarises_the_old_turns_not_the_recent_ones(self):
@@ -81,7 +87,10 @@ class TestReusingTheBriefWithoutAnotherCall:
 
         assert called == []  # only 2 new turns since the brief — no re-summary
         assert "OLD BRIEF" in messages[0]["content"]
-        assert messages[1:] == history[8:]
+        # The reuse path carries the folded-away questions too. It is the path most turns
+        # take, so a hole here would lose them on nearly every turn rather than occasionally.
+        asked = [m for m in history[:8] if m["role"] == "user"]
+        assert messages[1:] == [*asked, *history[8:]]
         assert summary is None  # nothing new to persist
 
     def test_the_prior_brief_is_folded_in_when_it_regenerates(self):
@@ -293,7 +302,11 @@ class TestTheCutCountsTurnsNotListItems:
         messages, summary = compact(hist, lambda t: "BRIEF", max_chars=100, keep_recent=1)
 
         assert summary is not None
-        assert messages[1:] == tail  # only the trailing exchange survives untouched
+        # The trailing exchange survives untouched, and so does the question that opened the
+        # folded turn — its ten tool calls and their results are what got compressed.
+        asked = [m for m in hist[: len(hist) - len(tail)] if m["role"] == "user"]
+        assert messages[1:] == [*asked, *tail]
+        assert not [m for m in messages if m.get("role") == "tool"], "the bulk did fold"
 
     def test_a_tool_calls_message_is_actually_counted_not_treated_as_zero(self):
         """A `{"role": "assistant", "tool_calls": [...]}` message has no string `content` —
@@ -422,4 +435,7 @@ class TestOneFoldCallHasABoundedInputEvenWhenMuchMoreIsOwed:
         messages, fresh = compact(hist, lambda t: "BRIEF", max_chars=100, keep_recent=1, max_fold_chars=1000)
 
         assert fresh == {"through": len(huge_turn), "text": "BRIEF"}
-        assert messages[1:] == tail
+        # Forward progress is the point here: the enormous turn is behind the brief, and what
+        # survives is the question that opened it plus the trailing exchange.
+        asked = [m for m in huge_turn if m["role"] == "user"]
+        assert messages[1:] == [*asked, *tail]
