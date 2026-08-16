@@ -19,11 +19,20 @@ import pytest
 from kith.engine.code.lsp import install
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def app():
-    """Built once. Nothing here depends on which folder it was created with — the route
-    reads the workspace when it is called — so paying `create_app` per test would buy
-    nothing but a slower suite."""
+    """One per test, and the scope is the whole point.
+
+    This was `scope="module"` — built once, because nothing here depends on which folder it
+    was created with. That reasoning was right about the folder and wrong about everything
+    else: `create_app` starts the scheduler, and the autouse fixture that stubs it is
+    function-scoped. Pytest builds higher-scoped fixtures *first*, so a module-scoped app ran
+    before its own protection and left a real `kith-scheduler` daemon running for the rest of
+    the session — which four tests in two other files then failed on, in CI, having passed
+    locally when this file was run alone.
+
+    So: function scope, and it inherits every guard the suite already has.
+    """
     from kith import create_app
 
     built = create_app()
