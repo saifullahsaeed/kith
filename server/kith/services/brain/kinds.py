@@ -218,8 +218,6 @@ KINDS: dict[str, Kind] = {
             add=lambda p, d: _make_schedule(p, d),
             edit=lambda p, k, d: repo.schedules.set_schedule_status(p, k, d.get("status", "active")),
         ),
-        # Keyed by name: he calls his self-made tools by name, so that is their identity.
-        Kind("tool", remove=repo.custom_tools.delete_custom_tool, key=str),
     )
 }
 

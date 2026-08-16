@@ -560,7 +560,7 @@ def _run_turn(
     config, room, offload_result = turn.config, turn.room, turn.offload
     budget, reserve, landing_effort = turn.budget, turn.reserve, turn.landing_effort
     routing = turn.routing
-    mcp_names, custom_names = tool_host.mcp_names, tool_host.custom_names
+    mcp_names = tool_host.mcp_names
 
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
@@ -627,7 +627,6 @@ def _run_turn(
                 window=config.context_window,
                 chars_per_token=room.chars_per_token,
                 mcp_names=mcp_names,
-                custom_names=custom_names,
             )
 
         book = yield from _make_room(

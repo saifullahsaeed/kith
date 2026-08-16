@@ -43,6 +43,12 @@ def _migrations():
         )
 
     def v2_custom_tools(conn):
+        # Kept although the feature is gone — see `v36_no_custom_tools`, which drops this
+        # table. Migrations are applied by *position*: `apply_migrations` runs everything past
+        # `PRAGMA user_version` and then sets the version to the index reached. Deleting this
+        # entry would renumber every migration after it, so a database at version 20 would
+        # re-run migration 21 believing it was 20, and each one would fail on a table it had
+        # already created. A migration list is append-only for the same reason a ledger is.
         conn.execute(
             """
             CREATE TABLE custom_tools (
@@ -560,6 +566,20 @@ def _migrations():
         # database is mid-upgrade.
         conn.execute("ALTER TABLE conversations ADD COLUMN last_said TEXT NOT NULL DEFAULT ''")
 
+    def v36_no_custom_tools(conn):
+        """Drop the table behind tools he wrote for himself.
+
+        The feature is gone. Across 13,961 recorded tool calls `create_tool`, `list_tools` and
+        `delete_tool` were used **zero times**, while their schemas — 292 tokens for
+        `create_tool` alone — were sent on every round of every turn.
+
+        Dropped rather than left empty. An unused table is a thing the next person has to work
+        out the status of, and the migration is the only honest place to say it is finished.
+        `IF EXISTS` because a database created after this lands never had it in the first
+        place.
+        """
+        conn.execute("DROP TABLE IF EXISTS custom_tools")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -596,6 +616,7 @@ def _migrations():
         v33_task_conversation,
         v34_four_task_statuses,
         v35_conversation_last_said,
+        v36_no_custom_tools,
     ]
 
 

@@ -23,7 +23,6 @@ import {
   Sparkles,
   StickyNote,
   User,
-  Wrench,
   X,
 } from "lucide-react";
 import { TaskDetailPage } from "@/components/control-panel/task-detail";
@@ -54,7 +53,6 @@ import { Projects } from "./projects";
 import { Reminders } from "./reminders";
 import { Schedules } from "./schedules";
 import { Sources } from "./sources";
-import { Tools } from "./tools";
 import { INPUT, KIND_LABEL } from "./types";
 import type { ProjectRef, Tab } from "./types";
 
@@ -397,14 +395,6 @@ export function ControlPanel({
             >
               Files
             </TabButton>
-            <TabButton
-              icon={<Wrench className="size-4" />}
-              active={tab === "tools"}
-              count={counts.tools}
-              onClick={() => openTab("tools")}
-            >
-              Tools
-            </TabButton>
           </NavGroup>
         </nav>
 
@@ -470,10 +460,8 @@ export function ControlPanel({
                 <People {...props} snap={snap} />
               ) : tab === "sources" ? (
                 <Sources snap={snap} query={query} remove={remove} ingest={ingest} />
-              ) : tab === "workspace" ? (
-                <WorkspaceFiles />
               ) : (
-                <Tools snap={snap} query={query} remove={remove} />
+                <WorkspaceFiles />
               )}
             </div>
           )}

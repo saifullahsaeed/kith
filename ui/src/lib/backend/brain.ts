@@ -116,65 +116,12 @@ export interface Project {
   tasks_active: number;
   tasks_total: number;
 }
-export interface CustomTool {
-  name: string;
-  description: string;
-  language: string;
-  code: string;
-  created_at: string;
-}
-export interface Reminder {
-  id: number;
-  fire_at: string;
-  note: string;
-  status: string;
-  created_at: string;
-  fires: string;
-}
-export interface Message {
-  id: number;
-  body: string;
-  kind: string;
-  read: number;
-  /** An in-app path like "/tasks/42" when this is about something you can open. */
-  link: string | null;
-  sender: string;
-  created_at: string;
-}
-export interface Person {
-  id: number;
-  name: string;
-  relationship: string;
-  profile: string;
-  created_at: string;
-  updated_at: string;
-}
-export interface Source {
-  id: number;
-  title: string;
-  origin: string;
-  created_at: string;
-  chars: number;
-}
-export interface Schedule {
-  id: number;
-  note: string;
-  every_minutes: number | null;
-  daily_at: string | null;
-  next_fire: string;
-  last_fired: string | null;
-  status: string;
-  created_at: string;
-  fires: string;
-}
-
 export interface BrainSnapshot {
   counts: Record<string, number>;
   memories: Memory[];
   notes: Note[];
   journal: JournalEntry[];
   tasks: Task[];
-  tools: CustomTool[];
   reminders: Reminder[];
   messages: Message[];
   people: Person[];

@@ -261,20 +261,6 @@ class Schedule(Base):
     conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class CustomTool(Base):
-    """Keyed by name, not an id — he calls tools by name, so that is the identity."""
-
-    __tablename__ = "custom_tools"
-
-    name: Mapped[str] = mapped_column(Text, primary_key=True)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
-    parameters: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    required: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    language: Mapped[str] = mapped_column(Text, nullable=False, default="python")
-    code: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-
-
 class Conversation(Base):
     """One chat, indexed. The words are a JSONL file in the workspace, not a column."""
 

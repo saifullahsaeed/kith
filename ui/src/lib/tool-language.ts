@@ -164,9 +164,6 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   list_files: { verb: "looked through", of: "path", group: "files" },
   grep: { verb: "searched files for", of: "pattern", group: "search" },
   // his own tools and skills
-  create_tool: { verb: "built himself a tool", of: "name", group: "tools" },
-  list_tools: { verb: "checked his own tools", group: "tools" },
-  delete_tool: { verb: "removed one of his tools", group: "tools" },
   read_skill: { verb: "opened the skill", of: "name", group: "skills" },
 };
 

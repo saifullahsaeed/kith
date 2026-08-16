@@ -18,7 +18,7 @@ from pathlib import Path
 
 from kith.domain.tooling import ToolHost
 from kith.infra import permissions
-from kith.services import custom_tools, touched, tuning
+from kith.services import touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
     asking,
     code,
@@ -26,7 +26,6 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     identity,
     journal,
     memory,
-    meta,
     notes,
     outreach,
     people,
@@ -84,7 +83,7 @@ def tool_schemas(
     extra = list(mcp or [])
     if agent_db_path is None or only is not None:
         return builtins + extra
-    return builtins + custom_tools.schemas(agent_db_path) + extra
+    return builtins + extra
 
 
 def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | None = None) -> dict:
@@ -150,9 +149,6 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
         touched.record(agent_db_path, name, arguments or {}, answer.get("result"))
         return answer
 
-    if custom_tools.exists(agent_db_path, name):
-        return custom_tools.run(agent_db_path, name, arguments or {})
-
     # MCP last, and that ordering is the collision policy. A built-in always wins by
     # construction rather than by a check someone could forget to write — a server shipping
     # a tool called `shell` simply cannot reach this line, because its name is
@@ -173,7 +169,7 @@ def _hint(name: str, agent_db_path: Path) -> str:
     round and often guesses wrong again. Aliases cover the cases where spelling
     distance cannot help (`run_command` and `shell` share no letters).
     """
-    known = names() + [s["function"]["name"] for s in custom_tools.schemas(agent_db_path)]
+    known = names()
     guess = suggest(name)
     near = [guess] if guess else difflib.get_close_matches(name, known, n=3, cutoff=0.45)
     if not near:
@@ -215,18 +211,4 @@ def host(
         schemas=lambda only=None: tool_schemas(agent_db_path, only=only, mcp=mcp, language_server=available),
         run=lambda name, arguments, allow=None: run_tool(name, arguments, agent_db_path, allow=allow),
         mcp_names=frozenset(str(((one.get("function") or {}).get("name")) or "") for one in mcp),
-        custom_names=_custom_names(agent_db_path),
     )
-
-
-def _custom_names(agent_db_path: Path) -> frozenset[str]:
-    """The names of the tools he has built for himself, for the ledger's accounting."""
-    try:
-        return frozenset(
-            str(((one.get("function") or {}).get("name")) or "")
-            for one in custom_tools.schemas(agent_db_path)
-        )
-    except Exception:
-        # Accounting. A ledger that cannot separate his own tools from the built-ins is still
-        # a useful ledger, and must not be able to take down the turn.
-        return frozenset()

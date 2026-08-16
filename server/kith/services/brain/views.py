@@ -15,7 +15,6 @@ def snapshot(path: Path) -> dict:
     notes = repo.notes.list_notes(path, _LIMIT)
     journal = repo.journal.list_journal(path, _LIMIT)
     tasks = repo.tasks.list_tasks(path)
-    tools = repo.custom_tools.list_custom_tools(path)
     reminders = [
         {**r, "fires": clock.humanize_until(r["fire_at"])} for r in repo.reminders.list_reminders(path)
     ]
@@ -32,7 +31,6 @@ def snapshot(path: Path) -> dict:
             "notes": len(notes),
             "journal": len(journal),
             "tasks": len(tasks),
-            "tools": len(tools),
             "reminders": len(reminders),
             "messages": len(messages),
             "people": len(people),
@@ -45,7 +43,6 @@ def snapshot(path: Path) -> dict:
         "notes": notes,
         "journal": journal,
         "tasks": tasks,
-        "tools": tools,
         "reminders": reminders,
         "messages": messages,
         "people": people,
@@ -79,10 +76,6 @@ def timeline(path: Path, limit: int = 500) -> list[dict]:
                 "text": t["goal"],
                 "meta": {"id": t["id"], "status": t["status"]},
             }
-        )
-    for c in repo.custom_tools.list_custom_tools(path):
-        events.append(
-            {"kind": "tool", "at": c["created_at"], "text": c["name"], "meta": {"language": c["language"]}}
         )
     for r in repo.reminders.list_reminders(path):
         events.append(

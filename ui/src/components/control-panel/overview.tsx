@@ -73,7 +73,6 @@ export function Overview({
       "Workspace",
       [
         ["Sources", c.sources, <FileText className="size-4" />, "sky"],
-        ["Tools", c.tools, <Wrench className="size-4" />, "rose"],
       ],
     ],
   ];

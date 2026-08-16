@@ -45,4 +45,3 @@ class ToolHost:
     #: knows — the alternative was the turn re-deriving both from a snapshot it also had to
     #: hold, which meant two places that could disagree about which tools exist.
     mcp_names: frozenset[str] = frozenset()
-    custom_names: frozenset[str] = frozenset()
