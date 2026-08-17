@@ -18,11 +18,13 @@ import {
   unstable_useComposerInput,
   unstable_useTriggerPopoverAriaProps,
   unstable_useTriggerPopoverTriggers,
+  useAuiState,
   useComposerRuntime,
 } from "@assistant-ui/react";
 import { type FC, useCallback, useEffect, useRef } from "react";
 
-import { queueNextSend } from "@/lib/queued-send";
+import { steerTurn } from "@/lib/commands";
+import { currentConversation, queueNextSend } from "@/lib/queued-send";
 import { cn } from "@/lib/utils";
 
 import { COMPOSER_EXTENSIONS, fromMarkdown, markdownOffset, toMarkdown } from "./markdown";
@@ -50,6 +52,9 @@ export const RichComposerInput: FC<{
   const triggers = unstable_useTriggerPopoverTriggers();
   const aria = unstable_useTriggerPopoverAriaProps();
   const composer = useComposerRuntime();
+  /** Whether a turn is in flight. Enter means something different when it is — see the key
+   *  handler — so this is read here rather than inferred from a disabled button. */
+  const running = useAuiState((s) => s.thread.isRunning);
 
   /** The markdown this component last wrote to the store. Anything else arriving on `value` came
    *  from elsewhere — `/skill`, a quote, a restored draft — and has to be parsed back in. Without
@@ -62,8 +67,8 @@ export const RichComposerInput: FC<{
   /** Read by callbacks that outlive the render they were made in. `useEditor`'s handlers are
    *  created once; without this they would forever see the first render's triggers, and the slash
    *  menu registers itself after that render. */
-  const latest = useRef({ triggers, send });
-  latest.current = { triggers, send };
+  const latest = useRef({ triggers, send, running, text: value, clear: () => setText("") });
+  latest.current = { triggers, send, running, text: value, clear: () => setText("") };
   /** The editor, reachable from handlers that are only given a view. */
   const self = useRef<Editor | null>(null);
 
@@ -121,18 +126,29 @@ export const RichComposerInput: FC<{
         }
         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
-          // ⌘⏎ (⌃⏎ elsewhere) means "after you finish", not "instead of what you are doing".
-          // Enter mid-turn steers — the text lands in the running turn and changes it, which is
-          // what a correction wants. A follow-up is the other intent, and steering it would make
-          // him abandon the thing he is in the middle of to start the next one.
-          //
-          // Set before `send`, because the adapter reads the flag on the very next send and the
-          // two are separated by the runtime, which carries text and attachments and nowhere to
-          // put an intent.
-          if (event.metaKey || event.ctrlKey) queueNextSend();
           // Flushed first: with a pending debounce the store still holds the text as it was one
           // keystroke ago, and sending would post that instead of what is on screen.
           flush(self.current);
+
+          const queueIt = event.metaKey || event.ctrlKey;
+          // ⏎ while he is working steers the turn — and it is done HERE, not in the adapter,
+          // because anything that reaches the adapter has already gone through
+          // `performRoundtrip`, whose first line is `abortController.abort()`. That cancels the
+          // run in flight, our abort handler posts `/stop`, and the turn dies. A steer routed
+          // through the runtime would kill the work it exists to redirect.
+          //
+          // ⌘⏎ is the other intent — after this, not instead of it — and it does go through the
+          // runtime, because by the time it sends there is nothing left to abort.
+          if (!queueIt && latest.current.running) {
+            const said = latest.current.text;
+            const where = currentConversation();
+            if (where && said.trim()) {
+              void steerTurn(where, said);
+              latest.current.clear();
+              return true;
+            }
+          }
+          if (queueIt) queueNextSend();
           latest.current.send();
           return true;
         }

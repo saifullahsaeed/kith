@@ -29,6 +29,8 @@ import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/shell/presence";
 import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
+import { steerTurn } from "@/lib/commands";
+import { currentConversation } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
 import { time, when } from "@/lib/dates";
 import { USAGE_PART } from "@/lib/backend/adapter";
@@ -614,13 +616,27 @@ export function latestUsage(messages: readonly unknown[]): TurnUsage | undefined
 const ComposerHint: FC = () => (
   <AuiIf condition={(s) => s.composer.isEmpty && s.composer.attachments.length === 0}>
     <div className="text-muted-foreground/40 pointer-events-none me-1 flex items-center gap-3 text-[10px] select-none">
-      <span>
-        <kbd className="font-sans">⏎</kbd> send
-      </span>
-      <span aria-hidden>·</span>
-      <span>
-        <kbd className="font-sans">⇧⏎</kbd> new line
-      </span>
+      {/* The keys mean different things while he is working, so the hint has to. Enter mid-turn
+          does not start a turn — it changes the one running — and nothing about a send arrow
+          says that. ⌘⏎ is the other intent: after this, not instead of it. */}
+      <AuiIf condition={(s) => !s.thread.isRunning}>
+        <span>
+          <kbd className="font-sans">⏎</kbd> send
+        </span>
+        <span aria-hidden>·</span>
+        <span>
+          <kbd className="font-sans">⇧⏎</kbd> new line
+        </span>
+      </AuiIf>
+      <AuiIf condition={(s) => s.thread.isRunning}>
+        <span>
+          <kbd className="font-sans">⏎</kbd> steer
+        </span>
+        <span aria-hidden>·</span>
+        <span>
+          <kbd className="font-sans">⌘⏎</kbd> after this
+        </span>
+      </AuiIf>
     </div>
   </AuiIf>
 );
@@ -701,6 +717,46 @@ const AttachButton: FC = () => {
   );
 };
 
+/**
+ * Send, while he is working — which means steer, and must not go near the runtime.
+ *
+ * `ComposerPrimitive.Send` cannot be used here. Everything it sends goes through
+ * `performRoundtrip`, whose first line is `abortController.abort()`: the run in flight is
+ * cancelled, the adapter's abort handler posts `/stop`, and the turn dies. A button labelled
+ * "send" that quietly stops the work it was meant to redirect is worse than no button, which is
+ * what was here before.
+ *
+ * So this is the same path the Enter key takes — post the text to the running turn, clear the
+ * box — and the two are deliberately identical, because a keystroke and a button that claim to
+ * do the same thing should.
+ */
+const SteerButton: FC = () => {
+  const composer = useComposerRuntime();
+  const text = useAuiState((s) => s.composer.text);
+  const canSend = useAuiState((s) => !s.composer.isEmpty);
+
+  return (
+    <TooltipIconButton
+      tooltip="Send to the turn he is running — it keeps what it has found"
+      side="bottom"
+      type="button"
+      variant="default"
+      size="icon"
+      disabled={!canSend}
+      className="aui-composer-send size-7 rounded-full"
+      aria-label="Steer this turn"
+      onClick={() => {
+        const where = currentConversation();
+        if (!where || !text.trim()) return;
+        void steerTurn(where, text);
+        composer.setText("");
+      }}
+    >
+      <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
+    </TooltipIconButton>
+  );
+};
+
 const ComposerAction: FC = () => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-end">
@@ -739,6 +795,30 @@ const ComposerAction: FC = () => {
             </ComposerPrimitive.StopDictation>
           </AuiIf>
         </AuiIf>
+        {/* Stop *and* send, while he is working — not one instead of the other.
+         *
+         * Send used to disappear the moment a turn started, leaving a single square button. So
+         * the only thing the composer offered mid-turn was "kill it", which is exactly the
+         * choice steering exists to remove: typing a correction and finding nowhere to put it
+         * is what makes people hit Stop and lose the work they were correcting.
+         *
+         * Both, because they are different intents and always were. Stop ends the run; send
+         * changes what it is doing and keeps everything it has found. */}
+        <AuiIf condition={(s) => s.thread.isRunning}>
+          <ComposerPrimitive.Cancel asChild>
+            <TooltipIconButton
+              tooltip="Stop — ends the turn and loses what it found"
+              side="bottom"
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="aui-composer-cancel size-7 rounded-full"
+              aria-label="Stop generating"
+            >
+              <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+            </TooltipIconButton>
+          </ComposerPrimitive.Cancel>
+        </AuiIf>
         <AuiIf condition={(s) => !s.thread.isRunning}>
           <ComposerPrimitive.Send asChild>
             <TooltipIconButton
@@ -755,17 +835,7 @@ const ComposerAction: FC = () => {
           </ComposerPrimitive.Send>
         </AuiIf>
         <AuiIf condition={(s) => s.thread.isRunning}>
-          <ComposerPrimitive.Cancel asChild>
-            <Button
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-cancel size-7 rounded-full"
-              aria-label="Stop generating"
-            >
-              <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
-            </Button>
-          </ComposerPrimitive.Cancel>
+          <SteerButton />
         </AuiIf>
       </div>
     </div>

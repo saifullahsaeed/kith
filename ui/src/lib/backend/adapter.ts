@@ -7,8 +7,8 @@ import type {
 import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
-import { foldNow, steerTurn, stopTurn } from "@/lib/commands";
-import { takeQueuedFlag, waitUntilIdle } from "@/lib/queued-send";
+import { foldNow, stopTurn } from "@/lib/commands";
+import { takeQueuedFlag, useConversationForSteering, waitUntilIdle } from "@/lib/queued-send";
 import { readEvents, toWireMessages } from "./stream";
 import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
@@ -87,6 +87,9 @@ export function createBackendAdapter(conversation?: {
   /** The server reports the id it opened on the first turn; keep it for the next one. */
   set: (id: string) => void;
 }): ChatModelAdapter {
+  // The composer's keystroke needs to know which conversation it is in, and cannot reach it
+  // through the runtime. Registered here because this is where the getter already exists.
+  if (conversation) useConversationForSteering(conversation.get);
   return {
     async *run({ messages, abortSignal }) {
       /* A slash command never becomes a turn.
@@ -120,17 +123,15 @@ export function createBackendAdapter(conversation?: {
        * Held back by `queueSend`: ⌘⏎ means "wait your turn", so it skips this and posts
        * normally once the run is over.
        */
-      const current = conversation?.get() ?? "";
-      const queued = takeQueuedFlag();
-      if (queued) {
-        // ⌘⏎ — hold it until he is done, then send it as an ordinary message. Waiting rather
-        // than posting now, because a second turn beside the first shares a stop switch with
-        // it and the loser of that race is a run nobody can stop.
-        await waitUntilIdle(current);
-      } else if (current && (await steerTurn(current, typed))) {
-        yield { content: [{ type: "text", text: "" }] };
-        return;
-      }
+      /* ⌘⏎ waits for the running turn to finish before this one starts.
+       *
+       * Steering is NOT done here, and that is the whole design: reaching this function at all
+       * means `performRoundtrip` has already run, and its first line aborts the turn in flight.
+       * A steer routed through the runtime would kill the work it was meant to redirect. So the
+       * keystroke steers directly (see `rich-input`), and only a queued send ever gets here
+       * while something is running.
+       */
+      if (takeQueuedFlag()) await waitUntilIdle(conversation?.get() ?? "");
 
       const body = JSON.stringify({
         messages: toWireMessages(messages),

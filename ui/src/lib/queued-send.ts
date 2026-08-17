@@ -19,6 +19,33 @@
  * set by the keystroke and consumed by the very next send.
  */
 
+/**
+ * Which conversation the composer is in.
+ *
+ * The keystroke needs it and cannot reach it: the composer lives inside assistant-ui's runtime,
+ * which carries text and attachments, and the conversation id belongs to the shell that built
+ * the adapter. Registered here by that shell rather than threaded down through the library.
+ *
+ * It has to be the keystroke that steers, not the adapter, and that is not a preference. Sending
+ * anything while a turn is running goes through `performRoundtrip`, whose first line is
+ * `this.abortController?.abort()` — so the in-flight run is cancelled, our abort handler posts
+ * `/stop`, and the server turn dies. A steer routed that way would kill the work it was meant to
+ * redirect and then start a fresh turn, which is Stop wearing a better name.
+ */
+let readConversation: (() => string) | null = null;
+
+export function useConversationForSteering(get: () => string): void {
+  readConversation = get;
+}
+
+export function currentConversation(): string {
+  try {
+    return readConversation?.() ?? "";
+  } catch {
+    return "";
+  }
+}
+
 /** Set by ⌘⏎, read once by the send it belongs to. */
 let queuedNext = false;
 
