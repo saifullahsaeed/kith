@@ -33,20 +33,105 @@ from kith.services.compaction import _as_text
 #: something that was actually said in it.
 _SUMMARY_HEADER = "[Summary of the earlier part of this conversation]"
 
-#: Output budget for a brief. A fold is worthwhile only when the summary is far smaller than
-#: what it replaces; a couple of thousand tokens is plenty for "what was decided and where we
-#: are", and capping it stops a talkative model turning the summary into another transcript.
-_SUMMARY_MAX_TOKENS = 1_600
+#: Room for a brief, as a share of the window — the same reasoning as `_FOLD_ABOVE_SHARE`
+#: below, applied to the output side, and for the same reason. A fixed number was here and it
+#: was the constant this module elsewhere argues against: 1,600 tokens is the right size for a
+#: paragraph and the wrong size for the six sections `_INSTRUCTION` now asks for. The cap and
+#: the ambition have to agree, or the cap wins silently and the prompt is decoration.
+#:
+#: The floor is the old value, so a small local model is unchanged and only a model with room
+#: to spare gets more of it. The ceiling exists because a fold is worth doing only when the
+#: brief is far smaller than what it replaces; past a few thousand tokens a summariser is
+#: writing another transcript.
+_SUMMARY_SHARE = 0.04
+_SUMMARY_MIN_TOKENS = 1_600
+_SUMMARY_MAX_TOKENS = 4_000
 
-#: How the model is asked to fold. Notes, not prose; keep the load-bearing facts, drop the
-#: chatter; invent nothing — a summary that adds things is worse than a prompt that is merely
-#: large.
+#: The exact headings, so the shape is one thing rather than six places that must agree. Read
+#: by the tests, which is the point: a section quietly dropped from the instruction should fail
+#: something, not merely produce a worse summary that nobody notices for a month.
+SECTIONS = (
+    "What they asked for",
+    "What was decided",
+    "What was done",
+    "What was found",
+    "What is still open",
+    "Where it stands",
+)
+
+#: How the model is asked to fold.
+#:
+#: This replaces one paragraph that named six things to preserve *inside a blob* and then said
+#: "be concise" three different ways. What came back was a blob — accurate, and useless: a real
+#: fold of six turns produced four lines about CI sharding and lost every question that had
+#: been asked, including ones never answered.
+#:
+#: Two things were wrong with it and neither was the model.
+#:
+#: **It asked for a paragraph.** Six concerns listed in a sentence get a sentence that gestures
+#: at all six. A heading per concern makes the model go and look for each one separately; that
+#: search is what a section is *for*, and without it the easy material crowds out the rest.
+#:
+#: **It never mentioned the person.** Decisions, facts, files, threads, current work — every
+#: item was about the work and not one was about who asked for it. On a transcript that is
+#: 0.3% their words, an instruction that does not name them produces a summary without them in
+#: it, which is exactly what happened. `_what_they_asked` fixes that mechanically and does not
+#: depend on the model cooperating; this makes the brief itself carry the intent, which the
+#: verbatim messages alone do not — a run of questions is not the same as knowing what was
+#: wanted, and the verbatim carry has a ceiling that eventually drops the oldest ones.
+#:
+#: **Intent, though, and explicitly not a replay.** The first draft asked for every request
+#: "quoted in their own words", and run against a real 146,000-character conversation it did
+#: exactly that: fifty-odd verbatim lines, down to "keepgoimh" and "wheere are we", and then it
+#: hit the output cap in the middle of section two. Five of the six sections never got written.
+#: The words were already being carried by `_what_they_asked`, so the brief was paying twice
+#: for them and starving everything only it can say — the same failure as the paragraph it
+#: replaced, with a different section doing the crowding out.
+#:
+#: Deliberately not shaped around code. Kith's conversations are spreadsheets, audits, research
+#: and websites at least as often, and a section called "files and code" would tilt every fold
+#: toward the one kind of work that happens to name its artifacts in backticks.
 _INSTRUCTION = (
     "You are compressing the earlier part of a conversation so it can be carried forward in "
-    "less space. Write a compact brief — notes, not prose — that preserves: decisions made, "
-    "facts and constraints established, files and identifiers referred to, unfinished threads, "
-    "and what is currently being worked on. Leave out small talk and anything already "
-    "superseded. Do not add, guess, or infer anything that is not in the text. Be concise."
+    "less space. What you write REPLACES that part entirely — it is the only memory of it that "
+    "survives, so anything you leave out is gone.\n"
+    "\n"
+    "Write these six sections, in this order, using these exact headings. Keep a heading with "
+    "'nothing' under it rather than dropping it.\n"
+    "\n"
+    "## What they asked for\n"
+    "What the person wanted, in the order it was asked for. The intent behind each request — "
+    "NOT a replay of their messages, which are carried forward separately and word for word. "
+    "Quote their own phrasing only where a paraphrase would lose something: a constraint, a "
+    "preference, a correction, a standing rule.\n"
+    "\n"
+    "## What was decided\n"
+    "Each choice made and the reason it was made, plus any constraint or preference they "
+    "stated that still applies.\n"
+    "\n"
+    "## What was done\n"
+    "The work actually carried out, naming things exactly: files and paths, records, "
+    "identifiers, commands, figures. A name you half-remember is worse than no name.\n"
+    "\n"
+    "## What was found\n"
+    "Facts established and measurements taken, and every problem hit — with how it was "
+    "resolved, or that it was not.\n"
+    "\n"
+    "## What is still open\n"
+    "Questions asked and not answered, work deferred, anything known to be broken, unverified "
+    "or waiting on someone.\n"
+    "\n"
+    "## Where it stands\n"
+    "What was being worked on at the moment this text ends, and the next step if there is an "
+    "obvious one.\n"
+    "\n"
+    "Quote rather than paraphrase wherever the exact words carry the meaning: what the person "
+    "said, error text, identifiers, figures. A short verbatim extract beats a longer "
+    "description of one. Invent nothing — if it is not in the text, it does not go in.\n"
+    "\n"
+    "If the text opens with [Summary so far], that is your own earlier brief. Carry its content "
+    "forward into the matching sections and add to it. Do not summarise it again: compressing a "
+    "summary is how a conversation forgets."
 )
 
 
@@ -201,17 +286,32 @@ def fold_dry(
     return folded, bool(unchanged and sum(message_chars(m) for m in history) > max_chars)
 
 
+def _summary_tokens(window: int) -> int:
+    """How much room the brief gets, scaled to the window it will live in.
+
+    An unknown window gets the floor. That is the honest answer rather than a cautious one:
+    there is no share to take of a number nobody recorded, and the floor is what this was for
+    its whole life before the sections existed.
+    """
+    if window <= 0:
+        return _SUMMARY_MIN_TOKENS
+    return int(min(_SUMMARY_MAX_TOKENS, max(_SUMMARY_MIN_TOKENS, window * _SUMMARY_SHARE)))
+
+
 def _summarize(text: str, config, host: str) -> str:
     """Ask the model for a brief. Returns "" on any failure — a fold must never break a turn.
 
-    Reasoning off and a hard output cap: a summary does not need to think, and it must be much
-    smaller than what it replaces or the fold is pointless. Uses the same transport the turn
-    itself would (cloud when a key and endpoint are set, else local Ollama).
+    Reasoning stays off. Six headings turn this from a judgement into an extraction — go
+    through the text and find what belongs under each one — and extraction is the shape of work
+    that reasoning tokens buy the least on, while a fold happens on every long conversation and
+    is paid for every time. Uses the same transport the turn itself would (cloud when a key and
+    endpoint are set, else local Ollama).
     """
     from kith.llm import ollama, openai_compat
 
     prompt = [{"role": "system", "content": _INSTRUCTION}, {"role": "user", "content": text}]
-    slim = replace(config, think=False, effort="", num_predict=_SUMMARY_MAX_TOKENS)
+    window = int(getattr(config, "context_window", 0) or 0)
+    slim = replace(config, think=False, effort="", num_predict=_summary_tokens(window))
     from kith.services import tuning
 
     try:
