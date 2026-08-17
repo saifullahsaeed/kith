@@ -14,7 +14,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { MermaidBlock } from "@/components/assistant-ui/mermaid-diagram";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { looksLikeHisFile, useFileViewer } from "@/lib/files";
+import { linkTarget, looksLikeHisFile, useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
 /** A ```mermaid fence is a picture, not a listing — see `mermaid-diagram.tsx`.
@@ -152,15 +152,36 @@ const defaultComponents = memoizeMarkdownComponents({
     // that means nothing outside this app, and the usual case was a click that did nothing at
     // all. The viewer this opens is the same one an inline `path` mention already used; only
     // the anchor was missing it.
-    if (href && looksLikeHisFile(href)) {
+    //
+    // Which shapes count is `linkTarget`'s call now, and it decides the opposite way round:
+    // the browser gets a link only when it is really a web address. Recognising *file* shapes
+    // and defaulting the rest to `<a>` left every unrecognised one — an absolute path, a
+    // `file:` URL — falling through to a browser that resolves it against this origin and
+    // serves it the app. See `lib/files.ts`.
+    const target = href ? linkTarget(href) : null;
+    if (target?.kind === "file") {
       return (
-        <button type="button" onClick={() => openFile(href)} title={`Open ${href}`} className={style}>
+        <button
+          type="button"
+          onClick={() => openFile(target.path)}
+          title={`Open ${target.path}`}
+          className={style}
+        >
           {children}
         </button>
       );
     }
-    // Anything else keeps the browser's behaviour. `noreferrer` because these are addresses he
-    // found, not ones the person chose to visit.
+    // A same-page jump stays in the page: `target="_blank"` on one opens a second copy of the
+    // app scrolled to a heading.
+    if (target?.kind === "anchor") {
+      return (
+        <a className={style} href={href} {...props}>
+          {children}
+        </a>
+      );
+    }
+    // A real address. `noreferrer` because these are ones he found, not ones the person
+    // chose to visit.
     return (
       <a className={style} href={href} target="_blank" rel="noreferrer" {...props}>
         {children}

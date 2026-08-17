@@ -69,10 +69,17 @@ const KNOWN_SUFFIXES = [
 ];
 
 const FILE_PATTERN = new RegExp(
-  // An optional /home/kith prefix or a relative path, then at least one name, then a
-  // known suffix. Anchored at both ends: a path is the whole span, not part of a
-  // sentence that happens to contain one.
-  `^(?:/home/kith/|~/|\\./)?(?:[\\w.-]+/)*[\\w.-]+\\.(${KNOWN_SUFFIXES.join("|")})$`,
+  // An optional leading slash, home or dot, then at least one name, then a known suffix.
+  // Anchored at both ends: a path is the whole span, not part of a sentence that happens
+  // to contain one.
+  //
+  // The leading `/` is the important one and it used to say `/home/kith/` instead. That
+  // recognised the sandbox paths and missed the ones he actually writes now that he works
+  // on this machine — `/Users/you/Kith/inbox/Staff-SAIF.xlsx` was not a file as far as this
+  // was concerned. Worse than a missing feature, because of what happened instead: the full
+  // path stayed inert while the bare filename beside it became the clickable one, so the
+  // only thing you could click was the only one that could not be found.
+  `^(?:/|~/|\\./)?(?:[\\w.-]+/)*[\\w.-]+\\.(${KNOWN_SUFFIXES.join("|")})$`,
   "i",
 );
 
@@ -99,6 +106,62 @@ function toSandboxPath(text: string): string {
     .replace(/^\/home\/kith\//, "")
     .replace(/^~\//, "")
     .replace(/^\.\//, "");
+}
+
+// -- what a link in his prose actually points at ---------------------------- //
+
+export type LinkTarget =
+  | { kind: "url"; href: string }
+  | { kind: "anchor"; href: string }
+  | { kind: "file"; path: string };
+
+/**
+ * Where `[name](target)` should go, and the default is *not* the browser.
+ *
+ * This is inverted from how it reads, on purpose. A markdown link whose target is a path
+ * has no business being an `<a href>`, because a path-shaped href is not inert — the
+ * browser resolves it against this page's origin, so `/Users/you/Kith/report.html` becomes
+ * `http://127.0.0.1:8756/Users/you/Kith/report.html`, the SPA's catch-all answers every
+ * unknown route with `index.html`, and the desktop shell hands that URL to the real
+ * browser. You click a link to a file and a second copy of Kith opens. Nothing errors
+ * anywhere; every layer did exactly its job.
+ *
+ * So a target only reaches the browser when it is genuinely a web address. Everything else
+ * is treated as one of his files, including shapes that turn out not to be — the viewer
+ * saying it cannot find something is a true answer, and the old behaviour was not.
+ *
+ * `file:` URLs come here too, and they had their own version of the same silence: Chromium
+ * refuses a file: navigation from an http: page, and the desktop shell's scheme allowlist
+ * refuses to hand one to the OS. The click did nothing at all, twice over.
+ */
+export function linkTarget(href: string): LinkTarget {
+  const raw = (href ?? "").trim();
+  if (!raw) return { kind: "url", href: raw };
+  // Same-page. The one relative href that really does belong to the browser.
+  if (raw.startsWith("#")) return { kind: "anchor", href: raw };
+  // Protocol-relative — an address that borrows this page's scheme.
+  if (raw.startsWith("//")) return { kind: "url", href: raw };
+  const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(raw)?.[0].toLowerCase();
+  if (scheme === "file:") return { kind: "file", path: fromFileUrl(raw) };
+  if (scheme) return { kind: "url", href: raw };
+  return { kind: "file", path: withoutFragment(raw) };
+}
+
+function fromFileUrl(raw: string): string {
+  const path = raw.replace(/^file:\/\/(localhost)?/i, "");
+  return withoutFragment(path.split("?")[0]);
+}
+
+/** `notes.md#the-bit-about-x` names a file and a place in it. Only the file can be opened,
+ *  and carrying the fragment through would make it part of the name. */
+function withoutFragment(raw: string): string {
+  const bare = raw.split("#")[0];
+  try {
+    return decodeURIComponent(bare);
+  } catch {
+    // A stray `%` is not a reason to refuse to open the file.
+    return bare;
+  }
 }
 
 // -- opening one ------------------------------------------------------------ //

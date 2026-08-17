@@ -282,6 +282,96 @@ def resolve(path: str) -> str:
     return str(base_dir() / expanded)
 
 
+#: Folders never worth walking to find a file someone clicked on. The same set `glob` prunes,
+#: plus his own bookkeeping — a click means "show me my file", never "show me a transcript".
+_LOOKUP_SKIP = {
+    "node_modules",
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    INTERNAL_DIR,
+}
+
+#: How many files a lookup will walk before it stops looking. A workspace with something the
+#: pruning above missed should make one click slow, not hang the interface on it.
+_LOOKUP_LIMIT = 40_000
+
+
+def locate(path: str) -> str:
+    """Where a path *someone clicked* actually is: the literal path, or the file of that name.
+
+    Not a second :func:`resolve`, and deliberately not reachable from anything he writes with.
+    ``resolve`` has to stay literal, because a ``write_file("Staff.xlsx")`` that quietly
+    retargeted an existing Staff.xlsx three folders away would be a data-loss bug wearing a
+    convenience feature's clothes. Writes anchor; only reads look around.
+
+    This is the other direction, and the interface is where it is needed. What arrives here
+    are strings out of his prose — a bare filename in a sentence, a link he wrote, an absolute
+    path copied from a tool result — and the only sensible reading of a click on one is "show
+    me that file". ``Staff-SAIF.xlsx``, written in a message that named
+    ``~/Kith/inbox/Staff-SAIF.xlsx`` two lines above, was anchored at the workspace root,
+    missed, and reported *there's no Staff-SAIF.xlsx* about a file that was two clicks away in
+    Finder. The path was never wrong; it was a name, and nothing was looking for it.
+
+    One match, or none. An ambiguous name raises and says which files it found, because
+    opening the wrong Staff.xlsx silently is worse than asking which one was meant.
+    """
+    text = (path or "").strip()
+    if not text:
+        raise WorkspaceError("no path to open")
+
+    literal = Path(resolve(text))
+    if literal.exists():
+        return str(literal)
+
+    name = literal.name
+    if not name:
+        raise WorkspaceError(f"there's no {text}")
+
+    found = _named(name)
+    # A path with folders in it says more than a bare name does. When several files answer to
+    # the name, the one whose location also matches what was written is the one meant.
+    tail = [part for part in Path(text).parts if part not in ("", "/", ".", "~")]
+    if len(found) > 1 and len(tail) > 1:
+        suffix = "/".join(tail)
+        narrowed = [item for item in found if str(item).endswith(suffix)]
+        if narrowed:
+            found = narrowed
+
+    if not found:
+        raise WorkspaceError(f"there's no {text}")
+    if len(found) == 1:
+        return str(found[0])
+    shown = ", ".join(display(item) for item in found[:5])
+    more = f" (and {len(found) - 5} more)" if len(found) > 5 else ""
+    raise WorkspaceError(f"there's more than one {name}: {shown}{more} — say which one")
+
+
+def _named(name: str) -> list[Path]:
+    """Every file called `name` under a folder he is allowed to be in, nearest root first."""
+    found: list[Path] = []
+    seen: set[str] = set()
+    walked = 0
+    for base in (root(), *permissions.linked_project_roots()):
+        if not base.is_dir():
+            continue
+        for folder, dirs, files in os.walk(base):
+            # In place, because os.walk reads this list back to decide where to go next.
+            dirs[:] = [d for d in dirs if d not in _LOOKUP_SKIP and not d.startswith(".")]
+            walked += len(files)
+            if name in files:
+                candidate = Path(folder) / name
+                if str(candidate) not in seen:
+                    seen.add(str(candidate))
+                    found.append(candidate)
+            if walked > _LOOKUP_LIMIT:
+                return found
+    return found
+
+
 def display(path: Path | str) -> str:
     """How a path is named when it is shown to him: short where that is unambiguous, full where
     it is not.

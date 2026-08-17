@@ -23,11 +23,19 @@ export function WorkspaceFileViewer({ projectId }: { projectId?: number | null }
   const close = useFileViewer((state) => state.close);
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState("");
+  /** Where the file turned out to be, when that isn't where it was named.
+   *
+   *  A click carries whatever he wrote, and what he writes is often a bare filename in a
+   *  sentence — `Staff-SAIF.xlsx` for a file in `inbox/`. The server looks for it (see
+   *  `locate`), so the title should say what was opened rather than what was clicked;
+   *  otherwise the one useful fact, that it lives somewhere else, is the one thing missing. */
+  const [found, setFound] = useState("");
 
   useEffect(() => {
     if (!path) return;
     setContent(null);
     setError("");
+    setFound("");
     // A picture or a PDF is loaded by the viewer from its own bytes, so reading it as
     // text here would spend a megabyte to produce a decode error — which is what the
     // viewer used to show, as "this one needs its own application".
@@ -38,7 +46,9 @@ export function WorkspaceFileViewer({ projectId }: { projectId?: number | null }
     // em-dash in one of his reports.
     fetchWorkspaceFile(path, projectId)
       .then((file) => {
-        if (!cancelled) setContent(file.content);
+        if (cancelled) return;
+        setContent(file.content);
+        if (file.path) setFound(file.path);
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -54,7 +64,7 @@ export function WorkspaceFileViewer({ projectId }: { projectId?: number | null }
     <FileViewer
       open
       onOpenChange={(next) => !next && close()}
-      name={path}
+      name={found || path}
       content={content}
       error={error}
       projectId={projectId}

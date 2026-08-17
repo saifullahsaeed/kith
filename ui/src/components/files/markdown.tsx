@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
+import { linkTarget, useFileViewer } from "@/lib/files";
 import { CodeBlock } from "./code-block";
 
 /* ── Markdown renderer (react-markdown + gfm + highlighted code) ─────────── */
@@ -36,6 +37,49 @@ export const MarkdownInline = memo(function MarkdownInline({ children }: { child
   );
 });
 
+/**
+ * A link in a document he wrote, which is usually a link to another thing he wrote.
+ *
+ * Same decision as the chat renderer's anchor, and here it matters more: a plan or a report
+ * is mostly cross-references, and every one of them was an `<a href>` pointing at a relative
+ * or absolute path. The browser resolved those against this origin and the app's catch-all
+ * answered with the app — so clicking a link in his own document opened a second Kith. See
+ * `linkTarget` in `lib/files.ts` for the whole chain.
+ */
+function Anchor({
+  href,
+  className,
+  children,
+  ...rest
+}: ComponentPropsWithoutRef<"a"> & { className: string }) {
+  const openFile = useFileViewer((state) => state.open);
+  const target = href ? linkTarget(href) : null;
+  if (target?.kind === "file") {
+    return (
+      <button
+        type="button"
+        onClick={() => openFile(target.path)}
+        title={`Open ${target.path}`}
+        className={className}
+      >
+        {children}
+      </button>
+    );
+  }
+  if (target?.kind === "anchor") {
+    return (
+      <a className={className} href={href} {...rest}>
+        {children}
+      </a>
+    );
+  }
+  return (
+    <a className={className} href={href} target="_blank" rel="noreferrer" {...rest}>
+      {children}
+    </a>
+  );
+}
+
 const MD_INLINE: Components = {
   p: (p) => <span {...p} />,
   h1: (p) => <span className="font-semibold" {...p} />,
@@ -48,15 +92,7 @@ const MD_INLINE: Components = {
   em: (p) => <em className="italic" {...p} />,
   code: (p) => <code className="bg-muted rounded px-1 py-0.5 font-mono text-[0.9em]" {...p} />,
   pre: (p) => <span {...p} />,
-  a: ({ href, ...rest }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="text-kith underline decoration-dotted"
-      {...rest}
-    />
-  ),
+  a: (p) => <Anchor className="text-kith underline decoration-dotted" {...p} />,
   blockquote: (p) => <span className="text-muted-foreground italic" {...p} />,
   hr: () => null,
   br: () => <> </>,
@@ -80,14 +116,8 @@ const MD: Components = {
     />
   ),
   p: (p) => <p className="my-3 leading-relaxed first:mt-0 last:mb-0" {...p} />,
-  a: ({ href, ...p }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="text-kith underline underline-offset-2 hover:text-kith/80"
-      {...p}
-    />
+  a: (p) => (
+    <Anchor className="text-kith hover:text-kith/80 underline underline-offset-2" {...p} />
   ),
   ul: (p) => <ul className="my-3 ms-5 list-disc space-y-1 marker:text-muted-foreground" {...p} />,
   ol: (p) => (

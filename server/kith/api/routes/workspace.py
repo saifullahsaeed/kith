@@ -44,6 +44,21 @@ def _anchor(path: str, project_id: str | None) -> str:
     return path
 
 
+def _wanted(path: str, project_id: str | None) -> str:
+    """The file the interface is actually asking for: anchored, then looked for.
+
+    Two different questions, and they were run together as one. `_anchor` answers *relative to
+    what* — a deliverable's path belongs to its project, not to whichever session is open.
+    `locate` answers *where is it* — because the strings that reach these routes come out of
+    his prose, and a name he wrote in a sentence is not a path anyone anchored anywhere.
+
+    Only the three read-and-open routes use this. Rename, delete and folder-creation go
+    through `_relative` and stay literal: searching for the file someone *meant* is a fine
+    thing to do before showing it and an appalling thing to do before deleting it.
+    """
+    return sandbox.locate(_anchor(path, project_id))
+
+
 @api.get("/workspace")
 @api.doc(
     summary="Browse his workspace",
@@ -66,8 +81,8 @@ def workspace_file():
     path = request.args.get("path") or ""
     if not path:
         return jsonify({"error": "path required"}), 400
-    path = _anchor(path, request.args.get("projectId"))
     try:
+        path = _wanted(path, request.args.get("projectId"))
         # read_raw, not read_file: the viewer wants the real file, not the
         # line-numbered window the model reads.
         return jsonify({"path": path, "content": sandbox.read_raw(path)})
@@ -88,9 +103,8 @@ def workspace_raw():
     path = request.args.get("path") or ""
     if not path:
         return jsonify({"error": "path required"}), 400
-    path = _anchor(path, request.args.get("projectId"))
     try:
-        target, kind = sandbox.media_file(path)
+        target, kind = sandbox.media_file(_wanted(path, request.args.get("projectId")))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     # conditional=True gives ETag/If-Modified-Since and Range handling for free.
@@ -120,7 +134,7 @@ def workspace_open():
         # One of his files, by workspace path: the common case, and the whole action in
         # a single request.
         if path:
-            path = _anchor(path, body.get("projectId"))
+            path = _wanted(path, body.get("projectId"))
             return jsonify({"ok": True, **handoff.open_workspace_file(path, reveal=reveal).public()})
         # An absolute path — his databases, his persona folder, a transcript. Those are
         # not under his workspace, so they arrive already resolved.
