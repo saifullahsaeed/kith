@@ -24,7 +24,7 @@ class TestWhatIsDueWakesItsOwnChat:
     def test_a_due_reminder_continues_that_conversation(self, db: Path, monkeypatch):
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         woken: list[str] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: woken.append(cid))
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume, **_: woken.append(cid))
         conv = conversations.start(db, "hi")["id"]
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "check it", conversation_id=conv)
 
@@ -37,7 +37,7 @@ class TestWhatIsDueWakesItsOwnChat:
         would eventually pick it up on a generic step; there is no generic step now."""
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         woken: list[str] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: woken.append(cid))
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume, **_: woken.append(cid))
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "no chat")
 
         scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
@@ -48,7 +48,9 @@ class TestWhatIsDueWakesItsOwnChat:
         """Not two replies talking past each other — one turn, told about both."""
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         seen: list[tuple[str, int]] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: seen.append((cid, len(notes))))
+        monkeypatch.setattr(
+            scheduler, "_continue", lambda cid, notes, resume, **_: seen.append((cid, len(notes)))
+        )
         conv = conversations.start(db, "hi")["id"]
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "first", conversation_id=conv)
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "second", conversation_id=conv)
@@ -60,7 +62,7 @@ class TestWhatIsDueWakesItsOwnChat:
     def test_nothing_due_wakes_nobody(self, db: Path, monkeypatch):
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         woken: list[str] = []
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: woken.append(cid))
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume, **_: woken.append(cid))
         conversations.start(db, "hi")
 
         scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
@@ -71,7 +73,7 @@ class TestWhatIsDueWakesItsOwnChat:
         """Fires once, whether or not the continuation worked. One that keeps failing is a
         bug to find in the traceback, not a reason to retry it forever."""
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
-        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: None)
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume, **_: None)
         conv = conversations.start(db, "hi")["id"]
         repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "check it", conversation_id=conv)
 
@@ -84,7 +86,7 @@ class TestWhatIsDueWakesItsOwnChat:
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         reached: list[str] = []
 
-        def explode(cid, notes, resume):
+        def explode(cid, notes, resume, **_):
             reached.append(cid)
             raise RuntimeError("provider is down")
 

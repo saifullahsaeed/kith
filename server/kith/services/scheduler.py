@@ -36,6 +36,19 @@ _EVERY_SECONDS = 30.0
 _thread: threading.Thread | None = None
 _stop = threading.Event()
 
+#: The two reasons a conversation gets woken, in the words the turn is opened with.
+#:
+#: Constants rather than strings at the call sites, because this is the first sentence of an
+#: unattended turn — the one thing it has to plan against — and the difference between them is
+#: the difference between "go and look at the thing you set" and "the thing you started has
+#: come back". Both ask for the same shape of answer, which is why the second half is shared.
+_THEN = (
+    "Check on it and tell them what changed — briefly, the way you would mid-conversation, "
+    "not a report — or that nothing has, if that's the honest answer."
+)
+DUE = f"One of your reminders just fired. {_THEN}"
+FINISHED = f"Something you started in the background has finished. {_THEN}"
+
 
 def wake_finished(resume: Resume) -> list[str]:
     """Wake every conversation with a background task that has finished. Returns the ids woken.
@@ -52,8 +65,20 @@ def wake_finished(resume: Resume) -> list[str]:
     """
     woken: list[str] = []
     for conversation_id, notes in processes.finished_since_last_look().items():
-        _continue(conversation_id, notes, resume)
         woken.append(conversation_id)
+        # Same wrapping as `fire_due`, and it was missing here — which mattered more, because
+        # this is the path that gets used. `session_context.working_in` is how `paths.base_dir`
+        # finds the project a conversation is bound to; without it `current()` is "" and every
+        # relative path in the woken turn falls through to `root()`. So a turn woken because a
+        # build finished wrote its report into ~/Kith instead of the project, and `commit` and
+        # `changes` read whichever repo happens to be at the root. Silent both ways: the file
+        # is written, the commit succeeds, and neither is where anybody looks for it.
+        with session_context.working_in(conversation_id), session_context.nobody_watching():
+            try:
+                _continue(conversation_id, notes, resume, because=FINISHED)
+            except Exception:
+                # One conversation failing to be told must not stop the others being told.
+                traceback.print_exc()
     return woken
 
 
@@ -79,7 +104,7 @@ def fire_due(now_iso: str, resume: Resume) -> list[str]:
         woken.append(conversation_id)
         with session_context.working_in(conversation_id), session_context.nobody_watching():
             try:
-                _continue(conversation_id, notes, resume)
+                _continue(conversation_id, notes, resume, because=DUE)
             except Exception:
                 # A reminder that fails to report back must not take the rest down — every
                 # other conversation waiting on one still gets its turn.
@@ -98,19 +123,22 @@ def fire_due(now_iso: str, resume: Resume) -> list[str]:
     return woken
 
 
-def _continue(conversation_id: str, notes: list[str], resume: Resume) -> None:
-    """Wake a conversation because one of its reminders came due.
+def _continue(conversation_id: str, notes: list[str], resume: Resume, because: str = DUE) -> None:
+    """Wake a conversation, and say truthfully why.
 
-    The prose is this module's — it is what a reminder firing should sound like. Running the
-    turn is not, and `resume` is handed in for that: this used to import `_build_messages`,
-    `_Recorder` and `_turn` out of `api/routes/chat.py`, a service reaching up into an
-    adapter for three private functions, and the last upward import in the tree.
+    The prose is this module's — it is what being woken should sound like. Running the turn is
+    not, and `resume` is handed in for that: this used to import `_build_messages`, `_Recorder`
+    and `_turn` out of `api/routes/chat.py`, a service reaching up into an adapter for three
+    private functions, and the last upward import in the tree.
+
+    `because` exists because there is a second caller and the line was written for the first.
+    Every wake announced itself as "one of your reminders just fired", including the ones where
+    a build or a test suite had finished — so the first thing the turn was told was false, and
+    it is the *opening line*, which is the sentence a turn plans against. He would go looking
+    for a reminder there wasn't one of. The two triggers are one sentence apart and neither is
+    worth guessing at.
     """
-    trigger = (
-        "One of your reminders just fired. Check on it and tell them what changed — "
-        "briefly, the way you would mid-conversation, not a report — or that nothing "
-        "has, if that's the honest answer.\n\n" + "\n".join(f"- {note}" for note in notes)
-    )
+    trigger = f"{because}\n\n" + "\n".join(f"- {note}" for note in notes)
     resume(conversation_id, trigger)
 
 

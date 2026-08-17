@@ -46,7 +46,9 @@ def woken(monkeypatch):
     patching `_continue` used to hide.
     """
     calls: list[tuple[str, list[str]]] = []
-    monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume: calls.append((cid, list(notes))))
+    monkeypatch.setattr(
+        scheduler, "_continue", lambda cid, notes, resume, **_: calls.append((cid, list(notes)))
+    )
     return calls
 
 

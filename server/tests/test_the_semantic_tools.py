@@ -41,9 +41,9 @@ def fresh_manager(monkeypatch):
     """A manager of its own, so a test never inherits another test's warm server.
 
     Reached through `sys.modules` because `from kith.engine.code.lsp import manager` gives the
-    *instance* — the package re-exports it under the same name as its module, so the module
-    is only reachable this way. `conftest.py` has the same note about `kith.autonomy.runner`;
-    it is the second time this shape has caught something in this codebase.
+    *instance* — the package re-exports it under the same name as its module, so the module is
+    only reachable this way. `kith.autonomy.runner` was the same shape and used to be named
+    here as the other example; the autonomy loop is gone and the trap is not.
 
     Every module that did `from …manager import manager` holds its own reference, so each one
     is patched — the same reason `never_the_real_database` sweeps for `AGENT_DB_PATH`.
@@ -244,8 +244,8 @@ class TestWhenTheServerWillNotStart:
         import sys
         import time
 
-        # The module, not the singleton that shares its name — the same trap conftest
-        # documents for `kith.autonomy.runner`, and the third time it has bitten here.
+        # The module, not the singleton that shares its name — the trap `fresh_manager`
+        # describes, and the third time it has bitten here.
         module = sys.modules["kith.engine.code.lsp.manager"]
 
         binary = tmp_path / "node_modules" / ".bin" / "typescript-language-server"
