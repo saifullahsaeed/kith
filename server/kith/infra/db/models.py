@@ -61,6 +61,9 @@ class Task(Base):
     #: pair survives `.kith/` being shared. Blank for anything filed before it existed — see
     #: `v39_task_account` on why that is not backfilled.
     account: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: What "the same task" means once `.kith/` is shared. The id above is a local handle and
+    #: differs between machines by construction — see `domain/keys`.
+    key: Mapped[str] = mapped_column(Text, nullable=False, default="")
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     milestone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

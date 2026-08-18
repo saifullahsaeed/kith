@@ -14,6 +14,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from kith.domain import keys
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra import identity, project_files
 from kith.infra.db.engine import as_dict, session
@@ -90,6 +91,7 @@ def add_task(
             # work identity and a personal one are a real distinction people already keep in
             # `git config` and the task should land under whichever one will sign its commit.
             account=identity.whoami(_project_dir(db, project_id)),
+            key=keys.new_key(),
             project_id=project_id,
             milestone_id=milestone_id,
             created_at=now,
@@ -313,7 +315,7 @@ def delete_task(path: Path, task_id: int) -> bool:
     if deleted and directory:
         # Silent, like the write it undoes: the task is gone either way, and a brief that could
         # not be removed is worth less than a deletion that failed because of it.
-        project_files.forget_brief(directory, int(task_id))
+        project_files.forget_brief(directory, int(task_id), str(getattr(row, "key", "") or ""))
     return deleted
 
 

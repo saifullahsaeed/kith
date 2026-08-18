@@ -9,6 +9,22 @@ from kith.infra.db.connection import apply_migrations, connect
 from kith.infra.db.support import utc_now_iso
 
 
+def _key_for(created_at: str, task_id: int) -> str:
+    """A key for a task that predates keys, from when it was made.
+
+    Deterministic rather than random, so re-running a migration on a copy of the database
+    produces the same keys and two copies of one history do not become two histories. The id
+    goes in the low bits, which is what makes them unique within the table.
+    """
+    from datetime import datetime
+
+    try:
+        when = int(datetime.fromisoformat(str(created_at)).timestamp() * 1000)
+    except (TypeError, ValueError):
+        when = 0
+    return f"{when:011x}{int(task_id) & 0xFFFFF:05x}"
+
+
 def _migrations():
     def v1_brain(conn):
         conn.executescript(
@@ -634,6 +650,25 @@ def _migrations():
         """
         conn.execute("ALTER TABLE tasks ADD COLUMN account TEXT NOT NULL DEFAULT ''")
 
+    def v40_task_key(conn):
+        """A name a task keeps when it leaves this machine.
+
+        The integer id cannot be it, and not because two people might collide on 108 — because
+        when the second person pulls the first one's brief their Kith writes a local row for it,
+        and that row gets *their* next number. The same task has a different id on each machine
+        by construction. See `domain/keys`.
+
+        Backfilled, unlike `account`, and the difference is worth stating: an account is a claim
+        about who someone was and cannot be invented afterwards, while a key is only a promise to
+        be unique. Existing tasks are given one from their creation time so the folder can start
+        naming them consistently instead of waiting for each to be touched again.
+        """
+        conn.execute("ALTER TABLE tasks ADD COLUMN key TEXT NOT NULL DEFAULT ''")
+        rows = conn.execute("SELECT id, created_at FROM tasks ORDER BY id").fetchall()
+        for task_id, created in rows:
+            conn.execute("UPDATE tasks SET key = ? WHERE id = ?", (_key_for(created, task_id), task_id))
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS tasks_key ON tasks(key)")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -674,6 +709,7 @@ def _migrations():
         v37_no_self_model,
         v38_no_notes_or_people,
         v39_task_account,
+        v40_task_key,
     ]
 
 

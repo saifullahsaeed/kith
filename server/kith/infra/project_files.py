@@ -37,6 +37,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from kith.domain import keys
+
 #: The folder inside a project that belongs to him.
 KITH_DIR = ".kith"
 
@@ -197,8 +199,20 @@ def read_plan(project_dir: str | Path, task_id: int) -> str:
         return ""
 
 
-def brief_path(project_dir: str | Path, task_id: int, goal: str) -> Path:
-    return folder_for(project_dir, TASKS) / f"{int(task_id):02d}-{slug(goal)}.md"
+def brief_path(project_dir: str | Path, task_id: int, goal: str, key: str = "") -> Path:
+    """Where a task's brief lives. Named by its key once it has one.
+
+    The number was fine while one machine wrote here. It is not once two do: both would write
+    `108-something.md` for two different tasks, and git would merge them into one file — a
+    conflict on the same *name* for things that were never the same thing. The key is unique
+    without anyone coordinating, so the collision cannot happen. See `domain/keys`.
+
+    Falls back to the number, and that is not only for old files: a task written before its key
+    existed keeps the name it already has, so the 57 briefs already committed in one project
+    here stay exactly where they are and keep reading.
+    """
+    stem = str(key or "").strip().lower() or f"{int(task_id):02d}"
+    return folder_for(project_dir, TASKS) / f"{stem}-{slug(goal)}.md"
 
 
 def write_brief(project_dir: str | Path, task: dict[str, Any]) -> Path | None:
@@ -215,13 +229,16 @@ def write_brief(project_dir: str | Path, task: dict[str, Any]) -> Path | None:
         task_id = int(task.get("id") or 0)
         if not task_id:
             return None
-        path = brief_path(project_dir, task_id, str(task.get("goal") or ""))
+        key = str(task.get("key") or "").strip().lower()
+        path = brief_path(project_dir, task_id, str(task.get("goal") or ""), key)
         # An old brief under a different slug — the goal was reworded — would otherwise sit
         # there for ever alongside the new one, and a directory of stale duplicates is worse
-        # than no directory.
-        for stale in path.parent.glob(f"{task_id:02d}-*.md"):
-            if stale != path:
-                stale.unlink(missing_ok=True)
+        # than no directory. Both names are swept: a task that had a brief before it had a key
+        # has one under its number too, and leaving that behind would turn one task into two.
+        for stem in {f"{task_id:02d}", key} - {""}:
+            for stale in path.parent.glob(f"{stem}-*.md"):
+                if stale != path:
+                    stale.unlink(missing_ok=True)
         path.write_text(_brief(task))
         return path
     except (OSError, ValueError, TypeError):
@@ -313,15 +330,21 @@ def read_brief(doc: str | Path) -> dict[str, Any]:
     brief whose id cannot be read is a file, not a task.
     """
     path = Path(doc)
-    stem = re.match(r"(\d+)-", path.name)
+    stem = re.match(r"([0-9a-fA-F]+)-", path.name)
     if not stem:
         return {}
+    found = stem.group(1)
+    key = found.lower() if keys.looks_like_a_key(found) else ""
+    if not key and not found.isdigit():
+        return {}  # hex, but neither a key nor a number: not one of ours
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return {}
 
-    out: dict[str, Any] = {"id": int(stem.group(1)), "checklist": [], "deliverables": []}
+    out: dict[str, Any] = {"key": key, "checklist": [], "deliverables": []}
+    if not key:
+        out["id"] = int(found)
     title = re.search(r"^#\s+(.+)$", text, re.M)
     if title:
         out["goal"] = title.group(1).strip()
@@ -353,20 +376,25 @@ def read_brief(doc: str | Path) -> dict[str, Any]:
     return out
 
 
-def read_board(project_dir: str | Path) -> dict[int, dict[str, Any]]:
-    """Every task this folder knows about, by id. The board as the *files* have it."""
+def read_board(project_dir: str | Path) -> dict[Any, dict[str, Any]]:
+    """Every task this folder knows about, keyed by whatever names it.
+
+    A key when it has one, the old number when it does not. Deliberately mixed rather than
+    normalised to one or the other: a folder mid-migration genuinely holds both, and pretending
+    otherwise would mean either inventing keys for old briefs or throwing new ones away.
+    """
     folder = kith_dir(project_dir) / TASKS
     if not folder.is_dir():
         return {}
-    board: dict[int, dict[str, Any]] = {}
+    board: dict[Any, dict[str, Any]] = {}
     for doc in sorted(folder.glob("*.md")):
         task = read_brief(doc)
         if task:
-            board[int(task["id"])] = task
+            board[task.get("key") or int(task["id"])] = task
     return board
 
 
-def forget_brief(project_dir: str | Path, task_id: int) -> bool:
+def forget_brief(project_dir: str | Path, task_id: int, key: str = "") -> bool:
     """Remove a task's brief. True if there was one.
 
     The half of `write_brief` that was never written, and its absence is why the folder is
@@ -380,9 +408,12 @@ def forget_brief(project_dir: str | Path, task_id: int) -> bool:
     try:
         folder = kith_dir(project_dir) / TASKS
         gone = False
-        for doc in folder.glob(f"{int(task_id):02d}-*.md"):
-            doc.unlink(missing_ok=True)
-            gone = True
+        # Both names, for the same reason `write_brief` sweeps both: a task from before keys
+        # existed may still be filed under its number.
+        for stem in {f"{int(task_id):02d}", str(key or "").strip().lower()} - {""}:
+            for doc in folder.glob(f"{stem}-*.md"):
+                doc.unlink(missing_ok=True)
+                gone = True
         return gone
     except (OSError, ValueError, TypeError):
         return False
@@ -400,17 +431,31 @@ def reconcile(project_dir: str | Path, board: dict[int, dict[str, Any]]) -> dict
     board was missing from the folder, and the folder held 29 tasks the board did not, 17 of them
     deleted long ago. `only_in_files` is the one worth watching: it is ghosts.
     """
-    files = read_board(project_dir)
-    ours, theirs = set(files), {int(i) for i in board}
+
+    # Both sides named the same way before anything is compared. A folder mid-migration holds
+    # briefs filed under a number and briefs filed under a key, and the board knows both for
+    # every task — so comparing one naming against the other would report every task twice, once
+    # as a ghost and once as a gap.
+    def _named(task: dict[str, Any], fallback: Any) -> Any:
+        return str(task.get("key") or "").strip().lower() or fallback
+
+    theirs = {_named(task, int(handle)): task for handle, task in board.items()}
+    by_id = {int(handle): _named(task, int(handle)) for handle, task in board.items()}
+
+    ours: dict[Any, dict[str, Any]] = {}
+    for handle, task in read_board(project_dir).items():
+        # A brief still filed under its number belongs to whatever the board calls that number.
+        ours[task.get("key") or by_id.get(handle, handle)] = task
+
     disagree = []
-    for task_id in sorted(ours & theirs):
+    for name in sorted(set(ours) & set(theirs), key=str):
         for field in ("goal", "status", "priority"):
-            mine = str(files[task_id].get(field) or "").strip()
-            yours = str(board[task_id].get(field) or "").strip()
+            mine = str(ours[name].get(field) or "").strip()
+            yours = str(theirs[name].get(field) or "").strip()
             if mine and yours and mine != yours:
-                disagree.append({"id": task_id, "field": field, "board": yours, "file": mine})
+                disagree.append({"id": name, "field": field, "board": yours, "file": mine})
     return {
-        "only_in_files": sorted(ours - theirs),
-        "only_on_board": sorted(theirs - ours),
+        "only_in_files": sorted(set(ours) - set(theirs), key=str),
+        "only_on_board": sorted(set(theirs) - set(ours), key=str),
         "disagree": disagree,
     }
