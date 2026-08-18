@@ -537,12 +537,26 @@ def _wait_for(decision: Decision) -> None:
     # nobody's screen. The whole suite hung on this before the guard existed, which is the same
     # failure a background job would have hit in the small hours.
 
-    # A live turn, not merely a conversation id. The id says which chat this belongs to; it
-    # does not say that anything is streaming it to a screen. A checkpoint taken by a test, a
-    # reminder firing, a background continuation — all of them have a conversation and none of
-    # them has anybody looking, so waiting would park the thread on a prompt that is drawn
-    # nowhere. `live_turns.current` is exactly "a turn is running and can be watched", which is
-    # the condition under which the card actually appears.
+    # Asked as two questions, because it was one and the one was a proxy.
+    #
+    # `live_turns.current` used to carry the whole weight, on the reasoning that a turn nobody
+    # requested has no live turn either. That held only because the scheduler ran its turns
+    # outside the machinery entirely — and it no longer does: `begin_turn` is now the only way
+    # a turn starts, so a reminder firing at four in the morning has a live turn exactly like a
+    # typed message does. Left alone, this line would have read "somebody is watching" off a
+    # turn drawn on nobody's screen and parked the scheduler's timer thread on it for fifteen
+    # minutes — the precise failure the guard was added to prevent, reintroduced by fixing
+    # something else. The proxy did not break; what it stood for moved.
+    #
+    # So the honest question first. `nobody_watching()` is opened by the scheduler and by
+    # nothing else, and it rides into the turn on the copied context, which makes it the one
+    # thing here that actually knows whether a person is present.
+    if session_context.unattended():
+        raise Denied(decision)
+
+    # And still the live turn, for everything that has a conversation but no turn at all: a
+    # checkpoint taken by a test, a tool called from a script. `live_turns.current` is "a turn
+    # is running and can be watched", which is the condition under which the card appears.
     if not live_turns.current(session_context.current()):
         raise Denied(decision)
 

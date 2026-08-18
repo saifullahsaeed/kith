@@ -707,12 +707,146 @@ def attach_turn(conversation_id: str):
     )
 
 
+def begin_turn(conversation_id: str, config, gather, opening: str = ""):
+    """Start a turn, supervised, and return the stream to watch. **The only way one begins.**
+
+    There used to be two. A typed message came through here and got the whole apparatus — a
+    live turn the window can follow, a stop switch, a steer queue, the session binding, the
+    fold announcement, one place that closes the books however it ends. A turn Kith started
+    himself — a reminder due, a background task finished — went through `continue_conversation`,
+    which built the messages and drove `_turn` by hand and had none of it.
+
+    Not a design. `continue_conversation` was written on 2026-08-14 to settle a layering
+    complaint: `services/scheduler` was importing three *private* functions out of this module,
+    the last upward edge in the tree. Exposing something public for it to call was right. What
+    it exposed was a second copy of the turn half — written five days after `work()` had already
+    been split off the request thread (2026-08-08) and the live turn had already stopped
+    belonging to a connection (2026-08-09). The door it needed was open; it built another one.
+
+    So the two paths cost you: an unattended turn could not be watched (the window has listened
+    for `changes.publish("turn", ...)` since it shipped, and only `live_turns.begin` sends it —
+    so the transcript grew on disk and you found out on reload), could not be stopped, and could
+    not be steered — `/steer` answers "nothing is running", so typing at it started a *second*
+    turn on the same conversation.
+
+    `gather` is a callable, not a list, and that is the one piece of this that is not simply a
+    move. Reading the transcript and building the prompt happen on the turn's own thread because
+    building it can fold, and a fold is a model call: measured at a 1.57M-character backlog, a
+    full round trip before the real request was sent. Handing this a finished list would drag
+    that back onto whichever thread called — the request thread for a chat, the scheduler's one
+    timer thread for a reminder.
+    """
+    # A turn is a loop, and the transcript keeps its shape: what he reasoned, what he said,
+    # what he called and what came back, in the order it happened. Anything less and a resumed
+    # conversation is a summary of itself.
+    recorder = _Recorder(conversation_id)
+    # Not a queue owned by this request any more — see `services/live_turns`. The turn's output
+    # outlives the connection that asked for it, so leaving mid-answer and coming back attaches
+    # to the same stream instead of finding a finished wall of text.
+    live = live_turns.begin(conversation_id)
+
+    # Held as a local for the life of this turn, not re-read from `_RUNNING` between events.
+    # See `_arm`: the dict says which turn is current, and a turn asking that question about
+    # itself gets the wrong answer the moment a second one starts in the same conversation.
+    stopping = _arm(conversation_id)
+
+    def work():
+        """Advance the turn to the end, whether or not anyone is still reading.
+
+        This used to be the body of the response generator, and that is what made the browser
+        load-bearing: a generator only advances when something pulls on it, and the thing
+        pulling was Flask writing to the socket. Close the tab, switch conversations, drop the
+        wifi, and the turn stopped mid-step — not because anything cancelled it, but because
+        nothing was left asking for the next one. Work already done survived (the recorder
+        writes as it goes); the rest simply never happened.
+
+        Now the turn runs here, on its own, and the response below is only a reader. What a
+        disconnect costs you is the live view, not the turn.
+        """
+        try:
+            # Bound for the whole turn, so a tool that acts on a project records that this
+            # session is the one working on it. Starting a project here and having nothing
+            # know whose it was is how `conversations.project_id` stayed null from the day it
+            # was added: read on every turn to pick the project memory, written by nobody.
+            #
+            # Entered *inside* the worker, not around it. The binding is a ContextVar, and a
+            # thread does not inherit its parent's — a `with` in the request thread would leave
+            # every tool call in here believing it belonged to no conversation, which is silent
+            # rather than loud: files still get written, and nothing records whose turn wrote
+            # them. See `copy_context` below for the other half of that.
+            with session_context.working_in(conversation_id):
+                # Reading the transcript and building the prompt happen *here*, not on the
+                # request path, because building it can fold — and a fold is a summarisation
+                # call to the model. On a long conversation it is a large one: measured on a
+                # real transcript, a 1.57M-character backlog, about 390k tokens, a full
+                # round-trip before the actual request was even sent.
+                #
+                # It also said nothing while it did it. The `compacting` event is emitted from
+                # inside the turn, and the turn had not started — so the one thing that could
+                # have explained the wait was structurally unable to fire. It reads as "he
+                # takes ages before he answers", and every explanation you reach for first —
+                # the reasoning effort, a slow provider — is wrong, because those come after.
+                #
+                folded: dict = {}
+                messages = _build_messages(
+                    gather(), config, conversation_id, folded, tool_chars=_tool_block_chars()
+                )
+                if folded.get("happened"):
+                    # Say so, and say how much went. The context reading the meter shows is
+                    # taken *after* this, so a conversation several times over its window reads
+                    # as comfortable and the fold looks gratuitous — the one number a person
+                    # checks is the one number that cannot show the problem.
+                    live_turns.publish(
+                        live,
+                        json.dumps(
+                            {
+                                "type": "compacting",
+                                "foldedFrom": folded["fromChars"],
+                                "foldedTo": folded["toChars"],
+                            }
+                        )
+                        + "\n",
+                    )
+
+                # The switch is handed to `_turn` rather than checked out here. Checking it
+                # here meant returning out of this loop with the generator suspended mid-body,
+                # and an abandoned generator is not a finished one: everything after its last
+                # `yield` — the turn-log row saying what the turn spent, the feed's own "done" —
+                # never ran. Stopping is the one case where you most want that row.
+                for line in _turn(recorder, messages, config, conversation_id, opening, stopping=stopping):
+                    live_turns.publish(live, line)
+        except Exception as exc:
+            # Broad on purpose: this thread is the only one running the turn, and no reader can
+            # see an exception raised here — an uncaught one would leave every watcher waiting
+            # for an end that never comes.
+            live_turns.publish(live, json.dumps({"type": "error", "message": str(exc)}) + "\n")
+        finally:
+            _disarm(conversation_id, stopping)
+            # Anything still waiting belonged to this turn. Carrying it into the next one would
+            # put it in front of a model whose recent history no longer matches what it was
+            # reacting to.
+            steering.forget(conversation_id)
+            live_turns.finish(live)  # releases every reader, now and later
+
+    # `copy_context().run` rather than a bare Thread target: everything else this request
+    # established in ContextVars — the project, the turn's scratch notes, whether this is
+    # the turn's scratch notes — has to travel with it. `turn_notes` keeps a turn to one checkpoint
+    # per repo, so losing it would take the checkpoint chain with it.
+    threading.Thread(
+        target=contextvars.copy_context().run,
+        args=(work,),
+        name=f"kith-turn-{conversation_id}",
+        daemon=True,
+    ).start()
+    return live
+
+
 def continue_conversation(conversation_id: str, trigger: str) -> None:
     """Run one turn in `conversation_id`, started by something other than a typed message.
 
-    Everything downstream of the trigger is the machinery a real chat turn uses, which is the
-    whole point: the result becomes an actual message in the transcript rather than a line in
-    a live feed that is gone the moment nobody is looking at it.
+    The scheduler's door onto `begin_turn`, and now nothing more than that. It used to build the
+    messages and drive `_turn` itself, which is how every turn Kith began on his own came to be
+    unwatchable, unstoppable and unsteerable — see `begin_turn` for how that happened.
 
     Public, and here rather than in `services/scheduler.py`, which used to reach in and import
     `_build_messages`, `_Recorder` and `_turn` — three *private* functions — out of this
@@ -720,14 +854,24 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
     concern that happens to need a turn; it is a turn, started differently, and the turn lives
     here until it moves out of the route entirely.
     """
-    config = default_config()
-    history = [*conversations.full_messages(conversation_id), {"role": "user", "content": trigger}]
-    messages = _build_messages(history, config, conversation_id, tool_chars=_tool_block_chars())
     conversations.record(AGENT_DB_PATH, conversation_id, "user", trigger)
-
-    recorder = _Recorder(conversation_id)
-    for _ in _turn(recorder, messages, config, conversation_id, opening=trigger):
-        pass  # driving the generator is the point — nothing is streaming this anywhere
+    live = begin_turn(
+        conversation_id,
+        default_config(),
+        lambda: [*conversations.full_messages(conversation_id), {"role": "user", "content": trigger}],
+        trigger,
+    )
+    # Drained rather than left to run, which keeps the scheduler exactly as serial as it was:
+    # `wake_finished` and `fire_due` both loop over conversations calling this, and returning
+    # the moment the thread started would set every one of them going at once. The turn is on
+    # its own thread either way — this waits for it the same way the first reader of a chat
+    # does, through the one watch path, so there is no second way to wait to keep in step.
+    #
+    # It does mean a long turn holds the timer thread, and nothing else is checked until it
+    # ends. That was true before this and is not made worse by it; fixing it is a question
+    # about how many turns may run at once, which is not this change.
+    for _ in live_turns.watch(live):
+        pass
 
 
 def _tool_block_chars() -> int:
@@ -1024,120 +1168,23 @@ def chat(payload):
         conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
     conversations.record(AGENT_DB_PATH, conversation_id, "user", latest)
 
-    # A turn is a loop, and the transcript keeps its shape: what he reasoned, what he said,
-    # what he called and what came back, in the order it happened. Anything less and a resumed
-    # conversation is a summary of itself.
-    recorder = _Recorder(conversation_id)
-    # Not a queue owned by this request any more — see `services/live_turns`. The turn's output
-    # outlives the connection that asked for it, so leaving mid-answer and coming back attaches
-    # to the same stream instead of finding a finished wall of text.
-    live = live_turns.begin(conversation_id)
+    # What this turn is being asked, resolved on the turn's own thread rather than here — see
+    # `begin_turn`. The branch is the request's business: only a chat has a client copy of the
+    # history to reconcile against the one on disk.
+    def gather():
+        # The client's own copy is prose-only by design (it strips tool calls before
+        # ever sending them), so on a resumed conversation everything in it but the
+        # message just typed is ignored and the transcript rebuilds the real thing,
+        # tool history included. Taken whole rather than just its text, so an
+        # attachment riding on it isn't dropped.
+        if resumed:
+            return [
+                *conversations.full_messages(conversation_id),
+                latest_message or {"role": "user", "content": latest},
+            ]
+        return client_history
 
-    # Held as a local for the life of this turn, not re-read from `_RUNNING` between events.
-    # See `_arm`: the dict says which turn is current, and a turn asking that question about
-    # itself gets the wrong answer the moment a second one starts in the same conversation.
-    stopping = _arm(conversation_id)
-
-    def work():
-        """Advance the turn to the end, whether or not anyone is still reading.
-
-        This used to be the body of the response generator, and that is what made the browser
-        load-bearing: a generator only advances when something pulls on it, and the thing
-        pulling was Flask writing to the socket. Close the tab, switch conversations, drop the
-        wifi, and the turn stopped mid-step — not because anything cancelled it, but because
-        nothing was left asking for the next one. Work already done survived (the recorder
-        writes as it goes); the rest simply never happened.
-
-        Now the turn runs here, on its own, and the response below is only a reader. What a
-        disconnect costs you is the live view, not the turn.
-        """
-        try:
-            # Bound for the whole turn, so a tool that acts on a project records that this
-            # session is the one working on it. Starting a project here and having nothing
-            # know whose it was is how `conversations.project_id` stayed null from the day it
-            # was added: read on every turn to pick the project memory, written by nobody.
-            #
-            # Entered *inside* the worker, not around it. The binding is a ContextVar, and a
-            # thread does not inherit its parent's — a `with` in the request thread would leave
-            # every tool call in here believing it belonged to no conversation, which is silent
-            # rather than loud: files still get written, and nothing records whose turn wrote
-            # them. See `copy_context` below for the other half of that.
-            with session_context.working_in(conversation_id):
-                # Reading the transcript and building the prompt happen *here*, not on the
-                # request path, because building it can fold — and a fold is a summarisation
-                # call to the model. On a long conversation it is a large one: measured on a
-                # real transcript, a 1.57M-character backlog, about 390k tokens, a full
-                # round-trip before the actual request was even sent.
-                #
-                # It also said nothing while it did it. The `compacting` event is emitted from
-                # inside the turn, and the turn had not started — so the one thing that could
-                # have explained the wait was structurally unable to fire. It reads as "he
-                # takes ages before he answers", and every explanation you reach for first —
-                # the reasoning effort, a slow provider — is wrong, because those come after.
-                #
-                # The client's own copy is prose-only by design (it strips tool calls before
-                # ever sending them), so on a resumed conversation everything in it but the
-                # message just typed is ignored and the transcript rebuilds the real thing,
-                # tool history included. Taken whole rather than just its text, so an
-                # attachment riding on it isn't dropped.
-                if resumed:
-                    history_messages = [
-                        *conversations.full_messages(conversation_id),
-                        latest_message or {"role": "user", "content": latest},
-                    ]
-                else:
-                    history_messages = client_history
-                folded: dict = {}
-                messages = _build_messages(
-                    history_messages, config, conversation_id, folded, tool_chars=_tool_block_chars()
-                )
-                if folded.get("happened"):
-                    # Say so, and say how much went. The context reading the meter shows is
-                    # taken *after* this, so a conversation several times over its window reads
-                    # as comfortable and the fold looks gratuitous — the one number a person
-                    # checks is the one number that cannot show the problem.
-                    live_turns.publish(
-                        live,
-                        json.dumps(
-                            {
-                                "type": "compacting",
-                                "foldedFrom": folded["fromChars"],
-                                "foldedTo": folded["toChars"],
-                            }
-                        )
-                        + "\n",
-                    )
-
-                # The switch is handed to `_turn` rather than checked out here. Checking it
-                # here meant returning out of this loop with the generator suspended mid-body,
-                # and an abandoned generator is not a finished one: everything after its last
-                # `yield` — the turn-log row saying what the turn spent, the feed's own "done" —
-                # never ran. Stopping is the one case where you most want that row.
-                for line in _turn(recorder, messages, config, conversation_id, latest, stopping=stopping):
-                    live_turns.publish(live, line)
-        except Exception as exc:
-            # Broad on purpose: this thread is the only one running the turn, and no reader can
-            # see an exception raised here — an uncaught one would leave every watcher waiting
-            # for an end that never comes.
-            live_turns.publish(live, json.dumps({"type": "error", "message": str(exc)}) + "\n")
-        finally:
-            _disarm(conversation_id, stopping)
-            # Anything still waiting belonged to this turn. Carrying it into the next one would
-            # put it in front of a model whose recent history no longer matches what it was
-            # reacting to.
-            steering.forget(conversation_id)
-            live_turns.finish(live)  # releases every reader, now and later
-
-    # `copy_context().run` rather than a bare Thread target: everything else this request
-    # established in ContextVars — the project, the turn's scratch notes, whether this is
-    # the turn's scratch notes — has to travel with it. `turn_notes` keeps a turn to one checkpoint
-    # per repo, so losing it would take the checkpoint chain with it.
-    threading.Thread(
-        target=contextvars.copy_context().run,
-        args=(work,),
-        name=f"kith-turn-{conversation_id}",
-        daemon=True,
-    ).start()
+    live = begin_turn(conversation_id, config, gather, latest)
 
     def generate():
         # Tell the client which conversation it is in before anything else, so a chat
