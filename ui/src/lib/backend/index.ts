@@ -49,3 +49,4 @@ export * from "./mcp";
 export * from "./language-servers";
 export * from "./checkpoints";
 export * from "./context";
+export * from "./shared-board";

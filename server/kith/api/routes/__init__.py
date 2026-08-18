@@ -27,6 +27,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     renderer,
     roadmap,
     setup,
+    shared_board,
     skills,
     sources,
     tasks,

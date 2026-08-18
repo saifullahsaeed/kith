@@ -11,6 +11,7 @@ import type { BrainSnapshot } from "@/lib/backend/brain";
 import { DeleteButton, EmptyState, SectionLabel } from "./chrome";
 import { matches } from "./format";
 import { Roadmap } from "./roadmap";
+import { SharedBoardBanner } from "./shared-board";
 import { ProgressRing, TaskLane } from "./task-lane";
 import { LOOSE, PROJECT_STATUSES } from "./types";
 import type { Handlers, ProjectRef } from "./types";
@@ -122,6 +123,13 @@ export function ProjectPage({
           composers — which is reachable the way the far end of a corridor is reachable. Someone
           on a project page wanting a conversation is not going to scroll a graph to find one. */}
       <ProjectConversations projectId={project ? project.id : null} />
+
+      {/* Above the roadmap, because it changes what the roadmap is showing. A person who takes
+          in three tasks and then finds the graph unchanged has been told the wrong thing about
+          what just happened. It renders nothing when nothing has come in — a permanent panel
+          saying "nothing new" is one people stop reading, and this has to be noticed on the
+          day it matters. */}
+      {project ? <SharedBoardBanner projectId={project.id} onTaken={refresh} /> : null}
 
       {project ? (
         <Roadmap
