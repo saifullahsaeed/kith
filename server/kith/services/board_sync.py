@@ -32,7 +32,6 @@ from typing import Any
 from kith.infra import project_files
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
-from kith.settings import AGENT_DB_PATH
 
 #: Fields a brief is allowed to carry into the board. Not everything a task has: `project_id`
 #: and `milestone_id` are this machine's own numbers and mean nothing in someone else's
@@ -180,7 +179,7 @@ def waiting_here(path: Path) -> str:
         project_id = session_context.current_project()
         if not project_id:
             conversation = session_context.current()
-            project_id = repo.conversations.project_of(AGENT_DB_PATH, conversation) if conversation else None
+            project_id = repo.conversations.project_of(path, conversation) if conversation else None
         if not project_id:
             return ""
         row = repo.projects.get_project(path, int(project_id))
@@ -239,7 +238,7 @@ def take_it_in(path: Path, project_id: int | None = None) -> dict[str, Any]:
         project_id = session_context.current_project()
         if not project_id:
             conversation = session_context.current()
-            project_id = repo.conversations.project_of(AGENT_DB_PATH, conversation) if conversation else None
+            project_id = repo.conversations.project_of(path, conversation) if conversation else None
     if not project_id:
         return {"error": "There is no project in hand, so there is no folder to read."}
     row = repo.projects.get_project(path, int(project_id))

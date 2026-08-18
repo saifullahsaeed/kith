@@ -248,13 +248,11 @@ class TestWhereItIsSaid:
     def test_it_says_nothing_when_the_folder_agrees(self, shared, monkeypatch):
         db, project_id, _folder, _ = shared
         monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
-        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
         assert board_sync.waiting_here(db) == ""
 
     def test_it_names_what_is_waiting(self, shared, monkeypatch):
         db, project_id, folder, _ = shared
         monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
-        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
         project_files.write_brief(
             folder,
             {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"},
@@ -266,7 +264,6 @@ class TestWhereItIsSaid:
     def test_it_says_when_the_folder_cannot_be_trusted(self, shared, monkeypatch):
         db, project_id, folder, _ = shared
         monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
-        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
         (folder / ".kith" / "tasks" / "99-theirs.md").write_text("# T\n<<<<<<< HEAD\nx\n")
         said = board_sync.waiting_here(db)
         assert "cannot be read right now" in said and "Nothing has been taken" in said
@@ -276,7 +273,6 @@ class TestWhereItIsSaid:
         agreement."""
         db, project_id, folder, _ = shared
         monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
-        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
         project_files.write_brief(
             folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
         )
@@ -286,7 +282,6 @@ class TestWhereItIsSaid:
         """`pull` is called by nobody. This is the sentence that lets a person decide."""
         db, project_id, folder, _ = shared
         monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
-        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
         project_files.write_brief(
             folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
         )
@@ -304,6 +299,5 @@ class TestWhereItIsSaid:
         would not be."""
         db, project_id, _, _ = shared
         monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
-        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
         monkeypatch.setattr(board_sync, "preview", lambda *a, **k: 1 / 0)
         assert board_sync.waiting_here(db) == ""

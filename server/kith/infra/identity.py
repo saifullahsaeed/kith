@@ -18,6 +18,7 @@ a real thing people have, and `git config` is already where they keep that disti
 from __future__ import annotations
 
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -27,6 +28,11 @@ from pathlib import Path
 _TTL = 60.0
 
 _cached: dict[str, tuple[float, str]] = {}
+#: Read on the way to writing a task, and turns run on their own threads. `permissions._linked`
+#: guards its cache the same way — a dict is safe enough under the GIL that nothing corrupts,
+#: but the read-then-write is not atomic, and two turns starting together would both shell out.
+#: The lock costs nothing here and makes the invariant a fact rather than an accident.
+_state = threading.Lock()
 
 
 def whoami(directory: str | Path | None = None) -> str:
@@ -38,11 +44,16 @@ def whoami(directory: str | Path | None = None) -> str:
     """
     where = str(directory or "")
     now = time.monotonic()
-    hit = _cached.get(where)
-    if hit and now - hit[0] < _TTL:
-        return hit[1]
+    with _state:
+        hit = _cached.get(where)
+        if hit and now - hit[0] < _TTL:
+            return hit[1]
+    # Outside the lock: this is a subprocess, and holding a lock across one would make every
+    # other turn wait on a `git config` that is not theirs. Two racing readers both shell out
+    # and write the same answer, which is wasteful once and never wrong.
     found = _ask(where, "user.email") or _ask(where, "user.name")
-    _cached[where] = (now, found)
+    with _state:
+        _cached[where] = (now, found)
     return found
 
 
@@ -67,4 +78,5 @@ def _ask(directory: str, key: str) -> str:
 
 def forget() -> None:
     """Drop the cache. For tests, and for the moment after somebody changes their git identity."""
-    _cached.clear()
+    with _state:
+        _cached.clear()
