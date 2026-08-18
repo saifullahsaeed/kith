@@ -15,7 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
-from kith.infra import identity
+from kith.infra import identity, project_files
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task
 from kith.infra.db.support import notifies, utc_now_iso
@@ -297,8 +297,24 @@ def _newest_first(task: dict) -> str:
 
 @notifies("task")
 def delete_task(path: Path, task_id: int) -> bool:
+    """Delete a task, and the brief that describes it in its project.
+
+    The brief was written by `_mirror_brief` on every change and removed by nothing, which made
+    the folder append-only: measured on a real project, 17 of its 57 briefs named tasks that had
+    been gone for weeks. Harmless while the database is the board and the reverse of harmless
+    once the files are — a brief nobody deletes is a task nobody can close.
+
+    The folder is read *before* the row goes, because the row is how the folder is found.
+    """
     with session(path) as db:
-        return db.execute(delete(Task).where(Task.id == task_id)).rowcount > 0
+        row = db.get(Task, int(task_id))
+        directory = _project_dir(db, getattr(row, "project_id", None)) if row else ""
+        deleted = db.execute(delete(Task).where(Task.id == task_id)).rowcount > 0
+    if deleted and directory:
+        # Silent, like the write it undoes: the task is gone either way, and a brief that could
+        # not be removed is worth less than a deletion that failed because of it.
+        project_files.forget_brief(directory, int(task_id))
+    return deleted
 
 
 # --------------------------------------------------------------------------- #

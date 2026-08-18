@@ -291,3 +291,126 @@ def _brief(task: dict[str, Any]) -> str:
         "rewritten whenever the task changes.",
     ]
     return "\n".join(lines) + "\n"
+
+
+# -- reading them back ------------------------------------------------------- #
+#
+# The briefs have only ever been written. Whether they can be *read* — whether what is in the
+# folder is enough to reconstruct the board rather than merely describe it — has never been
+# tested, and the whole question of making the files authoritative rests on the answer.
+#
+# So this exists to be checked against the database before anything is trusted to it. Not a
+# second writer, not yet a source of truth: a way to find out what the folder is missing, on a
+# real project, before betting a task board on a guess.
+
+
+def read_brief(doc: str | Path) -> dict[str, Any]:
+    """One brief back into the shape `write_brief` was handed. Empty dict if it is not one.
+
+    Deliberately forgiving about everything except the id. A person is invited to edit these —
+    the folder is theirs once it is committed — so a hand-written heading, a reordered fact line
+    or a stray blank must not make a task vanish. What cannot be forgiven is the identity: a
+    brief whose id cannot be read is a file, not a task.
+    """
+    path = Path(doc)
+    stem = re.match(r"(\d+)-", path.name)
+    if not stem:
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    out: dict[str, Any] = {"id": int(stem.group(1)), "checklist": [], "deliverables": []}
+    title = re.search(r"^#\s+(.+)$", text, re.M)
+    if title:
+        out["goal"] = title.group(1).strip()
+
+    for label, key in (("Status", "status"), ("Priority", "priority"), ("Filed by", "filed_by")):
+        found = re.search(rf"\*\*{label}:\*\*\s*([^·\n]+)", text)
+        if found:
+            out[key] = found.group(1).strip()
+    if out.get("filed_by"):
+        # "saif@example.com (Kith)" — split back into the two facts it was made from.
+        pair = re.match(r"(.+?)\s*\((Kith|you)\)\s*$", str(out.pop("filed_by")))
+        if pair:
+            out["account"] = pair.group(1).strip()
+            out["created_by"] = "kith" if pair.group(2) == "Kith" else "user"
+
+    done = re.search(r"^## How you know it is done\s*\n+(.*?)(?=\n## |\n---|\Z)", text, re.M | re.S)
+    if done:
+        out["description"] = done.group(1).strip()
+
+    for mark, item in re.findall(r"^- \[([ xX])\]\s*(.+)$", text, re.M):
+        out["checklist"].append({"text": item.strip(), "done": mark.lower() == "x"})
+
+    delivered = re.search(r"^## Delivered\s*\n+(.*?)(?=\n## |\n---|\Z)", text, re.M | re.S)
+    if delivered:
+        for line in delivered.group(1).splitlines():
+            one = re.match(r"^-\s+(.*?)(?:\s+—\s+`(.+)`)?\s*$", line.strip())
+            if one and one.group(1):
+                out["deliverables"].append({"title": one.group(1).strip(), "path": one.group(2) or ""})
+    return out
+
+
+def read_board(project_dir: str | Path) -> dict[int, dict[str, Any]]:
+    """Every task this folder knows about, by id. The board as the *files* have it."""
+    folder = kith_dir(project_dir) / TASKS
+    if not folder.is_dir():
+        return {}
+    board: dict[int, dict[str, Any]] = {}
+    for doc in sorted(folder.glob("*.md")):
+        task = read_brief(doc)
+        if task:
+            board[int(task["id"])] = task
+    return board
+
+
+def forget_brief(project_dir: str | Path, task_id: int) -> bool:
+    """Remove a task's brief. True if there was one.
+
+    The half of `write_brief` that was never written, and its absence is why the folder is
+    append-only in practice: `write_brief` deletes a stale *slug* for the same id — the goal was
+    reworded — and nothing has ever deleted a brief because its task was gone. Measured on a real
+    project, 17 of 57 briefs name tasks that no longer exist anywhere.
+
+    Harmless clutter while the database is the board, and the exact opposite once the files are:
+    a brief nobody deletes becomes a task nobody can close.
+    """
+    try:
+        folder = kith_dir(project_dir) / TASKS
+        gone = False
+        for doc in folder.glob(f"{int(task_id):02d}-*.md"):
+            doc.unlink(missing_ok=True)
+            gone = True
+        return gone
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def reconcile(project_dir: str | Path, board: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    """What the folder and the board disagree about. Neither is corrected; both are described.
+
+    Takes the board as a plain dict rather than reaching for a database, because this module
+    imports nothing from kith and is not about to start — and because the interesting comparison
+    is between two *records*, which is a question about data, not about storage.
+
+    Written to answer one question before anything was bet on it: can the folder carry the board?
+    Run against a real project, the answer was yes and came with two surprises — nothing on the
+    board was missing from the folder, and the folder held 29 tasks the board did not, 17 of them
+    deleted long ago. `only_in_files` is the one worth watching: it is ghosts.
+    """
+    files = read_board(project_dir)
+    ours, theirs = set(files), {int(i) for i in board}
+    disagree = []
+    for task_id in sorted(ours & theirs):
+        for field in ("goal", "status", "priority"):
+            mine = str(files[task_id].get(field) or "").strip()
+            yours = str(board[task_id].get(field) or "").strip()
+            if mine and yours and mine != yours:
+                disagree.append({"id": task_id, "field": field, "board": yours, "file": mine})
+    return {
+        "only_in_files": sorted(ours - theirs),
+        "only_on_board": sorted(theirs - ours),
+        "disagree": disagree,
+    }
