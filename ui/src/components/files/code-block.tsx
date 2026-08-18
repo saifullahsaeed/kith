@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import hljs from "highlight.js/lib/common";
 import { Check, Copy } from "lucide-react";
 import { copyText } from "@/lib/files";
+import { highlight } from "@/lib/highlight";
 
 /* ── Syntax-highlighted code ────────────────────────────────────────────── */
 
@@ -89,21 +89,4 @@ export function Code({
   );
 }
 
-function highlight(code: string, language?: string): string {
-  try {
-    if (code.length > 300_000) return escapeHtml(code);
-    if (language && hljs.getLanguage(language)) {
-      return hljs.highlight(code, { language, ignoreIllegals: true }).value;
-    }
-    return hljs.highlightAuto(code).value;
-  } catch {
-    return escapeHtml(code);
-  }
-}
 
-function escapeHtml(s: string): string {
-  return s.replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
-  );
-}

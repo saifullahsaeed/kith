@@ -658,25 +658,140 @@
   font-size: 0.85em;
 }
 
+/* ── Tables ────────────────────────────────────────────────────────────────────────────
+   One table style, used by all three places markdown is rendered: his replies, the file
+   viewer, and your own message bubbles. They had drifted into three different looks —
+   assistant-ui's stock grey in chat, a bordered card in the file viewer, and hand-written
+   `currentColor` rules in the bubble.
+
+   The reason to touch this at all is not decoration. In chat the table was `w-full`, and a
+   table that is told to be exactly as wide as its column *cannot* overflow — so it squashes
+   instead. Measured on a real 9-column table from his own transcripts at a 822px message
+   column: every column crushed to ~90px and cells wrapping to three lines, with the page
+   reporting no overflow at all, so nothing could scroll. `white-space: nowrap` on the header
+   gives each column a floor it cannot be squeezed below; when those floors add up to more
+   than the column, the table finally overflows and the wrapper scrolls. A narrow prose table
+   is unaffected: short headers, low floor, still fills the width and still wraps its prose.
+
+   The look follows from that. Vertical rules are dropped — with columns that can now be read,
+   a grid is noise, and rows are tracked with a zebra and a hover instead, which is what you
+   want when a row is nine cells long. The header is the one place the amber appears: a hairline
+   under it and nothing else, because two accents is the whole vocabulary and a table is not
+   important enough to spend one on twice. */
+.kith-table {
+  margin-block: 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  /* Clips the header's corners to the radius, so no per-cell rounding is needed. */
+  background: var(--card);
+  /* A table that scrolls and does not say so is a table with a column you never find. The two
+     `local` gradients scroll with the content and park over the two `scroll` shadows at each
+     end, so a shadow is visible exactly when there is something past that edge — no JS, no
+     resize observer, and it stays right while you are mid-scroll. */
+  background-image:
+    linear-gradient(to right, var(--card), transparent),
+    linear-gradient(to left, var(--card), transparent),
+    linear-gradient(to right, color-mix(in oklab, var(--foreground) 13%, transparent), transparent),
+    linear-gradient(to left, color-mix(in oklab, var(--foreground) 13%, transparent), transparent);
+  background-position: left, right, left, right;
+  background-size: 2.5rem 100%, 2.5rem 100%, 0.75rem 100%, 0.75rem 100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+.kith-table > table {
+  /* `max-content` rather than `100%` is the difference between a column sized to its content and
+     a column sized to its narrowest possible break. At `100%` an overflowing table falls back to
+     min-content, which chopped `2026-07-01` into `2026-07-` / `01` — a date broken at its hyphen,
+     which is the crushing this was meant to fix, just moved into the cell. `min-width: 100%` keeps
+     a narrow table filling the width instead of huddling at the left. */
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.925em;
+}
+/* Without a ceiling, `max-content` lets one long sentence set the width of the whole table and
+   nothing ever wraps. Prose wraps here; a date or a figure never reaches it. */
+.kith-table :is(th, td) {
+  max-width: 26rem;
+}
+.kith-table th {
+  /* The floor that makes a wide table scroll rather than crush — see above. */
+  white-space: nowrap;
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+  font-weight: 600;
+  font-size: 0.82em;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--kith) 5%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--kith) 34%, transparent);
+}
+.kith-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+  vertical-align: top;
+  border-top: 1px solid var(--border);
+}
+/* Zebra and hover, for tracking across a row that is wider than the eye can carry. */
+.kith-table tbody tr:nth-child(even) {
+  background: color-mix(in oklab, var(--muted-foreground) 4%, transparent);
+}
+.kith-table tbody tr:hover {
+  background: color-mix(in oklab, var(--kith) 6%, transparent);
+}
+/* Digits only line up for comparison if they are the same width, which is the entire reason
+   a column of numbers is in a table rather than a sentence. `align` is what remark-gfm emits
+   for `---:` in the source. */
+.kith-table :is(th, td)[align="right"] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.kith-table :is(th, td)[align="center"] { text-align: center; }
+.kith-table :is(th, td)[align="left"] { text-align: start; }
+.kith-table :is(th, td) > :first-child { margin-top: 0; }
+.kith-table :is(th, td) > :last-child { margin-bottom: 0; }
+
 /* Its own scroll container. A wide table inside a bubble that is itself inside a column must not
-   be what decides the width of the window. */
+   be what decides the width of the window.
+
+   Shaped like `.kith-table` above — same radius, same nowrap header, same absence of vertical
+   rules — but drawn in `currentColor` rather than the page's tokens, because this one sits on a
+   tinted bubble and a `--card` background would be a lighter rectangle inside a darker one. The
+   shape is what carries the identity; the colour has to come from where it is. */
 .kith-user-markdown table {
   display: block;
   overflow-x: auto;
   border-collapse: collapse;
+  border: 1px solid color-mix(in oklab, currentColor 16%, transparent);
+  border-radius: 0.6rem;
   font-size: 0.9em;
 }
 .kith-user-markdown th,
 .kith-user-markdown td {
-  border: 1px solid color-mix(in oklab, currentColor 20%, transparent);
-  padding: 0.2rem 0.45rem;
+  padding: 0.32rem 0.6rem;
   vertical-align: top;
   text-align: start;
 }
-.kith-user-markdown th {
-  background: color-mix(in oklab, currentColor 7%, transparent);
-  font-weight: 600;
+.kith-user-markdown td {
+  border-top: 1px solid color-mix(in oklab, currentColor 14%, transparent);
 }
+.kith-user-markdown th {
+  white-space: nowrap;
+  background: color-mix(in oklab, currentColor 8%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, currentColor 22%, transparent);
+  font-weight: 600;
+  font-size: 0.85em;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.kith-user-markdown :is(th, td)[align="right"] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.kith-user-markdown :is(th, td)[align="center"] { text-align: center; }
 
 .kith-user-markdown a {
   text-decoration: underline;

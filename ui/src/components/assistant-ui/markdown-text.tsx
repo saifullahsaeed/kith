@@ -9,12 +9,15 @@ import {
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
+
+import { remarkBr } from "@/lib/remark-br";
 import { type FC, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { MermaidBlock } from "@/components/assistant-ui/mermaid-diagram";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { linkTarget, looksLikeHisFile, useFileViewer } from "@/lib/files";
+import { copyText, linkTarget, looksLikeHisFile, useFileViewer } from "@/lib/files";
+import { grammarFor, highlight } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 
 /** A ```mermaid fence is a picture, not a listing — see `mermaid-diagram.tsx`.
@@ -30,7 +33,7 @@ const byLanguage = {
 const MarkdownTextImpl = () => {
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkBr]}
       className="aui-md"
       components={defaultComponents}
       componentsByLanguage={byLanguage}
@@ -41,11 +44,32 @@ const MarkdownTextImpl = () => {
 
 export const MarkdownText = memo(MarkdownTextImpl);
 
+/**
+ * The bar above a fenced block: what language it is, and a button to take it.
+ *
+ * The copy button did nothing at all — no clipboard write, no tick, no error in the console.
+ * It went through assistant-ui's `navigator.clipboard.writeText` with the rejection handler
+ * written as `() => {}`, so the one thing that reliably happens in an Electron webview —
+ * `writeText` rejecting with `NotAllowedError` — was caught and dropped on the floor. Confirmed
+ * by driving the real page: the write rejects, the icon never swaps, and nothing is logged.
+ *
+ * `copyText` is the path the rest of the app already copies through. It tries the async
+ * clipboard, falls back to `execCommand` on a different permission route, and returns whether
+ * either actually worked. The identical fix is described at length above `CopyReply` in
+ * `thread.tsx` — it was made for the reply button and never reached this one.
+ *
+ * The tick is shown only on a `true`. A checkmark over an empty clipboard is worse than a button
+ * that visibly fails, because you only find out later, from the thing you pasted.
+ */
 const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
+  const [isCopied, setIsCopied] = useState(false);
   const onCopy = () => {
     if (!code || isCopied) return;
-    copyToClipboard(code);
+    void copyText(code).then((ok) => {
+      if (!ok) return;
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    });
   };
 
   return (
@@ -61,29 +85,6 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
   );
 };
 
-const useCopyToClipboard = ({
-  copiedDuration = 3000,
-}: {
-  copiedDuration?: number;
-} = {}) => {
-  const [isCopied, setIsCopied] = useState<boolean>(false);
-
-  const copyToClipboard = (value: string) => {
-    if (!value || typeof navigator === "undefined" || !navigator.clipboard) {
-      return;
-    }
-
-    navigator.clipboard.writeText(value).then(
-      () => {
-        setIsCopied(true);
-        setTimeout(() => setIsCopied(false), copiedDuration);
-      },
-      () => {},
-    );
-  };
-
-  return { isCopied, copyToClipboard };
-};
 
 const defaultComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => (
@@ -218,42 +219,17 @@ const defaultComponents = memoizeMarkdownComponents({
   hr: ({ className, ...props }) => (
     <hr className={cn("aui-md-hr border-muted-foreground/20 my-3", className)} {...props} />
   ),
+  // The look lives in `.kith-table` in index.css, shared with the file viewer and your own
+  // bubbles. What was here was assistant-ui's stock styling, whose `w-full` is why a wide
+  // table crushed its columns instead of scrolling.
   table: ({ className, ...props }) => (
-    <table
-      className={cn(
-        "aui-md-table my-3 w-full border-separate border-spacing-0 overflow-y-auto",
-        className,
-      )}
-      {...props}
-    />
+    <div className="kith-table">
+      <table className={cn("aui-md-table", className)} {...props} />
+    </div>
   ),
-  th: ({ className, ...props }) => (
-    <th
-      className={cn(
-        "aui-md-th bg-muted px-3 py-1.5 text-start font-medium first:rounded-ss-lg last:rounded-se-lg [[align=center]]:text-center [[align=right]]:text-right",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  td: ({ className, ...props }) => (
-    <td
-      className={cn(
-        "aui-md-td border-muted-foreground/20 border-s border-b px-3 py-1.5 text-start last:border-e [[align=center]]:text-center [[align=right]]:text-right",
-        className,
-      )}
-      {...props}
-    />
-  ),
-  tr: ({ className, ...props }) => (
-    <tr
-      className={cn(
-        "aui-md-tr m-0 border-b p-0 first:border-t [&:last-child>td:first-child]:rounded-es-lg [&:last-child>td:last-child]:rounded-ee-lg",
-        className,
-      )}
-      {...props}
-    />
-  ),
+  th: ({ className, ...props }) => <th className={cn("aui-md-th", className)} {...props} />,
+  td: ({ className, ...props }) => <td className={cn("aui-md-td", className)} {...props} />,
+  tr: ({ className, ...props }) => <tr className={cn("aui-md-tr", className)} {...props} />,
   li: ({ className, ...props }) => (
     <li className={cn("aui-md-li leading-relaxed", className)} {...props} />
   ),
@@ -290,6 +266,24 @@ const defaultComponents = memoizeMarkdownComponents({
         >
           {children}
         </button>
+      );
+    }
+
+    // A fenced block, coloured. The file viewer has coloured code since it was written; a reply
+    // containing the same JSON rendered as flat grey. `language-<name>` is what the fence's info
+    // string becomes.
+    //
+    // Only a language hljs actually knows. Guessing is not the fallback here — a chat block
+    // re-renders on every token, and detection both costs 24x more and changes its mind as the
+    // block grows, so an unlabelled block stays plain rather than flickering. See `grammarFor`.
+    const grammar = isCodeBlock ? grammarFor(/language-([\w-]+)/.exec(className ?? "")?.[1]) : null;
+    if (grammar && text) {
+      return (
+        <code
+          className={cn("hljs font-mono", className)}
+          {...props}
+          dangerouslySetInnerHTML={{ __html: highlight(text, grammar) }}
+        />
       );
     }
 

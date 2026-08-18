@@ -12,6 +12,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { fetchContextMessage, type RoleTotal, type Sent, type SentMessage } from "@/lib/backend";
+import { copyText } from "@/lib/files";
 import { formatCompact, formatTokens } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 
@@ -902,7 +903,11 @@ function MessageBody({
     // Copies the pair when it is a pair — what was asked and what came back, in that order,
     // which is what someone pasting this into a bug report needs.
     const whole = asked ? `${asked}\n\n${text}` : text;
-    await navigator.clipboard.writeText(whole).catch(() => {});
+    // Through `copyText`, and only claim it on a `true`. Writing straight to
+    // `navigator.clipboard` and then setting `copied` regardless showed a tick over an empty
+    // clipboard whenever `writeText` rejected — which it does in an Electron webview — and you
+    // found out from the paste, not the button.
+    if (!(await copyText(whole))) return;
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1400);
   };

@@ -3,6 +3,8 @@ import type { ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+import { remarkBr } from "@/lib/remark-br";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
 import { linkTarget, useFileViewer } from "@/lib/files";
 import { CodeBlock } from "./code-block";
@@ -12,7 +14,7 @@ import { CodeBlock } from "./code-block";
 export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className="text-sm leading-relaxed break-words">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBr]} components={MD}>
         {children}
       </ReactMarkdown>
     </div>
@@ -31,7 +33,7 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
  */
 export const MarkdownInline = memo(function MarkdownInline({ children }: { children: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_INLINE}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBr]} components={MD_INLINE}>
       {children}
     </ReactMarkdown>
   );
@@ -136,14 +138,12 @@ const MD: Components = {
   img: ({ alt, ...p }) => (
     <img alt={alt} className="my-3 max-w-full rounded-lg border border-border/60" {...p} />
   ),
+  // Shared with chat and your bubbles — see `.kith-table` in index.css.
   table: (p) => (
-    <div className="my-4 overflow-x-auto rounded-xl border border-border/60">
-      <table className="w-full border-collapse text-sm" {...p} />
+    <div className="kith-table">
+      <table {...p} />
     </div>
   ),
-  thead: (p) => <thead className="bg-muted/50" {...p} />,
-  th: (p) => <th className="border-b border-border/60 px-3 py-2 text-start font-medium" {...p} />,
-  td: (p) => <td className="border-b border-border/40 px-3 py-2 align-top" {...p} />,
   pre: ({ children }) => <>{children}</>, // CodeBlock renders its own <pre>
   code: ({
     className,
