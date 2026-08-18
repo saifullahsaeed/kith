@@ -25,7 +25,14 @@ ignore = [
   "E501",    # line length is enforced by the formatter, not as an error
   "B008",    # Flask/APIFlask decorators legitimately call in argument defaults
   "SIM108",  # ternaries are not always clearer than an if/else
-  "RUF001",  # en dashes are deliberate in his persona and tool prose, not typos
+  # The same rule in three places — a character that *could* be a typo, in code, in a
+  # docstring, in a comment. The reasoning does not change with the location: this
+  # codebase writes prose deliberately, and en dashes, × for counts and → for flow are
+  # chosen. It fired 5 times on two files and blocked the whole check for days, which is
+  # precisely the "trains people to ignore the tool" this file opens by warning about.
+  "RUF001",  # ambiguous character in code
+  "RUF002",  # ...in a docstring
+  "RUF003",  # ...in a comment
   "SIM105",  # try/except/pass reads fine and contextlib.suppress hides the intent
   "SIM102",  # nested ifs are often clearer when each tests a separate thing
 ]
