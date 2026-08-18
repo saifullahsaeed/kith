@@ -271,6 +271,12 @@ def _brief(task: dict[str, Any]) -> str:
         ("Status", task.get("status")),
         ("Priority", task.get("priority")),
         ("Filed by", _filed_by(task)),
+        # When, so that two records of one task can be told apart. Without it a merge has no
+        # rule: a brief that has sat unchanged since before a status moved would look exactly
+        # like one somebody just pushed, and adopting it would silently undo the newer fact.
+        # Measured on a real folder — two briefs said `doing` and `review` for tasks the board
+        # had marked `done` weeks ago, and one of those is not a status any more.
+        ("Updated", task.get("updated_at")),
     ]
     said = [f"**{label}:** {value}" for label, value in facts if value]
     if said:
@@ -349,7 +355,12 @@ def read_brief(doc: str | Path) -> dict[str, Any]:
     if title:
         out["goal"] = title.group(1).strip()
 
-    for label, key in (("Status", "status"), ("Priority", "priority"), ("Filed by", "filed_by")):
+    for label, key in (
+        ("Status", "status"),
+        ("Priority", "priority"),
+        ("Filed by", "filed_by"),
+        ("Updated", "updated_at"),
+    ):
         found = re.search(rf"\*\*{label}:\*\*\s*([^·\n]+)", text)
         if found:
             out[key] = found.group(1).strip()

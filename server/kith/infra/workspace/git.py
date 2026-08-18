@@ -203,3 +203,59 @@ def log(limit: int = 20) -> str:
         return "git is not available on this machine."
     out = _git("log", f"-{max(1, min(limit, 200))}", "--format=%h %ad %s", "--date=format:%d %b %H:%M").output
     return _clip(out.strip()) or "No history yet."
+
+
+def push() -> str:
+    """Send committed work to wherever this repository came from. A sentence about what happened.
+
+    Committing is what makes work durable on this machine; pushing is what makes it exist for
+    anybody else, which is the entire mechanism `.kith/` relies on. It has been going through a
+    raw `git push` in a shell command until now — 15 such commits in one project here — which
+    means every way it can fail has been arriving as shell output for a model to interpret:
+    no remote, no upstream, nothing ahead, rejected because somebody else pushed first.
+
+    That last one is not an error, it is the normal condition of two people working, and it has
+    a different answer from the rest: pull, look at what came back, and push again. Said in words
+    rather than left as `! [rejected] main -> main (fetch first)`, because the difference between
+    "this failed" and "somebody else got there first" decides what happens next.
+
+    Never raises, for the same reason `commit_all` does not: failing to publish must not take
+    down the work that was published.
+    """
+    if not has_git():
+        return "There is no repository here, so there is nothing to push."
+    if not _git("remote").output.strip():
+        return "This repository has no remote, so the work stays on this machine."
+
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD").output.strip() or "HEAD"
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if upstream.exit_code != 0:
+        # First push of a branch. `-u` so the next one needs no argument, which is also what
+        # makes "nothing to push" answerable afterwards.
+        done = _git("push", "-u", "origin", branch)
+        return (
+            f"Pushed {branch} and set it to track origin/{branch}."
+            if done.exit_code == 0
+            else f"Couldn't push {branch}: {_last_line(done.output)}"
+        )
+
+    ahead = _git("rev-list", "--count", "@{u}..HEAD").output.strip()
+    if ahead in ("", "0"):
+        return f"Nothing to push — {branch} is level with {upstream.output.strip()}."
+
+    done = _git("push")
+    if done.exit_code == 0:
+        return f"Pushed {ahead} commit{'s' if ahead != '1' else ''} on {branch}."
+    said = done.output
+    if "rejected" in said or "fetch first" in said or "behind" in said:
+        return (
+            f"{branch} has {ahead} commit{'s' if ahead != '1' else ''} to send and the remote has "
+            "moved on — somebody else pushed first. Pull, look at what came back, then push again."
+        )
+    return f"Couldn't push {branch}: {_last_line(said)}"
+
+
+def _last_line(output: str) -> str:
+    """The line of git's output worth repeating. Its errors put the reason last."""
+    lines = [line.strip() for line in str(output or "").splitlines() if line.strip()]
+    return lines[-1] if lines else "no reason given"

@@ -298,6 +298,25 @@ def _newest_first(task: dict) -> str:
 
 
 @notifies("task")
+@notifies("task")
+def set_origin(path: Path, task_id: int, key: str = "", account: str = "") -> None:
+    """Stamp where a task came from, when it did not come from here.
+
+    `add_task` stamps both for work that starts on this machine. Work imported from a project's
+    folder started on somebody else's and already has a name: overwriting after the insert keeps
+    `add_task` honest about what it does rather than giving it an "unless" — and the key has to
+    survive, because it is the only thing that makes it the same task on both machines.
+    """
+    with session(path) as db:
+        row = db.get(Task, int(task_id))
+        if row is None:
+            return
+        if key:
+            row.key = key
+        if account:
+            row.account = account
+
+
 def delete_task(path: Path, task_id: int) -> bool:
     """Delete a task, and the brief that describes it in its project.
 
