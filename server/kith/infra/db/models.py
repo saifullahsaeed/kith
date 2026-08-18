@@ -57,6 +57,10 @@ class Task(Base):
     #: started before there was anywhere to record it, and for a reminder firing unattended.
     conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(Text, nullable=False, default="kith")
+    #: Whose. `created_by` says him-or-you; this says which him and which you, and only the
+    #: pair survives `.kith/` being shared. Blank for anything filed before it existed — see
+    #: `v39_task_account` on why that is not backfilled.
+    account: Mapped[str] = mapped_column(Text, nullable=False, default="")
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     milestone_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 

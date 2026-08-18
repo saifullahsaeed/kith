@@ -228,14 +228,32 @@ def write_brief(project_dir: str | Path, task: dict[str, Any]) -> Path | None:
         return None
 
 
+def _filed_by(task: dict[str, Any]) -> str:
+    """ "saif@example.com (Kith)", or "" when nobody was recorded.
+
+    Blank rather than a guess for the tasks written before `account` existed — see
+    `v39_task_account`. "unknown (Kith)" reads like an answer and is not one.
+    """
+    account = str(task.get("account") or "").strip()
+    if not account:
+        return ""
+    who = str(task.get("created_by") or "").strip()
+    return f"{account} ({'Kith' if who == 'kith' else 'you'})" if who else account
+
+
 def _brief(task: dict[str, Any]) -> str:
     """One task as markdown, written for someone who has not seen the board."""
     goal = str(task.get("goal") or "").strip() or "(untitled)"
     lines = [f"# {goal}", ""]
 
+    # `account` before `created_by` because with two people sharing this folder "whose" is the
+    # question and "his idea or theirs" is the qualifier, not the other way round. The brief is
+    # the half that actually travels — the database stays on whichever machine is driving — so
+    # if the name is not written here it is not written anywhere a second person can read.
     facts = [
         ("Status", task.get("status")),
         ("Priority", task.get("priority")),
+        ("Filed by", _filed_by(task)),
     ]
     said = [f"**{label}:** {value}" for label, value in facts if value]
     if said:

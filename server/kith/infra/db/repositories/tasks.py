@@ -15,6 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
+from kith.infra import identity
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task
 from kith.infra.db.support import notifies, utc_now_iso
@@ -32,6 +33,15 @@ _DELIVERABLE_KINDS = ("text", "file", "link")
 
 
 @notifies("task")
+def _project_dir(db, project_id: int | None) -> str:
+    """Where this task's project lives, for reading the git identity there. "" for a task that
+    belongs to no folder — then the machine's global identity is the honest answer."""
+    if not project_id:
+        return ""
+    row = db.get(Project, int(project_id))
+    return str(getattr(row, "directory", "") or "")
+
+
 def add_task(
     path: Path,
     goal: str,
@@ -75,6 +85,11 @@ def add_task(
             priority=priority,
             description=description,
             created_by=created_by,
+            # Stamped where the task is written rather than passed down from the tool, so a
+            # caller cannot forget it — and read from the project's own repository, because a
+            # work identity and a personal one are a real distinction people already keep in
+            # `git config` and the task should land under whichever one will sign its commit.
+            account=identity.whoami(_project_dir(db, project_id)),
             project_id=project_id,
             milestone_id=milestone_id,
             created_at=now,

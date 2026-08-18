@@ -619,6 +619,21 @@ def _migrations():
         conn.execute("DROP TABLE IF EXISTS notes")
         conn.execute("DROP TABLE IF EXISTS people")
 
+    def v39_task_account(conn):
+        """Whose task this is, beside whether it was his idea or yours.
+
+        `created_by` answers "him or me", which is the whole question while there is one person
+        and none of it once `.kith/` is shared through git. Both facts are wanted and neither
+        replaces the other: "Kith filed this" and "Kith-belonging-to-saifullah@sadeef.com filed
+        this" are different sentences, and only the second survives a second person.
+
+        Blank for the 87 rows that predate it, and deliberately not backfilled. There is no
+        honest value to write: the machine's current git identity is a guess about who was
+        sitting here in August, and a guess indistinguishable from a record is worse than a gap
+        that is obviously a gap.
+        """
+        conn.execute("ALTER TABLE tasks ADD COLUMN account TEXT NOT NULL DEFAULT ''")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -658,6 +673,7 @@ def _migrations():
         v36_no_custom_tools,
         v37_no_self_model,
         v38_no_notes_or_people,
+        v39_task_account,
     ]
 
 
