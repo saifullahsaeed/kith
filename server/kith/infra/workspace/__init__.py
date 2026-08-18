@@ -65,7 +65,7 @@ from .files import (
     trash_path,
     write_file,
 )
-from .git import commit_all, diff, ensure_repo, has_git, log
+from .git import commit_all, diff, ensure_repo, has_git, log, pull, push
 from .paths import (
     DEFAULT_ROOT,
     INTERNAL_DIR,
@@ -112,6 +112,8 @@ __all__ = [
     "make_dir",
     "media_file",
     "move",
+    "pull",
+    "push",
     "read_file",
     "read_image",
     "read_raw",

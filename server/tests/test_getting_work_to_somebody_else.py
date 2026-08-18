@@ -96,3 +96,66 @@ class TestTheWaysItDoesNotWork:
         """Failing to publish must not take down the work that was published."""
         monkeypatch.setattr(paths, "configured_root", lambda: tmp_path / "not-a-repo")
         assert isinstance(git.push(), str)
+
+
+class TestBringingItBack:
+    """The half the folder actually depends on. `.kith/` is how a second person's work reaches
+    this machine, and nothing arrives until somebody fetches — git is not a sync daemon. Until
+    this existed, "pull from git first" was advice with no operation behind it, which is worse
+    than saying nothing because it reads as though the thing can be done."""
+
+    def test_it_brings_in_what_somebody_else_pushed(self, repo):
+        work, origin = repo
+        _run("remote", "add", "origin", str(origin), cwd=work)
+        git.push()
+        other = work.parent / "other"
+        subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, capture_output=True)
+        _run("config", "user.email", "u@example.com", cwd=other)
+        _run("config", "user.name", "U", cwd=other)
+        (other / "theirs.txt").write_text("theirs\n")
+        _run("add", "-A", cwd=other)
+        _run("commit", "-q", "-m", "theirs", cwd=other)
+        _run("push", "-q", cwd=other)
+
+        assert "Pulled" in git.pull()
+        assert (work / "theirs.txt").is_file()
+
+    def test_nothing_new_is_said_plainly(self, repo):
+        work, origin = repo
+        _run("remote", "add", "origin", str(origin), cwd=work)
+        git.push()
+        assert "up to date" in git.pull().lower()
+
+    def test_it_will_not_pull_over_uncommitted_work(self, repo):
+        """A half-merged folder is the state `unsettled` then refuses to read, so the board
+        silently stops updating and the reason is three steps away."""
+        work, origin = repo
+        _run("remote", "add", "origin", str(origin), cwd=work)
+        git.push()
+        (work / "a.txt").write_text("mine, unsaved\n")
+        said = git.pull()
+        assert "uncommitted" in said and "Commit or set them aside" in said
+
+    def test_diverged_histories_are_handed_back_rather_than_merged(self, repo):
+        """`--ff-only`. A merge that has to be resolved is a person's judgement, and one made
+        without it leaves conflict markers in `.kith/tasks/`."""
+        work, origin = repo
+        _run("remote", "add", "origin", str(origin), cwd=work)
+        git.push()
+        other = work.parent / "other"
+        subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, capture_output=True)
+        _run("config", "user.email", "u@example.com", cwd=other)
+        _run("config", "user.name", "U", cwd=other)
+        (other / "theirs.txt").write_text("theirs\n")
+        _run("add", "-A", cwd=other)
+        _run("commit", "-q", "-m", "theirs", cwd=other)
+        _run("push", "-q", cwd=other)
+        (work / "mine.txt").write_text("mine\n")
+        _run("add", "-A", cwd=work)
+        _run("commit", "-q", "-m", "mine", cwd=work)
+
+        said = git.pull()
+        assert "both moved on" in said and "by hand" in said
+
+    def test_no_remote_is_not_an_error(self, repo):
+        assert "nowhere to pull from" in git.pull()

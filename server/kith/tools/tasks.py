@@ -187,6 +187,20 @@ def add_task(path: Path, args: dict):
 
 
 @tool(
+    "take_in_shared_tasks",
+    "Take into your board the tasks sitting in this project's `.kith/` folder — work somebody "
+    "else did and pushed. `list_tasks` tells you when there is any. Nothing is deleted and "
+    "nothing of yours is overwritten by something older: where both changed, the newer one "
+    "wins, and a brief with no date on it never does. Run `publish` with direction 'in' first, "
+    "or you are reading a folder nobody has fetched.",
+    {},
+    required=(),
+)
+def take_in_shared_tasks(path: Path, args: dict):
+    return board_sync.take_it_in(path)
+
+
+@tool(
     "list_tasks",
     "List your tasks (highest priority first), optionally filtered by column. "
     "Returns one page — check 'more' before assuming you've seen them all.",

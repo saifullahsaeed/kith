@@ -259,3 +259,44 @@ def _last_line(output: str) -> str:
     """The line of git's output worth repeating. Its errors put the reason last."""
     lines = [line.strip() for line in str(output or "").splitlines() if line.strip()]
     return lines[-1] if lines else "no reason given"
+
+
+def pull() -> str:
+    """Bring in what other people have pushed. A sentence about what happened.
+
+    The other half of `push`, and the half the folder actually depends on: `.kith/` is how a
+    second person's work reaches this machine, and nothing arrives until somebody fetches. Git
+    is not a sync daemon. Until this existed the advice "pull from git first" was a sentence
+    with no operation behind it — which is worse than saying nothing, because it reads as though
+    the thing can be done.
+
+    `--ff-only`, deliberately. A merge that has to be resolved is a person's judgement, and a
+    merge made without one leaves conflict markers in `.kith/tasks/` — which `unsettled` then
+    refuses to read, so the board silently stops updating and the reason is three steps away.
+    Refusing up front and saying the branches have diverged puts the decision where it belongs.
+    """
+    if not has_git():
+        return "There is no repository here, so there is nothing to pull."
+    if not _git("remote").output.strip():
+        return "This repository has no remote, so there is nowhere to pull from."
+    if _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").exit_code != 0:
+        return "This branch does not track anything yet, so there is nothing to pull."
+
+    dirty = _git("status", "--porcelain").output.strip()
+    if dirty:
+        return (
+            "There are uncommitted changes here, so pulling could leave a half-merged folder. "
+            "Commit or set them aside first."
+        )
+
+    done = _git("pull", "--ff-only")
+    if done.exit_code == 0:
+        said = done.output.strip()
+        return "Already up to date." if "up to date" in said.lower() else f"Pulled. {_last_line(said)}"
+    if "diverge" in done.output or "not possible to fast-forward" in done.output:
+        return (
+            "This branch and the remote have both moved on, so the two histories have to be "
+            "reconciled by hand — that is a judgement, and a merge made without one leaves "
+            "conflict markers in files I would then refuse to read."
+        )
+    return f"Couldn't pull: {_last_line(done.output)}"

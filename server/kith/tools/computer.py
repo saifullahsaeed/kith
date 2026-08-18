@@ -341,6 +341,33 @@ def changes(path: Path, args: dict):
 
 
 @tool(
+    "publish",
+    "Send your committed work to where the project came from, and bring in what other people "
+    "have pushed. `direction` is 'out' to send, 'in' to fetch, or 'both'. Do this after a "
+    "commit that somebody else needs, and before picking work up in a project other people "
+    "touch — nothing arrives on its own, so a board that looks quiet may only be unfetched.",
+    {
+        "direction": {
+            **STR,
+            "enum": ["out", "in", "both"],
+            "description": "'out' pushes, 'in' pulls, 'both' pulls then pushes.",
+        }
+    },
+    required=(),
+)
+def publish(path: Path, args: dict):
+    """Pulling before pushing, when both are asked for: a push from behind is rejected, and
+    being told to pull afterwards is a round spent learning what the order already knew."""
+    which = str(args.get("direction") or "both").strip().lower()
+    said = {}
+    if which in ("in", "both"):
+        said["in"] = sandbox.pull()
+    if which in ("out", "both"):
+        said["out"] = sandbox.push()
+    return said
+
+
+@tool(
     "commit",
     "Save a point in your folder's history, with a message saying what you did. Do this when "
     "something works — a feature finished, a bug fixed, a checker passing — not on every step "

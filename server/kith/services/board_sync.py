@@ -132,6 +132,14 @@ def _adopt(path: Path, project_id: int, brief: dict[str, Any]) -> str:
     repo.tasks.set_origin(
         path, int(made["id"]), key=str(brief.get("key") or ""), account=str(brief.get("account") or "")
     )
+    for one in brief.get("deliverables") or []:
+        # Read out of the brief since it was written and thrown away on the way back in, which
+        # is the quietest kind of gap: the evidence a task was finished arrives, is parsed, and
+        # does not land.
+        where = str(one.get("path") or "")
+        repo.tasks.add_deliverable(
+            path, int(made["id"]), "file" if where else "text", str(one.get("title") or ""), where
+        )
     for item in brief.get("checklist") or []:
         row = repo.tasks.add_checklist_item(path, int(made["id"]), str(item.get("text") or ""))
         if item.get("done"):
@@ -217,3 +225,27 @@ def _how_long(seconds: float) -> str:
     if seconds < 172800:
         return f"{int(seconds // 3600)} hours ago"
     return f"{int(seconds // 86400)} days ago"
+
+
+def take_it_in(path: Path, project_id: int | None = None) -> dict[str, Any]:
+    """Do what `waiting_here` described. The word the sentence invites you to say.
+
+    Split from `pull` so that the thing which finds the project is not the thing which does the
+    work — `pull` takes a directory and is testable without a session, and this is what a tool
+    calls. Refuses rather than guessing when there is no project in hand: importing into the
+    wrong board is not an error anyone would notice until much later.
+    """
+    if project_id is None:
+        project_id = session_context.current_project()
+        if not project_id:
+            conversation = session_context.current()
+            project_id = repo.conversations.project_of(AGENT_DB_PATH, conversation) if conversation else None
+    if not project_id:
+        return {"error": "There is no project in hand, so there is no folder to read."}
+    row = repo.projects.get_project(path, int(project_id))
+    directory = str((row or {}).get("directory") or "").strip()
+    if not directory:
+        return {
+            "error": f"{(row or {}).get('name') or 'That project'} has no folder, so there is nothing to read."
+        }
+    return pull(path, int(project_id), directory)

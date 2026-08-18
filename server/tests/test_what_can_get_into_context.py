@@ -31,7 +31,10 @@ class TestNothingReturnsWithoutABound:
     #: Tools whose output is bounded by the shape of the thing rather than by a number:
     #: a fixed set of rows, a single record, a status. Listed so the sweep stays a question
     #: about the rest.
-    SELF_LIMITING: ClassVar[set[str]] = {"create_project"}
+    #: `publish` is here for the reason this class already warns about twice: it is matched on
+    #: prose. Its delegates are `git.pull` and `git.push`, whose docstrings say "until somebody
+    #: fetches" — and both return a single sentence built from `_last_line`, which is the bound.
+    SELF_LIMITING: ClassVar[set[str]] = {"create_project", "publish"}
 
     BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|glob|grep|requests\.")
     # `MAX_` rather than `_MAX_`: a bound is a bound whether the constant naming it is private
