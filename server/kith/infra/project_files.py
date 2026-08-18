@@ -22,6 +22,7 @@ there — which is the whole point, and is why `.kith/` is *not* in the gitignor
       tasks/07-name.md   a readable brief per task               (committed)
       work/notes.md      working files, findings, drafts         (committed)
       scratch/shot.png   screenshots and throwaways              (ignored)
+      .gitignore         what must never be committed            (committed)
 
 **The briefs are a mirror, not the board.** Status, priority and ordering stay in the
 database, which is the one writer. A brief is a readable record of what a task *is* — enough
@@ -65,6 +66,49 @@ project's accumulated knowledge, not its code.
 """
 
 
+#: What must never leave the machine, written where the folder it governs can be read.
+#:
+#: This existed only as a sentence until now. The README above has always told the reader
+#: "**scratch/** — screenshots and throwaways. Gitignored", and nothing anywhere wrote a
+#: gitignore, so the promise was decoration. Checked against a real project: four scripts from
+#: `.kith/scratch/` are committed. They turned out to be clean, which was luck and not design —
+#: `tools/computer.py` instructs him to put scripts that touch "a system, someone's account"
+#: into exactly that folder, so it is the one directory here guaranteed to meet credentials.
+#:
+#: A denylist, not an allowlist, and deliberately: the whole point of `.kith/` is that a second
+#: person clones the repository and finds the work already there, so anything new he writes has
+#: to be shared by default. An allowlist would silently drop the next kind of file somebody
+#: invents, and nobody would notice until they needed it.
+#:
+#: The credential patterns are shape-based for the same reason `domain/secrets` is: a file
+#: called `notes.md` can hold a key and a file called `config.example` usually does not, but
+#: `.env` and `id_rsa` are what they say they are, and blocking them costs nothing.
+GITIGNORE = """\
+# Written by Kith. This folder is committed on purpose — see README.md — so this
+# says what must NOT be, rather than what may.
+
+# Throwaways. Screenshots, one-off scripts, anything run once and forgotten. He is told
+# to put scripts that touch a system or an account here, so this line is load-bearing.
+scratch/
+
+# Credentials, by shape rather than by name.
+*.env
+.env*
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa*
+*credentials*
+*secret*
+
+# Transcripts, if one is ever written here. They carry whole tool results verbatim —
+# measured on this machine: 143 plaintext copies of one API key across two of them.
+conversations/
+offload/
+"""
+
+
 def kith_dir(project_dir: str | Path) -> Path:
     return Path(project_dir) / KITH_DIR
 
@@ -80,7 +124,36 @@ def ensure(project_dir: str | Path) -> Path:
     readme = here / "README.md"
     if not readme.exists():
         readme.write_text(README)
+    rules = here / ".gitignore"
+    if not rules.exists():
+        rules.write_text(GITIGNORE)
     return here
+
+
+def neutered_by(project_dir: str | Path) -> str:
+    """The rule in the project's own .gitignore that stops the one above from being read.
+
+    Git does not descend into an ignored directory, so a root-level `.kith/` makes everything
+    in `GITIGNORE` dead letter — including the line protecting `scratch/`. And the failure is
+    not that nothing is committed: rules only apply to files git is not already tracking, so a
+    project that added `.kith/` *after* the folder existed keeps committing all of it while
+    reading as though it commits none. That is the live state of one project here — the rule is
+    on line 27 and 102 files are tracked past it.
+
+    Reported rather than repaired. The root gitignore is the person's file, deleting a line from
+    it changes what their repository does, and a folder called `.kith` that edits their ignore
+    rules on its own is exactly the behaviour that gets a folder called `.kith` deleted.
+    """
+    root = Path(project_dir) / ".gitignore"
+    try:
+        lines = root.read_text().splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        rule = line.split("#", 1)[0].strip().rstrip("/")
+        if rule.lstrip("/") == KITH_DIR:
+            return line.strip()
+    return ""
 
 
 def folder_for(project_dir: str | Path, kind: str) -> Path:

@@ -97,7 +97,21 @@ def create_project(path: Path, args: dict):
         project_files.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
         project_binding.adopt(path, made.get("id"), deliberate=True)
-        return {**made, "memory": f"{directory}/.kith/memory.md"}
+        out = {**made, "memory": f"{directory}/.kith/memory.md"}
+        # Said at the one moment it can still be acted on cheaply. `.kith/.gitignore` decides
+        # what of his work is safe to commit, and a root-level `.kith/` rule means git never
+        # reads it — see `project_files.neutered_by`. Reported, never repaired: their ignore
+        # file is theirs.
+        blocking = project_files.neutered_by(resolved)
+        if blocking:
+            out["heads_up"] = (
+                f"`.gitignore` here has `{blocking}`, so nothing in `.kith/` is meant to be "
+                "committed — which means the second person to work on this project starts from "
+                "nothing, and `.kith/.gitignore` (which is what keeps scratch and credentials "
+                "out) is never read. Worth telling them: drop that line and the folder shares "
+                "properly, keep it and the folder is yours alone. Do not change it yourself."
+            )
+        return out
     made = repo.projects.add_project(path, args["name"], args.get("description") or "")
     # The conversation that started it is the one working on it. Nothing used to write this
     # down, so `conversations.project_id` existed in the schema, was read on every chat turn
