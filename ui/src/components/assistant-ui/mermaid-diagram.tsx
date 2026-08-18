@@ -267,6 +267,9 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
 
   // Settled and unparseable: he wrote invalid mermaid, and the source is the useful thing.
   // Exactly what the block showed before any of this existed.
+  // Pinned to the viewBox once per render, not on every paint.
+  const sized = useMemo(() => (svg ? naturalSize(svg).html : ""), [svg]);
+
   if (broken && !svg) return <>{fallback}</>;
 
   return (
@@ -277,12 +280,24 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
       >
         {svg ? (
           <>
+            {/* Its own size, and never more than that.
+                Mermaid emits `width="100%"`, so the SVG stretched to whatever the column was.
+                For anything narrow — a straight vertical chain, which is most diagrams he
+                draws — that is a magnification: a 200px-wide graph blown to 1200px is six
+                times, so 14px labels became 80px and two nodes filled three screens.
+                `max-w-full` could not save it, because 100% *is* full.
+
+                `naturalSize` pins width and height to the viewBox, and the CSS only ever takes
+                size away: `max-w-full` shrinks something genuinely wider than the column, and
+                `h-auto` keeps that in proportion. So a small diagram stays small, a wide one
+                fits, and nothing is ever drawn larger than it was laid out to be — which is
+                the rule the Lightbox has always used ("never magnified past 1"). */}
             <div
               className="flex justify-center overflow-x-auto p-4 [&_svg]:h-auto [&_svg]:max-w-full!"
               // Mermaid's output — built by mermaid from the code he wrote, in a renderer that
               // already runs his shell commands. Rendered rather than escaped because an SVG
               // shown as text is the thing this component exists to stop doing.
-              dangerouslySetInnerHTML={{ __html: svg }}
+              dangerouslySetInnerHTML={{ __html: sized }}
             />
             <Toolbar svg={svg} dark={dark} onZoom={() => setZoomed(true)} />
           </>
