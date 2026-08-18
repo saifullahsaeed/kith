@@ -8,7 +8,7 @@ from kith.domain import stall
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
-from kith.services import project_binding
+from kith.services import board_sync, project_binding
 from kith.services.tasks import (
     FILED_THIS_TURN,
     _mirror_brief,
@@ -194,7 +194,11 @@ def add_task(path: Path, args: dict):
     required=(),
 )
 def list_tasks(path: Path, args: dict):
-    return paging.page(repo.tasks.list_tasks(path, args.get("status")), args)
+    out = paging.page(repo.tasks.list_tasks(path, args.get("status")), args)
+    waiting = board_sync.waiting_here(path)
+    if waiting:
+        out["from_the_folder"] = waiting
+    return out
 
 
 @tool(

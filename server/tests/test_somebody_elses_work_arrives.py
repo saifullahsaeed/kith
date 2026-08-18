@@ -235,3 +235,75 @@ class TestAFolderItMustNotRead:
         db, project_id, folder, _ = shared
         (folder / ".kith" / "tasks" / "99-theirs.md").write_text("# T\n<<<<<<< HEAD\nx\n")
         assert "99-theirs.md" in board_sync.pull(db, project_id, str(folder))["blocked"]
+
+
+class TestWhereItIsSaid:
+    """Attached to `list_tasks`, which is the one moment it matters and is not a hot path.
+
+    `project_binding.adopt` was the other candidate and is the wrong one: it fires on every
+    *write*, so an import there would run inside the write that triggered it, changing the board
+    underneath the turn doing the changing.
+    """
+
+    def test_it_says_nothing_when_the_folder_agrees(self, shared, monkeypatch):
+        db, project_id, _folder, _ = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
+        assert board_sync.waiting_here(db) == ""
+
+    def test_it_names_what_is_waiting(self, shared, monkeypatch):
+        db, project_id, folder, _ = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
+        project_files.write_brief(
+            folder,
+            {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"},
+        )
+        said = board_sync.waiting_here(db)
+        assert "Theirs" in said
+        assert "not on this board" in said
+
+    def test_it_says_when_the_folder_cannot_be_trusted(self, shared, monkeypatch):
+        db, project_id, folder, _ = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
+        (folder / ".kith" / "tasks" / "99-theirs.md").write_text("# T\n<<<<<<< HEAD\nx\n")
+        said = board_sync.waiting_here(db)
+        assert "cannot be read right now" in said and "Nothing has been taken" in said
+
+    def test_it_reminds_you_that_nothing_arrives_on_its_own(self, shared, monkeypatch):
+        """Git is not a sync daemon, and silence from an unfetched remote looks exactly like
+        agreement."""
+        db, project_id, folder, _ = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
+        project_files.write_brief(
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
+        )
+        assert "pull from git first" in board_sync.waiting_here(db)
+
+    def test_it_still_only_says(self, shared, monkeypatch):
+        """`pull` is called by nobody. This is the sentence that lets a person decide."""
+        db, project_id, folder, _ = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
+        project_files.write_brief(
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
+        )
+        before = len(repo.tasks.list_tasks(db))
+        board_sync.waiting_here(db)
+        assert len(repo.tasks.list_tasks(db)) == before
+
+    def test_a_session_on_no_project_is_asked_nothing(self, db: Path, monkeypatch):
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: None)
+        monkeypatch.setattr(board_sync.session_context, "current", lambda: "")
+        assert board_sync.waiting_here(db) == ""
+
+    def test_a_failure_reading_the_folder_does_not_fail_the_task_list(self, shared, monkeypatch):
+        """Reading somebody else's folder is a courtesy; a task list that failed because of one
+        would not be."""
+        db, project_id, _, _ = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        monkeypatch.setattr(board_sync, "AGENT_DB_PATH", db)
+        monkeypatch.setattr(board_sync, "preview", lambda *a, **k: 1 / 0)
+        assert board_sync.waiting_here(db) == ""

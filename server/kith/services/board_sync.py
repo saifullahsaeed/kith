@@ -31,6 +31,8 @@ from typing import Any
 
 from kith.infra import project_files
 from kith.infra.db import repositories as repo
+from kith.kernel import session_context
+from kith.settings import AGENT_DB_PATH
 
 #: Fields a brief is allowed to carry into the board. Not everything a task has: `project_id`
 #: and `milestone_id` are this machine's own numbers and mean nothing in someone else's
@@ -146,3 +148,72 @@ def _newer(theirs: Any, mine: Any) -> bool:
     """
     left, right = str(theirs or "").strip(), str(mine or "").strip()
     return bool(left) and left > right
+
+
+def waiting_here(path: Path) -> str:
+    """What the folder of the project in hand is holding, in a sentence. "" when nothing is.
+
+    Attached to `list_tasks`, which is the one moment it matters and the one that is not a hot
+    path. Asking the board what is on it is exactly when you want to know that somebody else's
+    work is sitting in the folder unread — and `list_tasks` is called deliberately, a few times
+    a turn at most, so a walk of fifty markdown files is affordable in a way that the per-round
+    prompt assembly is not. `project_binding.adopt` was the other candidate and is the wrong
+    one: it fires on every *write*, so an import there would run inside the write that triggered
+    it, changing the board underneath the turn doing the changing.
+
+    **Says, never does.** `pull` is still called by nobody. An import that runs on its own and
+    gets something wrong is expensive to unwind, and this is the sentence that lets a person
+    decide — including the sentence that says the folder cannot be trusted right now.
+
+    Silent on every failure. Reading somebody else's folder is a courtesy; a task list that
+    fails because of one would not be.
+    """
+    try:
+        project_id = session_context.current_project()
+        if not project_id:
+            conversation = session_context.current()
+            project_id = repo.conversations.project_of(AGENT_DB_PATH, conversation) if conversation else None
+        if not project_id:
+            return ""
+        row = repo.projects.get_project(path, int(project_id))
+        directory = str((row or {}).get("directory") or "").strip()
+        if not directory:
+            return ""
+        found = preview(path, int(project_id), directory)
+    except Exception:
+        return ""
+
+    if found.get("blocked"):
+        return (
+            f"This project's `.kith/` cannot be read right now — {found['blocked']}. "
+            "Nothing has been taken from it. Sort that out before trusting the board here."
+        )
+    added, updated, kept = found["added"], found["updated"], found["kept"]
+    if not (added or updated or kept):
+        return ""
+
+    said = []
+    if added:
+        said.append(f"{len(added)} task(s) in the folder that are not on this board: {', '.join(added[:4])}")
+    if updated:
+        said.append(f"{len(updated)} where the folder is newer: {', '.join(updated[:4])}")
+    if kept:
+        said.append(f"{len(kept)} where this board is newer: {', '.join(kept[:4])}")
+    quiet = _how_long(found.get("changed_ago") or 0.0)
+    return (
+        "Somebody else's work is in `.kith/` and has not been taken in. "
+        + "; ".join(said)
+        + f". The folder last changed {quiet}. Say the word and I will pull it in — "
+        "and pull from git first if nobody has today, because nothing arrives on its own."
+    )
+
+
+def _how_long(seconds: float) -> str:
+    """Rounded, and never precise: the difference that matters is minutes against days."""
+    if seconds < 90:
+        return "just now"
+    if seconds < 5400:
+        return f"{int(seconds // 60)} minutes ago"
+    if seconds < 172800:
+        return f"{int(seconds // 3600)} hours ago"
+    return f"{int(seconds // 86400)} days ago"
