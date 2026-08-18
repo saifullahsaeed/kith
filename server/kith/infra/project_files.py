@@ -470,3 +470,64 @@ def reconcile(project_dir: str | Path, board: dict[int, dict[str, Any]]) -> dict
         "only_on_board": sorted(set(theirs) - set(ours), key=str),
         "disagree": disagree,
     }
+
+
+#: What git leaves in a file it could not merge. Checked for literally rather than parsed,
+#: because the whole point is that this text is not valid content of anything.
+_CONFLICT = "<<<<<<< "
+
+
+def unsettled(project_dir: str | Path) -> str:
+    """Why this folder must not be read right now, or "" if it may be.
+
+    `read_brief` is forgiving on purpose — the folder is theirs once it is committed, so a
+    hand-edited heading must not make a task vanish. That tolerance is exactly what makes an
+    unmerged folder dangerous: git leaves
+
+        <<<<<<< HEAD
+        **Status:** done
+        =======
+        **Status:** working
+        >>>>>>> origin/main
+
+    in the file, and a forgiving reader takes the first `**Status:**` it finds and imports
+    `done`. Silently, and the conflict is resolved by having been read — the one outcome here
+    that nobody can unwind, because the losing side is gone before anyone saw there was a
+    disagreement.
+
+    So this is asked before any brief is read, and it answers in words rather than a boolean:
+    the caller is a turn and the person needs to know *which* file to go and look at.
+    """
+    project = Path(project_dir)
+    for marker in ("MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD"):
+        if (project / ".git" / marker).exists():
+            return f"this repository is in the middle of something ({marker.split('_')[0].lower()})"
+    folder = kith_dir(project) / TASKS
+    if not folder.is_dir():
+        return ""
+    for doc in sorted(folder.glob("*.md")):
+        try:
+            if _CONFLICT in doc.read_text(encoding="utf-8"):
+                return f"`{doc.name}` still has conflict markers in it"
+        except OSError:
+            continue
+    return ""
+
+
+def last_changed(project_dir: str | Path) -> float:
+    """When a brief in this folder was last written, as an epoch time. 0 for none.
+
+    So that "nothing came in" and "nobody fetched" stop looking alike. They are the same silence
+    and they mean opposite things — the first is agreement and the second is a day of somebody
+    else's work you have not seen.
+    """
+    folder = kith_dir(project_dir) / TASKS
+    if not folder.is_dir():
+        return 0.0
+    newest = 0.0
+    for doc in folder.glob("*.md"):
+        try:
+            newest = max(newest, doc.stat().st_mtime)
+        except OSError:
+            continue
+    return newest

@@ -45,7 +45,7 @@ class TestWorkThatArrivesFromSomebodyElse:
             folder,
             {
                 "id": 900,
-                "key": "1a015eaff8309001",
+                "key": "1a015eaff8309001abc",
                 "goal": "Theirs",
                 "status": "working",
                 "priority": "high",
@@ -62,11 +62,11 @@ class TestWorkThatArrivesFromSomebodyElse:
         would make it a different task that happens to read alike."""
         db, project_id, folder, _ = shared
         project_files.write_brief(
-            folder, {"id": 900, "key": "1a015eaff8309001", "goal": "Theirs", "status": "working"}
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
         )
         board_sync.pull(db, project_id, str(folder))
         theirs = next(t for t in repo.tasks.list_tasks(db) if t["goal"] == "Theirs")
-        assert theirs["key"] == "1a015eaff8309001"
+        assert theirs["key"] == "1a015eaff8309001abc"
 
     def test_its_checklist_comes_with_it(self, shared):
         db, project_id, folder, _ = shared
@@ -74,7 +74,7 @@ class TestWorkThatArrivesFromSomebodyElse:
             folder,
             {
                 "id": 901,
-                "key": "1a015eaff8309002",
+                "key": "1a015eaff8309002abc",
                 "goal": "With steps",
                 "status": "working",
                 "checklist": [{"text": "first", "done": True}, {"text": "second", "done": False}],
@@ -129,7 +129,7 @@ class TestWhenBothChanged:
     def test_agreement_changes_nothing(self, shared):
         db, project_id, folder, _ = shared
         out = board_sync.pull(db, project_id, str(folder))
-        assert out == {"added": [], "updated": [], "kept": []}
+        assert (out["added"], out["updated"], out["kept"]) == ([], [], [])
 
 
 class TestItOnlyEverGoesOneWay:
@@ -143,7 +143,95 @@ class TestItOnlyEverGoesOneWay:
         assert repo.tasks.task_detail(db, int(task["id"])) is not None
 
     def test_a_project_with_no_folder_is_a_no_op(self, db: Path):
-        assert board_sync.pull(db, 1, "") == {"added": [], "updated": [], "kept": []}
+        assert board_sync.pull(db, 1, "")["added"] == []
 
     def test_a_folder_that_is_not_there_is_a_no_op(self, db: Path, tmp_path: Path):
-        assert board_sync.pull(db, 1, str(tmp_path / "gone")) == {"added": [], "updated": [], "kept": []}
+        assert board_sync.pull(db, 1, str(tmp_path / "gone"))["added"] == []
+
+
+class TestLookingBeforeTakingItIn:
+    """`preview` is the default and `pull` is what you reach for once you have looked.
+
+    An import that runs on its own and gets something wrong is expensive to unwind; a report that
+    gets something wrong costs a sentence. Same shape as `project_files.neutered_by`.
+    """
+
+    def test_it_says_what_would_come_in(self, shared):
+        db, project_id, folder, _ = shared
+        project_files.write_brief(
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
+        )
+        assert board_sync.preview(db, project_id, str(folder))["added"] == ["Theirs"]
+
+    def test_and_changes_nothing(self, shared):
+        db, project_id, folder, task = shared
+        project_files.write_brief(
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
+        )
+        project_files.write_brief(
+            folder, {**task, "status": "done", "updated_at": "2099-01-01T00:00:00+00:00"}
+        )
+        before = {t["id"]: dict(t) for t in repo.tasks.list_tasks(db)}
+        board_sync.preview(db, project_id, str(folder))
+        assert {t["id"]: dict(t) for t in repo.tasks.list_tasks(db)} == before
+
+    def test_it_reports_exactly_what_pulling_then_does(self, shared):
+        """One traversal behind both. Two would drift, and the one that drifted would be the
+        report — so the thing you looked at would stop being the thing that happened."""
+        db, project_id, folder, task = shared
+        project_files.write_brief(
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
+        )
+        project_files.write_brief(
+            folder, {**task, "status": "done", "updated_at": "2099-01-01T00:00:00+00:00"}
+        )
+        looked = board_sync.preview(db, project_id, str(folder))
+        happened = board_sync.pull(db, project_id, str(folder))
+        assert (looked["added"], looked["updated"], looked["kept"]) == (
+            happened["added"],
+            happened["updated"],
+            happened["kept"],
+        )
+
+    def test_it_says_how_long_the_folder_has_been_quiet(self, shared):
+        """Git is not a sync daemon. "Nothing came in" and "nobody has fetched" are the same
+        silence and mean opposite things."""
+        db, project_id, folder, _ = shared
+        assert board_sync.preview(db, project_id, str(folder))["changed_ago"] >= 0
+
+
+class TestAFolderItMustNotRead:
+    def test_a_brief_with_conflict_markers_stops_everything(self, shared):
+        """The worst outcome available here. `read_brief` is forgiving by design, so it would
+        take the first `**Status:**` it found and import one side — silently, and the conflict
+        would be resolved by having been read, with the losing side gone before anyone saw
+        there was a disagreement."""
+        db, project_id, folder, _ = shared
+        (folder / ".kith" / "tasks" / "99-theirs.md").write_text(
+            "# Theirs\n<<<<<<< HEAD\n**Status:** done\n=======\n**Status:** working\n>>>>>>> origin/main\n"
+        )
+        out = board_sync.pull(db, project_id, str(folder))
+        assert "conflict markers" in out["blocked"]
+        assert out["added"] == [] and out["updated"] == []
+
+    def test_it_refuses_the_whole_folder_rather_than_skipping_the_file(self, shared):
+        """A folder mid-merge is not partly trustworthy."""
+        db, project_id, folder, _ = shared
+        project_files.write_brief(
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Fine on its own", "status": "working"}
+        )
+        (folder / ".kith" / "tasks" / "99-theirs.md").write_text("# T\n<<<<<<< HEAD\nx\n")
+        assert board_sync.pull(db, project_id, str(folder))["added"] == []
+        assert "Fine on its own" not in [t["goal"] for t in repo.tasks.list_tasks(db)]
+
+    def test_a_repository_mid_merge_stops_it_too(self, shared):
+        db, project_id, folder, _ = shared
+        (folder / ".git").mkdir(parents=True, exist_ok=True)
+        (folder / ".git" / "MERGE_HEAD").write_text("abc123\n")
+        assert "middle of something" in board_sync.pull(db, project_id, str(folder))["blocked"]
+
+    def test_it_names_the_file_rather_than_saying_no(self, shared):
+        """The caller is a turn and the person needs to know which file to go and look at."""
+        db, project_id, folder, _ = shared
+        (folder / ".kith" / "tasks" / "99-theirs.md").write_text("# T\n<<<<<<< HEAD\nx\n")
+        assert "99-theirs.md" in board_sync.pull(db, project_id, str(folder))["blocked"]

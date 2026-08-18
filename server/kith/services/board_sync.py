@@ -25,6 +25,7 @@ way.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -37,14 +38,42 @@ from kith.infra.db import repositories as repo
 _CARRIED = ("goal", "status", "priority", "description")
 
 
+def preview(path: Path, project_id: int, directory: str) -> dict[str, Any]:
+    """What `pull` would do, without doing it.
+
+    The default, and `pull` is what you reach for once you have looked. An import that runs on
+    its own and gets something wrong is expensive to unwind; a report that gets something wrong
+    costs a sentence. Same shape as `project_files.neutered_by` — describe, never repair — and
+    for the same reason.
+
+    It also makes the honest limit visible. Git is not a sync daemon: nothing arrives until
+    somebody fetches, so "nothing came in" and "nobody has pulled today" are the same silence
+    and mean opposite things. `changed_ago` says which.
+    """
+    return _walk(path, project_id, directory, apply=False)
+
+
 def pull(path: Path, project_id: int, directory: str) -> dict[str, Any]:
     """Read the project's folder into the board. Returns what changed, and why.
 
     Reports rather than logs, because the caller is a turn and the person wants the sentence:
     "three tasks came in from the folder, one of yours was newer so it stayed".
     """
+    return _walk(path, project_id, directory, apply=True)
+
+
+def _walk(path: Path, project_id: int, directory: str, apply: bool) -> dict[str, Any]:
+    """One traversal, described or applied. Two of these would drift, and the one that drifted
+    would be the report — so the thing you looked at would stop being the thing that happened."""
+    empty: dict[str, Any] = {"added": [], "updated": [], "kept": [], "blocked": "", "changed_ago": 0.0}
     if not directory or not Path(directory).is_dir():
-        return {"added": [], "updated": [], "kept": []}
+        return empty
+
+    # Asked before a single brief is read, and it refuses rather than skipping the bad one: a
+    # folder mid-merge is not partly trustworthy. See `project_files.unsettled`.
+    blocked = project_files.unsettled(directory)
+    if blocked:
+        return {**empty, "blocked": blocked}
 
     board = {int(t["id"]): t for t in repo.tasks.list_tasks(path) if t.get("project_id") == int(project_id)}
     by_key = {str(t.get("key") or ""): t for t in board.values() if t.get("key")}
@@ -52,26 +81,36 @@ def pull(path: Path, project_id: int, directory: str) -> dict[str, Any]:
     added: list[str] = []
     updated: list[str] = []
     kept: list[str] = []
+    changed = project_files.last_changed(directory)
 
     for name, brief in project_files.read_board(directory).items():
         key = str(brief.get("key") or "")
         mine = by_key.get(key) if key else board.get(name if isinstance(name, int) else 0)
         if mine is None:
             if key:
-                added.append(_adopt(path, project_id, brief))
+                added.append(_adopt(path, project_id, brief) if apply else str(brief.get("goal") or "")[:40])
             # A brief with no key and no matching row is from a project that used to own this
             # folder — 29 of them in one real case, 17 for tasks deleted long ago. Not ours to
             # resurrect: a task nobody can point at is not a task.
             continue
-        changed = {f: brief[f] for f in _CARRIED if brief.get(f) and brief[f] != mine.get(f)}
-        if not changed:
+        differs = {f: brief[f] for f in _CARRIED if brief.get(f) and brief[f] != mine.get(f)}
+        if not differs:
             continue
         if _newer(brief.get("updated_at"), mine.get("updated_at")):
-            repo.tasks.update_task(path, int(mine["id"]), **changed)
-            updated.append(f"{mine['goal'][:40]} ({', '.join(changed)})")
+            if apply:
+                repo.tasks.update_task(path, int(mine["id"]), **differs)
+            updated.append(f"{mine['goal'][:40]} ({', '.join(differs)})")
         else:
-            kept.append(f"{mine['goal'][:40]} ({', '.join(changed)})")
-    return {"added": added, "updated": updated, "kept": kept}
+            kept.append(f"{mine['goal'][:40]} ({', '.join(differs)})")
+    return {
+        "added": added,
+        "updated": updated,
+        "kept": kept,
+        "blocked": "",
+        # How long since anything in the folder was written. Long, with things waiting, usually
+        # means nobody has fetched rather than nobody has worked.
+        "changed_ago": max(0.0, time.time() - changed) if changed else 0.0,
+    }
 
 
 def _adopt(path: Path, project_id: int, brief: dict[str, Any]) -> str:

@@ -147,9 +147,9 @@ class TestANameATaskKeepsWhenItLeaves:
 
     def test_a_task_with_a_key_is_filed_under_it(self, tmp_path: Path):
         project_files.write_brief(
-            tmp_path, {"id": 8, "goal": "New style", "status": "working", "key": "1a015eaff83fa290"}
+            tmp_path, {"id": 8, "goal": "New style", "status": "working", "key": "1a015eaff83fa290abc"}
         )
-        assert (tmp_path / ".kith" / "tasks" / "1a015eaff83fa290-new-style.md").is_file()
+        assert (tmp_path / ".kith" / "tasks" / "1a015eaff83fa290abc-new-style.md").is_file()
 
     def test_a_task_without_one_keeps_the_name_it_has(self, tmp_path: Path):
         """Not only for old files. Nothing already committed should move because a column
@@ -160,39 +160,39 @@ class TestANameATaskKeepsWhenItLeaves:
     def test_both_read_back_at_once(self, tmp_path: Path):
         project_files.write_brief(tmp_path, {"id": 7, "goal": "Old", "status": "done"})
         project_files.write_brief(
-            tmp_path, {"id": 8, "goal": "New", "status": "working", "key": "1a015eaff83fa290"}
+            tmp_path, {"id": 8, "goal": "New", "status": "working", "key": "1a015eaff83fa290abc"}
         )
-        assert set(project_files.read_board(tmp_path)) == {7, "1a015eaff83fa290"}
+        assert set(project_files.read_board(tmp_path)) == {7, "1a015eaff83fa290abc"}
 
     def test_gaining_a_key_moves_the_brief_rather_than_forking_it(self, tmp_path: Path):
         """The failure this avoids is quiet: one task, two files, and a reader that believes
         there are two tasks."""
         project_files.write_brief(tmp_path, {"id": 7, "goal": "Old style", "status": "done"})
         project_files.write_brief(
-            tmp_path, {"id": 7, "goal": "Old style", "status": "done", "key": "1a015eaff8300007"}
+            tmp_path, {"id": 7, "goal": "Old style", "status": "done", "key": "1a015eaff8300007abc"}
         )
         found = sorted(p.name for p in (tmp_path / ".kith" / "tasks").glob("*.md"))
-        assert found == ["1a015eaff8300007-old-style.md"]
+        assert found == ["1a015eaff8300007abc-old-style.md"]
 
     def test_reconcile_matches_across_the_two_namings(self, tmp_path: Path):
         """Comparing numbers against keys would report every task twice — once as a ghost and
         once as a gap — which is the exact opposite of what this is for."""
         project_files.write_brief(tmp_path, {"id": 7, "goal": "Before keys", "status": "done"})
         project_files.write_brief(
-            tmp_path, {"id": 8, "goal": "After", "status": "working", "key": "1a015eaff83fa290"}
+            tmp_path, {"id": 8, "goal": "After", "status": "working", "key": "1a015eaff83fa290abc"}
         )
         out = project_files.reconcile(
             tmp_path,
             {
-                7: {"goal": "Before keys", "status": "done", "key": "1a015eaff8300007"},
-                8: {"goal": "After", "status": "working", "key": "1a015eaff83fa290"},
+                7: {"goal": "Before keys", "status": "done", "key": "1a015eaff8300007abc"},
+                8: {"goal": "After", "status": "working", "key": "1a015eaff83fa290abc"},
             },
         )
         assert out == {"only_in_files": [], "only_on_board": [], "disagree": []}
 
     def test_a_deleted_task_loses_its_brief_under_either_name(self, tmp_path: Path):
         project_files.write_brief(tmp_path, {"id": 7, "goal": "Old", "status": "done"})
-        assert project_files.forget_brief(tmp_path, 7, "1a015eaff8300007") is True
+        assert project_files.forget_brief(tmp_path, 7, "1a015eaff8300007abc") is True
         assert project_files.read_board(tmp_path) == {}
 
     def test_a_file_that_is_hex_but_neither_is_not_a_task(self, tmp_path: Path):

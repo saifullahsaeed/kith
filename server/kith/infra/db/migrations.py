@@ -22,7 +22,7 @@ def _key_for(created_at: str, task_id: int) -> str:
         when = int(datetime.fromisoformat(str(created_at)).timestamp() * 1000)
     except (TypeError, ValueError):
         when = 0
-    return f"{when:011x}{int(task_id) & 0xFFFFF:05x}"
+    return f"{when:011x}{int(task_id) & 0xFFFFFFFF:08x}"
 
 
 def _migrations():
