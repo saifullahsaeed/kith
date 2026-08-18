@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from kith.infra.workspace import git, paths
+from kith.infra.workspace import git
 
 
 def _run(*args: str, cwd: Path) -> None:
@@ -35,7 +35,13 @@ def repo(tmp_path: Path, monkeypatch):
     (work / "a.txt").write_text("one\n")
     _run("add", "-A", cwd=work)
     _run("commit", "-q", "-m", "first", cwd=work)
-    monkeypatch.setattr(paths, "configured_root", lambda: work)
+    # `git.base_dir`, not `paths.base_dir`: git.py does `from .paths import base_dir`, so it
+    # holds its own reference and patching the source module changes nothing. The first version
+    # of this fixture patched `paths.configured_root` and every assertion below was quietly
+    # about the developer's real ~/Kith — which is a git repository with no remote, so the
+    # "no remote" tests passed for the wrong reason and would have kept passing through a
+    # rewrite of the thing they test.
+    monkeypatch.setattr(git, "base_dir", lambda: work)
     return work, origin
 
 
@@ -94,8 +100,29 @@ class TestTheWaysItDoesNotWork:
 
     def test_it_never_raises(self, tmp_path: Path, monkeypatch):
         """Failing to publish must not take down the work that was published."""
-        monkeypatch.setattr(paths, "configured_root", lambda: tmp_path / "not-a-repo")
+        monkeypatch.setattr(git, "base_dir", lambda: tmp_path / "not-a-repo")
         assert isinstance(git.push(), str)
+
+    def test_a_folder_that_is_not_a_repository_says_that(self, tmp_path: Path, monkeypatch):
+        """`has_git()` answers whether the git *binary* exists, so the guard whose message said
+        "there is no repository here" fired only on a machine with no git at all. A plain folder
+        fell through to the remote check and was told "this repository has no remote" — a
+        sentence about a repository that does not exist. Somebody reading that goes looking for
+        `git remote add` when what they need is `git init`."""
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        monkeypatch.setattr(git, "base_dir", lambda: plain)
+        assert "not a git repository" in git.push()
+        assert "not a git repository" in git.pull()
+
+    def test_a_subfolder_of_a_repository_is_one(self, repo, monkeypatch):
+        """`_repo_root` walks up. Checking only `here/.git` would call every subdirectory of a
+        checkout a non-repository, which is most of where work actually happens."""
+        work, _ = repo
+        deep = work / "src" / "components"
+        deep.mkdir(parents=True)
+        monkeypatch.setattr(git, "base_dir", lambda: deep)
+        assert "not a git repository" not in git.push()
 
 
 class TestBringingItBack:

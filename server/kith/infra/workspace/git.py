@@ -205,6 +205,32 @@ def log(limit: int = 20) -> str:
     return _clip(out.strip()) or "No history yet."
 
 
+def _nowhere_to_send(verb: str) -> str:
+    """Why this folder cannot exchange anything with anybody, or "" if it can.
+
+    Both `push` and `pull` opened by asking `has_git()`, and `has_git()` answers whether the git
+    *binary* is installed — so the guard whose message says "there is no repository here" fired
+    only on a machine with no git at all. A plain folder fell straight through it to the remote
+    check and was told **"this repository has no remote"**, which is a sentence about a
+    repository that does not exist. Somebody reading that goes looking for `git remote add`
+    when what they need is `git init`.
+
+    The two are different questions and both are worth answering separately, because the answers
+    lead to different actions.
+    """
+    if not has_git():
+        return f"git is not installed on this machine, so there is nothing to {verb} with."
+    if _repo_root(base_dir()) is None:
+        return f"This folder is not a git repository, so there is nothing to {verb}."
+    if not _git("remote").output.strip():
+        return (
+            "This repository has no remote, so the work stays on this machine."
+            if verb == "push"
+            else "This repository has no remote, so there is nowhere to pull from."
+        )
+    return ""
+
+
 def push() -> str:
     """Send committed work to wherever this repository came from. A sentence about what happened.
 
@@ -222,10 +248,9 @@ def push() -> str:
     Never raises, for the same reason `commit_all` does not: failing to publish must not take
     down the work that was published.
     """
-    if not has_git():
-        return "There is no repository here, so there is nothing to push."
-    if not _git("remote").output.strip():
-        return "This repository has no remote, so the work stays on this machine."
+    nowhere = _nowhere_to_send("push")
+    if nowhere:
+        return nowhere
 
     branch = _git("rev-parse", "--abbrev-ref", "HEAD").output.strip() or "HEAD"
     upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
@@ -275,10 +300,9 @@ def pull() -> str:
     refuses to read, so the board silently stops updating and the reason is three steps away.
     Refusing up front and saying the branches have diverged puts the decision where it belongs.
     """
-    if not has_git():
-        return "There is no repository here, so there is nothing to pull."
-    if not _git("remote").output.strip():
-        return "This repository has no remote, so there is nowhere to pull from."
+    nowhere = _nowhere_to_send("pull")
+    if nowhere:
+        return nowhere
     if _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").exit_code != 0:
         return "This branch does not track anything yet, so there is nothing to pull."
 
