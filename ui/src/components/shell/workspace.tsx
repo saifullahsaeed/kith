@@ -510,12 +510,21 @@ export function Workspace({
                       // recomputed anywhere that compares them.
                       turnOffset={Math.max(0, timeline.length - shown)}
                     >
+                      {/* Floating, not stacked.
+                          This was a full-width flex row in the flow, which made it a band across
+                          the top of the conversation: it claimed its own height from the thread,
+                          and the first message ran up underneath the thread's top fade to meet
+                          it. Absolute takes it out of the flow entirely — the thread gets the
+                          whole box back, and the pill hovers over the top of it the way a
+                          "jump to latest" chip does at the other end.
+                          `pointer-events-none` on the strip so the full-width row cannot
+                          intercept anything; only the pill itself is clickable. */}
                       {timeline.length > shown ? (
-                        <div className="flex justify-center pt-3">
+                        <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
                           <button
                             type="button"
                             onClick={loadEarlier}
-                            className="border-border/60 bg-card/60 text-muted-foreground hover:text-foreground rounded-full border px-3 py-1 text-[11px]"
+                            className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors"
                           >
                             Load {Math.min(WINDOW, timeline.length - shown)} earlier ·{" "}
                             {timeline.length - shown} above

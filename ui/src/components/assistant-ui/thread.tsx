@@ -143,8 +143,13 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
         // background, which in the light room came out within a percent of the background
         // itself: the one control the whole screen exists for was the faintest thing on it.
         ["--composer-bg" as string]: "var(--color-card)",
-        ["--composer-radius" as string]: "1.5rem",
-        ["--composer-padding" as string]: "8px",
+        // Room to write in. The box holds one line of text in a space sized for several, which
+        // is the point: it is where a long message gets composed, and an input that looks like a
+        // search field invites a sentence. Padding and radius both grew with the height so the
+        // proportions hold — a taller box inside the old 8px inset reads as a text area with a
+        // border, not as a surface.
+        ["--composer-radius" as string]: "1.75rem",
+        ["--composer-padding" as string]: "12px",
       }}
     >
       {/* Global on purpose — it listens on `document`, not on anything inside this subtree, so
@@ -202,18 +207,21 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
               // Almost nothing, on purpose. Enough that a line of reply does not collide with
               // the input as it scrolls past — the messages run the full width now, so there is
               // text moving behind the composer on both sides of it — and not enough to be a
-              // surface. Mostly the blur does that work; the tint only keeps the last few
-              // pixels from touching the composer's own edge.
+              // surface.
+              //
+              // The blur that used to do this work is gone. Frosting the strip did stop the
+              // collision, but it did it by making a band of his reply unreadable on its way
+              // past, which is a strange thing to do to the text someone is in the middle of
+              // reading. The gradient alone keeps the last few pixels off the composer's edge
+              // and leaves the words legible until they go under it.
               //
               // To remove it altogether, delete this line. Nothing else depends on it: the
               // composer carries its own background and border, so it stays legible over
               // whatever passes underneath.
-              !isEmpty &&
-                "sticky bottom-0 mt-auto bg-gradient-to-t from-background/45 to-transparent backdrop-blur-sm",
+              !isEmpty && "sticky bottom-0 mt-auto bg-gradient-to-t from-background/45 to-transparent",
             )}
           >
             <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
-              <ThreadScrollToBottom />
               <ThreadFollowupSuggestions />
               <AskPrompt conversationId={conversationId} />
               <PermissionPrompt />
@@ -267,28 +275,42 @@ const SelectionQuoteToolbar: FC = () => (
 const ThreadScrollToBottom: FC = () => {
   return (
     <ThreadPrimitive.ScrollToBottom asChild>
-      {/* End-aligned rather than centred, and smaller. Centred over a 44rem column it landed
-          squarely on the last line of the reply — so the one control for "take me back down"
-          was drawn through the sentence you were reading.
+      {/* Centred, floating clear of the composer.
+
+          Two wrong answers first, both worth keeping written down. End-aligned put it *inside*
+          the reading column — measured, its right edge and the text column's right edge were the
+          same pixel, so it landed on the end of a line and squarely on a wide table. That had
+          been the fix for an even earlier version, and it only ever worked while messages sat in
+          a 44rem column with empty margins; they run the full width now, so the right margin is
+          text. Straddling the composer's top-right corner solved the overlap and traded it for a
+          button sitting on the input's own border, which is worse to look at every time you type.
+
+          So: above the composer, centred, with a real gap under it. It floats over the tail of
+          the reply when a line reaches that high — that is the accepted cost, and it is the
+          arrangement every other assistant has settled on, because the fade is thickest here and
+          the eye is already heading for the composer.
 
           It's always mounted — `disabled` is how the primitive says "you're already at the
           bottom" — so appearing/disappearing is a transition on that attribute, not a mount.
           `disabled:invisible` cut straight to gone with nothing in between; scale+fade over the
-          same easing the rest of the app's discloures use reads as the button arriving rather
-          than blinking on. A couple more pixels of clearance from the composer, and a lift on
-          hover so it reads as pressable before you press it. */}
+          same easing the rest of the app's disclosures use reads as the button arriving rather
+          than blinking on, and a lift on hover so it reads as pressable before you press it.
+
+          No `backdrop-blur`: it sits on the composer's own fill, so there is nothing behind it
+          worth frosting — and frosting is what was making a band of the reply unreadable
+          elsewhere. */}
       <TooltipIconButton
         tooltip="Scroll to bottom"
         variant="outline"
         className={cn(
-          "aui-thread-scroll-to-bottom dark:border-border dark:bg-background/80 dark:hover:bg-accent",
-          "absolute -top-14 end-2 z-10 self-end rounded-full p-2.5 shadow-md backdrop-blur-sm",
+          "aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent bg-background",
+          "absolute -top-11 left-1/2 z-20 -translate-x-1/2 rounded-full p-2 shadow-md",
           "scale-100 opacity-100 transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]",
           "hover:scale-110 active:scale-90",
           "disabled:pointer-events-none disabled:scale-50 disabled:opacity-0",
         )}
       >
-        <ArrowDownIcon className="size-4" />
+        <ArrowDownIcon className="size-3.5" />
       </TooltipIconButton>
     </ThreadPrimitive.ScrollToBottom>
   );
@@ -438,6 +460,8 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
   const slash = unstable_useSlashCommandAdapter({ commands, removeOnExecute: true });
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+      {/* Anchored to the composer, not floated over the conversation. */}
+      <ThreadScrollToBottom />
       {/* No `AttachmentDropzone` around this. It made this box the only place in the window
           that would take a file, which is the smallest and least obvious target on screen —
           and keeping it alongside the window-wide handler in `DropZone` would mean a file let

@@ -140,7 +140,7 @@ export const RichComposerInput: FC<{
     editorProps: {
       attributes: {
         class: cn(
-          "kith-composer-doc max-h-64 min-h-10 w-full overflow-y-auto px-2.5 py-1 text-base outline-none",
+          "kith-composer-doc max-h-64 min-h-14 w-full overflow-y-auto px-3.5 py-2.5 text-base outline-none",
           className,
         ),
         role: "textbox",
@@ -261,7 +261,7 @@ export const RichComposerInput: FC<{
       {/* The placeholder, rendered rather than an extension: one more package to hold one line of
           text, and this way it says the same thing in the same place as it did in the textarea. */}
       {!value && (
-        <span className="text-muted-foreground/80 pointer-events-none absolute start-2.5 top-1 select-none text-base">
+        <span className="text-muted-foreground/70 pointer-events-none absolute start-3.5 top-2.5 select-none text-base">
           {placeholder}
         </span>
       )}
