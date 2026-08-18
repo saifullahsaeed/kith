@@ -7,7 +7,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any
 
 from kith.infra.db.session import transaction
 from kith.kernel import changes
@@ -85,10 +84,6 @@ def keyword_search(path: Path, table: str, columns: tuple[str, ...], query: str,
 # the table name straight into the SQL, which is the shape of an injection even when every
 # caller today passes a literal — and a dead helper is exactly the one someone reaches for
 # later without reading it. Everything goes through the ORM now.
-
-
-def row_to_dict(row) -> dict[str, Any]:
-    return dict(row)
 
 
 def utc_now_iso() -> str:

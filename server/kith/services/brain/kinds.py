@@ -136,12 +136,6 @@ KINDS: dict[str, Kind] = {
             add=_memory_add,
             edit=_memory_edit,
         ),
-        Kind(
-            "note",
-            remove=repo.notes.delete_note,
-            add=lambda p, d: repo.notes.add_note(p, d.get("title", ""), d.get("body") or ""),
-            edit=lambda p, k, d: repo.notes.update_note(p, k, d.get("title"), d.get("body")),
-        ),
         Kind("journal", remove=repo.journal.delete_journal),
         Kind(
             "task",
@@ -201,14 +195,6 @@ KINDS: dict[str, Kind] = {
             "message",
             remove=repo.messages.delete_message,
             add=lambda p, d: repo.messages.add_message(p, d.get("body", ""), "user"),
-        ),
-        Kind(
-            "person",
-            remove=repo.people.delete_person,
-            add=lambda p, d: repo.people.upsert_person(
-                p, d.get("name", ""), d.get("relationship"), d.get("profile")
-            ),
-            edit=lambda p, k, d: repo.people.update_person(p, k, d.get("relationship"), d.get("profile")),
         ),
         Kind("source", remove=repo.sources.delete_source),
         Kind(

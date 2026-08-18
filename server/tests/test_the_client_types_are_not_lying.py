@@ -91,7 +91,6 @@ class TestTheTimeline:
         from kith.infra.db import repositories as repo
 
         repo.memories.add_memory(db, "something worth keeping")
-        repo.notes.add_note(db, "a note", "with a body")
         repo.journal.add_journal(db, "a journal entry")
         repo.tasks.add_task(db, "a task")
         repo.reminders.add_reminder(db, "a reminder", "2030-01-01T00:00:00+00:00")

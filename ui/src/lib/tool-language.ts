@@ -91,9 +91,6 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   remember: { verb: "remembered", of: "content", group: "memory" },
   forget: { verb: "let go of a memory", group: "memory" },
   set_memory_level: { verb: "re-shelved a memory", group: "memory" },
-  take_note: { verb: "noted", of: "title", group: "writing" },
-  read_notes: { verb: "read his notes", group: "reading" },
-  update_note: { verb: "edited a note", group: "writing" },
   journal: { verb: "wrote in his journal", group: "writing" },
   read_journal: { verb: "re-read his journal", group: "reading" },
   // tasks and projects
@@ -116,8 +113,6 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   set_mood: { verb: "felt", of: "mood", group: "self" },
   set_identity: { verb: "reshaped who he is", group: "self" },
   note_about_self: { verb: "noted about himself", of: "note", group: "self" },
-  note_about: { verb: "noted about you", of: "note", group: "self" },
-  recall_person: { verb: "recalled who you are", group: "self" },
   // time
   set_reminder: { verb: "set a reminder", of: "note", group: "time" },
   list_reminders: { verb: "checked his reminders", group: "time" },

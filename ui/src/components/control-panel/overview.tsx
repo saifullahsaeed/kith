@@ -10,7 +10,6 @@ import {
   MessageCircle,
   NotebookPen,
   Repeat,
-  StickyNote,
   Wrench,
 } from "lucide-react";
 import { Markdown, MarkdownInline } from "@/components/files";
@@ -24,7 +23,6 @@ import type { Tab } from "./types";
 
 const KIND_ICON: Record<TimelineKind, ReactNode> = {
   memory: <Brain className="size-3.5 text-violet-500" />,
-  note: <StickyNote className="size-3.5 text-amber-500" />,
   journal: <NotebookPen className="size-3.5 text-sky-500" />,
   task: <ListChecks className="size-3.5 text-emerald-500" />,
   reminder: <BellRing className="size-3.5 text-orange-500" />,
@@ -56,7 +54,6 @@ export function Overview({
       "Mind",
       [
         ["Memories", c.memories, <Brain className="size-4" />, "violet"],
-        ["Notes", c.notes, <StickyNote className="size-4" />, "amber"],
         ["Journal", c.journal, <NotebookPen className="size-4" />, "sky"],
       ],
     ],

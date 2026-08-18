@@ -37,8 +37,6 @@ ALIASES: dict[str, str] = {
     "save_file": "write_file",
     "create_file": "write_file",
     "put_file": "write_file",
-    "add_note": "take_note",
-    "write_note": "take_note",
     "log": "journal",
     "write_journal": "journal",
     "journal_entry": "journal",

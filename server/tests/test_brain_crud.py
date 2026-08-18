@@ -23,8 +23,6 @@ from kith.services.brain.kinds import KINDS
 #: the point.
 FORMS: dict[str, tuple[dict, str]] = {
     "memory": ({"content": "a thing worth keeping", "tags": ["probe"]}, "memories"),
-    "note": ({"title": "A note", "body": "its body"}, "notes"),
-    "person": ({"name": "Probe Person"}, "people"),
     "project": ({"name": "A project", "description": "its point"}, "projects"),
     "task": ({"goal": "do the thing", "description": "how"}, "tasks"),
     # The two that were broken.
@@ -80,7 +78,7 @@ class TestTheRegistryAndThePanelHaveToAgree:
     from this registry. When the two drift, the symptom is a button that 400s.
     """
 
-    @pytest.mark.parametrize("kind", ["memory", "note", "person", "project", "task", "reminder", "schedule"])
+    @pytest.mark.parametrize("kind", ["memory", "project", "task", "reminder", "schedule"])
     def test_every_kind_with_a_form_is_creatable(self, kind):
         assert KINDS[kind].add is not None, f"the panel has an Add form for {kind}"
 

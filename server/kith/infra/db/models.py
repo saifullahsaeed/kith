@@ -14,7 +14,7 @@ are packed float arrays in a ``BLOB``.
 
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, Float, Integer, LargeBinary, String, Text
+from sqlalchemy import CheckConstraint, Float, Integer, LargeBinary, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -32,16 +32,6 @@ class Memory(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     level: Mapped[str] = mapped_column(Text, nullable=False, default="recall")
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-
-
-class Note(Base):
-    __tablename__ = "notes"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    title: Mapped[str] = mapped_column(Text, nullable=False)
-    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class JournalEntry(Base):
@@ -175,29 +165,6 @@ class Message(Base):
     kind: Mapped[str] = mapped_column(Text, nullable=False, default="note")
     sender: Mapped[str] = mapped_column(Text, nullable=False, default="kith")
     link: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class Person(Base):
-    __tablename__ = "people"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # UNIQUE COLLATE NOCASE in the live schema — case-insensitive by design, so
-    # "saif" and "Saif" are the same person.
-    name: Mapped[str] = mapped_column(String(collation="NOCASE"), nullable=False, unique=True)
-    relationship: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    profile: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
-
-
-# `Curiosity` was mapped here — the last piece of the scheduled inner life still standing.
-# The tools, the repository and the brain kind all went; the ORM class stayed,
-# referenced by nothing, still declaring `curiosities` to SQLAlchemy's metadata.
-#
-# The migration that creates the table stays where it is, and must: migrations are history,
-# and rewriting one breaks every database that already ran it. An existing install keeps an
-# empty table it no longer opens, which costs nothing. A mapped class is different — it is a
-# live claim about what the schema is for, and this one had not been true for a day.
 
 
 class SelfModel(Base):

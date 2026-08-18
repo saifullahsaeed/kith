@@ -101,22 +101,6 @@ def self_block(path: Path) -> str:
     return "\n".join(lines)
 
 
-def people_block(path: Path) -> str:
-    """Who Kith is with — the people he's come to know, so he doesn't relearn them."""
-    people = repo.people.list_people(path)
-    if not people:
-        return ""
-    lines = ["[Who you know]"]
-    for person in people:
-        header = person["name"]
-        if person["relationship"]:
-            header += f" — {person['relationship']}"
-        lines.append(header)
-        if person["profile"]:
-            lines += [f"  {line}" for line in person["profile"].splitlines()]
-    return "\n".join(lines)
-
-
 def presence_block(path: Path) -> str:
     """The '[Right now]' block injected each turn: the time, how long since he
     last acted, and any reminders waiting or newly due.
@@ -124,7 +108,7 @@ def presence_block(path: Path) -> str:
     Moved here from `domain/clock.py`, where it was the sole reason that module imported
     `kith.infra.db.repositories` at module scope — the one `domain -> infra` edge in the tree.
     It is not a time primitive. It is a system-prompt fragment that happens to open with the
-    time, and it sits between `self_block` and `people_block` at the one call site that builds
+    time, and it sits after `self_block` at the one call site that builds
     the prompt, which is what this module is for.
     """
     lines = ["[Right now]", clock_line()]

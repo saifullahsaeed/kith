@@ -201,7 +201,6 @@ _LANDING_TOOLS = frozenset(
         "run_tests",
         "changes",
         "commit",
-        "take_note",
         "journal",
         "remember",
         "reach_out",

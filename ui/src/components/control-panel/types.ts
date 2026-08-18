@@ -3,12 +3,10 @@ export type Tab =
   | "overview"
   | "lifetime"
   | "memory"
-  | "notes"
   | "journal"
   | "projects"
   | "reminders"
   | "schedules"
-  | "people"
   | "sources"
   | "workspace"
   | "tools";
@@ -64,13 +62,11 @@ export const KIND_LABEL: Record<string, string> = {
  * Projects, since that's where work lives now. */
 export const TAB_FOR: Record<string, Tab> = {
   Memories: "memory",
-  Notes: "notes",
   Journal: "journal",
   Projects: "projects",
   Tasks: "projects",
   Reminders: "reminders",
   Schedules: "schedules",
-  People: "people",
   Sources: "sources",
   Tools: "tools",
 };

@@ -8,13 +8,6 @@ export interface Memory {
   level: string;
   created_at: string;
 }
-export interface Note {
-  id: number;
-  title: string;
-  body: string;
-  created_at: string;
-  updated_at: string;
-}
 export interface JournalEntry {
   id: number;
   entry: string;
@@ -116,15 +109,49 @@ export interface Project {
   tasks_active: number;
   tasks_total: number;
 }
+export interface Reminder {
+  id: number;
+  fire_at: string;
+  note: string;
+  status: string;
+  created_at: string;
+  fires: string;
+}
+export interface Message {
+  id: number;
+  body: string;
+  kind: string;
+  read: number;
+  /** An in-app path like "/tasks/42" when this is about something you can open. */
+  link: string | null;
+  sender: string;
+  created_at: string;
+}
+export interface Source {
+  id: number;
+  title: string;
+  origin: string;
+  created_at: string;
+  chars: number;
+}
+export interface Schedule {
+  id: number;
+  note: string;
+  every_minutes: number | null;
+  daily_at: string | null;
+  next_fire: string;
+  last_fired: string | null;
+  status: string;
+  created_at: string;
+  fires: string;
+}
 export interface BrainSnapshot {
   counts: Record<string, number>;
   memories: Memory[];
-  notes: Note[];
   journal: JournalEntry[];
   tasks: Task[];
   reminders: Reminder[];
   messages: Message[];
-  people: Person[];
   sources: Source[];
   schedules: Schedule[];
   projects: Project[];
@@ -132,8 +159,7 @@ export interface BrainSnapshot {
   self?: { identity: string; profile: string; updated_at: string | null };
 }
 
-export type TimelineKind =
-  "memory" | "note" | "journal" | "task" | "tool" | "reminder" | "message";
+export type TimelineKind = "memory" | "journal" | "task" | "tool" | "reminder" | "message";
 export interface TimelineEvent {
   kind: TimelineKind;
   at: string;

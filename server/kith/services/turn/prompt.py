@@ -337,7 +337,6 @@ def _present_state(conversation_id: str = "") -> str:
     blocks = [
         memory_context.self_block(AGENT_DB_PATH),
         memory_context.presence_block(AGENT_DB_PATH),
-        memory_context.people_block(AGENT_DB_PATH),
         memory_context.messages_block(AGENT_DB_PATH),
         memory_context.projects_block(AGENT_DB_PATH),
         memory_context.work_block(AGENT_DB_PATH),

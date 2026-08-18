@@ -21,8 +21,6 @@ import {
   Repeat,
   Search,
   Sparkles,
-  StickyNote,
-  User,
   X,
 } from "lucide-react";
 import { TaskDetailPage } from "@/components/control-panel/task-detail";
@@ -45,9 +43,7 @@ import { WorkspaceFiles } from "./files";
 import { matches, projectLabel } from "./format";
 import { Journal } from "./journal";
 import { Memories } from "./memories";
-import { Notes } from "./notes";
 import { Lifetime, Overview } from "./overview";
-import { People } from "./people";
 import { ProjectPage } from "./project-page";
 import { Projects } from "./projects";
 import { Reminders } from "./reminders";
@@ -324,30 +320,12 @@ export function ControlPanel({
               Memory
             </TabButton>
             <TabButton
-              icon={<StickyNote className="size-4" />}
-              active={tab === "notes"}
-              count={counts.notes}
-              onClick={() => openTab("notes")}
-            >
-              Notes
-            </TabButton>
-            <TabButton
               icon={<NotebookPen className="size-4" />}
               active={tab === "journal"}
               count={counts.journal}
               onClick={() => openTab("journal")}
             >
               Journal
-            </TabButton>
-            {/* What he knows about the people in his life — which is memory, and reads as odd
-                anywhere else. It had a section of its own with one entry in it. */}
-            <TabButton
-              icon={<User className="size-4" />}
-              active={tab === "people"}
-              count={counts.people}
-              onClick={() => openTab("people")}
-            >
-              People
             </TabButton>
           </NavGroup>
 
@@ -446,8 +424,6 @@ export function ControlPanel({
                 <Lifetime events={timeline.filter((e) => matches(query, e.text))} />
               ) : tab === "memory" ? (
                 <Memories {...props} snap={snap} />
-              ) : tab === "notes" ? (
-                <Notes {...props} snap={snap} />
               ) : tab === "journal" ? (
                 <Journal snap={snap} query={query} remove={remove} />
               ) : tab === "projects" ? (
@@ -456,8 +432,6 @@ export function ControlPanel({
                 <Reminders {...props} snap={snap} />
               ) : tab === "schedules" ? (
                 <Schedules {...props} snap={snap} />
-              ) : tab === "people" ? (
-                <People {...props} snap={snap} />
               ) : tab === "sources" ? (
                 <Sources snap={snap} query={query} remove={remove} ingest={ingest} />
               ) : (
