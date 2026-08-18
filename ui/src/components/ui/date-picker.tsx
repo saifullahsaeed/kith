@@ -58,6 +58,10 @@ export function DatePicker({
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // Claim it. An open calendar is the innermost thing on screen, so its Escape is its
+        // own — unclaimed, the same key kept travelling up and closed the whole control panel.
+        event.preventDefault();
+        event.stopPropagation();
         setOpen(false);
         return;
       }

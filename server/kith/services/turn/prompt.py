@@ -1,8 +1,8 @@
 """Assembling the prompt one turn is sent.
 
 The persona and the skill index at the head, the folded history, the attachments turned into
-something a model can read, then what is true right now — the clock, his mood, the files he has
-open, what he knows about this project. Everything between "here is what was said" and "here is
+something a model can read, then what is true right now — the clock, the files he has open,
+what he knows about this project. Everything between "here is what was said" and "here is
 the request".
 
 It lived in `api/routes/chat.py` because the chat route was the first caller. It was never
@@ -117,8 +117,8 @@ def _build_messages(
     provider can reuse has to sit in an unchanging prefix: the persona and the turn
     CHAT_DIRECTIVE never change, so they go first and alone.
 
-    What follows them changes constantly — the clock to the minute, his mood, how long
-    since he last acted, whatever memory is present — and it used to be concatenated into
+    What follows them changes constantly — the clock to the minute, how long since he
+    last acted, whatever memory is present — and it used to be concatenated into
     the same system message. That is what made a repeated "hey" cost full price twice:
     the moment he replies, `last_activity_at` moves, "1 hour ago" becomes "just now", and
     the message is no longer byte-identical. Providers that cache automatically match at
@@ -151,6 +151,46 @@ def _build_messages(
             fromChars=_conversation_chars(messages),
             toChars=_conversation_chars(folded),
         )
+    return _assemble(out, folded, conversation_id)
+
+
+def as_sent(messages, config, conversation_id: str = "", *, tool_chars: int = 0):
+    """The same list a turn would send, built without sending anything or spending anything.
+
+    For showing someone their own prompt. The question "what is actually in the context" has
+    only ever been answerable in aggregate — the ledger's eleven categories — and a category is
+    not the thing: "code he has read: 260k" cannot tell you *which* messages those are, in what
+    order, or what any of them says.
+
+    **It must not fold.** A real fold is a summarisation call, and a screen you open in order to
+    look at something must never spend money to draw itself. `compact` already treats a
+    summariser that comes back empty as "leave the history alone" — its own fail-safe, so a
+    broken summariser never breaks a turn — which means handing it one that always returns ""
+    reproduces the real prompt exactly in the two cases that matter (short enough not to fold; a
+    stored brief that still covers it) and declines to invent one in the third.
+
+    Returns ``(messages, fold_pending)``. ``fold_pending`` is True in that third case: the next
+    real turn will summarise before it sends, so what is shown is what would go *if it did not*.
+    Said out loud rather than papered over — this is a screen whose entire purpose is that the
+    number on it is the number.
+    """
+    out = []
+    persona = (config.system or "").strip()
+    if persona:
+        out.append({"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()})
+
+    folded, pending = history.fold_dry(messages, config, conversation_id, tool_chars=tool_chars)
+    return _assemble(out, folded, conversation_id), pending
+
+
+def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list[dict]:
+    """Turn a folded history into the message list a provider receives.
+
+    Shared by `_build_messages` and `as_sent` so a preview of the prompt cannot drift from the
+    prompt. They differ in exactly one thing — whether they are allowed to pay for a fold — and
+    everything after that decision has to be the same list or the screen is describing a request
+    that is never made.
+    """
     for message in folded:
         role = message.get("role")
         if role == "system":
@@ -335,7 +375,6 @@ def _save_attachment(attachment: dict) -> str:
 def _present_state(conversation_id: str = "") -> str:
     """Everything about him that is true only at this moment."""
     blocks = [
-        memory_context.self_block(AGENT_DB_PATH),
         memory_context.presence_block(AGENT_DB_PATH),
         memory_context.messages_block(AGENT_DB_PATH),
         memory_context.projects_block(AGENT_DB_PATH),

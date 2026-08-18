@@ -14,7 +14,7 @@ are packed float arrays in a ``BLOB``.
 
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, Float, Integer, LargeBinary, Text
+from sqlalchemy import Float, Integer, LargeBinary, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -165,31 +165,6 @@ class Message(Base):
     kind: Mapped[str] = mapped_column(Text, nullable=False, default="note")
     sender: Mapped[str] = mapped_column(Text, nullable=False, default="kith")
     link: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-class SelfModel(Base):
-    """Singleton row — who he thinks he's become."""
-
-    __tablename__ = "self"
-    __table_args__ = (CheckConstraint("id = 1"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    identity: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    profile: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
-
-
-class Mood(Base):
-    """Singleton row — how he feels right now. Tints the whole UI."""
-
-    __tablename__ = "mood"
-    __table_args__ = (CheckConstraint("id = 1"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    label: Mapped[str] = mapped_column(Text, nullable=False, default="settling in")
-    energy: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
-    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    updated_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class Source(Base):

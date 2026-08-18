@@ -30,10 +30,10 @@ import { PresenceOrb } from "@/components/shell/presence";
 import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { steerTurn } from "@/lib/commands";
-import { currentConversation } from "@/lib/queued-send";
+import { currentConversation, dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
 import { time, when } from "@/lib/dates";
-import { USAGE_PART } from "@/lib/backend/adapter";
+import { STEER_PART, USAGE_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
 import { summariseRun } from "@/lib/tool-language";
 import { cn } from "@/lib/utils";
@@ -62,6 +62,7 @@ import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  Clock3,
   CopyIcon,
   MicIcon,
   Paperclip,
@@ -83,6 +84,7 @@ import {
   type PropsWithChildren,
   type ReactNode,
   useEffect,
+  useSyncExternalStore,
 } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
@@ -447,6 +449,7 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
         // a suggestion of an input; you had to know it was there.
         className="border-border dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 relative flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] dark:shadow-none"
       >
+        <QueuedNotice />
         <ComposerQuoteStrip />
         <ComposerAttachmentStrip />
         {/* Four parts, and it needs all four — spreading the adapter hook's return onto the
@@ -613,12 +616,62 @@ export function latestUsage(messages: readonly unknown[]): TurnUsage | undefined
  * height the moment you typed a character — and the hint is about the two keys sitting beside
  * the send button, so it belongs in the same cluster as them.
  */
+/**
+ * A ⌘⏎ message, held until the turn ends.
+ *
+ * Nothing said this before. The wait happens inside the adapter, *before* the fetch, so
+ * assistant-ui had already put the message in the thread and was showing the turn as running
+ * while nothing had been sent — for up to twenty minutes. A queued message and a message that
+ * got no reply looked exactly alike, and only one of them is fine.
+ */
+const QueuedNotice: FC = () => {
+  const holding = useSyncExternalStore(subscribeHolding, isHolding, () => false);
+  const text = useSyncExternalStore(subscribeHolding, heldMessage, () => "");
+  if (!holding) return null;
+  return (
+    <div className="border-border/60 bg-muted/40 mb-1.5 flex items-start gap-2 rounded-lg border px-3 py-2">
+      <Clock3 className="text-muted-foreground/70 mt-0.5 size-3 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="text-muted-foreground text-[11px]">
+          Queued — goes as soon as this turn finishes.
+        </div>
+        {/* The words themselves, not just the fact of them. A notice that says something is
+            waiting without showing what is a notice you have to take on trust. */}
+        {text ? (
+          <p className="text-foreground/70 mt-0.5 line-clamp-2 text-[12px]">{text}</p>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        onClick={() => dropHeld()}
+        className="text-muted-foreground/50 hover:text-destructive shrink-0 text-[11px] transition-colors"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+};
+
+/**
+ * What the keys do, said at the moment it is worth saying.
+ *
+ * **Shown while he is working even once you have typed**, which is the change that matters. The
+ * whole hint used to be gated on an empty composer, so the two keys that differ mid-turn — ⏎
+ * steers the running turn, ⌘⏎ waits for it to finish — were only ever legible when there was
+ * nothing to send with them. The instant you typed the correction that makes the choice real,
+ * the only thing that explained the choice disappeared. ⌘⏎ was undiscoverable by construction.
+ *
+ * Idle keeps saying ⏎ / ⇧⏎ and nothing else, because ⌘⏎ idle is not a third option: the flag is
+ * set, `waitUntilIdle` finds nothing running and returns at once, and the message sends exactly
+ * as ⏎ would. Listing "after this" with no *this* would be teaching a key that does nothing.
+ */
 const ComposerHint: FC = () => (
-  <AuiIf condition={(s) => s.composer.isEmpty && s.composer.attachments.length === 0}>
+  <AuiIf
+    condition={(s) =>
+      s.thread.isRunning || (s.composer.isEmpty && s.composer.attachments.length === 0)
+    }
+  >
     <div className="text-muted-foreground/40 pointer-events-none me-1 flex items-center gap-3 text-[10px] select-none">
-      {/* The keys mean different things while he is working, so the hint has to. Enter mid-turn
-          does not start a turn — it changes the one running — and nothing about a send arrow
-          says that. ⌘⏎ is the other intent: after this, not instead of it. */}
       <AuiIf condition={(s) => !s.thread.isRunning}>
         <span>
           <kbd className="font-sans">⏎</kbd> send
@@ -628,13 +681,15 @@ const ComposerHint: FC = () => (
           <kbd className="font-sans">⇧⏎</kbd> new line
         </span>
       </AuiIf>
+      {/* Named by what each does to the turn in flight, not by "send" twice. Steering keeps
+          everything the turn has found; queuing starts fresh once it is over. */}
       <AuiIf condition={(s) => s.thread.isRunning}>
         <span>
-          <kbd className="font-sans">⏎</kbd> steer
+          <kbd className="font-sans">⏎</kbd> steer now
         </span>
         <span aria-hidden>·</span>
         <span>
-          <kbd className="font-sans">⌘⏎</kbd> after this
+          <kbd className="font-sans">⌘⏎</kbd> send after
         </span>
       </AuiIf>
     </div>
@@ -795,16 +850,17 @@ const ComposerAction: FC = () => {
             </ComposerPrimitive.StopDictation>
           </AuiIf>
         </AuiIf>
-        {/* Stop *and* send, while he is working — not one instead of the other.
+        {/* One button, and what it does depends on whether you have typed anything.
          *
-         * Send used to disappear the moment a turn started, leaving a single square button. So
-         * the only thing the composer offered mid-turn was "kill it", which is exactly the
-         * choice steering exists to remove: typing a correction and finding nowhere to put it
-         * is what makes people hit Stop and lose the work they were correcting.
+         * It was two while a turn ran — a square Stop beside an arrow Send — which is a choice
+         * presented at the moment you are least interested in making one. Every other assistant
+         * settles this the same way and it is the right way: an empty box while something is
+         * running can only mean stop, and a box with words in it can only mean send them.
          *
-         * Both, because they are different intents and always were. Stop ends the run; send
-         * changes what it is doing and keeps everything it has found. */}
-        <AuiIf condition={(s) => s.thread.isRunning}>
+         * The two intents are still both reachable, because they are still different: Stop ends
+         * the run and loses what it found; sending steers, and keeps every tool result so far.
+         * You get whichever one your input is already asking for. */}
+        <AuiIf condition={(s) => s.thread.isRunning && s.composer.isEmpty}>
           <ComposerPrimitive.Cancel asChild>
             <TooltipIconButton
               tooltip="Stop — ends the turn and loses what it found"
@@ -818,6 +874,9 @@ const ComposerAction: FC = () => {
               <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
             </TooltipIconButton>
           </ComposerPrimitive.Cancel>
+        </AuiIf>
+        <AuiIf condition={(s) => s.thread.isRunning && !s.composer.isEmpty}>
+          <SteerButton />
         </AuiIf>
         <AuiIf condition={(s) => !s.thread.isRunning}>
           <ComposerPrimitive.Send asChild>
@@ -833,9 +892,6 @@ const ComposerAction: FC = () => {
               <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
             </TooltipIconButton>
           </ComposerPrimitive.Send>
-        </AuiIf>
-        <AuiIf condition={(s) => s.thread.isRunning}>
-          <SteerButton />
         </AuiIf>
       </div>
     </div>
@@ -934,6 +990,13 @@ const AssistantMessage: FC = () => {
                 // number in the body reads as something he said. Every other data part is
                 // somebody else's and keeps the library's renderer.
                 if (part.name === USAGE_PART) return null;
+                // What you said into the running turn, drawn where it actually landed. It sits
+                // inside his message because that is the truth of it — it went into the prompt
+                // mid-turn, between two of his rounds, not before the turn began.
+                if (part.name === STEER_PART) {
+                  const said = (part.data as { text?: string } | undefined)?.text ?? "";
+                  return said ? <SteeredIn text={said} /> : null;
+                }
                 return part.dataRendererUI;
               case "indicator":
                 // The bare dot means "working". When the turn can say *what* it is working on
@@ -962,6 +1025,23 @@ const AssistantMessage: FC = () => {
     </MessagePrimitive.Root>
   );
 };
+
+/**
+ * Something you said into a turn that was already running.
+ *
+ * Marked as yours and set apart, because it is the one thing inside his message that he did not
+ * write. Placed at the round it actually entered the prompt rather than at the top — a steer
+ * that arrived after four tool calls did not influence those four, and showing it above them
+ * would claim it did.
+ */
+const SteeredIn: FC<{ text: string }> = ({ text }) => (
+  <div className="border-kith/30 bg-kith-soft/40 my-2 rounded-lg border-s-2 px-3 py-2">
+    <div className="text-kith/80 mb-0.5 text-[10px] font-medium tracking-wide uppercase">
+      you, mid-turn
+    </div>
+    <p className="text-foreground/85 text-sm whitespace-pre-wrap">{text}</p>
+  </div>
+);
 
 /**
  * A run of tool calls, collapsed to one line that says what he touched.

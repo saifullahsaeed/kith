@@ -55,6 +55,24 @@ def is_openrouter(base_url: str) -> bool:
     return _OPENROUTER_HOST in (base_url or "")
 
 
+def refuses_reasoning(body: str) -> bool:
+    """Is this 400 the provider saying reasoning cannot be turned *off*?
+
+    Some models mandate it — "Reasoning is mandatory for this endpoint and cannot be
+    disabled", HTTP 400. Asking for it off is still right, because on every other model it
+    saves real tokens; being refused just means sending the same request again without the
+    switch, rather than failing whatever needed it.
+
+    Matched on the provider's words rather than retried blindly, so a genuine bad request
+    still surfaces as one instead of being quietly sent twice. Here, and not in the
+    transport where it was born, for exactly the reason `is_openrouter` is here: two
+    callers need the answer now — the chat stream and `infra.websearch`, which builds its
+    own chat payload — and `infra` reaching sideways into `llm` to ask a question about a
+    string is the peer edge the layering forbids.
+    """
+    return "reasoning" in (body or "").lower()
+
+
 @dataclass(frozen=True)
 class ModelInfo:
     """One model a provider offers, in the shape a picker needs.

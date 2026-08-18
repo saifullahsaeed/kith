@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuiState } from "@assistant-ui/react";
-import { ChevronRight, Layers } from "lucide-react";
+import { ChevronRight, Layers, Maximize2 } from "lucide-react";
 
 import { latestUsage } from "@/components/assistant-ui/thread";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { foldNow } from "@/lib/commands";
+import { byGroup, FOLDS_AT } from "@/lib/context-groups";
+import { pathForContext } from "@/lib/router";
 import { formatTokens } from "@/lib/tokens";
 import type { ContextLedger } from "@/lib/backend/types";
 
@@ -26,49 +29,8 @@ import type { ContextLedger } from "@/lib/backend/types";
  * percentage of an unknown total is worse than no percentage.
  */
 
-/** The threshold the loop folds at, from `agent_loop`. Named so the section can say what is about to
- *  happen rather than only how full it is — 78% and 82% look alike and are not. */
-const FOLDS_AT = 0.8;
-
-/**
- * What each of the ledger's eleven categories *is*, and the colour that says so.
- *
- * Grouped rather than eleven hues, for two reasons. A categorical palette runs out at eight, and a
- * ninth hue is never generated — it folds. And the groups are the actual decisions: tool schemas are
- * shrunk by removing tools, the conversation by folding it, what he has read by not re-reading it.
- * Eleven colours would name eleven rows and answer none of that.
- *
- * **The hue belongs to the group, never to its size.** These were assigned by rank at first, which
- * meant the bar repainted itself whenever two categories swapped places — the one thing a
- * categorical scale must never do, since it makes the colour mean "currently third largest" instead
- * of "the conversation".
- *
- * Slots 1-5 of a palette validated against Kith's own surfaces in both modes: worst adjacent CVD
- * ΔE 9.1 light / 8.4 dark, worst adjacent normal-vision ΔE 19.6 / 19.3.
- */
-const GROUPS = [
-  { key: "talk", label: "Conversation", swatch: "bg-[#2a78d6] dark:bg-[#3987e5]" },
-  { key: "read", label: "What he has read", swatch: "bg-[#eb6834] dark:bg-[#d95926]" },
-  { key: "tools", label: "Tool schemas", swatch: "bg-[#1baf7a] dark:bg-[#199e70]" },
-  { key: "place", label: "Where he is", swatch: "bg-[#eda100] dark:bg-[#c98500]" },
-  { key: "self", label: "Who he is", swatch: "bg-[#e87ba4] dark:bg-[#d55181]" },
-] as const;
-
-const GROUP_OF: Record<string, (typeof GROUPS)[number]["key"]> = {
-  messages: "talk",
-  tool_results: "read",
-  code: "read",
-  skills: "read",
-  images: "read",
-  built_in_tools: "tools",
-  mcp_tools: "tools",
-  custom_tools: "tools",
-  live: "place",
-  persona: "self",
-  system: "self",
-};
-
 export function ContextSection({ conversationId }: { conversationId?: string }) {
+  const navigate = useNavigate();
   const messages = useAuiState((s) => s.thread.messages);
   const running = useAuiState((s) => s.thread.isRunning);
   const usage = latestUsage(messages);
@@ -101,17 +63,9 @@ export function ContextSection({ conversationId }: { conversationId?: string }) 
         : "text-muted-foreground";
 
   // Fixed order, so a segment stays where it was and the bar does not reshuffle between turns.
-  //
-  // `part` is the share of what is *used*, not of the window, and that is what makes the bar worth
-  // colouring. Drawn against the window it was honest and useless: at 5% of a million tokens all
-  // five categories are crushed into a fiftieth of the width, so the composition — the only thing
-  // the colours are for — was unreadable at exactly the usage level a conversation spends most of
-  // its life at. How full it is has two other places to say so, the percentage and the figures.
-  const byGroup = GROUPS.map((group) => {
-    const mine = context.lines.filter((line) => GROUP_OF[line.key] === group.key);
-    const tokens = mine.reduce((sum, line) => sum + line.tokens, 0);
-    return { ...group, tokens, part: context.used ? tokens / context.used : 0 };
-  }).filter((group) => group.tokens > 0);
+  // Shared with the detail screen this opens — see `lib/context-groups` for why the grouping and
+  // the palette live in one place rather than two.
+  const groups = byGroup(context.lines, context.used);
 
   const fold = async () => {
     if (!conversationId || folding) return;
@@ -154,13 +108,26 @@ export function ContextSection({ conversationId }: { conversationId?: string }) 
             <Layers className="size-3" />
             <span className="text-[11px]">Fold</span>
           </Button>
+          {/* The rail can say how full and what of, in sixty pixels. It cannot say *which* of it
+              is there twice, which is the question you open a context reading with and the one
+              thing you can act on — so that gets a screen, and this is the way in. */}
+          <Button
+            size="xs"
+            variant="ghost"
+            className="text-muted-foreground/70 hover:text-foreground -me-1 size-6 shrink-0 px-0"
+            onClick={() => navigate(pathForContext())}
+            aria-label="Open the full context breakdown"
+            title="Open the full breakdown — every call, and which of them are repeats"
+          >
+            <Maximize2 className="size-3" />
+          </Button>
         </div>
 
         {/* The bar is what the collapsed state is for, so it lives outside the content. A 2px gap
             between segments, because adjacent fills of similar lightness read as one block without
             one — and it is the secondary encoding the palette's light-mode contrast warn asks for. */}
         <span aria-hidden className="mt-2 flex h-1.5 gap-0.5 overflow-hidden rounded-full">
-          {byGroup.map((group) => (
+          {groups.map((group) => (
             <span
               key={group.key}
               className={`${group.swatch} first:rounded-s-full last:rounded-e-full`}
@@ -179,7 +146,7 @@ export function ContextSection({ conversationId }: { conversationId?: string }) 
             </p>
 
             <ul className="flex flex-col gap-1">
-              {byGroup.map((group) => (
+              {groups.map((group) => (
                 <li key={group.key} className="flex items-center gap-2 text-[11px]">
                   <span aria-hidden className={`size-2 shrink-0 rounded-[2px] ${group.swatch}`} />
                   <span className="text-muted-foreground min-w-0 flex-1 truncate">

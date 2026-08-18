@@ -48,3 +48,4 @@ export * from "./notify";
 export * from "./mcp";
 export * from "./language-servers";
 export * from "./checkpoints";
+export * from "./context";

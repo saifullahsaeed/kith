@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Lock,
   ArrowLeft,
@@ -68,6 +68,9 @@ export function TaskDetailPage({
   const confirm = useConfirm();
   const [task, setTask] = useState<Detail | null>(null);
   const [item, setItem] = useState("");
+  // The title being typed, held apart from the loaded task — see the input below for why.
+  const [goalDraft, setGoalDraft] = useState<string | null>(null);
+  const goalCancelled = useRef(false);
   // Collapsed until asked for. A task in `planning` is the exception — the plan is the whole
   // reason you opened it, and being asked to approve something you have to click to see is the
   // shape of the bug this section exists to fix.
@@ -226,13 +229,51 @@ export function TaskDetailPage({
         {/* header: what it is, and whether it can be worked on */}
         <div>
           <div className="flex items-start gap-3">
-            <span className="bg-muted/70 mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-emerald-500">
+            <span
+              title={STATUS_LABEL[task.status] ?? task.status}
+              className={cn(
+                "bg-muted/70 mt-1 flex size-9 shrink-0 items-center justify-center rounded-lg",
+                task.status === "done" ? "text-roam" : task.status === "working" ? "text-kith" : "text-muted-foreground",
+              )}
+            >
               <ListChecks className="size-4" />
             </span>
+            {/* The draft lives outside `task`, and that is the whole fix.
+                `onChange` used to write the typed text straight into `task`, so by the time
+                `onBlur` ran its `e.target.value !== task.goal` guard the two were always equal
+                and `patch` never fired — you could rename a task, click away, and watch the
+                30-second poll put the old title back. Held here, the comparison has something
+                to compare against. */}
             <input
-              value={task.goal}
-              onChange={(e) => setTask({ ...task, goal: e.target.value })}
-              onBlur={(e) => e.target.value !== task.goal && patch({ goal: e.target.value })}
+              value={goalDraft ?? task.goal}
+              onChange={(e) => setGoalDraft(e.target.value)}
+              onBlur={() => {
+                const next = goalDraft?.trim();
+                setGoalDraft(null);
+                // Escape blurs the field, and that blur must not be read as a commit. The blur
+                // fires synchronously from inside the keydown handler, before React flushes
+                // state, so a ref is the only thing this can trust.
+                if (goalCancelled.current) {
+                  goalCancelled.current = false;
+                  return;
+                }
+                // A blank title is a slip, not an instruction.
+                if (!next || next === task.goal) return;
+                setTask({ ...task, goal: next });
+                void patch({ goal: next });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+                if (e.key === "Escape") {
+                  goalCancelled.current = true;
+                  setGoalDraft(null);
+                  e.currentTarget.blur();
+                }
+              }}
+              aria-label="Task title"
               title="Click to rename"
               className="focus:ring-ring/25 hover:bg-accent/40 focus:bg-card/70 -mx-2 min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-xl font-semibold tracking-tight outline-none transition-colors focus:ring-[3px]"
             />
@@ -242,10 +283,10 @@ export function TaskDetailPage({
             task the roadmap is holding back is the page telling you something untrue about
             the most important thing on it. */}
           {held.length > 0 ? (
-            <div className="border-orange-400/30 bg-orange-400/5 mt-3 ml-12 flex items-start gap-2.5 rounded-xl border px-3 py-2.5">
-              <Lock className="mt-0.5 size-3.5 shrink-0 text-orange-400/90" />
+            <div className="border-kith/25 bg-kith-soft mt-3 ml-12 flex items-start gap-2.5 rounded-xl border px-3 py-2.5">
+              <Lock className="mt-0.5 size-3.5 shrink-0 text-kith" />
               <p className="text-xs leading-relaxed">
-                <span className="text-orange-400/90">Not available yet.</span>{" "}
+                <span className="text-kith">Not available yet.</span>{" "}
                 <span className="text-muted-foreground">
                   It waits for {held.join(", ")} — he will not pick it up until that is done,
                   whatever its status says.
@@ -434,7 +475,7 @@ export function TaskDetailPage({
                 <span className="ml-2 inline-flex items-center gap-2 font-normal normal-case tracking-normal text-muted-foreground">
                   <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
                     <span
-                      className="block h-full rounded-full bg-kith transition-all"
+                      className="block h-full rounded-full bg-roam transition-all"
                       style={{ width: `${pct}%` }}
                     />
                   </span>
@@ -453,7 +494,7 @@ export function TaskDetailPage({
                     className={cn(
                       "flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
                       c.done
-                        ? "border-kith bg-kith text-primary-foreground"
+                        ? "border-roam bg-roam text-background"
                         : "border-muted-foreground/40 hover:border-kith",
                     )}
                     aria-label="Toggle"
@@ -577,7 +618,7 @@ function DeliverableRow({
 
   return (
     <li className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card/50 p-3 shadow-sm transition-all hover:border-border hover:shadow-md">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/70 text-sky-500">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted/70 text-muted-foreground">
         {isLink ? (
           <Link2 className="size-4" />
         ) : isFile ? (
@@ -588,14 +629,14 @@ function DeliverableRow({
       </span>
       {isLink ? (
         <a href={d.content} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium transition-colors group-hover:text-kith">
+          <span className="block truncate text-sm font-medium transition-colors group-hover:text-foreground">
             {d.title}
           </span>
           <span className="block truncate font-mono text-[11px] text-muted-foreground">{sub}</span>
         </a>
       ) : (
         <button onClick={preview} className="min-w-0 flex-1 text-left" title="Open preview">
-          <span className="block truncate text-sm font-medium transition-colors group-hover:text-kith">
+          <span className="block truncate text-sm font-medium transition-colors group-hover:text-foreground">
             {d.title}
           </span>
           <span className="block truncate font-mono text-[11px] text-muted-foreground">{sub}</span>

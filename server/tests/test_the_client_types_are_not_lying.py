@@ -70,11 +70,10 @@ class TestTheBrainSnapshot:
         unused = sorted(set(snapshot) - declared)
         assert not unused, f"/api/brain sends fields no client type knows about: {unused}"
 
-    def test_an_optional_field_is_one_the_server_really_can_omit(self, snapshot):
-        """`mood?` and `self?` are optional because a fresh brain has neither. If one is
-        always present, the `?` costs every caller a null check that can never fire."""
-        optional = {name for name, is_optional in declared_fields("BrainSnapshot").items() if is_optional}
-        assert optional, "the interface has no optional fields — has the parser broken?"
+    # There was a third test here, asserting that an optional field is one the server can
+    # really omit. Its only two subjects were `mood?` and `self?`, and both are gone (see
+    # migration v37), so `BrainSnapshot` now has no optional fields at all and the test
+    # could assert nothing. The two above still keep the type honest in both directions.
 
 
 class TestTheTimeline:

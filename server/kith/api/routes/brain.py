@@ -61,11 +61,3 @@ def brain_set_memory_level(memory_id):
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(updated or {})
-
-
-@api.get("/mood")
-@api.doc(
-    summary="Kith's mood", description="His current felt state — label, energy (0–100), and an optional note."
-)
-def mood():
-    return jsonify(repo.self_model.get_mood(AGENT_DB_PATH))

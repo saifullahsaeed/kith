@@ -5,15 +5,13 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { HeaderControls } from "@/components/shell/header-controls";
 import { PresenceOrb } from "@/components/shell/presence";
-import { moodHue, type Mood } from "@/lib/backend/mood";
 import { cn } from "@/lib/utils";
 
-/** The presence bar: Kith as a living thing (orb + mood + what he's doing right
+/** The presence bar: Kith as a living thing (orb + what he's doing right
  * now), then his inbox, work, panel, and settings. */
 export function AppHeader({
   working,
   status,
-  mood,
   model,
   effort = "",
   supportsEffort = false,
@@ -30,7 +28,6 @@ export function AppHeader({
 }: {
   working: boolean;
   status: string | null;
-  mood: Mood | null;
   /** The model he is actually thinking with, straight from the server. */
   model?: string;
   effort?: string;
@@ -48,7 +45,6 @@ export function AppHeader({
   onOpenSettings: () => void;
 }) {
   const doing = cleanStatus(status);
-  const hue = moodHue(mood?.label);
 
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   const toggleTheme = () => {
@@ -92,23 +88,14 @@ export function AppHeader({
         </TooltipIconButton>
       ) : null}
 
-      <PresenceOrb working={working} idle={!working} size={11} color={hue} />
+      <PresenceOrb working={working} idle={!working} size={11} />
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-medium tracking-tight">Kith</span>
         <span className="truncate font-mono text-[11px] tracking-wide">
-          {mood?.label ? (
-            <span
-              style={{ color: working ? undefined : hue }}
-              className={working ? "text-muted-foreground/80" : ""}
-            >
-              {mood.label}
-            </span>
-          ) : null}
           {/* This said "roaming", which was a mode you switched on for the whole machine and
               which is gone — work belongs to a session now. The word had to go with it, or
               the header names a thing the app no longer has. */}
           <span className={working ? "text-roam" : "text-muted-foreground/60"}>
-            {mood?.label ? " · " : ""}
             {working ? "working" : "here"}
           </span>
           {doing ? <span className="text-muted-foreground/50"> · {doing}</span> : null}

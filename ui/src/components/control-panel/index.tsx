@@ -145,9 +145,15 @@ export function ControlPanel({
       subject: label,
       destructive: true,
     });
-    if (!ok) return;
-    await deleteBrainItem(kind, key);
+    if (!ok) return false;
+    try {
+      await deleteBrainItem(kind, key);
+    } catch {
+      // Stay where you are rather than navigate away from a delete that did not happen.
+      return false;
+    }
     load();
+    return true;
   };
   const relevel = async (id: number, level: string) => {
     await setMemoryLevel(id, level);
@@ -198,6 +204,13 @@ export function ControlPanel({
         // Escape closed the entire panel — which is what happened the first time I
         // tried it.
         if (document.querySelector('[role="menu"], [role="dialog"]')) return;
+        // Something below already dealt with it — a date picker closing its calendar, a field
+        // reverting its own draft. Handled once, by whoever is nearest.
+        if (event.defaultPrevented) return;
+        // Escape inside a field belongs to that field. `typing` was computed here and never
+        // consulted, so pressing Escape to abandon an edit also wiped the panel-wide search —
+        // two unrelated things undone by one key.
+        if (typing && event.target !== searchBox.current) return;
         // Then a search: closing the panel because someone wanted to undo a filter
         // would lose their place.
         if (query) {

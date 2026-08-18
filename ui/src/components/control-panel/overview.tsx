@@ -12,12 +12,12 @@ import {
   Repeat,
   Wrench,
 } from "lucide-react";
-import { Markdown, MarkdownInline } from "@/components/files";
+import { MarkdownInline } from "@/components/files";
 import type { BrainSnapshot, TimelineEvent, TimelineKind } from "@/lib/backend/brain";
 import { cn } from "@/lib/utils";
 import { EmptyState, PageHeader, SectionLabel } from "./chrome";
 import { groupByDay, time } from "@/lib/dates";
-import { clamp, matches } from "./format";
+import { matches } from "./format";
 import { CHIP, TAB_FOR } from "./types";
 import type { Tab } from "./types";
 
@@ -73,55 +73,9 @@ export function Overview({
       ],
     ],
   ];
-  const self = snap.self;
-  const mood = snap.mood;
   const recent = timeline.filter((e) => matches(query, e.text)).slice(0, 14);
   return (
     <div className="space-y-10">
-      {(self && (self.identity || self.profile)) || mood?.label ? (
-        <div className="relative overflow-hidden rounded-xl border border-border/70 bg-gradient-to-br from-kith-soft/40 to-transparent p-6">
-          <div className="relative">
-            <div className="mb-3 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              <span className="kith-orb size-2" /> Who he's become
-            </div>
-            {self?.identity ? (
-              <p className="text-xl font-semibold leading-snug tracking-tight">{self.identity}</p>
-            ) : null}
-            {self?.profile ? (
-              <div className="mt-2.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                {/* His own account of himself — his to format, so it renders. */}
-                <Markdown>{self.profile}</Markdown>
-              </div>
-            ) : null}
-            {!self?.identity && !self?.profile ? (
-              <p className="text-sm text-muted-foreground">
-                He hasn't shaped his own identity yet.
-              </p>
-            ) : null}
-            {mood?.label ? (
-              <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/50 pt-4 text-sm">
-                <span className="text-muted-foreground">Currently feeling</span>
-                <span className="font-semibold text-kith">{mood.label}</span>
-                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <span className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
-                    <span
-                      className="block h-full rounded-full bg-kith transition-all"
-                      style={{ width: `${clamp(mood.energy)}%` }}
-                    />
-                  </span>
-                  energy {mood.energy}
-                </span>
-                {mood.note ? (
-                  <span className="truncate text-xs text-muted-foreground/80">
-                    · <MarkdownInline>{mood.note}</MarkdownInline>
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
       <div className="space-y-6">
         {groups.map(([label, stats]) => (
           <div key={label}>

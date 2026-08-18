@@ -109,10 +109,6 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   order_milestones: { verb: "put the milestones in order", group: "projects" },
   unlink_milestones: { verb: "unlinked two milestones", group: "projects" },
   link_folder: { verb: "linked a folder", of: "folder", group: "projects" },
-  // mood, identity, people
-  set_mood: { verb: "felt", of: "mood", group: "self" },
-  set_identity: { verb: "reshaped who he is", group: "self" },
-  note_about_self: { verb: "noted about himself", of: "note", group: "self" },
   // time
   set_reminder: { verb: "set a reminder", of: "note", group: "time" },
   list_reminders: { verb: "checked his reminders", group: "time" },

@@ -13,6 +13,7 @@ import { AppHeader } from "@/components/shell/app-header";
 import { ControlPanel } from "@/components/control-panel";
 import { SettingsPage } from "@/components/settings/settings-page";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
+import { ContextDetailScreen } from "@/components/chat/context-detail";
 import { InboxPanel } from "@/components/chat/inbox-panel";
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
@@ -22,10 +23,8 @@ import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { useChanges } from "@/hooks/use-changes";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
-import { useMood } from "@/hooks/use-mood";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { cn } from "@/lib/utils";
-import { moodHue } from "@/lib/backend/mood";
 import {
   parseLocation,
   pathForHome,
@@ -260,7 +259,6 @@ export function Workspace({
 
   const activity = useActivity();
   const inbox = useMessages();
-  const { mood } = useMood();
   // Home is two windows — Chat and Work — side by side. Work can be collapsed to
   // give Chat the whole room, and the split is draggable (and remembered).
   const [workOpen, setWorkOpen] = useState(true);
@@ -395,8 +393,8 @@ export function Workspace({
   // signal that anything could have changed at all.
   const finished = activity.activity.filter((item) => item.kind === "done").length;
   useEffect(refreshSession, [finished, refreshSession]);
-  // The room glows green while he is working, otherwise the colour of his mood.
-  const wash = working ? "var(--roam)" : moodHue(mood?.label);
+  // The room glows green while he is working, and is otherwise his own amber.
+  const wash = working ? "var(--roam)" : "var(--kith)";
 
   return (
     <TooltipProvider>
@@ -408,7 +406,6 @@ export function Workspace({
             <AppHeader
               working={working}
               status={null}
-              mood={mood}
               model={config.model}
               effort={config.effort}
               // Offered unless the provider has said otherwise: an unknown model is the
@@ -563,7 +560,7 @@ export function Workspace({
         {/* Drop a file anywhere in the window and it lands on the composer. Disabled — but
             still swallowing the drop — while something is covering the thread, since attaching
             to a composer nobody can see is a file that has vanished. */}
-        <DropZone enabled={!route.settingsTab && !panelOpen && !inboxOpen} />
+        <DropZone enabled={!route.settingsTab && !panelOpen && !inboxOpen && !route.contextOpen} />
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. Given this session's project, because the paths it is
             handed are mostly relative ones out of his prose and his tool results, and a
@@ -572,6 +569,14 @@ export function Workspace({
             .kith/work/task-76.md" for a file that was never missing. */}
         <WorkspaceFileViewer projectId={projectId} />
         {inboxOpen ? <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} /> : null}
+        {route.contextOpen ? (
+          <ErrorBoundary where="The context breakdown">
+            <ContextDetailScreen
+              conversationId={conversationId}
+              onClose={() => navigate(pathForHome())}
+            />
+          </ErrorBoundary>
+        ) : null}
         {route.settingsTab ? (
           <ErrorBoundary where="Settings">
             <SettingsPage

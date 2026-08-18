@@ -23,10 +23,15 @@ interface ToolPart {
 type Piece =
   | { kind: "reasoning"; text: string }
   | { kind: "text"; text: string }
+  /** Something you said into the running turn, at the point in the stream it landed. */
+  | { kind: "steered"; text: string }
   | { kind: "tool"; tool: ToolPart };
 
 /** Name on the data part carrying a turn's token count, shared with the renderer. */
 export const USAGE_PART = "round-usage";
+
+/** Name on the data part carrying something you said into the running turn. */
+export const STEER_PART = "steered-in";
 
 /**
  * Attempts at *starting* a turn — and only at starting one.
@@ -264,6 +269,12 @@ let retried = 0;
             },
           ];
         }
+        if (piece.kind === "steered") {
+          // Its own part type rather than text, so the thread can draw it as something you
+          // said rather than something he did. Placed where it actually arrived, which is the
+          // only honest position: it went into the prompt at that round and not before.
+          return [{ type: "data", name: STEER_PART, data: { text: piece.text } }];
+        }
         // A channel can open and produce nothing; an empty part renders as a gap.
         if (!piece.text) return [];
         return [{ type: piece.kind === "reasoning" ? "reasoning" : "text", text: piece.text }];
@@ -328,6 +339,8 @@ let retried = 0;
           // since that is the one that predates anything this turn did.
           if (!baseline) baseline = event.context;
           context = event.context;
+        } else if (event.type === "steered") {
+          pieces.push({ kind: "steered", text: event.text });
         } else if (event.type === "compacting") {
           // He is folding to make room. Worth showing because it costs a model call and takes
           // a moment, so an unexplained pause looks like a hang — and when it happens before

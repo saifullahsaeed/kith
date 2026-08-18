@@ -56,10 +56,11 @@ def _body(response) -> str:
 def _refuses_reasoning(response: requests.Response) -> bool:
     """Is this 400 specifically about the reasoning switch?
 
-    Matched on the provider's words rather than retried blindly, so a genuine bad
-    request still surfaces as one instead of being quietly sent twice.
+    The judgement itself is `domain.connection.refuses_reasoning`, because the web search
+    builds its own chat payload and needs the same answer; this wrapper is only the part
+    that knows how to read a body off a streamed response.
     """
-    return "reasoning" in _body(response).lower()
+    return connection.refuses_reasoning(_body(response))
 
 
 def _routing_options(config: Config, routing: Routing) -> dict[str, Any]:

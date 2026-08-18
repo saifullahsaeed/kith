@@ -24,7 +24,7 @@ import {
 import { type FC, useCallback, useEffect, useRef } from "react";
 
 import { steerTurn } from "@/lib/commands";
-import { currentConversation, queueNextSend } from "@/lib/queued-send";
+import { currentConversation, holdUntilIdle } from "@/lib/queued-send";
 import { cn } from "@/lib/utils";
 
 import { COMPOSER_EXTENSIONS, fromMarkdown, markdownOffset, toMarkdown } from "./markdown";
@@ -91,6 +91,40 @@ export const RichComposerInput: FC<{
     [write],
   );
 
+  /**
+   * What ⏎ / ⌘⏎ actually do. One function, because two callers need it and they must not drift.
+   *
+   * Neither branch may go through the runtime while a turn is running: `performRoundtrip`'s
+   * first line is `abortController.abort()`, so anything routed that way kills the run it was
+   * meant to steer or wait behind. ⏎ posts to `/steer`; ⌘⏎ holds the text here until the turn
+   * has genuinely ended and only then hands it back to the composer to send normally.
+   */
+  const decide = useCallback(
+    (queueIt: boolean) => {
+      const said = latest.current.text;
+      const where = currentConversation();
+      const running = latest.current.running;
+
+      if (running && where && said.trim()) {
+        latest.current.clear();
+        if (queueIt) {
+          void holdUntilIdle(where, said, (text) => {
+            setText(text);
+            // A tick, so the store holds the restored text before the send reads it.
+            window.setTimeout(() => latest.current.send(), 0);
+          });
+        } else {
+          void steerTurn(where, said);
+        }
+        return;
+      }
+      // Nothing running (or nothing to say): an ordinary send, which is what both keys mean
+      // when there is no turn to steer or queue behind.
+      latest.current.send();
+    },
+    [setText],
+  );
+
   /** Tell every registered trigger where the caret is, in characters of markdown. This is what
    *  makes `/` know it is at the start of a word rather than in the middle of one. */
   const reportCaret = useCallback((editor: Editor) => {
@@ -130,26 +164,10 @@ export const RichComposerInput: FC<{
           // keystroke ago, and sending would post that instead of what is on screen.
           flush(self.current);
 
-          const queueIt = event.metaKey || event.ctrlKey;
-          // ⏎ while he is working steers the turn — and it is done HERE, not in the adapter,
-          // because anything that reaches the adapter has already gone through
-          // `performRoundtrip`, whose first line is `abortController.abort()`. That cancels the
-          // run in flight, our abort handler posts `/stop`, and the turn dies. A steer routed
-          // through the runtime would kill the work it exists to redirect.
-          //
-          // ⌘⏎ is the other intent — after this, not instead of it — and it does go through the
-          // runtime, because by the time it sends there is nothing left to abort.
-          if (!queueIt && latest.current.running) {
-            const said = latest.current.text;
-            const where = currentConversation();
-            if (where && said.trim()) {
-              void steerTurn(where, said);
-              latest.current.clear();
-              return true;
-            }
-          }
-          if (queueIt) queueNextSend();
-          latest.current.send();
+          // Both keys, and what they mean, live in `decide` — see it for why neither may reach
+          // the runtime while a turn is in flight. The same function backs the DOM-level
+          // fallback below, so the two paths cannot disagree about what ⌘⏎ does.
+          decide(event.metaKey || event.ctrlKey);
           return true;
         }
         return false;
@@ -199,6 +217,37 @@ export const RichComposerInput: FC<{
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
   }, [editor, flush]);
+
+  /**
+   * ⏎ and ⌘⏎, again, in case the editor never offered them.
+   *
+   * `handleKeyDown` in `editorProps` is the intended path and usually the only one that runs.
+   * But it is ProseMirror's to call, and it is not the only thing bound to these keys: TipTap's
+   * base keymap claims `Mod-Enter` (it is `exitCode`, for leaving a code block), and in the
+   * desktop shell ⌘⏎ was reaching the composer and doing nothing at all — no send, no queue, no
+   * fall-through, which is not a state the handler above can produce. Whatever consumed it, the
+   * message was lost between the keyboard and the code meant to act on it.
+   *
+   * So the decision lives in `decide()` and is offered twice: once where it belongs, and once
+   * here as a backstop. **Bubble phase, and only when nothing has claimed the event** — if the
+   * editor's own handler ran it called `preventDefault`, and this sees that and stays out of the
+   * way. It can therefore only ever fire when the first path did not, which is exactly the case
+   * being covered.
+   */
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return; // the editor already dealt with it
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      if (!dom.contains(document.activeElement)) return;
+      event.preventDefault();
+      flush(self.current);
+      decide(event.metaKey || event.ctrlKey);
+    };
+    dom.addEventListener("keydown", onKeyDown);
+    return () => dom.removeEventListener("keydown", onKeyDown);
+  }, [editor, flush, decide]);
 
   useEffect(() => {
     return () => {

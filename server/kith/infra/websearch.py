@@ -239,17 +239,29 @@ def _openrouter(query: str, limit: int, config: Config, engine: str = "exa", car
         # an answer we are about to discard.
         "reasoning": {"enabled": False},
     }
-    response = requests.post(
-        f"{config.base_url.rstrip('/')}/chat/completions",
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost",
-            "X-Title": "Kith",
-        },
-        timeout=(10, 60),  # Exa fetches live pages; give it room
-    )
+    response = _post(config, payload)
+
+    # Some models cannot have reasoning turned off — "Reasoning is mandatory for this endpoint
+    # and cannot be disabled", HTTP 400 — and asking anyway killed search outright for anyone on
+    # one of them. `google/gemini-3.7-flash` is one, so every single search 400'd and he was
+    # handed the "plumbing failure" note instead of results, over and over, with no way to tell
+    # from the note that his *model* was the reason.
+    #
+    # The transport already knew this lesson and retries without the switch (`llm/openai_compat`,
+    # via the same classifier). This file duplicated the payload and not the lesson, which is the
+    # actual defect: a second place that speaks the chat API, and so a second place that has to
+    # know every way the chat API says no.
+    #
+    # Dropping the switch is the whole fix — measured against OpenRouter on that model, the retry
+    # returns the same citations for the same $0.008. `max_tokens` is what makes that true: a
+    # model forced to think still only gets 16 tokens to do it in, and the plugin searches
+    # *before* the model runs, so the annotations are already attached to a completion that was
+    # cut off after 13 tokens. Raising the ceiling to let it finish thinking buys nothing but
+    # 500 billed tokens, which is why this does not.
+    if response.status_code == 400 and connection.refuses_reasoning(response.text):
+        payload.pop("reasoning", None)
+        response = _post(config, payload)
+
     if response.status_code != 200:
         raise RuntimeError(f"OpenRouter search returned {response.status_code}: {response.text[:200]}")
 
@@ -274,3 +286,18 @@ def _openrouter(query: str, limit: int, config: Config, engine: str = "exa", car
             }
         )
     return hits[:limit]
+
+
+def _post(config: Config, payload: dict[str, Any]) -> requests.Response:
+    """One search request. Separate only so the retry above can be "the same thing again"."""
+    return requests.post(
+        f"{config.base_url.rstrip('/')}/chat/completions",
+        json=payload,
+        headers={
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost",
+            "X-Title": "Kith",
+        },
+        timeout=(10, 60),  # Exa fetches live pages; give it room
+    )

@@ -76,6 +76,14 @@ export type BackendEvent =
       foldedFrom?: number;
       foldedTo?: number;
     }
+  /* What you said to a turn already running, at the moment it actually went in.
+   *
+   * The server has always sent this (`agent_loop` yields it the round it appends the text) and
+   * nothing here listened, so the event fell through `adapter`'s final `else { continue }` and
+   * was dropped. The result was the worst version of a working feature: the words reached the
+   * model, the model acted on them, and the one participant who never saw them was the person
+   * who typed them. */
+  | { type: "steered"; text: string }
   | { type: "conversation"; id: string }
   | { type: "error"; message: string }
   | { type: "done" };

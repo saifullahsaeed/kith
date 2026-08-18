@@ -27,7 +27,7 @@ Sending one where it is not needed is harmless — verified 200 on Moonshot — 
 still only sent to the families that need it, so a request carries nothing it cannot use.
 
 **Where the breakpoint goes matters as much as sending one.** Kith's system prompt is
-the persona followed by the current time, his mood, and the memory present right now —
+the persona followed by the current time and the memory present right now —
 so the volatile part starts at character 9,084 of 17,646. Caching is strictly
 prefix-based, so a single breakpoint over that whole block is written afresh on every
 request and read almost never: it caches the rounds within one turn and nothing across
@@ -68,7 +68,7 @@ def stable_head(text: str, persona: str) -> int:
 
     Caching is strictly prefix-based, so one volatile byte costs everything after it.
     Kith's system prompt is assembled as the persona followed by the current time, his
-    mood, how long since he last acted, and whatever memory is present — which means
+    how long since he last acted, and whatever memory is present — which means
     the volatile part starts a third of the way in and the stable part in front of it
     is the only region that can be cached across requests.
 
@@ -116,7 +116,7 @@ def apply(
        request Kith ever makes — so this is the only breakpoint that pays off *across*
        turns and ticks rather than only within one. For Anthropic the cache covers
        tools *and* persona, since tools sit ahead of system in their ordering.
-    2. **The end of the system prompt**, i.e. after the time, the mood and the present
+    2. **The end of the system prompt**, i.e. after the time and the present
        memory. Stale as soon as the clock ticks, so this one is reused by the later
        rounds of the same turn. A write costs 0.25x of the region and a read saves
        0.9x, so it pays for itself the first time it is read, whatever its size.

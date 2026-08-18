@@ -88,19 +88,6 @@ def messages_block(path: Path) -> str:
     return "\n".join(lines)
 
 
-def self_block(path: Path) -> str:
-    """Who Kith understands himself to be — always present, so he stays himself."""
-    me = repo.self_model.get_self(path)
-    if not me.get("identity") and not me.get("profile"):
-        return ""
-    lines = ["[Who you are, as you've come to see yourself]"]
-    if me.get("identity"):
-        lines.append(me["identity"])
-    if me.get("profile"):
-        lines += me["profile"].splitlines()
-    return "\n".join(lines)
-
-
 def presence_block(path: Path) -> str:
     """The '[Right now]' block injected each turn: the time, how long since he
     last acted, and any reminders waiting or newly due.
@@ -108,16 +95,10 @@ def presence_block(path: Path) -> str:
     Moved here from `domain/clock.py`, where it was the sole reason that module imported
     `kith.infra.db.repositories` at module scope — the one `domain -> infra` edge in the tree.
     It is not a time primitive. It is a system-prompt fragment that happens to open with the
-    time, and it sits after `self_block` at the one call site that builds
-    the prompt, which is what this module is for.
+    time, and it is assembled at the one call site that builds the prompt, which is what
+    this module is for.
     """
     lines = ["[Right now]", clock_line()]
-
-    mood = repo.self_model.get_mood(path)
-    if mood.get("label"):
-        felt = f"You feel {mood['label']} (energy {mood['energy']}/100)"
-        felt += f" — {mood['note']}." if mood.get("note") else "."
-        lines.append(felt)
 
     last = repo.activity.last_activity_at(path)
     since = clock.humanize_since(last)

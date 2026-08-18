@@ -12,6 +12,9 @@
  *                                nowhere else
  *   /messages                  → the inbox open, for a notice with nothing narrower to
  *                                point at (a reach-out, a stall, a session resting itself)
+ *   /context                   → the context detail screen, itemised. Its own route rather than
+ *                                a panel tab: the Control Panel is everything he *is*, which
+ *                                outlives any conversation, and this is about the one on screen.
  */
 
 // The panel's internal tab values. The URL uses these verbatim except for the
@@ -26,7 +29,6 @@ const TABS = [
   "schedules",
   "sources",
   "workspace",
-  "tools",
 ] as const;
 
 export type PanelTab = (typeof TABS)[number];
@@ -55,6 +57,7 @@ export type Route = {
   taskId: number | null;
   settingsTab: SettingsTab | null;
   inboxOpen: boolean;
+  contextOpen: boolean;
   /** A conversation to open. Notifications need it: "he is waiting on an answer" is useless
    *  if it lands you in whichever chat you happened to have open. */
   conversationId: string | null;
@@ -67,6 +70,7 @@ const HOME: Route = {
   taskId: null,
   settingsTab: null,
   inboxOpen: false,
+  contextOpen: false,
   conversationId: null,
 };
 
@@ -93,6 +97,9 @@ export function parseLocation(pathname: string = window.location.pathname): Rout
   if (pathname.startsWith("/messages")) {
     return { ...HOME, inboxOpen: true };
   }
+  if (pathname.startsWith("/context")) {
+    return { ...HOME, contextOpen: true };
+  }
   return HOME;
 }
 
@@ -101,4 +108,5 @@ export const pathForTab = (tab: PanelTab) => `/control-panel/${tabSlug(tab)}`;
 export const pathForTask = (id: number) => `/tasks/${id}`;
 export const pathForSettings = (tab: SettingsTab = "model") => `/settings/${tab}`;
 export const pathForMessages = () => "/messages";
+export const pathForContext = () => "/context";
 export const pathForConversation = (id: string) => `/chat/${encodeURIComponent(id)}`;

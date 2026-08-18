@@ -42,8 +42,6 @@ def snapshot(path: Path) -> dict:
         "messages": messages,
         "sources": source_list,
         "schedules": schedules,
-        "mood": repo.self_model.get_mood(path),
-        "self": repo.self_model.get_self(path),
     }
 
 

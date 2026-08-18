@@ -95,15 +95,23 @@ export function TaskLane({
           const held = Boolean(task.milestone_id && blocked.has(task.milestone_id));
           return (
             <li key={task.id} className="group flex items-center gap-3 px-3 py-2.5">
+              {/* `approved`, not `working`.
+                  Un-ticking wrote `working`, and `working` is not a quiet state: it drives the
+                  busy flag, the "Working on X" banner on the projects page, and the pulsing node
+                  in the roadmap graph. So a button whose own aria-label says "Reopen" announced
+                  to the whole app that he had picked the task up, from a click he never made.
+                  Reopening returns it to the queue; only he moves it to `working`. */}
               <button
                 onClick={() =>
-                  update("task", task.id, { status: task.status === "done" ? "working" : "done" })
+                  update("task", task.id, {
+                    status: task.status === "done" ? "approved" : "done",
+                  })
                 }
                 aria-label={task.status === "done" ? "Reopen" : "Mark done"}
                 className={cn(
                   "flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
                   task.status === "done"
-                    ? "border-kith bg-kith text-primary-foreground"
+                    ? "border-roam bg-roam text-background"
                     : "border-muted-foreground/40 hover:border-kith",
                 )}
               >
@@ -121,7 +129,7 @@ export function TaskLane({
                     <span className="text-kith">working on it</span>
                   ) : null}
                   {task.status === "planning" ? (
-                    <span className="text-violet-500/90">plan ready for your look</span>
+                    <span className="text-foreground font-medium">plan ready for your look</span>
                   ) : null}
                   {held ? <span>held until “{titleOf(task.milestone_id)}” is ready</span> : null}
                   {!held && task.milestone_id ? <span>{titleOf(task.milestone_id)}</span> : null}
@@ -176,7 +184,7 @@ export function ProgressRing({ pct, size = 52 }: { pct: number; size?: number })
           r={r}
           strokeWidth={stroke}
           strokeLinecap="round"
-          className="fill-none stroke-kith transition-all duration-500"
+          className="fill-none stroke-roam transition-all duration-500"
           strokeDasharray={c}
           strokeDashoffset={c * (1 - clamp(pct) / 100)}
         />

@@ -580,6 +580,45 @@ def _migrations():
         """
         conn.execute("DROP TABLE IF EXISTS custom_tools")
 
+    def v37_no_self_model(conn):
+        """Drop the tables behind the identity and the mood.
+
+        Across 14,327 recorded tool calls in 221 conversations, `set_identity` and
+        `note_about_self` were used **zero** times and `set_mood` twice. `self.identity` and
+        `self.profile` had been empty strings since the row was created, so the panel's
+        "Who he's become" card only ever rendered its own placeholder, and `memory_context`'s
+        self block returned "" on every single prompt.
+
+        The mood was worse than unused. Two writes in three weeks, and the last one — eight days
+        old — was still being injected into the live block of every request as "You feel focused
+        (energy 52/100)", in the present tense, about a state from the week before. A field that
+        is stale by default is not a feature that is merely quiet.
+
+        Dropped rather than left empty, for the reason `v36_no_custom_tools` gives: an unused
+        table is a thing the next person has to work out the status of.
+        """
+        conn.execute("DROP TABLE IF EXISTS self")
+        conn.execute("DROP TABLE IF EXISTS mood")
+
+    def v38_no_notes_or_people(conn):
+        """Drop the tables behind `take_note` and `note_about`.
+
+        Both features had a substitute already being used, which is the test that separates a
+        description problem from a tool nobody needs. Measured over the recorded calls: the
+        journal was written 575 times and `take_note` zero. `note_about`/`recall_person` had the
+        same shape — what he learns about someone is a memory, and `remember` is where it went.
+        Both tables were empty on the live database when this was written.
+
+        Their schemas rode on every round of every turn regardless, at roughly 575 tokens a
+        round for the five of them together.
+
+        Dropped rather than left empty, for the reason `v36_no_custom_tools` gives: an unused
+        table is a thing the next person has to work out the status of, and the migration is the
+        only honest place to say it is finished.
+        """
+        conn.execute("DROP TABLE IF EXISTS notes")
+        conn.execute("DROP TABLE IF EXISTS people")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -617,6 +656,8 @@ def _migrations():
         v34_four_task_statuses,
         v35_conversation_last_said,
         v36_no_custom_tools,
+        v37_no_self_model,
+        v38_no_notes_or_people,
     ]
 
 

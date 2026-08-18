@@ -109,6 +109,17 @@ export interface Project {
   tasks_active: number;
   tasks_total: number;
 }
+/* Restored. Commit 3d18366 ("Remove the tools he wrote for himself") deleted 53 lines from
+ * this file to take out `CustomTool`, and took these five with it — all of them still
+ * referenced by `BrainSnapshot` below, and none of them declared anywhere else. That left
+ * `tsc` failing on five undeclared names, which meant `npm run build` (`tsc -b && vite build`)
+ * never reached vite: the app still ran, because the dev server transpiles without checking
+ * types, so nothing said anything until a build was asked for.
+ *
+ * Taken verbatim from 3d18366^ rather than rewritten from how they are used. These describe
+ * rows the server sends, and guessing their shape from the three fields the panel happens to
+ * read is how a type stops matching the thing it is typing. */
+
 export interface Reminder {
   id: number;
   fire_at: string;
@@ -117,6 +128,7 @@ export interface Reminder {
   created_at: string;
   fires: string;
 }
+
 export interface Message {
   id: number;
   body: string;
@@ -127,6 +139,7 @@ export interface Message {
   sender: string;
   created_at: string;
 }
+
 export interface Source {
   id: number;
   title: string;
@@ -134,6 +147,7 @@ export interface Source {
   created_at: string;
   chars: number;
 }
+
 export interface Schedule {
   id: number;
   note: string;
@@ -145,6 +159,7 @@ export interface Schedule {
   created_at: string;
   fires: string;
 }
+
 export interface BrainSnapshot {
   counts: Record<string, number>;
   memories: Memory[];
@@ -155,8 +170,6 @@ export interface BrainSnapshot {
   sources: Source[];
   schedules: Schedule[];
   projects: Project[];
-  mood?: { label: string; energy: number; note: string; updated_at: string | null };
-  self?: { identity: string; profile: string; updated_at: string | null };
 }
 
 export type TimelineKind = "memory" | "journal" | "task" | "tool" | "reminder" | "message";

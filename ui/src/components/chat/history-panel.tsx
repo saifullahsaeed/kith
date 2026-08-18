@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronRight, MessageSquare, Plus, Search, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  ChevronRight,
+  Folder,
+  MessageSquare,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { ItemMenu } from "@/components/ui/item-menu";
@@ -15,6 +24,7 @@ import {
 import { fetchBrain, type Project } from "@/lib/backend/brain";
 import { dayLabel, time } from "@/lib/dates";
 import { openOnHost } from "@/lib/files";
+import { pathForTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
 /** How many to ask for at first, and the most the server will hand over in one call
@@ -22,6 +32,10 @@ import { cn } from "@/lib/utils";
  *  thousand titles is not something anyone reads to the end. */
 const PAGE = 100;
 const MAX = 500;
+
+/** How many projects the sidebar carries before the rest live on the screen built for them.
+ *  Four fits without pushing the conversations under the fold, which is the whole trade. */
+const PROJECTS_SHOWN = 4;
 
 /**
  * Every conversation you have had with him, and the way back into one.
@@ -75,6 +89,7 @@ export function HistoryPanel({
   // conversations without a toggle you never pressed being remembered as a preference.
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
   const confirm = useConfirm();
+  const navigate = useNavigate();
 
   const load = useCallback(() => {
     fetchConversations(limit)
@@ -140,13 +155,40 @@ export function HistoryPanel({
       .catch(() => {});
   }, [items]);
   const groups = useMemo(() => groupByProject(items, projects), [items, projects]);
-  // Open by default: the project you are in. Failing that — a conversation not yet in the
-  // page, or none active — the most recent, because a panel that opens entirely shut is a
-  // panel that answers nothing until you click.
+
+  /* Projects are a short list at the top; chats are the panel.
+   *
+   * Every project used to get a heading of its own, so six of them — four of which were finished
+   * — pushed the twenty-three loose conversations below the fold in a sidebar whose job is
+   * finding a conversation. A sidebar is not a project manager: the few you are actually in
+   * belong here, and the rest belong on the screen that already exists for them.
+   */
+  const { shownProjects, projectCount, chats, ordered } = useMemo(() => {
+    const all = groups.filter((group) => group.kind === "project");
+    const loose = groups.find((group) => group.kind === "chats");
+    // Always include the one you are in, even when it is not recent enough to make the cut —
+    // a panel that hides the project you are working in is worse than one that shows five.
+    const holding = all.find((group) => group.items.some((one) => one.id === activeId));
+    const top = all.slice(0, PROJECTS_SHOWN);
+    if (holding && !top.includes(holding)) top.push(holding);
+    return {
+      shownProjects: top,
+      // Every project, not every project that happens to have a conversation in it. The link
+      // said "All 5" and landed on a screen showing six, because these are two different
+      // questions: the sidebar groups conversations, and a project he started but has not
+      // talked in yet has none. A count on a link is a promise about where it goes.
+      projectCount: Math.max(projects.length, all.length),
+      chats: loose,
+      ordered: [...top, ...(loose ? [loose] : [])],
+    };
+  }, [groups, projects, activeId]);
+
+  // Open by default: the chats, always — they are the list, not a drawer — and the project you
+  // are in. A panel that opens entirely shut answers nothing until you click.
   const openByDefault = useMemo(() => {
-    const holding = groups.find((group) => group.items.some((one) => one.id === activeId));
-    return (holding ?? groups[0])?.key;
-  }, [groups, activeId]);
+    const holding = ordered.find((group) => group.items.some((one) => one.id === activeId));
+    return new Set([chats?.key, holding?.key].filter(Boolean) as string[]);
+  }, [ordered, chats, activeId]);
   // A full page back means there are almost certainly more behind it. The alternative was
   // showing 100 of seventeen hundred with nothing on screen saying so, which is a silent
   // truncation dressed as a complete list.
@@ -236,24 +278,52 @@ export function HistoryPanel({
             </p>
           ) : (
             <>
-              {groups.map((group) => {
+              {/* The projects band, and the way out of it.
+                  A count on the link rather than a bare "View all": the number is the reason to
+                  press it, and without one there is nothing to say whether the four on screen
+                  are most of them or a tenth. */}
+              {shownProjects.length > 0 ? (
+                <div className="flex items-center gap-1.5 px-2.5 pt-0.5 pb-1">
+                  <span className="text-muted-foreground/45 text-[10px] font-semibold tracking-[0.12em] uppercase">
+                    Projects
+                  </span>
+                  <span className="flex-1" />
+                  <button
+                    type="button"
+                    onClick={() => navigate(pathForTab("projects"))}
+                    className="text-muted-foreground/50 hover:text-foreground flex items-center gap-0.5 text-[10px] transition-colors"
+                  >
+                    {projectCount > shownProjects.length ? `All ${projectCount}` : "Open"}
+                    <ArrowUpRight className="size-3" />
+                  </button>
+                </div>
+              ) : null}
+              {ordered.map((group) => {
                 // XOR against the default: no effect syncing state to props, and nothing to
                 // go stale when the active conversation moves to another project.
-                const open = (group.key === openByDefault) !== toggled.has(group.key);
+                const open = openByDefault.has(group.key) !== toggled.has(group.key);
+                // The rule between the projects and the conversations. Two different kinds of
+                // thing in one column need a line, or the last project reads as the first chat.
+                const bandStarts = group.kind === "chats" && shownProjects.length > 0;
                 return (
-                  <section key={group.key}>
+                  <section
+                    key={group.key}
+                    className={cn(bandStarts && "border-border/40 mt-1.5 border-t pt-1.5")}
+                  >
                     {/* Sticky, so the project you are looking at is named while you are inside
                       it. It needs the panel's own backdrop to sit on, which is why the aside
                       has a background now rather than letting the room show straight through. */}
-                    {/* The app's own label treatment — `SectionLabel` in the control panel uses
-                      `tracking-[0.12em]`, and this used `tracking-wider`, which is a different
-                      letterspacing on the same uppercase. Small differences in the one element
-                      that repeats down a whole panel are what make a panel look like it came
-                      from somewhere else.
+                    {/* Sentence case, not uppercase with letterspacing.
 
-                      And one line, always. "SADEEF CAPITAL SERVICES PUBLIC WEBSITE" wrapped to
-                      two, which turned a quiet divider into the loudest thing in the sidebar
-                      and pushed the conversations it was labelling down the screen. */}
+                      A heading is navigation and a conversation is content, and the old treatment
+                      had it backwards: `SADEEF CAPITAL SERVI…` was the loudest thing on the
+                      screen *and* truncated, because uppercase plus 0.12em of tracking costs
+                      roughly a third of the width for the same words. In sentence case the real
+                      names fit, and they stop competing with the sentences underneath them.
+
+                      An icon rather than a word for the kind. It is the distinction the panel was
+                      missing — a project and the loose chats are not two projects — and it costs
+                      twelve pixels instead of a row. */}
                     <h3 className="bg-sidebar/80 sticky top-0 z-10 backdrop-blur-sm">
                       <button
                         type="button"
@@ -265,31 +335,46 @@ export function HistoryPanel({
                             return next;
                           })
                         }
-                        className="text-muted-foreground/70 hover:text-foreground flex w-full items-baseline gap-1.5 px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase transition-colors"
+                        className={cn(
+                          "hover:text-foreground flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                          // Finished projects are still reachable and no longer in the way.
+                          group.finished ? "text-muted-foreground/45" : "text-muted-foreground/85",
+                        )}
                       >
                         <ChevronRight
                           className={cn(
-                            "size-3 shrink-0 self-center transition-transform",
+                            "size-3 shrink-0 transition-transform",
                             open && "rotate-90",
                           )}
                         />
+                        {group.kind === "chats" ? (
+                          <MessageSquare className="size-3 shrink-0 opacity-60" aria-hidden />
+                        ) : (
+                          <Folder className="size-3 shrink-0 opacity-60" aria-hidden />
+                        )}
                         <span className="min-w-0 truncate" title={group.label}>
                           {group.label}
                         </span>
+                        {/* A dot, not the word. "done" and "paused" spelled out beside a
+                          truncated name were two things fighting for the same inch; the state
+                          matters, its spelling does not. */}
                         {group.status ? (
-                          <span className="text-muted-foreground/45 shrink-0 font-normal tracking-normal normal-case">
-                            {group.status}
-                          </span>
+                          <span
+                            aria-hidden
+                            title={group.status}
+                            className="bg-muted-foreground/40 size-1.5 shrink-0 rounded-full"
+                          />
                         ) : null}
+                        {group.status ? <span className="sr-only">{group.status}</span> : null}
                         {/* The count is what makes a closed section honest — a name on its own
                           gives no reason to open it, and no sense of what is behind it. */}
-                        <span className="text-muted-foreground/45 ms-auto shrink-0 font-normal tabular-nums">
+                        <span className="text-muted-foreground/40 ms-auto shrink-0 font-normal tabular-nums">
                           {group.items.length}
                         </span>
                         {/* Something still running in a section you cannot see. */}
                         {!open && group.items.some((one) => one.working) ? (
                           <span
-                            className="bg-roam size-1.5 shrink-0 animate-pulse self-center rounded-full"
+                            className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
                             title="Still working in here"
                           />
                         ) : null}
@@ -425,9 +510,19 @@ export function HistoryPanel({
 interface Group {
   key: string;
   label: string;
+  /** What kind of thing this is, which is the distinction the panel was missing.
+   *
+   * A project and the loose conversations are not two projects, and rendering them as six
+   * identical shouting headings — one of which was called "NO PROJECT" — made the everyday
+   * chats look like the leftovers of a filing system rather than the place most talking
+   * actually happens. */
+  kind: "project" | "chats";
   /** Shown beside the name when the project is not active — being bound to a closed one is
    *  *why* nothing is happening in these sessions, which is the thing worth knowing. */
   status?: string;
+  /** Done, paused, archived. Sorted to the bottom and rendered quietly: four finished projects
+   *  were each taking a full row above twenty-three live conversations. */
+  finished: boolean;
   items: ConversationSummary[];
 }
 
@@ -456,18 +551,35 @@ function groupByProject(items: ConversationSummary[], projects: Project[]): Grou
         key,
         // A project he started this session on may not be in the list yet, and an id is a
         // better answer than a blank heading.
-        label: id === null ? "No project" : (project?.name ?? `Project #${id}`),
+        //
+        // "Chats" rather than "No project". The old name described these by the thing they did
+        // not have, put them last, and left the largest group in the panel — twenty-three
+        // sessions against four — reading as an unfiled remainder. Talking to him without a
+        // project is not a filing failure; it is most of what the app is for.
+        label: id === null ? "Chats" : (project?.name ?? `Project #${id}`),
+        kind: id === null ? "chats" : "project",
         status: project && project.status !== "active" ? project.status : undefined,
+        finished: Boolean(project && project.status !== "active"),
         items: [],
       };
       groups.set(key, group);
     }
     group.items.push(item);
   }
-  // Insertion order is already most-recently-active first, because `items` arrives newest first
-  // — so the project you touched last is at the top without sorting anything.
+  // Insertion order inside each band is already most-recently-active first, because `items`
+  // arrives newest first — so the project you touched last is at the top of its band without
+  // sorting anything.
+  //
+  // Three bands, and the order is the answer to "where is the thing I want": what is live, then
+  // where most conversations are, then what is over. Finished projects used to sit above the
+  // chats purely because a session in one had been touched more recently, which put four dead
+  // projects between you and everything you actually say.
   const all = [...groups.values()];
-  return [...all.filter((g) => g.key !== "none"), ...all.filter((g) => g.key === "none")];
+  return [
+    ...all.filter((g) => g.kind === "project" && !g.finished),
+    ...all.filter((g) => g.kind === "chats"),
+    ...all.filter((g) => g.kind === "project" && g.finished),
+  ];
 }
 
 /**

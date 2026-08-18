@@ -1,15 +1,126 @@
-import { useState } from "react";
-import { ChevronRight, FolderKanban, ListChecks, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { ChevronRight, FolderKanban, ListChecks, MessageSquare, Plus } from "lucide-react";
 import { MarkdownInline } from "@/components/files";
 import { Button } from "@/components/ui/button";
 import { Dropdown } from "@/components/ui/dropdown";
 import type { BrainSnapshot } from "@/lib/backend/brain";
+import { fetchConversations, type ConversationSummary } from "@/lib/backend";
+import { dayLabel } from "@/lib/dates";
+import { pathForConversation } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Badge, Composer, DeleteButton, EmptyState, PageHeader } from "./chrome";
 import { matches, shortPath } from "./format";
 import { ProgressRing } from "./task-lane";
 import { FIELD, LOOSE, PROJECT_STATUSES } from "./types";
 import type { Handlers, ProjectRef } from "./types";
+
+/** How many of a project's conversations the card carries. Three is enough to recognise the one
+ *  you want; the rest are behind the project itself. */
+const CHATS_ON_CARD = 3;
+
+/**
+ * Every conversation, grouped by the project it belongs to.
+ *
+ * The listing lives on the card because that is where someone looking for a conversation
+ * actually arrives. It was on the project's own page first, at the bottom, under a workflow
+ * graph and a task list — which is to say it was reachable in the sense that a thing at the end
+ * of a corridor is reachable. A projects screen that cannot get you to what was said in a project
+ * is a filing cabinet with the drawers welded shut.
+ *
+ * One fetch for the whole screen. Eight cards each asking for the same listing is eight reads of
+ * the same file to draw one page.
+ */
+function useProjectConversations(): Map<number, ConversationSummary[]> {
+  const [byProject, setByProject] = useState<Map<number, ConversationSummary[]>>(new Map());
+  useEffect(() => {
+    let live = true;
+    void fetchConversations(500)
+      .then((data) => {
+        if (!live) return;
+        const grouped = new Map<number, ConversationSummary[]>();
+        for (const one of data.conversations) {
+          if (one.projectId === null) continue;
+          const held = grouped.get(one.projectId);
+          if (held) held.push(one);
+          else grouped.set(one.projectId, [one]);
+        }
+        setByProject(grouped);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return byProject;
+}
+
+/**
+ * A project's conversations, on the card, one click from anywhere.
+ *
+ * The point of this whole screen, for someone who came here from the sidebar, is getting back
+ * into something that was said. Everything else on the card describes the plan; this is the only
+ * part that is the conversation.
+ *
+ * Each row stops the click from reaching the card. The card opens the project, these open a chat,
+ * and a row that did both would open the project and then navigate away from it.
+ */
+function CardChats({
+  chats,
+  onOpenProject,
+}: {
+  chats: ConversationSummary[];
+  onOpenProject: () => void;
+}) {
+  const navigate = useNavigate();
+  if (chats.length === 0) return null;
+  const shown = chats.slice(0, CHATS_ON_CARD);
+
+  return (
+    <div
+      className="border-border/50 mt-3 border-t pt-2"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="text-muted-foreground/50 mb-1 flex items-center gap-1.5 text-[10px] font-semibold tracking-[0.1em] uppercase">
+        <MessageSquare className="size-3" />
+        {chats.length} conversation{chats.length === 1 ? "" : "s"}
+      </div>
+      <ul>
+        {shown.map((one) => (
+          <li key={one.id}>
+            <button
+              type="button"
+              onClick={() => navigate(pathForConversation(one.id))}
+              className="hover:bg-accent/50 -mx-1.5 flex w-[calc(100%+0.75rem)] items-baseline gap-2 rounded px-1.5 py-1 text-left transition-colors"
+            >
+              <span className="text-foreground/80 min-w-0 flex-1 truncate text-[12px]">
+                {one.title}
+              </span>
+              {one.working ? (
+                <span
+                  className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
+                  title="Still working in this conversation"
+                />
+              ) : null}
+              <span className="text-muted-foreground/40 shrink-0 text-[10px] tabular-nums">
+                {dayLabel(one.updatedAt)}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {chats.length > shown.length ? (
+        <button
+          type="button"
+          onClick={onOpenProject}
+          className="text-muted-foreground/50 hover:text-foreground mt-0.5 px-1.5 text-[11px] transition-colors"
+        >
+          {chats.length - shown.length} more in this project →
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 /** Counts of a project's tasks by where they sit. */
 function taskTally(tasks: BrainSnapshot["tasks"]) {
@@ -39,6 +150,9 @@ export function Projects({
 } & Handlers) {
   const [name, setName] = useState("");
   const searching = query.trim().length > 0;
+  // Loaded once here rather than per card: every card wants the same listing, and eight cards
+  // each fetching it is eight reads of the same file for one screen.
+  const chats = useProjectConversations();
   const hits = (t: BrainSnapshot["tasks"][number]) =>
     matches(query, t.goal, t.status, t.description);
   // Searching finds work wherever it lives: a project surfaces when it matches
@@ -110,7 +224,7 @@ export function Projects({
                 <span className="text-muted-foreground"> in {onNow.project}</span>
               </>
             ) : all.planning ? (
-              <span className="text-orange-400/90">
+              <span className="text-foreground font-medium">
                 {all.planning} plan{all.planning === 1 ? "" : "s"} waiting on you
               </span>
             ) : available > 0 ? (
@@ -150,6 +264,7 @@ export function Projects({
                 remove={remove}
                 update={update}
                 onOpen={() => onOpenProject(p.id)}
+                chats={chats.get(p.id) ?? []}
               />
             );
           })}
@@ -172,6 +287,7 @@ export function Projects({
                     remove={remove}
                     update={update}
                     onOpen={() => onOpenProject(p.id)}
+                    chats={chats.get(p.id) ?? []}
                   />
                 ))}
               </div>
@@ -187,13 +303,11 @@ function TaskTally({ tally }: { tally: ReturnType<typeof taskTally> }) {
   if (!tally.total) return <span className="text-muted-foreground/70">no tasks yet</span>;
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
-      {tally.working ? <span className="text-emerald-500">{tally.working} working</span> : null}
+      {tally.working ? <span className="text-kith">{tally.working} working</span> : null}
       {/* Same shape as `review`, one step earlier: a plan waiting on a decision before any
           work starts, rather than work waiting on a check after it's done. */}
       {tally.planning ? (
-        <span className="font-medium text-violet-600 dark:text-violet-400">
-          {tally.planning} to approve
-        </span>
+        <span className="text-foreground font-medium">{tally.planning} to approve</span>
       ) : null}
       {tally.open ? <span>{tally.open} to do</span> : null}
       {tally.done ? <span className="text-muted-foreground/70">{tally.done} done</span> : null}
@@ -208,12 +322,15 @@ function ProjectCard({
   remove,
   update,
   onOpen,
+  chats,
 }: {
   project: BrainSnapshot["projects"][number];
   tasks: BrainSnapshot["tasks"];
   /** How many of its tasks match the current search (undefined = not searching). */
   matching?: number;
   onOpen: () => void;
+  /** This project's conversations, newest first. */
+  chats: ConversationSummary[];
 } & Pick<Handlers, "remove" | "update">) {
   const pct = project.milestones_total
     ? Math.round((project.milestones_done / project.milestones_total) * 100)
@@ -243,7 +360,7 @@ function ProjectCard({
         <ProgressRing pct={pct} size={44} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="min-w-0 truncate text-[15px] leading-snug font-semibold transition-colors group-hover:text-kith">
+            <span className="min-w-0 truncate text-[15px] leading-snug font-semibold transition-colors group-hover:text-foreground">
               {project.name}
             </span>
             {here ? (
@@ -300,7 +417,7 @@ function ProjectCard({
                   Next: <span className="text-foreground">{next.title}</span>
                 </span>
               ) : stalled ? (
-                <span className="text-orange-400/90">
+                <span className="text-foreground font-medium">
                   Nothing available — every milestone is waiting on another
                 </span>
               ) : (
@@ -328,8 +445,10 @@ function ProjectCard({
           />
           <DeleteButton onClick={() => remove("project", project.id, project.name)} />
         </div>
-        <ChevronRight className="text-muted-foreground/40 group-hover:text-kith mt-2 size-4 shrink-0 transition-colors" />
+        <ChevronRight className="text-muted-foreground/40 group-hover:text-foreground mt-2 size-4 shrink-0 transition-colors" />
       </div>
+
+      <CardChats chats={chats} onOpenProject={onOpen} />
 
       {/* The roadmap as a strip: the shape of the project without opening it. Segments in
           order, coloured by state, the one he is on marked. A ring can only say how much is
@@ -375,7 +494,7 @@ function LooseCard({ tasks, onOpen }: { tasks: BrainSnapshot["tasks"]; onOpen: (
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-[15px] font-semibold leading-snug transition-colors group-hover:text-kith">
+          <span className="text-[15px] font-semibold leading-snug transition-colors group-hover:text-foreground">
             No project
           </span>
           {tally.planning ? (
@@ -389,7 +508,7 @@ function LooseCard({ tasks, onOpen }: { tasks: BrainSnapshot["tasks"]; onOpen: (
           <TaskTally tally={tally} />
         </div>
       </div>
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-kith" />
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground" />
     </div>
   );
 }

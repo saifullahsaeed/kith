@@ -11,7 +11,7 @@ policy gets that wrong once and nobody connects the flash to the header.
 Three deliberate relaxations, all consequences of how the UI is built:
 
 * ``style-src`` allows inline. The app uses ``style={{…}}`` in several components and
-  tints its whole surface by his current mood at runtime; there is no nonce path for
+  tints its whole surface from runtime state; there is no nonce path for
   React inline styles.
 * ``img-src`` allows ``data:`` and ``blob:``. Icons are inlined and file previews are
   built client-side. Remote images stay blocked, which also means agent-authored

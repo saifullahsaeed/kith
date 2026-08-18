@@ -4,15 +4,12 @@ export function PresenceOrb({
   working = false,
   size = 10,
   idle = false,
-  color,
 }: {
   working?: boolean;
   size?: number;
   idle?: boolean;
-  /** Override the orb colour (e.g. his mood). Ignored while working. */
-  color?: string;
 }) {
-  const orb = working ? "var(--roam)" : (color ?? "var(--kith)");
+  const orb = working ? "var(--roam)" : "var(--kith)";
   return (
     <span
       className="kith-orb inline-block shrink-0"

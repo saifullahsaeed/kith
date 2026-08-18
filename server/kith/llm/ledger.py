@@ -23,7 +23,7 @@ showing someone a number.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from kith.llm.budget import SEED_CHARS_PER_TOKEN, message_chars
@@ -228,3 +228,197 @@ def _has_image(message: dict[str, Any]) -> bool:
     return isinstance(parts, list) and any(
         isinstance(part, dict) and part.get("type") == "image_url" for part in parts
     )
+
+
+#: The argument that says what a call was *about*, in the order to look for it. The first four are
+#: the precedence `conversations._let_go_of_old_results` uses when it names a trimmed result back
+#: to him — the two have to agree about what a call was about, or the screen and the stub describe
+#: the same read in different words.
+#:
+#: `name` and `id` are here because of what a real conversation did without them: `read_skill`
+#: takes `name` and `view_task` takes `id`, so 191 different skills and 87 different tasks each
+#: grouped under one empty subject and were reported as near-total waste. A subject list that is
+#: too short does not merely lose detail — it invents repeats.
+_SUBJECT_KEYS = ("path", "pattern", "command", "query", "name", "id")
+
+#: The `Line.key`s that `itemise` can break down, in the order a screen should show them. Every
+#: other line — persona, system prompt, live block, the three kinds of tool schema — comes from
+#: config rather than from the conversation, and `messages` and `images` have no call to name. A
+#: caller uses this to know which categories open into something and which are just a number.
+ITEMISED_KEYS = ("code", "tool_results", "skills")
+
+#: The tools whose second call makes the first one redundant — the ones that *look* at something
+#: rather than doing something to it.
+#:
+#: This is the difference between reading a file twice and editing it twice. A read is a look at
+#: something with a current state, so the later look supersedes the earlier: the earlier copy
+#: describes a file that has since changed, which is worse than not having it at all. An edit is
+#: an act. The second does not make the first redundant; it happened too.
+#:
+#: Without this the finished screen led with `edit_file ×10` on one file, priced at 2,500 tokens
+#: "you could drop without losing anything" — nine edits that were nothing of the kind. `shell` is
+#: deliberately out: `ls` is a look and `rm -rf` is not, and the arguments cannot tell them apart.
+#: Where it cannot be known, claim nothing — an overstated figure is one the person has to go and
+#: check, which is worth less than no figure.
+_A_LOOK = frozenset(_CODE_TOOLS + _SKILL_TOOLS)
+
+
+@dataclass(frozen=True)
+class Item:
+    """One tool call's contribution, and how many times it was the same call."""
+
+    #: The `Line.key` this rolls up into, so an item can be shown under the category it is part of.
+    key: str
+    tool: str
+    subject: str
+    calls: int
+    tokens: int
+    #: What could be dropped without losing anything: every copy but the newest. Zero when the
+    #: call happened once. This is the number worth sorting by — a large file read once is the
+    #: cost of the work, while sixty copies of a small one is the thing to remove.
+    wasted: int
+
+
+def itemise(
+    convo: list[dict[str, Any]],
+    *,
+    chars_per_token: float = SEED_CHARS_PER_TOKEN,
+) -> tuple[Item, ...]:
+    """Which calls filled the tool-result categories, and which of them were the same call again.
+
+    `take` answers "how much"; this answers "what of". They are different questions and the second
+    is the one you can act on: 300k of files he needed once and 300k of one file read sixty times
+    are the same figure and completely different problems. Measured on one real conversation here,
+    before any of this existed: 3,241 code reads, 2.3M tokens of them repeats, one file read 64
+    times.
+
+    Deliberately a second walk over **the same list** `take` is given, rather than a rebuild from
+    the stored log. The log has more in it — it predates every fold and every trim — so itemising
+    it would describe a window that no longer exists and disagree with the meter by millions of
+    tokens. Whatever list the caller measured is the list this subdivides.
+
+    Only the three tool-result categories. Persona, system prompt, live block and tool schemas do
+    not come from the conversation at all, and `messages` and `images` have no call to name.
+    """
+    ratio = chars_per_token if chars_per_token > 0 else SEED_CHARS_PER_TOKEN
+
+    # (key, tool, subject) -> [total chars, calls, newest call's chars]
+    groups: dict[tuple[str, str, str], list[int]] = {}
+    pending: dict[str, Any] = {}
+
+    for message in convo:
+        role = message.get("role")
+        if role == "assistant" and message.get("tool_calls"):
+            pending = _arguments_of(message)
+            continue
+        if role != "tool":
+            continue
+
+        name = str(message.get("tool_name") or message.get("name") or "")
+        key = "skills" if name in _SKILL_TOOLS else "code" if name in _CODE_TOOLS else "tool_results"
+        subject = ""
+        for wanted in _SUBJECT_KEYS:
+            value = pending.get(wanted)
+            # `str`/`int` rather than `str` alone: a task id arrives as a number, and treating
+            # "not text" as "no subject" put every task he opened into one group.
+            if isinstance(value, (str, int)) and not isinstance(value, bool) and str(value):
+                subject = str(value)
+                break
+        # Consumed: the next tool result without its own assistant turn in front of it has no
+        # arguments of its own, and inheriting the previous call's would name the wrong file.
+        pending = {}
+
+        size = message_chars(message)
+        entry = groups.setdefault((key, name, subject), [0, 0, 0])
+        entry[0] += size
+        entry[1] += 1
+        entry[2] = size
+
+    items = [
+        Item(
+            key=key,
+            tool=tool,
+            subject=subject,
+            calls=calls,
+            tokens=_tokens(chars, ratio),
+            # Two conditions, and both are about not overclaiming. The subject has to say these
+            # really were the same call — without one, all this knows is that a tool ran twice.
+            # And the tool has to be one whose later call supersedes its earlier one, or ten
+            # edits to a file get priced as nine stale copies of the tenth.
+            wasted=_tokens(chars - newest, ratio) if subject and tool in _A_LOOK else 0,
+        )
+        for (key, tool, subject), (chars, calls, newest) in groups.items()
+    ]
+    items = _reconcile(items, groups, ratio)
+    # Worst waste first, then largest — so the screen opens on the thing to act on rather than on
+    # whatever happened to be read last.
+    return tuple(sorted(items, key=lambda item: (-item.wasted, -item.tokens)))
+
+
+def _arguments_of(message: dict[str, Any]) -> dict[str, Any]:
+    """The first tool call's arguments, whichever shape they arrived in.
+
+    `conversations.full_messages` rebuilds them as dicts; `openai_compat._to_openai` turns them
+    into JSON text on the way to a provider. Both shapes reach this, and a string that quietly
+    fell through would blank every subject on exactly the path a real request takes.
+    """
+    calls = message.get("tool_calls") or []
+    if not calls:
+        return {}
+    arguments = (calls[0].get("function") or {}).get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except (ValueError, TypeError):
+            return {}
+    return arguments if isinstance(arguments, dict) else {}
+
+
+def _reconcile(
+    items: list[Item],
+    groups: dict[tuple[str, str, str], list[int]],
+    ratio: float,
+) -> list[Item]:
+    """Make each category's items add up to exactly what `take` reports for that category.
+
+    `take` converts a category's characters to tokens *once*, at the end. Converting each item on
+    its own and adding those up is a different sum — three results of 4,003 characters are 3,002
+    tokens counted together and 3,000 counted apart — and real reads are never round numbers, so
+    this is the ordinary case rather than the edge one. A detail screen whose rows do not add up
+    to the total printed above them is not a detail screen; it is two numbers, one of which is
+    wrong, with no way to tell which.
+
+    Fixed by largest remainder: the category total is the measured one, and the rounding loss is
+    handed to the items that lost the most of it.
+    """
+    out = list(items)
+    for key in ITEMISED_KEYS:
+        mine = [index for index, item in enumerate(out) if item.key == key]
+        if not mine:
+            continue
+        chars = sum(groups[(out[i].key, out[i].tool, out[i].subject)][0] for i in mine)
+        short = _tokens(chars, ratio) - sum(out[i].tokens for i in mine)
+        # Whoever was rounded down hardest gets the token back, one each, until the sums agree.
+        by_remainder = sorted(
+            mine,
+            key=lambda i: (groups[(out[i].key, out[i].tool, out[i].subject)][0] / ratio) % 1,
+            reverse=True,
+        )
+        for i in by_remainder[:short]:
+            out[i] = replace(out[i], tokens=out[i].tokens + 1)
+    return out
+
+
+def items_as_wire(items: tuple[Item, ...]) -> list[dict[str, Any]]:
+    """For the API, and therefore for the detail screen."""
+    return [
+        {
+            "key": item.key,
+            "tool": item.tool,
+            "subject": item.subject,
+            "calls": item.calls,
+            "tokens": item.tokens,
+            "wasted": item.wasted,
+        }
+        for item in items
+    ]

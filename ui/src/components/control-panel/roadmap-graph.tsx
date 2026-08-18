@@ -405,11 +405,6 @@ function MilestoneNode({ data }: NodeProps) {
       {here ? (
         <p className="text-kith mt-1 ps-5 text-[10px] leading-snug">working on this now</p>
       ) : null}
-      {milestone.tasks_waiting > 0 ? (
-        <p className="text-orange-400/90 mt-1 ps-5 text-[10px] leading-snug">
-          {milestone.tasks_waiting} waiting on you
-        </p>
-      ) : null}
       {waiting && milestone.blocked_by.length > 0 ? (
         <p className="text-muted-foreground/70 mt-1 ps-5 text-[10px] leading-snug">
           waits for {milestone.blocked_by.join(", ")}
