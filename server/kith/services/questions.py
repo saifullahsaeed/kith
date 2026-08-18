@@ -28,6 +28,8 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 
+from kith.kernel import session_context
+
 #: How long a question waits before giving up on being answered.
 _DEADLINE_SECONDS = 15 * 60
 
@@ -104,6 +106,29 @@ def ask(conversation_id: str, raw: list, deadline: float = _DEADLINE_SECONDS) ->
     asked = _normalise(raw)
     if not asked:
         return {"ok": False, "error": "ask needs at least one question with at least one option"}
+
+    # Nobody is there, so nothing is gained by holding the turn to find out.
+    #
+    # This wait had no such check, and permission next door has had one since August: a reminder
+    # firing at four in the morning parked here for the full fifteen minutes, and because the
+    # scheduler runs its wakes one after another on a single timer thread, nothing else was
+    # checked while it did — no other reminder fired, no finished build was noticed. A quarter
+    # of an hour of the whole background half of the app, spent waiting for a click that could
+    # not happen.
+    #
+    # The answer is the same one the deadline already gives, arrived at without the wait: say
+    # nobody answered and let him carry on. The alert is still raised, so the question is on the
+    # badge in the morning even though its turn is long finished.
+    if session_context.unattended():
+        _tell_them(conversation_id, asked)
+        return {
+            "ok": True,
+            "answered": False,
+            "note": (
+                "Nobody is here to answer — this is running unattended. Carry on with what you "
+                "have, and say which way you went and why."
+            ),
+        }
 
     question = Question(id=uuid.uuid4().hex[:12], conversation_id=conversation_id, asked=asked)
     _tell_them(conversation_id, asked)

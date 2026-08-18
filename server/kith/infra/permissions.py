@@ -37,7 +37,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -552,7 +552,33 @@ def _wait_for(decision: Decision) -> None:
     # nothing else, and it rides into the turn on the copied context, which makes it the one
     # thing here that actually knows whether a person is present.
     if session_context.unattended():
-        raise Denied(decision)
+        # Refused at once, which is the same answer as before. What changes is that it is now
+        # said honestly and said out loud.
+        #
+        # The reason handed back named an Allow button on a message drawn on nobody's screen,
+        # and then told him not to work around it — so the one instruction he could actually
+        # follow was to stop, with no way to report what he had stopped for. And nothing was
+        # written down at all: `_tell_them` sits below this, deliberately, because a refusal
+        # nobody is waiting on is not an interruption worth making. True of the interrupting;
+        # false of the recording. You came back in the morning to a turn that had quietly not
+        # done something and no trace of what.
+        #
+        # The shape is `ask`'s, which is the mechanism this codebase already chose for "someone
+        # else's turn" — see `domain/enums`, where `waiting` and `review` were deleted in favour
+        # of it. `ask` answers an unanswered question with "carry on with what you have, and say
+        # which way you went and why". A refusal is the same situation and now gets the same
+        # sentence, so the two gates stop disagreeing about what an absent person means.
+        _tell_them(decision.request, unattended=True)
+        raise Denied(
+            replace(
+                decision,
+                reason=(
+                    f"Not allowed, and nobody was there to ask: {decision.request.why if decision.request else ''}. "
+                    f"Nothing is waiting on you — carry on without it and say plainly what you "
+                    f"skipped and why. It is on their alerts; they can allow it when they next look."
+                ),
+            )
+        )
 
     # And still the live turn, for everything that has a conversation but no turn at all: a
     # checkpoint taken by a test, a tool called from a script. `live_turns.current` is "a turn
@@ -580,8 +606,12 @@ def _wait_for(decision: Decision) -> None:
         raise Denied(decision)
 
 
-def _tell_them(request: Request) -> None:
+def _tell_them(request: Request | None, unattended: bool = False) -> None:
     """Raise the badge and the desktop notification for something he cannot do yet.
+
+    `unattended` changes the sentence, not whether one is written. There is nothing to approve
+    in the moment — the turn already refused and moved on — so this is a record of something he
+    wanted and could not have, phrased as that rather than as a request waiting on you.
 
     The prompt sits in the conversation, so without this it is only visible if you happen to be
     looking at that chat — and now that the gate waits rather than failing forward, not seeing
@@ -598,11 +628,17 @@ def _tell_them(request: Request) -> None:
         from kith.settings import AGENT_DB_PATH
 
         conversation_id = session_context.current()
-        if not conversation_id:
+        if not conversation_id or request is None:
             return
+        said = (
+            f"While you were away I wanted to {request.kind} {request.what}, and couldn't. "
+            f"I carried on without it."
+            if unattended
+            else f"I need your say-so before I can {request.kind} {request.what}."
+        )
         repo.messages.add_message(
             AGENT_DB_PATH,
-            f"I need your say-so before I can {request.kind} {request.what}.",
+            said,
             link=f"/chat/{conversation_id}",
             kind="asked",
         )
