@@ -8,9 +8,7 @@ import {
   unstable_memoizeMarkdownComponents as memoizeMarkdownComponents,
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown";
-import remarkGfm from "remark-gfm";
-
-import { remarkBr } from "@/lib/remark-br";
+import { MARKDOWN_PLUGINS, MARKDOWN_REHYPE } from "@/lib/markdown-plugins";
 import { type FC, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
@@ -33,7 +31,7 @@ const byLanguage = {
 const MarkdownTextImpl = () => {
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={[remarkGfm, remarkBr]}
+      remarkPlugins={MARKDOWN_PLUGINS} rehypePlugins={MARKDOWN_REHYPE}
       className="aui-md"
       components={defaultComponents}
       componentsByLanguage={byLanguage}

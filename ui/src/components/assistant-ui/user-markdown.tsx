@@ -16,8 +16,8 @@
 
 import type { FC } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useAuiState } from "@assistant-ui/react";
+import { MARKDOWN_PLUGINS, MARKDOWN_REHYPE } from "@/lib/markdown-plugins";
 
 export const UserMarkdownText: FC = () => {
   const text = useAuiState((s) => (s.part.type === "text" ? s.part.text : ""));
@@ -25,7 +25,7 @@ export const UserMarkdownText: FC = () => {
   return (
     <div className="kith-user-markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={MARKDOWN_PLUGINS} rehypePlugins={MARKDOWN_REHYPE}
         components={{
           // Links open outward; everything else is styled from `index.css`, where the rules can
           // sit next to the composer's own and be kept honest against them.

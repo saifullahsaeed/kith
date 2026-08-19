@@ -2,19 +2,18 @@ import { memo } from "react";
 import type { ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
 
-import { remarkBr } from "@/lib/remark-br";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
 import { linkTarget, useFileViewer } from "@/lib/files";
 import { CodeBlock } from "./code-block";
+import { MARKDOWN_PLUGINS, MARKDOWN_REHYPE } from "@/lib/markdown-plugins";
 
 /* ── Markdown renderer (react-markdown + gfm + highlighted code) ─────────── */
 
 export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className="text-sm leading-relaxed break-words">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBr]} components={MD}>
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} rehypePlugins={MARKDOWN_REHYPE} components={MD}>
         {children}
       </ReactMarkdown>
     </div>
@@ -33,7 +32,7 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
  */
 export const MarkdownInline = memo(function MarkdownInline({ children }: { children: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBr]} components={MD_INLINE}>
+    <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} rehypePlugins={MARKDOWN_REHYPE} components={MD_INLINE}>
       {children}
     </ReactMarkdown>
   );
