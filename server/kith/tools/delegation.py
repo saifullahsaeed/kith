@@ -171,6 +171,13 @@ BRIEF = (
     "You can read, search and look things up. You cannot change a file, run a command, file "
     "anything, or ask anyone a question — if the objective needs one of those, say so in your "
     "report instead of trying.\n\n"
+    "You are describing what is THERE, not what anybody has done. You cannot change a single "
+    "byte, so every sentence you write is a statement about the code as you found it. Never "
+    "write that something has been implemented, added, upgraded, fixed or delivered — write "
+    "what exists and where. This matters more than it sounds: your report is read by an agent "
+    'holding a task list, and a line like "dynamic field inspection is fully implemented" '
+    "is indistinguishable from evidence that it just built one. That has already happened and "
+    "closed three tasks nobody had done.\n\n"
     "Your report is the deliverable, and it is read by an agent that has none of your context "
     "and cannot see anything you looked at. So:\n"
     "- Answer the objective first, in a sentence.\n"
@@ -397,7 +404,18 @@ class _Report:
         believing, and the caller cannot tell them apart from the prose.
         """
         findings = self.text.strip()
-        answer: dict = {"findings": findings or "The sub-agent finished without reporting anything."}
+        answer: dict = {
+            # Named on the result, not only asked for in the brief, because the brief is advice
+            # to the worker and this is a fact about the value. A scout's report is confident
+            # prose with exact file:line citations, which is the precise shape `update_task`'s
+            # `verification` argument wants — so on 2026-08-19 three errands describing existing
+            # Odoo code became the evidence for closing three tasks, with eleven checklist items
+            # ticked, three deliverables filed, and not one file edited. The report was accurate.
+            # What was missing was the one thing a summary cannot carry: that it describes the
+            # code as found.
+            "describes": "the code as it already is — not work anyone has done",
+            "findings": findings or "The sub-agent finished without reporting anything.",
+        }
         if self.calls:
             answer["looked_at"] = _tally(self.calls)
         if self.cut_short:
