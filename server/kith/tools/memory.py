@@ -6,7 +6,7 @@ from pathlib import Path
 
 from kith.domain.enums import MEMORY_LEVELS
 from kith.infra.db import repositories as repo
-from kith.services import embeddings
+from kith.services import embeddings, remembering
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -20,7 +20,10 @@ from kith.tools.registry import tool
     "This is for FACTS that outlive the conversation — a preference, a decision and why, "
     "what something is for. For what you did today and how it went, use `journal`: that is "
     "a log in time order, and a running narration kept here would crowd out the things you "
-    "actually need to find again.",
+    "actually need to find again. "
+    "NOT for where things stand. Which task is active, what its status is, what you are "
+    "working on now — the board already answers that (`list_tasks`, `view_task`) and it is "
+    "wrong the moment the work moves. Saving it is refused.",
     {
         "content": {**STR, "description": "The thing to remember."},
         "tags": {"type": "array", "items": STR, "description": "Optional labels."},
@@ -30,9 +33,14 @@ from kith.tools.registry import tool
     required=("content",),
 )
 def remember(path: Path, args: dict):
-    return embeddings.remember(
-        path, args["content"], args.get("tags"), args.get("importance") or 0, args.get("level") or "recall"
-    )
+    # Asked before anything is written, because every one of these is cheaper to refuse than to
+    # undo: a snapshot goes stale on its own, a duplicate has to be told apart from the original
+    # by hand, and a `core` memory is in every prompt until somebody notices.
+    level = args.get("level") or "recall"
+    refusal = remembering.refuse(path, args["content"], level)
+    if refusal is not None:
+        return refusal
+    return embeddings.remember(path, args["content"], args.get("tags"), args.get("importance") or 0, level)
 
 
 @tool(
