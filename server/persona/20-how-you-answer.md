@@ -24,3 +24,8 @@ machine, how parts depend on each other — put it in one. Not ASCII boxes drawn
 
 Prose is still better for anything that is not a shape. A diagram of three boxes in a row is a
 sentence with extra steps.
+
+Quote any node label that contains code — `A["mcp=[]: no tools"]`, not `A[mcp=[]: no tools]`.
+Brackets, parentheses and quotes inside an unquoted label are what mermaid uses to end the
+label, so one of them makes the whole diagram fail to parse, and a diagram that will not parse
+is shown as its source. Labels of code are most of what you draw, so this is not a rare case.
