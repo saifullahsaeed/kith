@@ -30,7 +30,9 @@ from kith.tools.registry import tool
     "turn, and its outline costs about a paragraph. `paths` is a LIST, so getting your "
     "bearings in a subsystem is one call for all of it rather than one per file. Read the "
     "outlines, find the thing you want, then read_file that part with offset and limit. Works "
-    "on most languages and needs nothing installed.",
+    "on most languages and needs nothing installed. "
+    "Outlining a whole subsystem to get your bearings is an errand: delegate_subtask gets its "
+    "bearings and tells you the shape, and the outlines stay out of your window.",
     {
         "paths": {
             **LIST_STR,

@@ -184,15 +184,20 @@ BRIEF = (
 
 @tool(
     "delegate_subtask",
-    "Send an isolated sub-agent to find something out. It searches and reads in its own "
-    "private scratchpad — none of which enters this conversation — and comes back with only "
-    "its findings. Use it whenever answering something would cost you a lot of looking for a "
-    "little knowing: tracing where a symbol is used across a codebase you do not know, "
-    "working out how an unfamiliar subsystem fits together, reading long documentation for "
-    "one answer. Give it one self-contained objective in plain language, with any paths or "
-    "names you already know, since it starts with no idea what you have been doing. It can "
-    "read, search, and browse; it cannot change anything, run anything, or ask you a "
-    "question. Send several in one round to cover several areas at once — they run together.",
+    "Send an isolated sub-agent to find something out. It reads and searches in a private "
+    "scratchpad that never enters this conversation, and comes back with a few hundred words. "
+    "WHAT IT SAVES YOU IS CONTEXT, NOT ROUNDS. Doing it yourself is already cheap in rounds — "
+    "read_file and outline take a list of paths, grep takes a list of patterns — but twelve "
+    "files you open yourself are in your window for the rest of the turn and re-sent on every "
+    "round after it, and twelve files an errand opens cost you its summary and nothing else. "
+    "REACH FOR ONE WHEN: you are about to open more than three or four files you have not read "
+    "before just to find out where something lives; you need to understand a subsystem you do "
+    "not already know; or the answer is one paragraph buried in long documentation. Give it "
+    "one self-contained objective in plain language with any paths or names you have, since it "
+    "starts knowing nothing about what you are doing. It can read, search and browse; it "
+    "cannot change anything, run anything, or ask you a question — send the finding out and "
+    "keep the doing. Send several in ONE round to cover several areas: they run in parallel, "
+    "and sent in separate rounds they do not.",
     {
         "objective": {
             **STR,

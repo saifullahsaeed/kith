@@ -71,7 +71,10 @@ def shell(path: Path, args: dict):
     "get one function or class by name, or grep to find the line you want and read a window "
     "with `offset`/`limit`; those three describe a window into ONE file, so they only apply "
     "when you ask for one. A read without a range returns the first 400 lines and tells you "
-    "if there's more.",
+    "if there's more. "
+    "If you are about to list four files you have not read before just to work out where "
+    "something lives, that is an errand: delegate_subtask reads them somewhere else and hands "
+    "you the answer, so your window ends up holding the answer instead of the files.",
     {
         "paths": {
             **LIST_STR,
@@ -464,6 +467,9 @@ def list_files(path: Path, args: dict):
     "file:line numbers — your way to find the needle without loading whole "
     "haystacks into your head. Then read_file just that slice. Supports a glob "
     "filter like '*.py'. "
+    "Grepping around a codebase you do not know, to build a picture rather than to find a "
+    "line you already expect, is an errand: delegate_subtask does that searching without any "
+    "of it landing here. "
     "If the thing you are looking for is the NAME of a function, class or method, use "
     "find_symbol instead: this matches characters, so it also returns the word in comments, "
     "in strings, inside longer names, and every unrelated variable that happens to share it — "
