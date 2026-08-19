@@ -153,6 +153,24 @@ function ToolFallbackTrigger({
   const needsAction = statusType === "requires-action";
 
   const call = describeCall(toolName, args);
+  // One definition of the line, used both as the label and as the shimmer laid over it.
+  const line = (
+    <>
+      {call.verb}
+      {call.subject ? (
+        <>
+          {" "}
+          {/* Mono for the subject: a path, a command or a query is scannable that way, and
+              obviously a literal rather than part of the sentence. */}
+          <span className="text-foreground/80 font-mono">{call.subject}</span>
+        </>
+      ) : null}
+      {/* The whole justification for collapsing by default. Without this the closed row says
+          the same thing twenty times over and you have to open every one to find the
+          failure. With it, a turn is skimmable. */}
+      {summary ? <span className="text-muted-foreground/70"> · {summary}</span> : null}
+    </>
+  );
   // The kind icon is the resting state; a status that is worth noticing takes the slot.
   const Icon = isRunning || isFailed || needsAction ? statusIconMap[statusType] : call.icon;
   const tone = isFailed
@@ -192,28 +210,26 @@ function ToolFallbackTrigger({
           isCancelled && "line-through",
         )}
       >
-        <span>
-          {call.verb}
-          {call.subject ? (
-            <>
-              {" "}
-              {/* Mono for the subject: a path, a command or a query is scannable that way,
-                  and obviously a literal rather than part of the sentence. */}
-              <span className="text-foreground/80 font-mono">{call.subject}</span>
-            </>
-          ) : null}
-          {/* The whole justification for collapsing by default. Without this the closed row
-              says the same thing twenty times over and you have to open every one to find
-              the failure. With it, a turn is skimmable. */}
-          {summary ? <span className="text-muted-foreground/70"> · {summary}</span> : null}
-        </span>
+        <span>{line}</span>
+        {/* The shimmer is the same line again, drawn on top with its glyphs used as a mask.
+            That only reads as one shimmering line if the two are laid out identically — and
+            they were not. This rendered `callText(call)`, a flat string, so the subject came
+            out in the body font while the line underneath sets it in mono. Same words, two
+            different sets of glyph positions, one on top of the other: for the whole time a
+            tool was running you saw its name ghosted and smeared, and it snapped clean the
+            instant the call returned and this unmounted. Measured, the overlay's text ran in
+            `ui-sans-serif` against the label's `ui-monospace`.
+
+            So it renders `line` — the identical element — and cannot drift again. The
+            transparent fill the effect needs is inherited, so the colours inside come out
+            masked rather than painted. */}
         {isRunning && (
           <span
             aria-hidden
             data-slot="tool-fallback-trigger-shimmer"
             className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 truncate motion-reduce:animate-none"
           >
-            {callText(call)}
+            {line}
           </span>
         )}
       </span>
