@@ -74,6 +74,14 @@ const LAST_CONVERSATION = "kith-conversation";
  * mounting and markdown-parsing the tail is what you are waiting for. */
 const WINDOW = 40;
 
+/** How long to hold the restored position against the thread settling after a remount. Long,
+ *  because the settling is: on an 80-turn conversation `scrollHeight` went 25,070 → 48,106 and
+ *  was still climbing at 900ms, which is where the first attempt gave up and left you near the
+ *  top of a thread you had been reading the middle of. Any input from you ends it early. */
+const RESTORE_MS = 2500;
+/** How long to wait before reading the scroll position on a freshly opened thread. */
+const SETTLE_MS = 600;
+
 /** The ready-state app: chat runtime, header, and the activity ("Work") panel.
  * Split out so its hooks only run once the backend is reachable. */
 export function Workspace({
@@ -110,6 +118,24 @@ export function Workspace({
    */
   const [timeline, setTimeline] = useState<StoredTurn[]>([]);
   const [shown, setShown] = useState(WINDOW);
+  /* Whether you are near the top of what is loaded — the only place "load earlier" means
+   * anything. It used to be on screen permanently, including at the bottom of the conversation,
+   * offering to fetch history in the one position where you have just arrived and are reading
+   * forwards. */
+  const [nearTop, setNearTop] = useState(false);
+  /* Which message you were looking at, across the remount that "load earlier" performs.
+   *
+   * Not a scroll offset. Distance-from-the-bottom was the first attempt and it drifts by
+   * thousands of pixels, because `content-visibility` placeholders are still measuring their
+   * real height long after the frame budget any restore loop can reasonably hold — measured,
+   * `scrollHeight` was still climbing past 2.5s. Nor a `data-message-id`: assistant-ui mints
+   * fresh ones on mount, and none of the ids visible before a load exist after it.
+   *
+   * What does survive is *ordinal*. Loading earlier prepends a known number of messages, so the
+   * message you were reading is the same message `shift` places further down the list. Pinning
+   * an element is immune to anything settling above it, because its position is recomputed each
+   * time rather than assumed. */
+  const anchor = useRef<{ index: number; shift: number; offset: number } | null>(null);
   const [threadKey, setThreadKey] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   // What this session is working on. Held here rather than fetched inside the bar because
@@ -214,10 +240,100 @@ export function Workspace({
   const loadEarlier = useCallback(() => {
     const next = Math.min(shown + WINDOW, timeline.length);
     if (next === shown) return;
+    // Remember which message you were reading before the thread is torn down; see `anchor`.
+    const grown = toThreadMessages(timeline.slice(-next));
+    const viewport = document.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
+    anchor.current = null;
+    if (viewport) {
+      const top = viewport.getBoundingClientRect().top;
+      const messages = [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")];
+      // The first message still on screen — the one you are actually reading, rather than the
+      // one scrolled off above it.
+      const index = messages.findIndex((m) => m.getBoundingClientRect().bottom > top);
+      if (index >= 0) {
+        anchor.current = {
+          index,
+          shift: grown.length - messages.length,
+          offset: messages[index].getBoundingClientRect().top - top,
+        };
+      }
+    }
     setShown(next);
-    setResumed(toThreadMessages(timeline.slice(-next)));
+    setResumed(grown);
     setThreadKey((n) => n + 1);
   }, [shown, timeline]);
+
+  /* Watch the thread's own scroll box: whether you are near the top, and putting you back where
+   * you were after "load earlier" tore the thread down and built a longer one.
+   *
+   * Both live here rather than in `Thread` because the button and the windowing state are here,
+   * and the viewport is reachable by its slot.
+   *
+   * "Near the top" is a screenful rather than a pixel count. A fixed threshold does not survive
+   * this thread: `content-visibility` placeholders measure their real height as you arrive, and
+   * asking for `scrollTop = 0` settled at 531 once they had — under any tight constant, the
+   * offer of older messages was hidden at the exact moment you had scrolled up to look for it.
+   *
+   * The restore holds a *message* at the place on screen it already occupied, on a frame loop,
+   * because it is competing with the library's scroll-to-bottom and with that same settling.
+   * Pinning an element rather than an offset is what makes it exact: everything above it can
+   * change height and the answer is still recomputed from where the element actually is.
+   */
+  useEffect(() => {
+    const viewport = document.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
+    if (!viewport) return;
+
+    const look = () => setNearTop(viewport.scrollTop < viewport.clientHeight);
+    viewport.addEventListener("scroll", look, { passive: true });
+
+    const held = anchor.current;
+    anchor.current = null;
+    let frame = 0;
+    let timer = 0;
+    let done = false;
+    const stop = () => {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(frame);
+      look();
+    };
+
+    if (!held) {
+      // A fresh conversation opens at the bottom; only read the position once the library's own
+      // scroll has run, or the pill flashes on open.
+      timer = window.setTimeout(look, SETTLE_MS);
+    } else {
+      const until = performance.now() + RESTORE_MS;
+      const pin = () => {
+        if (done) return;
+        const messages = viewport.querySelectorAll<HTMLElement>("[data-message-id]");
+        const mine = messages[held.index + held.shift];
+        if (mine) {
+          const drift =
+            mine.getBoundingClientRect().top - viewport.getBoundingClientRect().top - held.offset;
+          if (Math.abs(drift) > 1) viewport.scrollTop += drift;
+        }
+        if (performance.now() < until) frame = requestAnimationFrame(pin);
+        else stop();
+      };
+      frame = requestAnimationFrame(pin);
+      // Any input from you ends it: a loop that keeps re-seizing the scroll is worse than the
+      // jump it was fixing.
+      for (const event of ["wheel", "touchstart", "keydown"] as const) {
+        window.addEventListener(event, stop, { passive: true, once: true });
+      }
+    }
+
+    return () => {
+      viewport.removeEventListener("scroll", look);
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+      done = true;
+      for (const event of ["wheel", "touchstart", "keydown"] as const) {
+        window.removeEventListener(event, stop);
+      }
+    };
+  }, [threadKey, conversationId]);
 
   const newConversation = useCallback(() => {
     setConversationId("");
@@ -519,7 +635,7 @@ export function Workspace({
                           "jump to latest" chip does at the other end.
                           `pointer-events-none` on the strip so the full-width row cannot
                           intercept anything; only the pill itself is clickable. */}
-                      {timeline.length > shown ? (
+                      {timeline.length > shown && nearTop ? (
                         <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
                           <button
                             type="button"
