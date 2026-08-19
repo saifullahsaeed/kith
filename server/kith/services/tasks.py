@@ -29,6 +29,11 @@ from kith.services import project_binding
 #: which is empty outside a turn — the honest answer for a tool called from a script.
 FILED_THIS_TURN = "tasks_filed_this_turn"
 
+#: Tasks whose *plan* was written in this turn — today, the tasks a checklist item was added to.
+#: Separate from `FILED_THIS_TURN` because they are different doors into the same room and only
+#: one of them was locked. See `_verify_approvable`.
+PLANNED_THIS_TURN = "tasks_planned_this_turn"
+
 #: How much of a brief has to exist before "done" is believable.
 _VERIFY_MIN_BRIEF = 80
 
@@ -178,7 +183,33 @@ def _verify_approvable(path: Path, task_id: int) -> dict | None:
     # the turn after the one that wrote it. Outside a turn — a test, a script — `turn_notes()` is
     # an empty throwaway and this cannot fire, which is right: there is nobody to have asked.
 
-    if int(task_id) in session_context.turn_notes().get(FILED_THIS_TURN, ()):
+    # Filed this turn, or *planned* this turn. The second was missing and it is the door that got
+    # used. Measured on tasks #110 and #111 on 2026-08-19: both rows already existed, so
+    # `FILED_THIS_TURN` did not fire — and in one turn he added their checklists, wrote their
+    # plans, and moved each one planning -> approved -> working in three consecutive rounds,
+    # then closed them. Three tasks marked done in eight minutes with no file edited.
+    #
+    # The proxy was right and only half-wired. This function's own note says it: "'Has a person
+    # seen it' cannot be read from here, but 'has a turn passed' can, and it is the honest
+    # proxy: the plan is handed over in chat, so the earliest anyone could have answered is the
+    # turn after the one that wrote it." That applies to the plan, not to the row the plan is
+    # attached to. A task filed last week whose checklist was written ninety seconds ago is
+    # exactly as unseen as one filed in this turn.
+    notes = session_context.turn_notes()
+    if int(task_id) in notes.get(PLANNED_THIS_TURN, ()):
+        return {
+            "blocked": (
+                "You wrote this task's plan in this same turn, so nobody has had a chance to "
+                "read it yet — the task being older than the plan does not make the plan seen."
+            ),
+            "next": (
+                "Leave it in 'planning' and say the plan and the checklist back to them in chat. "
+                "Approving is the one decision about a task that is theirs. If the work is small "
+                "and obvious enough not to need any of this, it did not need a plan either: put "
+                "it straight into 'working' and do it."
+            ),
+        }
+    if int(task_id) in notes.get(FILED_THIS_TURN, ()):
         return {
             "blocked": "You filed this task in this same turn, so nobody has had a chance to read it yet.",
             "next": (

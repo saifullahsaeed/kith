@@ -11,6 +11,7 @@ from kith.kernel import session_context
 from kith.services import board_sync, project_binding
 from kith.services.tasks import (
     FILED_THIS_TURN,
+    PLANNED_THIS_TURN,
     _mirror_brief,
     _out_of_scope,
     _reopen_if_finished,
@@ -284,6 +285,11 @@ def view_task(path: Path, args: dict):
 )
 def add_checklist_item(path: Path, args: dict):
     made = repo.tasks.add_checklist_item(path, args["id"], args["text"])
+    # Noted for `_verify_approvable`. Half of what gets approved is the checklist, so writing one
+    # is the moment the plan becomes something a person has not seen yet — regardless of how old
+    # the task row is. Recorded here rather than inferred from a timestamp because "this turn" is
+    # not a duration: a turn can run for an hour, and two minutes ago is still inside it.
+    session_context.turn_notes().setdefault(PLANNED_THIS_TURN, set()).add(int(args["id"]))
     _mirror_brief(path, args["id"])
     return made
 
