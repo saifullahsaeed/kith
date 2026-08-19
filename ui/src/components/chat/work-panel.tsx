@@ -3,6 +3,7 @@ import { Activity, PanelRightClose } from "lucide-react";
 import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { BackgroundTasks } from "@/components/chat/background-tasks";
 import { ContextSection } from "@/components/chat/context-section";
+import { Errands, isErrandLine } from "@/components/chat/errands";
 import { Button } from "@/components/ui/button";
 import { formatTokens } from "@/lib/tokens";
 import type { useActivity } from "@/hooks/use-activity";
@@ -20,6 +21,8 @@ type Activity = ReturnType<typeof useActivity>;
  * Gone, and what is left is the three things a conversation genuinely cannot say:
  *
  * * **what he is working on**, and how far through its checklist;
+ * * **what a sub-agent is finding out for him** — the one tool feed that is not a second copy,
+ *   because a worker's searching is discarded by design and reaches the thread nowhere;
  * * **what is in his head**, itemised, with the button that shrinks it;
  * * **what is running in the background** while he does something else.
  *
@@ -41,7 +44,7 @@ export function WorkPanel({
   const { status, activity: lines } = activity;
   // Rounds this session, counted off the activity lines. The feed used to group them into blocks and
   // count those; there are no blocks any more.
-  const steps = lines.filter((item) => !isControlLine(item)).length;
+  const steps = lines.filter((item) => !isControlLine(item) && !isErrandLine(item)).length;
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
   // Whether the counters row has anything to say. It used to render regardless and fill itself with
   // "no steps yet" — an empty bar is better removed than captioned.
@@ -80,6 +83,11 @@ export function WorkPanel({
       {/* What he is on right now, and how far through it. It lived above the composer, which put
           "what is he doing" in the middle of the thing you type into. */}
       <WorkingOn conversationId={conversationId} />
+
+      {/* Who he has sent to find something out, and how far they have got. Directly under
+          what he is working on, because while an errand is out it *is* what is happening —
+          the thread shows one spinning row and nothing else until it comes back. */}
+      <Errands lines={lines} conversationId={conversationId} />
 
       {/* What is in his head, itemised, and the Fold button. */}
       <ContextSection conversationId={conversationId} />

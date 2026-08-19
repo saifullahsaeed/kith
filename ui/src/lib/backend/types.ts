@@ -84,6 +84,15 @@ export type BackendEvent =
    * model, the model acted on them, and the one participant who never saw them was the person
    * who typed them. */
   | { type: "steered"; text: string }
+  /* An errand sent with `wait: false` has come back, at the round its findings went into the
+   * prompt. Drawn where it landed for the same reason a steer is: it entered the conversation
+   * between two of his rounds, not before the turn began, and putting it anywhere else would
+   * misrepresent what he knew when. */
+  | { type: "errand_back"; text: string }
+  /* He has nothing left to say but an errand is still out, so the turn is waiting rather than
+   * ending on work it asked for. Without this the wait is a pause with no explanation, which is
+   * indistinguishable from a hang. */
+  | { type: "waiting_on_errands"; count: number }
   | { type: "conversation"; id: string }
   | { type: "error"; message: string }
   | { type: "done" };

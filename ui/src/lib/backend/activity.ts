@@ -28,12 +28,18 @@ export interface ActivityItem {
     | "error"
     | "status"
     | "tokens"
-    | "retrying";
+    | "retrying"
+    /** A sub-agent's own work — see `errand` below. */
+    | "errand";
   text: string;
   at: string;
   tokens?: { round: number; uncached: number; cached: number; out: number };
   tool?: string;
   args?: Record<string, string>;
+  /** Present on `errand` lines: which sub-agent this is, and where it has got to.
+   *  `running` opens one, `step` is a tool call inside it, `done` closes it. The id is what
+   *  keeps three scouts sent in the same round from reading as one confused list. */
+  errand?: { id: string; state: "running" | "step" | "done"; objective: string };
   /** Which session this line belongs to. Absent on the genuinely global lines — a status
    *  change — which every session shows, because they are about the machine rather than
    *  about one piece of work. */

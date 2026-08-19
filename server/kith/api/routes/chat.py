@@ -19,7 +19,7 @@ from kith.config import (
 )
 from kith.infra import permissions
 from kith.infra.db import repositories as repo
-from kith.kernel import clock, live_turns, session_context
+from kith.kernel import clock, live_turns, session_context, stopping
 from kith.llm import ledger
 from kith.llm.budget import SEED_CHARS_PER_TOKEN, message_chars
 from kith.schemas import (
@@ -52,39 +52,16 @@ from kith.settings import AGENT_DB_PATH
 #: four helpers below rather than directly, because every one of them turns on the identity of
 #: the event rather than on the key — see `_disarm` for the bug that reads as "Stop does
 #: nothing".
-_RUNNING: dict[str, threading.Event] = {}
-#: Held across read-then-write on `_RUNNING`. The turns contending for it are on separate
-#: threads by design, so "check whether this is still mine, then remove it" has to be one step.
-_RUNNING_LOCK = threading.Lock()
-
-
-def _arm(conversation_id: str) -> threading.Event:
-    """The switch for a turn about to start, and the one it must read for the rest of its life.
-
-    Returned rather than looked up again later. A turn that re-reads `_RUNNING[id]` between
-    events is reading whichever turn started most recently, which is how one click stopped two.
-    """
-    event = threading.Event()
-    with _RUNNING_LOCK:
-        _RUNNING[conversation_id] = event
-    return event
-
-
-def _disarm(conversation_id: str, event: threading.Event) -> None:
-    """Forget a finished turn's switch — but only if it is still the current one.
-
-    The `if` is the whole point. An unconditional `pop` meant the first turn to *finish*
-    deleted the entry a still-running turn was registered under, and Stop then answered
-    `{"stopping": false}` for a turn visibly in progress.
-    """
-    with _RUNNING_LOCK:
-        if _RUNNING.get(conversation_id) is event:
-            del _RUNNING[conversation_id]
-
-
-def _current(conversation_id: str) -> threading.Event | None:
-    with _RUNNING_LOCK:
-        return _RUNNING.get(conversation_id)
+#: The registry moved to `kernel/stopping.py`, and this name is kept as the alias the tests and
+#: this module already reach for. It moved because a *tool* has to read it now: a sub-agent runs
+#: a whole second loop inside one tool call and the parent loop emits nothing while it does, so
+#: the between-events check below cannot fire and Stop did nothing for the length of an errand.
+#: A tool cannot import a route, so the switch went to where `session_context` and `live_turns`
+#: already live. What stays here is the decision to stop, which is the part that needs services.
+_RUNNING = stopping._RUNNING
+_arm = stopping.arm
+_disarm = stopping.disarm
+_current = stopping.current
 
 
 def _stop(conversation_id: str) -> bool:
@@ -104,13 +81,11 @@ def _stop(conversation_id: str) -> bool:
     merely being small: by the time anything the release woke can reach a check, the flag it
     reads is already set.
     """
-    event = _current(conversation_id)
-    if event is not None:
-        event.set()
+    was_running = stopping.stop(conversation_id)
     # Now nothing that wakes up can get past its next check, so it is safe to wake it.
     questions.release(conversation_id)
     permissions.release_waiting()
-    return event is not None
+    return was_running
 
 
 @api.get("/chat/<conversation_id>/question")

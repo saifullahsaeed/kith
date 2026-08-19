@@ -23,6 +23,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     asking,
     code,
     computer,
+    delegation,
     journal,
     memory,
     outreach,

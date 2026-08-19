@@ -23,6 +23,7 @@ import {
   Heart,
   ListChecks,
   NotebookPen,
+  Radar,
   Puzzle,
   Search,
   Send,
@@ -68,6 +69,10 @@ export const GROUP: Record<string, WorkKind> = {
   search: { icon: Search, tone: "text-sky-400/70", noun: "searches", one: "search" },
   tools: { icon: Wrench, tone: "text-muted-foreground/70", noun: "tools", one: "tool" },
   skills: { icon: Puzzle, tone: "text-kith/80", noun: "skills", one: "skill" },
+  // Its own kind rather than another "search". A run of six searches is him looking; one of
+  // these is a whole second agent's worth of looking that happened somewhere you cannot see,
+  // and collapsing the two into "7 searches" would hide exactly the part worth knowing about.
+  delegation: { icon: Radar, tone: "text-teal-400/80", noun: "errands", one: "errand" },
 };
 
 /**
@@ -132,7 +137,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   browse_page: { verb: "opened", of: "url", group: "web" },
   // the machine
   shell: { verb: "ran", of: "command", group: "shell" },
-  read_file: { verb: "read", of: "path", group: "files" },
+  read_file: { verb: "read", of: "paths", group: "files" },
   write_file: { verb: "wrote", of: "path", group: "files" },
   edit_file: { verb: "edited", of: "path", group: "files" },
   edit_files: { verb: "edited several files at once", group: "files" },
@@ -143,7 +148,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   start_process: { verb: "started", of: "name", group: "shell" },
   check_process: { verb: "checked on", of: "name", group: "shell" },
   stop_process: { verb: "stopped", of: "name", group: "shell" },
-  outline: { verb: "read the shape of", of: "path", group: "reading" },
+  outline: { verb: "read the shape of", of: "paths", group: "reading" },
   repo_map: { verb: "got his bearings in", of: "path", group: "reading" },
   find_symbol: { verb: "traced every use of", of: "name", group: "search" },
   install_language_support: { verb: "set up language support for", of: "confirm", group: "shell" },
@@ -155,10 +160,15 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   history: { verb: "looked back through his history", group: "reading" },
   delete_file: { verb: "put in the Trash", of: "path", group: "files" },
   list_files: { verb: "looked through", of: "path", group: "files" },
-  grep: { verb: "searched files for", of: "pattern", group: "search" },
+  grep: { verb: "searched files for", of: "patterns", group: "search" },
   // his own tools and skills
   read_skill: { verb: "opened the skill", of: "name", group: "skills" },
+  // sending someone else to look
+  delegate_subtask: { verb: "sent someone to find out", of: "objective", group: "delegation" },
 };
+
+/** What each plural argument used to be called, for reading back old tool calls. */
+const SINGULAR: Record<string, string> = { paths: "path", patterns: "pattern" };
 
 /** A tool nobody has written a phrase for: its name, made readable, never raw code. */
 function fallbackVerb(name: string): string {
@@ -190,8 +200,19 @@ function shortenShellCommand(command: string): string {
 export function describeCall(name: string, args?: Record<string, unknown>): DescribedCall {
   const entry = TOOL[name];
   const group = entry ? GROUP[entry.group] : undefined;
-  const raw = entry?.of ? args?.[entry.of] : undefined;
-  let subject = raw === undefined || raw === null ? "" : String(raw);
+  // Fall back to the singular the plural tools used to take. Old calls are replayed out of
+  // the transcript on every resumed turn, so a week-old conversation must not lose the one
+  // piece of information on its rows — `read a.py` degrading to a bare `read`.
+  const raw = entry?.of ? (args?.[entry.of] ?? args?.[SINGULAR[entry.of] ?? ""]) : undefined;
+  // A list reads as a list, not as `["a.py","b.py"]`. Three is the point at which naming them
+  // all stops being an aid and starts being the reason the row wraps.
+  let subject = Array.isArray(raw)
+    ? raw.length > 3
+      ? `${raw.slice(0, 3).map(String).join(", ")} +${raw.length - 3} more`
+      : raw.map(String).join(", ")
+    : raw === undefined || raw === null
+      ? ""
+      : String(raw);
   if (name === "shell" && subject) subject = shortenShellCommand(subject);
   return {
     verb: entry?.verb ?? fallbackVerb(name),

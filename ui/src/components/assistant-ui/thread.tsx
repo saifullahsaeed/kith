@@ -33,7 +33,7 @@ import { steerTurn } from "@/lib/commands";
 import { currentConversation, dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
 import { time, when } from "@/lib/dates";
-import { STEER_PART, USAGE_PART } from "@/lib/backend/adapter";
+import { ERRAND_PART, STEER_PART, USAGE_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
 import { summariseRun } from "@/lib/tool-language";
 import { cn } from "@/lib/utils";
@@ -1021,6 +1021,13 @@ const AssistantMessage: FC = () => {
                   const said = (part.data as { text?: string } | undefined)?.text ?? "";
                   return said ? <SteeredIn text={said} /> : null;
                 }
+                // An errand he sent away, arriving back. Same placement rule as a steer and
+                // the opposite voice: that one is his person interrupting, this is a result he
+                // asked for turning up late.
+                if (part.name === ERRAND_PART) {
+                  const found = (part.data as { text?: string } | undefined)?.text ?? "";
+                  return found ? <ErrandBack text={found} /> : null;
+                }
                 return part.dataRendererUI;
               case "indicator":
                 // The bare dot means "working". When the turn can say *what* it is working on
@@ -1058,6 +1065,20 @@ const AssistantMessage: FC = () => {
  * that arrived after four tool calls did not influence those four, and showing it above them
  * would claim it did.
  */
+/** What an errand came back with, drawn at the round it landed.
+ *
+ *  Teal, matching the errand's row in the Work panel and its icon in the tool feed, so the
+ *  three places one delegation shows up read as the same thing. Muted rather than prominent:
+ *  it is raw material he is about to use, not his answer to you. */
+const ErrandBack: FC<{ text: string }> = ({ text }) => (
+  <div className="my-2 rounded-lg border-s-2 border-teal-400/30 bg-teal-400/[0.06] px-3 py-2">
+    <div className="mb-0.5 text-[10px] font-medium tracking-wide text-teal-400/80 uppercase">
+      an errand came back
+    </div>
+    <p className="text-foreground/75 text-sm whitespace-pre-wrap">{text}</p>
+  </div>
+);
+
 const SteeredIn: FC<{ text: string }> = ({ text }) => (
   <div className="border-kith/30 bg-kith-soft/40 my-2 rounded-lg border-s-2 px-3 py-2">
     <div className="text-kith/80 mb-0.5 text-[10px] font-medium tracking-wide uppercase">

@@ -25,6 +25,8 @@ type Piece =
   | { kind: "text"; text: string }
   /** Something you said into the running turn, at the point in the stream it landed. */
   | { kind: "steered"; text: string }
+  /** An errand's findings, at the round they went into the prompt. */
+  | { kind: "errand"; text: string }
   | { kind: "tool"; tool: ToolPart };
 
 /** Name on the data part carrying a turn's token count, shared with the renderer. */
@@ -32,6 +34,9 @@ export const USAGE_PART = "round-usage";
 
 /** Name on the data part carrying something you said into the running turn. */
 export const STEER_PART = "steered-in";
+
+/** Name on the data part carrying what an errand came back with. */
+export const ERRAND_PART = "errand-back";
 
 /**
  * Attempts at *starting* a turn — and only at starting one.
@@ -269,6 +274,12 @@ let retried = 0;
             },
           ];
         }
+        if (piece.kind === "errand") {
+          // Its own part, drawn where it arrived. Not folded into his prose: he did not write
+          // it, and a finding that reads as something he already knew hides the fact that it
+          // turned up three rounds after he asked for it.
+          return [{ type: "data", name: ERRAND_PART, data: { text: piece.text } }];
+        }
         if (piece.kind === "steered") {
           // Its own part type rather than text, so the thread can draw it as something you
           // said rather than something he did. Placed where it actually arrived, which is the
@@ -341,6 +352,13 @@ let retried = 0;
           context = event.context;
         } else if (event.type === "steered") {
           pieces.push({ kind: "steered", text: event.text });
+        } else if (event.type === "errand_back") {
+          pieces.push({ kind: "errand", text: event.text });
+        } else if (event.type === "waiting_on_errands") {
+          // Nothing to draw in the thread — the Work panel is already showing which errands
+          // are still out, and a second "still waiting" line in the message would be the
+          // duplicate feed all over again. Consumed so it does not fall through to `done`.
+          continue;
         } else if (event.type === "compacting") {
           // He is folding to make room. Worth showing because it costs a model call and takes
           // a moment, so an unexplained pause looks like a hang — and when it happens before

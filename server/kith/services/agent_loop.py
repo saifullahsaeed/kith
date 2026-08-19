@@ -17,6 +17,7 @@ import re
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -25,10 +26,10 @@ from typing import Any
 from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
 from kith.domain.tooling import ToolHost
-from kith.kernel import session_context
+from kith.kernel import session_context, stopping
 from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
-from kith.services import compaction, tuning
+from kith.services import compaction, errands, tuning
 from kith.services.turn import frozen
 from kith.services.turn.history import (
     _FOLD_ABOVE_SHARE,
@@ -47,7 +48,22 @@ from kith.services.turn.meter import _record, measured
 # of side effects, and indifferent to what the others are doing. Everything else —
 # every database write, every shell command, anything touching his files — stays
 # strictly serial, because with those the order *is* the meaning.
-_PARALLEL_SAFE = frozenset({"web_search", "fetch_url", "browse_page", "search_sources"})
+_PARALLEL_SAFE = frozenset(
+    {
+        "web_search",
+        "fetch_url",
+        "browse_page",
+        "search_sources",
+        # A sub-agent clears the same bar, and it is the one tool where clearing it is the
+        # whole point. It is network-bound to the exclusion of everything else — its cost is
+        # its own model calls — it is read-only by construction (`tools/delegation.py` hands
+        # it a set that cannot write, run, file or ask), and two of them share nothing but the
+        # files they read. Three scouts sent at one subsystem each in a single round is the
+        # thing this makes possible; serialised they are three times the wall-clock for the
+        # same answer.
+        "delegate_subtask",
+    }
+)
 
 # Tools whose entire contract is "call again with the same arguments to check on it" — see
 # `run_tests`'s own tool description, and `check_process`, which is watching something
@@ -509,6 +525,7 @@ def stream_agent(
     allow: set[str] | None = None,
     conversation_id: str = "",
     steer: Callable[[], str] | None = None,
+    landing_reserve: int | None = None,
 ) -> Iterator[dict]:
     """Run the tool loop for one turn.
 
@@ -523,17 +540,25 @@ def stream_agent(
     """
 
     with session_context.a_turn():
-        yield from _run_turn(
-            messages,
-            config,
-            host,
-            agent_db_path,
-            tool_host,
-            max_rounds=max_rounds,
-            allow=allow,
-            conversation_id=conversation_id,
-            steer=steer,
-        )
+        try:
+            yield from _run_turn(
+                messages,
+                config,
+                host,
+                agent_db_path,
+                tool_host,
+                max_rounds=max_rounds,
+                allow=allow,
+                conversation_id=conversation_id,
+                steer=steer,
+                landing_reserve=landing_reserve,
+            )
+        finally:
+            # Every way a turn ends — finished, errored, stopped, or the reader gave up on the
+            # generator — clears its errand board. An answer that arrives after the turn that
+            # asked has no question in front of it, and keeping it would put a finding into the
+            # *next* turn's prompt out of nowhere.
+            errands.forget(conversation_id)
 
 
 def _run_turn(
@@ -546,6 +571,7 @@ def _run_turn(
     allow: set[str] | None = None,
     conversation_id: str = "",
     steer: Callable[[], str] | None = None,
+    landing_reserve: int | None = None,
 ) -> Iterator[dict]:
     """Run the tool loop.
 
@@ -568,7 +594,7 @@ def _run_turn(
     # the budget and reserve, the routing, the MCP snapshot and the ledger's name sets. Each is
     # read once and never re-read, and `services/turn/frozen.py` holds the reasons why. Unpacked
     # into locals here rather than reached through, so the round loop below reads as it did.
-    turn = frozen.begin(config, agent_db_path, conversation_id, max_rounds)
+    turn = frozen.begin(config, agent_db_path, conversation_id, max_rounds, landing_reserve)
     config, room, offload_result = turn.config, turn.room, turn.offload
     budget, reserve, landing_effort = turn.budget, turn.reserve, turn.landing_effort
     routing = turn.routing
@@ -610,6 +636,14 @@ def _run_turn(
             if said:
                 convo.append({"role": "user", "content": said})
                 yield {"type": "steered", "text": said}
+
+        # And anything an errand has come back with since the last round — see
+        # `services/errands.py`. The same boundary as a steer and for the same reason, but not
+        # the same channel: a steer is his person changing the subject, and this is a result he
+        # asked for arriving late. Two sources, one moment.
+        for finding in errands.collect(conversation_id):
+            convo.append({"role": "user", "content": finding})
+            yield {"type": "errand_back", "text": finding}
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:
@@ -758,6 +792,37 @@ def _run_turn(
             # made no sense: "I haven't been researching anything this turn."
             #
             # Nothing runs unattended now, so the case it existed for cannot occur.
+            #
+            # Unless he sent an errand and has not heard back. That is work this turn asked
+            # for, so ending on it would throw it away — and worse, would throw it away
+            # invisibly, since a background errand's findings are not in the transcript. So
+            # the turn waits, and then goes round again with what came back in front of it.
+            #
+            # Bounded, and it reads the stop switch, so this cannot be the thing that makes
+            # Stop feel broken. If the wait times out, the loop comes back here next round with
+            # nothing new and ends for real — a hung errand delays a turn once, not forever.
+            #
+            # `has_ready` is asked FIRST, and asking it second is a bug this shipped with. The
+            # drain that puts findings into the prompt runs at the *top* of a round; an errand
+            # that reports while that round's own model call is streaming is therefore back,
+            # collected by nobody, and no longer "outstanding" — so the check below saw zero,
+            # the turn ended, and `forget` in the finally dropped it.
+            #
+            # Measured on the run that found it: three errands sent with `wait=false`, the next
+            # round wrote "their results will arrive automatically as they finish", all three
+            # finished while it was writing that sentence, and every one of them was thrown
+            # away. Three sub-agents' worth of model calls, paid for, gone — and the reply
+            # promising the findings was the last thing the turn ever said.
+            #
+            # The two conditions together are exhaustive: nothing ready and nothing out means
+            # the board really is drained, and there is no third state.
+            if errands.has_ready(conversation_id):
+                continue
+            if errands.outstanding(conversation_id):
+                yield {"type": "waiting_on_errands", "count": errands.outstanding(conversation_id)}
+                errands.wait_for_all(conversation_id, stopped=lambda: stopping.asked_to_stop(conversation_id))
+                if errands.has_ready(conversation_id):
+                    continue
             return
 
         # Record the assistant's tool-calling turn so the model has context.
@@ -813,13 +878,38 @@ def _run_turn(
                 # He asks for six searches at once and each takes seconds; run them
                 # together. Order of the *results* is still the order he asked in, so
                 # the transcript he reads back is unchanged.
+                #
+                # Each carries a copy of this thread's context, and without that a batched
+                # call runs as work belonging to nobody. `ThreadPoolExecutor` does not
+                # propagate context variables — a pool thread starts on the defaults — so
+                # `session_context.current()` inside one is `""`, which every reader of it
+                # treats as the honest answer for a script or a test. Measured: with a
+                # conversation set on this thread, two pooled calls both saw "".
+                #
+                # It cost nothing while the parallel set was four searches, none of which ask
+                # who is calling. It costs everything the moment one of them is a sub-agent:
+                # the workspace root, the project binding, the permission prompt's owner and
+                # the turn scratch are all read from there, so a scout in a pool thread would
+                # resolve relative paths against the wrong folder and its questions would
+                # surface under no conversation.
+                #
+                # Copied *here*, before the pool is handed anything, because here is the
+                # thread that has a context worth copying — a `copy_context()` evaluated
+                # inside the lambda would run on the pool thread and faithfully copy the empty
+                # one this exists to avoid. One each: a `Context` cannot be entered from two
+                # threads at once, so they cannot share.
+                carried = [copy_context() for _ in batch]
                 with ThreadPoolExecutor(max_workers=len(batch)) as pool:
                     # `permitted` bound as a default rather than closed over: the lambda is
                     # consumed inside this iteration so a late read would be safe today, but
                     # the gate is the one value in here that must never be read from the
                     # wrong round.
                     results = list(
-                        pool.map(lambda step, allow=permitted: _run(step, tool_host.run, allow), batch)
+                        pool.map(
+                            lambda ctx, step, allow=permitted: ctx.run(_run, step, tool_host.run, allow),
+                            carried,
+                            batch,
+                        )
                     )
 
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
@@ -848,6 +938,15 @@ def _run_turn(
                 convo.append(_tool_result_message(convo, step["name"], json.dumps(result)))
 
     # Out of tool budget — force a final answer so there's always a reply.
+    #
+    # Anything an errand has reported goes in first. The same hole as the one at the end of the
+    # round loop, in the one place that has no next round to drain into: a finding that arrived
+    # during the last round would otherwise be dropped by `forget` while the answer it belongs
+    # in was being written. Not waited on — the budget is gone, and waiting here would hold a
+    # turn that has already been told to stop working — but what is back is free to include.
+    for finding in errands.collect(conversation_id):
+        convo.append({"role": "user", "content": finding})
+        yield {"type": "errand_back", "text": finding}
     yield from _final_answer(convo, config, host, schemas, routing=routing)
 
 

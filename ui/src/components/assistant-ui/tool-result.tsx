@@ -4,7 +4,7 @@ import { memo, useState, type FC, type ReactNode } from "react";
 import { useThreadRuntime } from "@assistant-ui/react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BookOpenText, Check, Copy } from "lucide-react";
+import { BookOpenText, Check, Copy, Radar } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/files";
@@ -58,6 +58,21 @@ function unwrap(result: unknown): { value: unknown; failed: boolean } {
   return { value: result, failed: false };
 }
 
+/**
+ * A list-shaped tool argument, however it actually arrived.
+ *
+ * The mirror of `domain.tooling.many` on the server, and it exists for the same reason: the
+ * plural tools (`read_file`, `grep`, `outline`) used to take a singular, and every resumed
+ * conversation renders from a transcript full of the old spelling. Two readers of the same
+ * argument that disagree would mean a week-old chat quietly losing the one useful thing on its
+ * rows — `read a.py` degrading to a bare `read`.
+ */
+function listArg(plural: unknown, singular: unknown): string[] {
+  const raw = plural ?? singular;
+  if (Array.isArray(raw)) return raw.map(String);
+  return raw == null || String(raw) === "" ? [] : [String(raw)];
+}
+
 /** The line you read without opening anything. */
 export function summarise(name: string, args: Args, wrapped: unknown): string {
   const { value: result, failed } = unwrap(wrapped);
@@ -87,13 +102,17 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
     case "write_file":
       return `${short(args.path)} · ${s(args.content).length.toLocaleString()} chars`;
     case "read_file": {
+      const paths = listArg(args.paths, args.path);
+      // A batch says how many it opened rather than naming four files at you; the names are
+      // on the row above and inside the result.
+      const what = paths.length > 1 ? `${paths.length} files` : short(paths[0] ?? "");
       // Image first, and the order is the whole point. A picture comes back with a `note`
       // reading "Look at the image below and describe or judge what you actually see" — a
       // sentence written to him — and with `note` tested first that was the summary line
       // every image read collapsed to.
-      if (r.image || r.data) return `${short(args.path)} · looked at it`;
-      if (r.note) return `${short(args.path)} · ${short(r.note, 40)}`;
-      return `${short(args.path)} · ${lines(result).toLocaleString()} lines`;
+      if (r.image || r.data) return `${what} · looked at it`;
+      if (r.note) return `${what} · ${short(r.note, 40)}`;
+      return `${what} · ${lines(result).toLocaleString()} lines`;
     }
     case "delete_file":
       return `${short(r.trashed ?? args.path)} · to the Trash`;
@@ -101,7 +120,10 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
       const hits = s(result)
         .split("\n")
         .filter((l) => l.includes(":")).length;
-      return `${short(args.pattern, 30)} · ${hits || "no"} match${hits === 1 ? "" : "es"}`;
+      const patterns = listArg(args.patterns, args.pattern);
+      const what =
+        patterns.length > 1 ? `${patterns.length} patterns` : short(patterns[0] ?? "", 30);
+      return `${what} · ${hits || "no"} match${hits === 1 ? "" : "es"}`;
     }
     case "glob": {
       const found = Array.isArray(r.files) ? r.files.length : lines(result);
@@ -136,6 +158,24 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
       return asked.length > 1
         ? `${asked.length} questions`
         : short(String(one?.question ?? ""), 56);
+    }
+    case "delegate_subtask": {
+      // Two halves, and neither works without the other. The brief tells the worker to answer
+      // the objective in its first sentence, so the first sentence is the summary. The call
+      // count is what the prose cannot tell you: a confident paragraph built on two calls and
+      // one built on nineteen read identically, and this is the only surviving trace of which
+      // you are looking at — everything else the worker did was thrown away by design.
+      const looked = s(r.looked_at).trim();
+      const total = looked
+        ? looked
+            .split(",")
+            .reduce((n, part) => n + (Number(/\sx(\d+)$/.exec(part.trim())?.[1]) || 1), 0)
+        : 0;
+      const first = short(s(r.findings).split(/(?<=[.!?])\s/)[0], 56);
+      const cut = r.error ? "cut short" : "";
+      return [cut, total ? `${total} call${total === 1 ? "" : "s"}` : "", first]
+        .filter(Boolean)
+        .join(" \u00b7 ");
     }
     case "read_skill":
       return s(args.name);
@@ -332,6 +372,55 @@ function looksLikeSkill(value: Record<string, unknown>): boolean {
     Array.isArray(value.resources)
   );
 }
+
+/** What a sub-agent came back with — `delegate_subtask`'s result.
+ *
+ *  Its own card because its result is the one that is *deliberately* not a record of what
+ *  happened. Everything the worker actually did — the greps, the files, the dead ends — was
+ *  thrown away on purpose, and what is left is a written report meant to be read as prose.
+ *  Rendered as JSON it reads as machine output from a machine that did nothing, which is the
+ *  opposite of true: `looked_at` is the only trace left of a whole second agent's work, and
+ *  it is what tells you whether to believe the paragraph above it.
+ */
+function looksLikeFindings(value: Record<string, unknown>): boolean {
+  return typeof value.findings === "string";
+}
+
+const Findings: FC<{ value: Record<string, unknown>; objective: string }> = ({
+  value,
+  objective,
+}) => {
+  const findings = typeof value.findings === "string" ? value.findings : "";
+  const lookedAt = typeof value.looked_at === "string" ? value.looked_at : "";
+  const note = typeof value.note === "string" ? value.note : "";
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg p-2.5 ring-1 ring-border/60">
+      {objective ? (
+        <div className="flex items-start gap-1.5">
+          <Radar className="mt-0.5 size-3.5 shrink-0 text-teal-400/80" />
+          <span className="text-xs leading-relaxed text-muted-foreground">{objective}</span>
+        </div>
+      ) : null}
+      {note ? (
+        <p className="rounded-md bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
+          {note}
+        </p>
+      ) : null}
+      {findings ? (
+        <div className="max-h-96 overflow-auto rounded-md bg-muted/30 p-2.5 ring-1 ring-border/40">
+          <Prose text={findings} />
+        </div>
+      ) : null}
+      {lookedAt ? (
+        <div className="flex flex-col gap-1">
+          <Label>looked at</Label>
+          <span className="text-[11px] text-muted-foreground">{lookedAt}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+};
 
 const Skill: FC<{ value: Record<string, unknown> }> = ({ value }) => {
   const open = useFileViewer((s) => s.open);
@@ -1110,6 +1199,20 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
       return <Outline text={String(r.outline ?? "")} path={String(r.path ?? args.path ?? "")} />;
     }
 
+    if (
+      name === "delegate_subtask" &&
+      result &&
+      typeof result === "object" &&
+      looksLikeFindings(result as Record<string, unknown>)
+    ) {
+      return (
+        <Findings
+          value={result as Record<string, unknown>}
+          objective={String(args.objective ?? "")}
+        />
+      );
+    }
+
     // Same reasoning as `outline` just above: `repo_map`'s shape is unique to it.
     if (name === "repo_map" && result && typeof result === "object" && "map" in result) {
       const r = result as { map?: string };
@@ -1122,11 +1225,15 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
         return <Locations text={result} />;
       }
       if (name === "read_file") {
+        // One file gets its language highlighted and its name on the block. A batch is several
+        // languages under one heading, so guessing from the first would colour the rest wrong.
+        const paths = listArg(args.paths, args.path);
+        const one = paths.length === 1 ? paths[0] : "";
         return (
           <CodeBlock
             code={result}
-            language={languageOf(String(args.path ?? ""))}
-            label={String(args.path ?? "")}
+            language={one ? languageOf(one) : undefined}
+            label={one || (paths.length ? `${paths.length} files` : "")}
           />
         );
       }

@@ -201,6 +201,21 @@ TUNABLES: tuple[Tunable, ...] = (
         maximum=16,
         unit="calls",
     ),
+    Tunable(
+        key="subtask_rounds",
+        env="KITH_SUBTASK_ROUNDS",
+        label="Rounds a sub-agent gets",
+        help="How long an isolated sub-agent may look before it has to report back. Small on "
+        "purpose: the whole value of one is that the searching happens somewhere the main "
+        "turn never has to read, and a scout that wanders for twenty rounds costs more than "
+        "the answer is worth. If they keep coming back with nothing, the objectives are too "
+        "broad, not the budget too small.",
+        default=6,
+        group="context",
+        minimum=2,
+        maximum=20,
+        unit="rounds",
+    ),
     # `stop_after_delegating` stood here and is gone with the mechanism it drove — see the long
     # note in `services/agent_loop` where the `delegated` latch used to be. Short version: it
     # dated from when a conversation was an intake desk, it contradicted the chat directive

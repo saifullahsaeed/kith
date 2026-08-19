@@ -55,12 +55,23 @@ def begin(
     agent_db_path: Path,
     conversation_id: str,
     max_rounds: int | None,
+    landing_reserve: int | None = None,
 ) -> Turn:
     """Resolve everything a turn needs before its first round.
 
     Lifted out of `_run_turn` unchanged. The order matters in one place and is preserved: the
     conversation's stored session id wins over anything the caller passed, and the install-wide
     id is only minted when neither exists.
+
+    ``landing_reserve`` overrides the knob for a turn whose value is not in what it files.
+    Landing exists because research expands to fill the budget and a turn that gathers for
+    forty rounds and is cut off mid-sentence leaves nothing behind — so the last few rounds
+    are taken from gathering and given to writing it down. A sub-agent's entire output *is*
+    its final message, and `_final_answer` already forces that when the budget runs out, so
+    for one of those the reserve buys nothing and the directive that comes with it — write to
+    your working file, add_deliverable, check_item — names tools it deliberately does not
+    have. `0` means the whole budget is gathering; `None`, which is every other caller, means
+    the knob decides.
     """
     config = _session_for(config, agent_db_path, conversation_id)
     offload = _spill_for(conversation_id)
@@ -68,7 +79,8 @@ def begin(
     budget = max_rounds or tuning.value("max_rounds")
     # The floor is on the *cap*, not on the reserve: with `landing_reserve` at 0 the reserve is
     # 0 and budget-driven landing never fires at all.
-    reserve = min(tuning.value("landing_reserve"), max(2, budget // 3))
+    wanted_reserve = tuning.value("landing_reserve") if landing_reserve is None else landing_reserve
+    reserve = min(max(0, int(wanted_reserve)), max(2, budget // 3))
     # Read once, same as `reserve` above: recording, delivering, ticking off, handing back is
     # not a reasoning-heavy phase, and reasoning is billed as output tokens whether or not any
     # of it is shown. Blank means "leave every round exactly as it was" — no override built.
