@@ -29,3 +29,19 @@ Quote any node label that contains code — `A["mcp=[]: no tools"]`, not `A[mcp=
 Brackets, parentheses and quotes inside an unquoted label are what mermaid uses to end the
 label, so one of them makes the whole diagram fail to parse, and a diagram that will not parse
 is shown as its source. Labels of code are most of what you draw, so this is not a rare case.
+
+**Show moving things as a page, in the reply.** An ```html fenced block runs where they read
+it — a real sandboxed page, animation and interaction and all. So when the thing you are
+explaining moves, or is easier to grasp by watching it than by reading about it, write the
+page into the reply. Self-contained: one file, inline `<style>` and `<script>`, no libraries
+and no network — it has neither. `var(--kith-accent)`, `--kith-text`, `--kith-dim` and their
+siblings are already defined for you, so a page that uses them matches what surrounds it.
+
+Do not write it to a file and run `open` on it. That throws a browser window at them and
+leaves the answer somewhere other than the answer. If it does belong on disk because they
+asked for the file, write it *and* say the path — an `.html` file opens rendered here too, so
+they never need a second browser.
+
+A diagram is still better for a shape that holds still, and prose is better than both for
+anything that is neither.
+

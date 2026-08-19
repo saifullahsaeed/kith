@@ -5,7 +5,9 @@ import { AlertTriangle, Check, Copy, Maximize2, Minimize2, X, ZoomIn, ZoomOut } 
 
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 
+import { OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { naturalSize, toPng } from "@/lib/diagram";
+import { PALETTE } from "@/lib/kith-palette";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -48,46 +50,6 @@ function mermaidEngine() {
   engine ??= import("mermaid").then((mod) => mod.default);
   return engine;
 }
-
-/**
- * The app's own tokens, resolved.
- *
- * These mirror `--background`, `--foreground`, `--muted`, `--border`, `--kith` and `--roam`
- * from `index.css`, converted out of oklch because mermaid derives shades from what it is
- * given (khroma darkens and lightens these to build the rest of its palette) and does that
- * arithmetic on colours it can parse. Baked rather than read from the live stylesheet: reading
- * means resolving a custom property to something mermaid will accept, and getting a usable
- * value back out of `getComputedStyle` for an oklch token is browser-dependent in a way that
- * fails silently and looks like a theming bug.
- *
- * If the tokens in `index.css` change, these want changing with them.
- */
-const PALETTE = {
-  light: {
-    background: "#fbf9f5",
-    surface: "#fffefb",
-    line: "#e4e0dc",
-    text: "#29231d",
-    dim: "#69625b",
-    accent: "#c77618",
-    accentSoft: "#f4e7d6",
-    second: "#0e8c41",
-    secondSoft: "#daeadc",
-    muted: "#f1eee9",
-  },
-  dark: {
-    background: "#110e0b",
-    surface: "#1a1713",
-    line: "#25221e",
-    text: "#eae5dd",
-    dim: "#a19a92",
-    accent: "#f1b65a",
-    accentSoft: "#352918",
-    second: "#5dd786",
-    secondSoft: "#1d2e1f",
-    muted: "#26221f",
-  },
-} as const;
 
 /** The `base` theme with every colour it derives from replaced.
  *
@@ -345,7 +307,7 @@ function Toolbar({ svg, dark, onZoom }: { svg: string; dark: boolean; onZoom: ()
     // Hidden until the diagram is hovered — two buttons parked on every picture is clutter,
     // and clutter is the thing being fixed here. Kept reachable by keyboard regardless.
     <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-      <IconButton
+      <OverlayButton
         label={state === "failed" ? "Could not copy the diagram" : "Copy the diagram as an image"}
         onClick={() => void copy()}
       >
@@ -356,33 +318,11 @@ function Toolbar({ svg, dark, onZoom }: { svg: string; dark: boolean; onZoom: ()
         ) : (
           <Copy className="size-3.5" />
         )}
-      </IconButton>
-      <IconButton label="Open the diagram full screen" onClick={onZoom}>
+      </OverlayButton>
+      <OverlayButton label="Open the diagram full screen" onClick={onZoom}>
         <Maximize2 className="size-3.5" />
-      </IconButton>
+      </OverlayButton>
     </div>
-  );
-}
-
-function IconButton({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className="border-border/60 bg-card/80 text-muted-foreground hover:text-foreground flex size-7 items-center justify-center rounded-md border backdrop-blur-sm transition-colors"
-    >
-      {children}
-    </button>
   );
 }
 
@@ -507,18 +447,18 @@ function Lightbox({ svg, onClose }: { svg: string; onClose: () => void }) {
         <span className="text-muted-foreground/60 me-1 font-mono text-[11px] tabular-nums">
           {Math.round(view.k * 100)}%
         </span>
-        <IconButton label="Zoom out" onClick={() => nudge(1 / 1.3)}>
+        <OverlayButton label="Zoom out" onClick={() => nudge(1 / 1.3)}>
           <ZoomOut className="size-3.5" />
-        </IconButton>
-        <IconButton label="Zoom in" onClick={() => nudge(1.3)}>
+        </OverlayButton>
+        <OverlayButton label="Zoom in" onClick={() => nudge(1.3)}>
           <ZoomIn className="size-3.5" />
-        </IconButton>
-        <IconButton label="Fit to the window" onClick={fit}>
+        </OverlayButton>
+        <OverlayButton label="Fit to the window" onClick={fit}>
           <Minimize2 className="size-3.5" />
-        </IconButton>
-        <IconButton label="Close" onClick={onClose}>
+        </OverlayButton>
+        <OverlayButton label="Close" onClick={onClose}>
           <X className="size-3.5" />
-        </IconButton>
+        </OverlayButton>
       </div>
     </div>,
     document.body,

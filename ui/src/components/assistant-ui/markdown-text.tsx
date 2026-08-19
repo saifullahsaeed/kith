@@ -12,8 +12,10 @@ import { MARKDOWN_PLUGINS, MARKDOWN_REHYPE } from "@/lib/markdown-plugins";
 import { type FC, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
+import { HtmlCanvasBlock } from "@/components/assistant-ui/html-canvas";
 import { MermaidBlock } from "@/components/assistant-ui/mermaid-diagram";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { looksRenderable } from "@/lib/canvas";
 import { copyText, linkTarget, looksLikeHisFile, useFileViewer } from "@/lib/files";
 import { grammarFor, highlight } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
@@ -26,7 +28,16 @@ import { cn } from "@/lib/utils";
  *  own hover toolbar instead, next to the control for making it bigger. */
 const byLanguage = {
   mermaid: { SyntaxHighlighter: MermaidBlock, CodeHeader: () => null },
+  /** An ```html fence is a picture *sometimes* — see `html-canvas.tsx`. Which is why this one
+   *  asks rather than being told: the header is right above the source he is showing you and
+   *  wrong above the drawing it turned into, and the same fence produces both. */
+  html: { SyntaxHighlighter: HtmlCanvasBlock, CodeHeader: CanvasAwareHeader },
 };
+
+function CanvasAwareHeader(props: CodeHeaderProps) {
+  if (looksRenderable(props.code ?? "")) return null;
+  return <CodeHeader {...props} />;
+}
 
 const MarkdownTextImpl = () => {
   return (

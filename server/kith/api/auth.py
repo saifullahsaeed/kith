@@ -62,6 +62,12 @@ FILENAME = "api.token"
 #: that "tasks changed" learns nothing it could not learn by watching the file mtimes.
 OPEN_PATHS = frozenset({"/api/health", "/api/activity/stream", "/api/changes"})
 
+#: ``/api/canvas/<id>`` — a frame's ``src``, and a navigation cannot carry a custom header any
+#: more than an EventSource can. Same trade, and a smaller one: the id is 24 random bytes handed
+#: out over the authenticated POST, so guessing it is the only way in, and what it buys is a copy
+#: of a message already in the transcript. Same-origin gated like the others.
+OPEN_GET_PREFIXES = ("/api/canvas/",)
+
 #: Documentation. Serving the schema of an API someone cannot call is not a leak, and
 #: locking it means /docs is a login wall on a single-user machine.
 OPEN_PREFIXES = ("/docs", "/openapi.json")
@@ -124,7 +130,7 @@ def register(app, data_dir: Path) -> str:
             return None  # the SPA and its assets; nothing to protect and no way to send one
         if request.method == "OPTIONS":
             return None  # the preflight itself, which flask-cors answers
-        if path in OPEN_PATHS:
+        if path in OPEN_PATHS or (request.method == "GET" and path.startswith(OPEN_GET_PREFIXES)):
             return None if _same_origin() else (jsonify({"error": "cross-site request"}), 403)
         presented = request.headers.get(HEADER, "")
         if presented and hmac.compare_digest(presented, expected):

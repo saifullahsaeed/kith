@@ -12,6 +12,7 @@ from kith.api.blueprint import api
 from kith.api.routes import (  # noqa: F401 - imported for registration
     activity,
     brain,
+    canvas,
     changes,
     chat,
     checkpoints,

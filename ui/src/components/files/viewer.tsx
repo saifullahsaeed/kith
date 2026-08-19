@@ -8,6 +8,7 @@ import { Code } from "./code-block";
 import { IconAction } from "./icon-action";
 import { classify, looksBinary } from "./kinds";
 import type { Kind } from "./kinds";
+import { HtmlCanvas } from "@/components/assistant-ui/html-canvas";
 import { Markdown } from "./markdown";
 import { HostActions, ImageBody, Loading, NeedsAnApp, PdfBody } from "./media";
 
@@ -222,6 +223,18 @@ function FileBody({
     );
   }
   if (kind.type === "markdown") return <Code code={content} language="markdown" numbered />;
+  // An .html file is a thing to look at, so it runs. This is the surface that matters most:
+  // asked for something animated he writes a page to his folder and shells out to `open`, which
+  // hands it to a browser outside this app. Rendering it here is the same drawing without the
+  // detour — and under the same seal a canvas in a reply gets.
+  if (kind.type === "page" && view === "rendered") {
+    return (
+      <div className="mx-auto max-w-[68rem] px-6 py-6">
+        <HtmlCanvas code={content} fallback={<Code code={content} language="xml" numbered />} />
+      </div>
+    );
+  }
+  if (kind.type === "page") return <Code code={content} language="xml" numbered />;
   // A .mmd is a picture written down, so the picture is the default and the source is the
   // toggle — the same call the SVG beside it already makes.
   if (kind.type === "diagram" && view === "rendered") {

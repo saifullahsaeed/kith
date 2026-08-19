@@ -3,6 +3,7 @@ import type { ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 
+import { HtmlCanvas } from "@/components/assistant-ui/html-canvas";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
 import { linkTarget, useFileViewer } from "@/lib/files";
 import { CodeBlock } from "./code-block";
@@ -169,6 +170,7 @@ const MD: Components = {
     // diagram that renders in the conversation but not in the document it was written into is
     // the sort of inconsistency you notice immediately and cannot explain.
     if (lang === "mermaid") return <MermaidDiagram code={text} fallback={source} />;
+    if (lang === "html") return <HtmlCanvas code={text} fallback={source} />;
     return source;
   },
 };

@@ -94,10 +94,15 @@ const IMAGES: Record<string, string> = {
 
 /** Mermaid source, which is a picture written down — same argument as SVG, one step earlier. */
 const DIAGRAMS = new Set(["mmd", "mermaid"]);
+/** A page he wrote to be looked at, not read. Same call as `.mmd`: the thing it draws is the
+ *  default and the markup is the toggle. It is also what he actually produces when asked for
+ *  something animated — a file, opened — so this is the surface that catches that. */
+const PAGES = new Set(["html", "htm"]);
 
 export type Kind =
   | { type: "markdown"; label: string }
   | { type: "diagram"; label: string }
+  | { type: "page"; label: string }
   | { type: "code"; lang: string; label: string }
   | { type: "plain"; label: string }
   | { type: "image"; label: string }
@@ -110,6 +115,7 @@ export function classify(name: string): Kind {
   // markup second, and the source toggle is how you get to the markup.
   if (IMAGES[ext]) return { type: "image", label: IMAGES[ext] };
   if (DIAGRAMS.has(ext)) return { type: "diagram", label: "Diagram" };
+  if (PAGES.has(ext)) return { type: "page", label: "Page" };
   if (ext === "pdf") return { type: "pdf", label: "PDF" };
   if (MARKDOWN.has(ext)) return { type: "markdown", label: "Markdown" };
   const named = BY_NAME[base];
