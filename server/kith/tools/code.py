@@ -12,38 +12,67 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kith.domain.tooling import many
 from kith.engine.code import outline as outline_service
 from kith.engine.code import repomap as repomap_service
 from kith.engine.code import search as search_service
 from kith.engine.run import processes as process_service
 from kith.engine.run import testing as testing_service
-from kith.tools.params import INT, STR
+from kith.tools.params import INT, LIST_STR, STR
 from kith.tools.registry import tool
 
 
 @tool(
     "outline",
-    "The shape of a source file — every class, function and method in it, with the line each "
-    "one starts on — without reading the file. Do this BEFORE read_file on anything you do "
+    "The shape of source files — every class, function and method in them, with the line each "
+    "one starts on — without reading the files. Do this BEFORE read_file on anything you do "
     "not already know: a 2,000-line module costs you the whole module for the rest of the "
-    "turn, and its outline costs about a paragraph. Read the outline, find the thing you "
-    "want, then read_file that part with offset and limit. Works on most languages and needs "
-    "nothing installed.",
-    {"path": {**STR, "description": "The source file to outline."}},
-    required=("path",),
+    "turn, and its outline costs about a paragraph. `paths` is a LIST, so getting your "
+    "bearings in a subsystem is one call for all of it rather than one per file. Read the "
+    "outlines, find the thing you want, then read_file that part with offset and limit. Works "
+    "on most languages and needs nothing installed.",
+    {
+        "paths": {
+            **LIST_STR,
+            "description": "The source files to outline. Ask for the whole set you care about.",
+        }
+    },
+    required=("paths",),
 )
 def outline(path: Path, args: dict):
+    wanted = many(args, "paths", "path")
+    if not wanted:
+        return {"error": "Nothing to outline — `paths` is a list of source files."}
+    shapes = [_outline_one(one) for one in wanted]
+    if len(shapes) == 1:
+        return shapes[0]
+    # Combined into the shape a single outline already has, rather than a second one. Every
+    # reader of this result — the model, the transcript, the panel that renders a listing of
+    # definitions — knows that shape, and `path` is a label rather than a lookup key.
+    return {
+        "path": f"{len(shapes)} files",
+        "language": ", ".join(sorted({str(one.get("language") or "?") for one in shapes})),
+        "definitions": sum(int(one.get("definitions") or 0) for one in shapes),
+        "outline": "\n\n".join(
+            f"===== {one.get('path')} =====\n{one.get('outline') or one.get('error') or ''}" for one in shapes
+        ),
+    }
+
+
+def _outline_one(wanted: str) -> dict:
     from kith.infra import permissions
     from kith.infra import workspace as sandbox
 
-    target = Path(sandbox.resolve(args["path"]))
+    target = Path(sandbox.resolve(wanted))
     permissions.require_path("read", target, sandbox.root())
     try:
         found = outline_service.of_file(target)
     except outline_service.OutlineError as exc:
-        return {"error": str(exc)}
+        # Named with its path, because in a batch "not a language I can parse" with no file
+        # attached is a sentence you cannot act on.
+        return {"path": str(wanted), "error": str(exc)}
     return {
-        "path": str(args["path"]),
+        "path": str(wanted),
         "language": found["language"],
         "definitions": len(found["symbols"]),
         "outline": outline_service.render(found),

@@ -45,3 +45,33 @@ class ToolHost:
     #: knows — the alternative was the turn re-deriving both from a snapshot it also had to
     #: hold, which meant two places that could disagree about which tools exist.
     mcp_names: frozenset[str] = frozenset()
+
+
+def many(args: dict, plural: str, singular: str) -> list[str]:
+    """The values of a list-shaped argument, however they actually arrived.
+
+    Three spellings are accepted and the reason is not politeness, it is that all three occur:
+
+    * ``{"paths": ["a", "b"]}`` — the declared shape, what the schema asks for.
+    * ``{"paths": "a"}`` — a model sending a bare string into an array parameter, which they do.
+    * ``{"path": "a"}`` — the singular these tools used to take. Old tool calls are replayed
+      out of the transcript on every resumed turn (`conversations.full_messages`), so the
+      previous spelling has to keep working forever or reopening a week-old conversation fails
+      on arguments that were valid when they were made.
+
+    **Why plural at all.** Measured across 11,291 rounds of real work: 78-96% of every round
+    that called a tool called exactly *one*, on every model tried. `persona/35-how-you-spend-a-
+    round.md` was written to fix that on 2026-08-13 and did not move it — 77% single-call
+    before it shipped, 88% after. Asking did not work, so the shape changed instead: batching
+    is not a discipline you have to remember when the parameter is already a list.
+    """
+    found = args.get(plural)
+    if found is None:
+        found = args.get(singular)
+    if found is None:
+        return []
+    if isinstance(found, str):
+        return [found] if found.strip() else []
+    if isinstance(found, list):
+        return [str(one) for one in found if str(one).strip()]
+    return [str(found)]

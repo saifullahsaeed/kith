@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kith.domain.tooling import many
 from kith.infra import workspace as sandbox
-from kith.tools.params import INT, STR
+from kith.tools.params import INT, LIST_STR, STR
 from kith.tools.registry import tool
 
 
@@ -62,14 +63,20 @@ def shell(path: Path, args: dict):
 
 @tool(
     "read_file",
-    "Read a file from your computer (relative paths are under your own folder). Output "
-    "is line-numbered. A screenshot or image is shown to you as a picture instead, so "
-    "you can judge what you actually made. For anything big, don't read it whole — pass "
-    "`symbol` to get one function or class by name, or grep to find the line you want and "
-    "read a window with `offset`/`limit`. A read without a "
-    "range returns the first 400 lines and tells you if there's more.",
+    "Read files from your computer (relative paths are under your own folder). `paths` is a "
+    "LIST — when you know you need four files, ask for all four here rather than calling this "
+    "four times: it is one round instead of four, at the same cost in tokens. Output is "
+    "line-numbered. A screenshot or image is shown to you as a picture instead, so you can "
+    "judge what you actually made. For anything big, don't read it whole — pass `symbol` to "
+    "get one function or class by name, or grep to find the line you want and read a window "
+    "with `offset`/`limit`; those three describe a window into ONE file, so they only apply "
+    "when you ask for one. A read without a range returns the first 400 lines and tells you "
+    "if there's more.",
     {
-        "path": STR,
+        "paths": {
+            **LIST_STR,
+            "description": "The files to read. Ask for every one you already know you need.",
+        },
         "symbol": {
             **STR,
             "description": (
@@ -82,10 +89,15 @@ def shell(path: Path, args: dict):
         "offset": {**INT, "description": "1-based line to start at (optional)."},
         "limit": {**INT, "description": "How many lines to return (optional; default 400)."},
     },
-    required=("path",),
+    required=("paths",),
 )
 def read_file(path: Path, args: dict):
-    wanted = args["path"]
+    wanted_all = many(args, "paths", "path")
+    if not wanted_all:
+        return {"error": "Nothing to read — `paths` is a list of files to open."}
+    if len(wanted_all) > 1:
+        return _read_several(wanted_all, args)
+    wanted = wanted_all[0]
     # A screenshot asked for by name should be looked at, not decoded as text. He was taking
     # Playwright captures at 1440 and 390 all day and never seeing one of them, because this
     # function read bytes as UTF-8 and reported "not text". Routed rather than given a separate
@@ -104,6 +116,40 @@ def read_file(path: Path, args: dict):
     if symbol:
         return _read_symbol(wanted, symbol, args.get("offset"), args.get("limit"))
     return sandbox.read_file(wanted, args.get("offset"), args.get("limit"))
+
+
+def _read_several(wanted: list[str], args: dict):
+    """Several files as one result, each under its own heading.
+
+    One string rather than a list of them, because that is what the single-file case already
+    returns and every reader of a `read_file` result — the model, the transcript, the code
+    block in the interface — already knows that shape. A second shape for the same tool would
+    mean each of them growing a branch.
+
+    ``symbol``, ``offset`` and ``limit`` describe a window into one file, so asking for them
+    alongside four is refused rather than quietly applied to all four or quietly to the first.
+    Both of those are wrong in a way that reads as a correct answer.
+    """
+    windowing = [name for name in ("symbol", "offset", "limit") if args.get(name) not in (None, "")]
+    if windowing:
+        return {
+            "error": (
+                f"{', '.join(windowing)} describes a window into one file, and you asked for "
+                f"{len(wanted)}. Read them whole, or ask for the one you want a window of."
+            )
+        }
+    blocks = []
+    for one in wanted:
+        try:
+            body = read_file(Path(), {"paths": [one]})
+        except Exception as exc:  # a bad path in a batch must not lose the good ones
+            body = f"{type(exc).__name__}: {exc}"
+        if isinstance(body, dict):
+            # An image, or a per-file refusal. Named rather than inlined, so a batch that
+            # happens to contain a screenshot says so instead of printing a dict at him.
+            body = str(body.get("note") or body.get("error") or body)
+        blocks.append(f"===== {one} =====\n{body}")
+    return "\n\n".join(blocks)
 
 
 def _read_symbol(wanted: str, symbol: str, offset=None, limit=None) -> str:
@@ -423,11 +469,24 @@ def list_files(path: Path, args: dict):
     "in strings, inside longer names, and every unrelated variable that happens to share it — "
     "and you pay for reading all of that to find out which is which.",
     {
-        "pattern": {**STR, "description": "Regex or literal to search for."},
+        "patterns": {
+            **LIST_STR,
+            "description": (
+                "Regexes or literals to search for. A LIST — when you have three things to "
+                "look for, put all three here rather than grepping three times."
+            ),
+        },
         "path": {**STR, "description": "File or directory to search (default: home)."},
         "glob": {**STR, "description": "Optional filename filter, e.g. '*.md'."},
     },
-    required=("pattern",),
+    required=("patterns",),
 )
 def grep(path: Path, args: dict):
-    return sandbox.grep(args["pattern"], args.get("path") or ".", args.get("glob"))
+    wanted = many(args, "patterns", "pattern")
+    if not wanted:
+        return {"error": "Nothing to search for — `patterns` is a list of things to look for."}
+    where, only = args.get("path") or ".", args.get("glob")
+    if len(wanted) == 1:
+        return sandbox.grep(wanted[0], where, only)
+    # Headed and joined, for the same reason `_read_several` joins: one shape out of one tool.
+    return "\n\n".join(f"===== {one} =====\n{sandbox.grep(one, where, only)}" for one in wanted)

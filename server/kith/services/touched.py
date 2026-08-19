@@ -32,6 +32,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from kith.domain.tooling import many
 from kith.infra import workspace
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
@@ -183,8 +184,11 @@ def _paths(tool_name: str, arguments: dict) -> list[str]:
         if not isinstance(edits, list):
             return []
         return [str(edit["path"]) for edit in edits if isinstance(edit, dict) and edit.get("path")]
-    wanted = arguments.get("path")
-    return [str(wanted)] if wanted else []
+    # `read_file` takes `paths`, a list, and the manifest has to name every file in a batch or
+    # a four-file read is recorded as one. `many` is the same reader the tool itself uses, so
+    # the two cannot disagree about what a call named — which they would, immediately, if this
+    # kept its own idea of where a path lives.
+    return many(arguments, "paths", "path")
 
 
 #: How ``workspace.read_file`` announces that it stopped early. Matched rather than
