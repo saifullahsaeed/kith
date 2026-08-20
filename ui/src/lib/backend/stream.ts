@@ -1,5 +1,7 @@
 import type { ThreadMessage } from "@assistant-ui/react";
 
+import { currentCanvasState, type CanvasReading } from "@/lib/canvas-state";
+
 import type { BackendEvent } from "./types";
 
 /** Read the server's newline-delimited JSON stream as typed events. */
@@ -56,11 +58,16 @@ function quoteOf(message: ThreadMessage): string {
   return typeof text === "string" ? text : "";
 }
 
+type WireMessage = {
+  role: string;
+  content: string;
+  attachments?: WireAttachment[];
+  canvas?: CanvasReading[];
+};
+
 /** Convert assistant-ui messages into the server's wire format. */
-export function toWireMessages(
-  messages: readonly ThreadMessage[],
-): { role: string; content: string; attachments?: WireAttachment[] }[] {
-  const out: { role: string; content: string; attachments?: WireAttachment[] }[] = [];
+export function toWireMessages(messages: readonly ThreadMessage[]): WireMessage[] {
+  const out: WireMessage[] = [];
   for (const message of messages) {
     if (message.role !== "user" && message.role !== "assistant") continue;
     const attachments = attachmentsOf(message);
@@ -74,6 +81,14 @@ export function toWireMessages(
       ...(attachments.length ? { attachments } : {}),
     });
   }
+  // Whatever is set on a canvas he drew, carried by the message you are sending rather than by a
+  // turn of its own. Attached to the last message for the same reason an attachment is: it is
+  // part of what you are saying, not a separate thing that happened. Only the newest, because an
+  // earlier message was sent when those controls read something else and rewriting history to
+  // match the present would be a lie about both.
+  const readings = currentCanvasState();
+  const last = out[out.length - 1];
+  if (readings.length && last?.role === "user") last.canvas = readings;
   return out;
 }
 

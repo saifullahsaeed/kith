@@ -58,8 +58,16 @@ export function FileViewer({
   const media = kind.type === "image" || kind.type === "pdf";
   // An SVG is a picture and a document at once, so it gets the toggle: the markup is
   // frequently the thing being checked. A PNG has no source to show.
+  //
+  // A page belongs on this list for the same reason and was left off it when the kind was added,
+  // which made the toggle for `.html` invisible and the source branch below unreachable: a file
+  // he wrote could only ever be looked at running. That is the wrong default for the one kind
+  // whose source is code someone may well want to read before trusting what it draws.
   const hasSource =
-    kind.type === "markdown" || kind.type === "diagram" || kind.label === "SVG";
+    kind.type === "markdown" ||
+    kind.type === "diagram" ||
+    kind.type === "page" ||
+    kind.label === "SVG";
 
   const base = name.split("/").pop() || name;
   const heading = title || base;

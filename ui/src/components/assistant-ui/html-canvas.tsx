@@ -3,9 +3,12 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Code2, Maximize2, RotateCw, X } from "lucide-react";
 
+import { useAuiState } from "@assistant-ui/react";
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
+import { readCanvasMessage, themeMessage } from "@/lib/canvas-bridge";
+import { useCanvasState } from "@/lib/canvas-state";
 import { FRAME_SANDBOX, isComplete, looksRenderable, sealedDocument } from "@/lib/canvas";
 import { paletteFor } from "@/lib/kith-palette";
 import { useDarkMode } from "@/lib/theme";
@@ -40,7 +43,21 @@ import { cn } from "@/lib/utils";
 /** Tall enough for a diagram or a small scene, short enough that two in a row are still a
  *  conversation. Drag the bottom edge for anything else. */
 const DEFAULT_HEIGHT = 380;
-const HEIGHT_RANGE = [160, 1200] as const;
+
+/** How tall the box in the conversation is allowed to get, however it got that way — dragged or
+ *  measured. Not the same range as `HEIGHT_RANGE` in `canvas-bridge.ts`, and the two are
+ *  deliberately different things: that one is how tall a page may *claim* to be, a bound on
+ *  input from a frame we do not trust, and it is wider because the claim is also what the
+ *  full-screen view honours. This one is how tall this rectangle may *be*.
+ *
+ *  They were both called `HEIGHT_RANGE`, and a self-measured 2000px page took the wider one:
+ *  the canvas came up tall, and the first nudge of the drag handle — which clamped to this one
+ *  — collapsed it by eight hundred pixels in a single frame. Anything that sets the height now
+ *  goes through `boxed` so a drag can only ever continue from a size the drag itself could
+ *  have reached. */
+const BOX_HEIGHT = [160, 1200] as const;
+
+const boxed = (px: number) => Math.min(BOX_HEIGHT[1], Math.max(BOX_HEIGHT[0], px));
 
 /** How long the code has to stop changing before the frame is built. Matches the diagram's
  *  settle window, and for the same reason: long enough never to fire between two tokens of the
@@ -56,8 +73,17 @@ const GIVE_UP_MS = 2600;
  *  ordinary code block, built from the `Pre`/`Code` the library hands over, so anything this
  *  component declines to draw renders exactly as it did before this existed. */
 export function HtmlCanvasBlock({ code, components: { Pre, Code } }: SyntaxHighlighterProps) {
+  /* Whether this reply is still being written, asked of the thread rather than guessed from the
+     text. The settle timer alone was not enough and the way it failed is worth keeping: a long
+     page passes through *many* momentarily-valid states on its way in — the instant `</style>`
+     closes, every block this file counts is balanced — so a pause between tokens looked like a
+     finished document. Each one built, POSTed and mounted a frame, and the next token tore it
+     down again. That is the whole of the "the UI is blinking" report: not a render loop, a page
+     being loaded and discarded ten times while he wrote it. */
+  const streaming = useAuiState((state) => state.message.status?.type === "running");
   return (
     <HtmlCanvas
+      streaming={streaming}
       code={code}
       fallback={
         <Pre>
@@ -68,7 +94,16 @@ export function HtmlCanvasBlock({ code, components: { Pre, Code } }: SyntaxHighl
   );
 }
 
-export function HtmlCanvas({ code, fallback }: { code: string; fallback: ReactNode }) {
+export function HtmlCanvas({
+  code,
+  fallback,
+  streaming = false,
+}: {
+  code: string;
+  fallback: ReactNode;
+  /** False for a file in the viewer, which is never half-written. */
+  streaming?: boolean;
+}) {
   const dark = useDarkMode();
   /** The URL the last document worth mounting is being served from. Held across re-renders so a
    *  theme change or a replay does not have to go back through the settle window.
@@ -84,9 +119,48 @@ export function HtmlCanvas({ code, fallback }: { code: string; fallback: ReactNo
   const [showSource, setShowSource] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
+  /** Set the moment you drag the bottom edge, and never unset. A canvas that re-measured itself
+   *  after you had chosen a size would undo the choice, which is worse than a canvas that never
+   *  measured at all. */
+  const [sized, setSized] = useState(false);
   /** Bumped by the replay button, and used as the frame's key — remounting is the only way to
    *  restart a page whose animation we are not allowed to talk to. */
   const [generation, setGeneration] = useState(0);
+
+  const report = useCanvasState((state) => state.report);
+  const forget = useCanvasState((state) => state.forget);
+
+  /* What the canvas tells us about itself. Height is applied here; state is put where the next
+     message will find it — see `canvas-state.ts` for why moving a slider does not start a turn. */
+  const heard = useCallback(
+    (message: ReturnType<typeof readCanvasMessage>) => {
+      if (!message) return;
+      if (message.type === "height") {
+        if (!sized) setHeight(boxed(message.px));
+        return;
+      }
+      report(doc, { title: message.title, values: message.values });
+    },
+    [doc, report, sized],
+  );
+
+  /* The same wire, from the full-screen frame — minus the height.
+     A page measures itself against the window it is in, and full screen is a different window;
+     letting that reading back would resize the inline box to fit a viewport it is not in. What
+     the controls read is the same question in both frames. How tall the page is, is not. */
+  const heardZoomed = useCallback(
+    (message: ReturnType<typeof readCanvasMessage>) => {
+      if (!message || message.type === "height") return;
+      report(doc, { title: message.title, values: message.values });
+    },
+    [doc, report],
+  );
+
+  /* A canvas nobody can see is not context. Scrolled away, replaced by a later reply, or the
+     whole conversation closed — either way what its controls read is no longer something the
+     person is looking at, and carrying it into the next turn would be describing a screen that
+     is not on screen. */
+  useEffect(() => () => forget(doc), [doc, forget]);
 
   // Both synchronous, so a canvas shows a placeholder from its first token rather than a flash
   // of source that turns into a drawing 220ms later. They are regexes; they can afford to run on
@@ -94,12 +168,19 @@ export function HtmlCanvas({ code, fallback }: { code: string; fallback: ReactNo
   const renderable = useMemo(() => looksRenderable(code), [code]);
   const complete = useMemo(() => isComplete(code), [code]);
 
+  /* The theme at the moment of building, read through a ref so that changing it later does not
+     land in the effect's dependencies. It used to, and the cost was the whole point of the port:
+     switching to dark rebuilt the document, re-POSTed it and reloaded the frame, so every
+     animation started over. Now the document is built once and repainted in place. */
+  const theme = useRef(dark);
+  theme.current = dark;
+
   useEffect(() => {
-    if (!renderable) return;
+    if (!renderable || streaming) return;
     let cancelled = false;
     const build = setTimeout(() => {
       if (!isComplete(code)) return;
-      void host(sealedDocument(code, paletteFor(dark))).then((url) => {
+      void host(sealedDocument(code, paletteFor(theme.current))).then((url) => {
         if (cancelled || !url) return;
         setDoc(url);
         setStalled(false);
@@ -112,7 +193,7 @@ export function HtmlCanvas({ code, fallback }: { code: string; fallback: ReactNo
       clearTimeout(build);
       clearTimeout(abandon);
     };
-  }, [code, dark, renderable]);
+  }, [code, renderable, streaming]);
 
   // Markup he is showing you rather than drawing with — but only once he has finished writing
   // it. Half of a document does not look like a drawing yet: `<style>b{colo` has behaviour and
@@ -132,9 +213,14 @@ export function HtmlCanvas({ code, fallback }: { code: string; fallback: ReactNo
         {showSource ? (
           <div className="max-h-[520px] overflow-auto">{fallback}</div>
         ) : doc ? (
-          <Frame doc={doc} generation={generation} height={height} />
+          /* Keyed here rather than on the iframe inside. The key was on the element, so replay
+             remounted the frame and left `Frame`'s own state standing — including the flag that
+             says the frame has loaded, which then said "yes" about a document that had just been
+             thrown away. Keying the component means a replayed canvas starts from the same place
+             a new one does. */
+          <Frame key={generation} doc={doc} height={height} dark={dark} onMessage={heard} />
         ) : (
-          <Building />
+          <Building bytes={code.length} streaming={streaming} />
         )}
 
         <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
@@ -159,9 +245,19 @@ export function HtmlCanvas({ code, fallback }: { code: string; fallback: ReactNo
           ) : null}
         </div>
 
-        {!showSource && doc ? <ResizeHandle height={height} onChange={setHeight} /> : null}
+        {!showSource && doc ? (
+          <ResizeHandle
+            height={height}
+            onChange={(next) => {
+              setSized(true);
+              setHeight(next);
+            }}
+          />
+        ) : null}
       </figure>
-      {zoomed ? <Lightbox doc={doc} onClose={() => setZoomed(false)} /> : null}
+      {zoomed ? (
+        <Lightbox doc={doc} dark={dark} onMessage={heardZoomed} onClose={() => setZoomed(false)} />
+      ) : null}
     </>
   );
 }
@@ -173,18 +269,65 @@ export function HtmlCanvas({ code, fallback }: { code: string; fallback: ReactNo
  * attributes. Kept as its own component so that boundary is one small readable thing rather than
  * three lines buried in the middle of a layout.
  *
- * `key` on the generation rather than a `src` change: reassigning `srcDoc` to the same string is
- * a no-op, so replay has to be a remount.
+ * Replay is a remount — reassigning the same `src` is a no-op — so the caller keys this
+ * component on the generation. Everything a frame knows about itself, including whether it has
+ * loaded, is state in here and has to go with it.
+ *
+ * Used for the inline box and for the full-screen window both. The lightbox opening a bare
+ * `<iframe>` of its own was the bug that made this a shared component: the bigger, more usable
+ * surface was the one with no wire out and no theme in, so what you set full screen was thrown
+ * away and the palette froze at whatever it was built with.
  */
-function Frame({ doc, generation, height }: { doc: string; generation: number; height: number }) {
+function Frame({
+  doc,
+  height,
+  dark,
+  onMessage,
+  className,
+}: {
+  doc: string;
+  /** Absent for the full-screen frame, which is the size of the window. */
+  height?: number;
+  dark: boolean;
+  onMessage: (message: ReturnType<typeof readCanvasMessage>) => void;
+  className?: string;
+}) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [alive, setAlive] = useState(false);
+
+  /* The wire in. Identity is checked before anything else and by window rather than by origin:
+     every sandboxed frame on the page reports its origin as the string "null", so origin
+     distinguishes one canvas from another not at all — and this handler is on `window`, which
+     hears from all of them. `event.source` is the one fact about a message that the sender cannot
+     forge. See `canvas-bridge.ts` for what happens to the payload after that. */
+  useEffect(() => {
+    const listen = (event: MessageEvent) => {
+      if (!frame.current || event.source !== frame.current.contentWindow) return;
+      const message = readCanvasMessage(event.data);
+      if (message) onMessage(message);
+    };
+    window.addEventListener("message", listen);
+    return () => window.removeEventListener("message", listen);
+  }, [onMessage]);
+
+  /* The theme, pushed in. The palette inside the frame is custom properties, so this is a
+     repaint — the page keeps running, and a canvas you were watching does not start over because
+     you reached for the light switch. Sent on every change and once on load, since a frame that
+     mounts mid-switch would otherwise keep the palette it was built with. */
+  useEffect(() => {
+    if (!alive) return;
+    frame.current?.contentWindow?.postMessage(themeMessage(paletteFor(dark), dark), "*");
+  }, [dark, alive]);
+
   return (
     <iframe
-      key={generation}
+      ref={frame}
       title="Canvas"
       sandbox={FRAME_SANDBOX}
       src={doc}
-      className="block w-full border-0 bg-transparent"
-      style={{ height }}
+      onLoad={() => setAlive(true)}
+      className={cn("block w-full border-0 bg-transparent", className)}
+      style={height === undefined ? undefined : { height }}
     />
   );
 }
@@ -211,15 +354,49 @@ async function host(document: string): Promise<string | null> {
   }
 }
 
-/** Shown while the document is still arriving. Deliberately not the source: a canvas that
- *  flashed its own code before drawing would undo the thing this component is for. */
-function Building() {
+/**
+ * Shown while the document is still arriving.
+ *
+ * Deliberately not the source — a canvas that flashed its own code before drawing would undo the
+ * thing this component is for — but deliberately not a blank box either. The first version was
+ * one word in an empty rectangle the height of nothing, held for however long a page takes to
+ * write, which reads as broken rather than busy. So it says what is happening and shows it
+ * growing: the byte count climbing is the only honest progress signal available, since the one
+ * thing nobody knows is how long the page will turn out to be.
+ *
+ * A single line rather than a reserved rectangle. Guessing the finished height and holding that
+ * much empty space would be wrong twice — wrong while it waits, and wrong again when the canvas
+ * arrives and reports its real height.
+ */
+function Building({ bytes, streaming }: { bytes: number; streaming: boolean }) {
   return (
-    <div className="text-muted-foreground/50 flex items-center gap-2 px-4 py-8 font-mono text-[11px]">
-      <span className="bg-muted-foreground/40 size-1.5 animate-pulse rounded-full" />
-      building…
+    <div className="animate-in fade-in flex flex-col gap-3 p-4 duration-300">
+      <div className="text-muted-foreground/70 flex items-center gap-2.5 font-mono text-[11px]">
+        <span className="bg-kith/70 size-1.5 shrink-0 animate-pulse rounded-full" />
+        <span>{streaming ? "writing a page" : "building the page"}</span>
+        <span className="text-muted-foreground/35 tabular-nums">
+          {bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`}
+        </span>
+      </div>
+      {/* The shape of a page, not a spinner. Three bars and a block is what almost everything he
+          draws looks like from far enough away — a title, a couple of lines, then the thing — so
+          the space reads as "a canvas is arriving here" rather than as an empty box someone
+          forgot to fill. Grows with the page: one bar at first, the block once there is enough
+          written that it will certainly need one. */}
+      <div className="flex flex-col gap-2" aria-hidden>
+        <Bar className="w-2/5" />
+        {bytes > 400 ? <Bar className="w-4/5" /> : null}
+        {bytes > 900 ? <Bar className="w-3/5" /> : null}
+        {bytes > 1600 ? (
+          <div className="bg-muted/45 mt-1 h-24 animate-pulse rounded-lg [animation-duration:2.4s]" />
+        ) : null}
+      </div>
     </div>
   );
+}
+
+function Bar({ className }: { className: string }) {
+  return <div className={cn("bg-muted/60 h-2.5 animate-pulse rounded [animation-duration:2s]", className)} />;
 }
 
 /**
@@ -240,8 +417,7 @@ function ResizeHandle({ height, onChange }: { height: number; onChange: (h: numb
     (event: React.PointerEvent) => {
       const start = from.current;
       if (!start) return;
-      const next = start.height + (event.clientY - start.y);
-      onChange(Math.min(HEIGHT_RANGE[1], Math.max(HEIGHT_RANGE[0], next)));
+      onChange(boxed(start.height + (event.clientY - start.y)));
     },
     [onChange],
   );
@@ -274,8 +450,22 @@ function ResizeHandle({ height, onChange }: { height: number; onChange: (h: numb
  * Through a portal to `<body>` for the reason the diagram's lightbox documents at length: the
  * message this sits inside carries `content-visibility: auto`, which makes it the containing
  * block for `position: fixed`, and "full screen" otherwise comes out the size of the message.
+ *
+ * A second frame means a second load, so the page comes up at its defaults rather than where you
+ * left it — the same thing that already happens visibly, now also true of what gets reported.
+ * That is the honest version: what he is told about a canvas is what is on the screen.
  */
-function Lightbox({ doc, onClose }: { doc: string; onClose: () => void }) {
+function Lightbox({
+  doc,
+  dark,
+  onMessage,
+  onClose,
+}: {
+  doc: string;
+  dark: boolean;
+  onMessage: (message: ReturnType<typeof readCanvasMessage>) => void;
+  onClose: () => void;
+}) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -291,12 +481,7 @@ function Lightbox({ doc, onClose }: { doc: string; onClose: () => void }) {
       aria-label="Canvas"
       className="bg-background fixed inset-0 z-50 overflow-hidden"
     >
-      <iframe
-        title="Canvas"
-        sandbox={FRAME_SANDBOX}
-        src={doc}
-        className="size-full border-0 bg-transparent"
-      />
+      <Frame doc={doc} dark={dark} onMessage={onMessage} className="size-full" />
       <div className="absolute end-4 top-4 flex items-center gap-1">
         <OverlayButton label="Close" onClick={onClose}>
           <X className="size-3.5" />

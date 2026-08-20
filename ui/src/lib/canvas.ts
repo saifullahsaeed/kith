@@ -35,6 +35,7 @@
  * file has to be undone for. `canvas.test.ts` asserts that, so a later edit that quietly closes
  * the door fails a test instead of being discovered a month later.
  */
+import { BRIDGE, canvasTokens } from "@/lib/canvas-bridge";
 import { PALETTE, type Palette } from "@/lib/kith-palette";
 
 /**
@@ -160,6 +161,15 @@ export function sealedDocument(code: string, theme: Palette): string {
   policy.setAttribute("content", POLICY);
   head.prepend(policy);
 
+  // The wire out. In the head, and ahead of anything he wrote, because it installs `window.kith`
+  // — a page that calls `kith.report(...)` from its own top-level script would find nothing there
+  // if this ran afterwards, and that failure would look like the feature being broken rather than
+  // mis-ordered. It reads the document lazily, so being parsed before there is a body costs it
+  // nothing. See `canvas-bridge.ts`.
+  const bridge = parsed.createElement("script");
+  bridge.textContent = BRIDGE;
+  head.append(bridge);
+
   return `<!doctype html>${parsed.documentElement.outerHTML}`;
 }
 
@@ -176,31 +186,27 @@ function groundwork(theme: Palette): string {
   // would otherwise get light form controls on a dark canvas, which is a bug you only notice
   // once there is a `<select>` in a drawing.
   const dark = theme.background === PALETTE.dark.background;
+  const tokens = Object.entries(canvasTokens(theme))
+    .map(([name, value]) => `  --kith-${name}: ${value};`)
+    .join("\n");
   return `
 :root {
   color-scheme: ${dark ? "dark" : "light"};
-  --kith-bg: ${theme.surface};
-  --kith-line: ${theme.line};
-  --kith-text: ${theme.text};
-  --kith-dim: ${theme.dim};
-  --kith-accent: ${theme.accent};
-  --kith-accent-soft: ${theme.accentSoft};
-  --kith-second: ${theme.second};
-  --kith-second-soft: ${theme.secondSoft};
-  --kith-muted: ${theme.muted};
+${tokens}
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; }
+html { min-height: 100%; background: var(--kith-bg); }
+html, body { margin: 0; padding: 0; }
 body {
-  background: ${theme.surface};
-  color: ${theme.text};
+  background: transparent;
+  color: var(--kith-text);
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   overflow: auto;
 }
-a { color: ${theme.accent}; }
+a { color: var(--kith-accent); }
 code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 `.trim();
 }
