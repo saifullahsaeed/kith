@@ -11,7 +11,7 @@ import { toPng } from "@/lib/diagram";
 import { useFlowFailures } from "@/lib/flow-failures";
 import { loopsForever } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
-import { mermaidOptions } from "@/lib/mermaid-config";
+import { mermaidConfig, mermaidEngine, mermaidOptions, sweepOrphans } from "@/lib/mermaid-config";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -168,6 +168,16 @@ function useAnimator({
         try {
           const { MermaidAnimator, validateFlowInDiagram } = await animatorLibrary();
           if (cancelled) return;
+          /* Parsed before the library is allowed anywhere near it, which is the same guard the
+             still renderer has always had and the reason it never showed this: `mermaid.render`
+             on a diagram it cannot draw leaves its own cartoon bomb in the body, and the animator
+             renders inside the library, where there is no parse step to add one to. An
+             unparseable fence is not an animation that failed — it is a code block, which is
+             exactly what the still renderer beside this will make of it. */
+          const mermaid = await mermaidEngine();
+          mermaid.initialize(mermaidConfig(dark));
+          if (!(await mermaid.parse(code, { suppressErrors: true }))) return;
+          if (cancelled) return;
           const theme = animatorTheme(dark);
           // Checked before anything is drawn, and against the diagram rather than only against
           // the schema: the two mistakes worth catching — a route naming a node that is not
@@ -194,6 +204,9 @@ function useAnimator({
           setError(null);
           setAnimator(built);
         } catch (thrown) {
+          // A diagram that parsed and then would not lay out, which is the one way the bomb can
+          // still get in. See `sweepOrphans`.
+          sweepOrphans();
           if (cancelled) return;
           // Anything the validator could not know: a diagram type whose graph it cannot read, a
           // route that only fails once the edges are real geometry, a mermaid parse that got

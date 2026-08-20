@@ -45,6 +45,18 @@ const fake = vi.hoisted(() => ({
   viewBox: "0 0 400 260",
   /** The bar's frame callback, so a test can be the clock. */
   tick: null as ((at: number, total: number) => void) | null,
+  /** Whether mermaid can draw the diagram at all. */
+  parses: true,
+}));
+
+/* Mermaid itself is stood in for. The component parses the fence before the animator is allowed
+   to see it — a diagram that reaches `mermaid.render` unparsed leaves a cartoon bomb in the body
+   — and loading a megabyte of real parser to answer "yes" is a slow way to test nothing. */
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: () => {},
+    parse: () => Promise.resolve(fake.parses),
+  },
 }));
 
 vi.mock("mermaid-animator", () => {
@@ -127,6 +139,7 @@ beforeEach(() => {
   fake.seeked = [];
   fake.validation = { ok: true, checked: "graph" };
   fake.validate = null;
+  fake.parses = true;
   fake.viewBox = "0 0 400 260";
   fake.tick = null;
   useFlowFailures.getState().clear();
@@ -312,6 +325,20 @@ describe("an animated mermaid fence", () => {
     await settle();
     expect(fake.built).toHaveLength(0);
     expect(screen.getByText(/no edge between/)).toBeInTheDocument();
+  });
+
+  it("never lets a diagram mermaid cannot draw reach the animator", async () => {
+    // The library renders inside itself, with no parse step to add one to — and `mermaid.render`
+    // on a diagram it cannot draw builds its own error graphic in a scratch element parented to
+    // the body, then throws and leaves it there. It is a cartoon bomb the size of a paragraph,
+    // it lands under the composer attached to nothing, and it was two of them for two diagrams.
+    fake.parses = false;
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    expect(fake.built).toHaveLength(0);
+    // The still renderer owns this case, exactly as it did before any of this existed.
+    expect(screen.getByTestId("still")).toBeVisible();
+    expect(screen.queryByLabelText("Seek the animation")).not.toBeInTheDocument();
   });
 
   it("keeps the diagram and says why when the choreography will not compile", async () => {

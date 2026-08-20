@@ -11,7 +11,7 @@ import { OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { naturalSize, toPng } from "@/lib/diagram";
 import { hasFlowScript } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
-import { mermaidConfig } from "@/lib/mermaid-config";
+import { mermaidConfig, mermaidEngine, sweepOrphans } from "@/lib/mermaid-config";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -41,19 +41,6 @@ import { cn } from "@/lib/utils";
  * **It is the app's palette, not mermaid's.** Default mermaid is lilac on white with Trebuchet
  * MS, which reads as a wiki plugin from 2014 dropped into the middle of a conversation.
  */
-
-/** Loaded once, on the first diagram anyone sees.
- *
- *  Mermaid is about a megabyte of parser and layout engine, and most conversations contain no
- *  diagram at all — a static import would put it in the entry chunk of every session that
- *  never draws one. The promise is module-level so a message with six diagrams still loads it
- *  once rather than six times. */
-let engine: Promise<typeof import("mermaid")["default"]> | null = null;
-
-function mermaidEngine() {
-  engine ??= import("mermaid").then((mod) => mod.default);
-  return engine;
-}
 
 /** Ids have to be unique per render or mermaid reuses a stale `<defs>` for the arrowheads —
  *  which shows up as every edge after the first losing its arrow. */
@@ -145,6 +132,9 @@ export function MermaidDiagram({
         setSvg(drawn);
         setBroken(false);
       } catch {
+        // A diagram that parsed and then would not lay out. Mermaid drew its own error graphic
+        // into the scratch element it renders in and left it in the body; take it away.
+        sweepOrphans();
         if (!cancelled) setBroken(true);
       }
     }, 220);

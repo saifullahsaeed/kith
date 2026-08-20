@@ -15,6 +15,45 @@ import type { MermaidConfig } from "mermaid";
 
 import { PALETTE } from "@/lib/kith-palette";
 
+/** Loaded once, on the first diagram anyone sees.
+ *
+ *  Mermaid is about a megabyte of parser and layout engine, and most conversations contain no
+ *  diagram at all — a static import would put it in the entry chunk of every session that never
+ *  draws one. The promise is module-level so a message with six diagrams loads it once rather
+ *  than six times, and so both renderers share the one instance they are both configuring.
+ *
+ *  Here rather than in the component that used to own it because the animated path needs it too,
+ *  for `parse` — see `sweepOrphans` for what happens when a diagram reaches `render` without it. */
+let engine: Promise<(typeof import("mermaid"))["default"]> | null = null;
+
+export function mermaidEngine() {
+  engine ??= import("mermaid").then((mod) => mod.default);
+  return engine;
+}
+
+/** The ids the two renderers pass to `mermaid.render`. Mermaid's scratch element is `d` plus the
+ *  id it was given, so these are also how its leftovers are recognised. */
+const RENDER_IDS = ["kith-diagram-", "ma-"];
+
+/**
+ * Whatever mermaid left in the body when a render went wrong.
+ *
+ * `render` builds its diagram in a temporary `#d{id}` element parented to `<body>`, and on
+ * failure it draws its *own* error graphic into that element and rethrows — leaving the thing
+ * behind. That graphic is a cartoon bomb the size of a paragraph reading "Syntax error in text",
+ * and because it hangs off the body rather than the conversation it lands at the bottom of the
+ * window, under the composer, attached to nothing. Two bad diagrams, two bombs.
+ *
+ * The still renderer avoids the whole thing by parsing first, which is why this went unnoticed
+ * for as long as it did. The animated path renders inside the library, which does not parse
+ * first — so it needs the guard *and* this, because a diagram can parse and still fail to lay
+ * out, and the difference between those two is not knowable from here.
+ */
+export function sweepOrphans(): void {
+  const selector = RENDER_IDS.map((id) => `:scope > [id^="d${id}"]`).join(", ");
+  for (const orphan of document.body.querySelectorAll(selector)) orphan.remove();
+}
+
 /** The `base` theme with every colour it derives from replaced.
  *
  *  `base` rather than `dark`/`neutral` because it is the only one mermaid means to be
