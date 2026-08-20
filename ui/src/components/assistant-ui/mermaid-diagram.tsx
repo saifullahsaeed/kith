@@ -8,10 +8,11 @@ import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
+import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { naturalSize, toPng } from "@/lib/diagram";
 import { hasFlowScript } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
-import { mermaidConfig, mermaidEngine, sweepOrphans } from "@/lib/mermaid-config";
+import { mermaidConfig, mermaidEngine, renderTarget, sweepOrphans } from "@/lib/mermaid-config";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -76,13 +77,23 @@ export function MermaidBlock({ code, components: { Pre, Code } }: SyntaxHighligh
       <Code>{code}</Code>
     </Pre>
   );
-  if (!hasFlowScript(code)) return <MermaidDiagram code={code} fallback={fallback} />;
+  /* Wrapped, so that whatever a diagram does it does inside its own box. Everything below this
+     line is someone else's parser and layout engine running on text a model wrote, and a throw
+     anywhere in it used to unmount the nearest boundary — which is the thread. One bad fence
+     took the conversation you were reading with it. The fallback is the source, which is what
+     this block showed before any of this existed. */
   return (
-    <AnimatedDiagram
-      code={code}
-      still={<MermaidDiagram code={code} fallback={fallback} bare />}
-      streaming={streaming}
-    />
+    <ErrorBoundary where="A diagram" fallback={fallback}>
+      {hasFlowScript(code) ? (
+        <AnimatedDiagram
+          code={code}
+          still={<MermaidDiagram code={code} fallback={fallback} bare />}
+          streaming={streaming}
+        />
+      ) : (
+        <MermaidDiagram code={code} fallback={fallback} />
+      )}
+    </ErrorBoundary>
   );
 }
 
@@ -127,7 +138,13 @@ export function MermaidDiagram({
           setBroken(true);
           return;
         }
-        const { svg: drawn } = await mermaid.render(`kith-diagram-${(seq += 1)}`, source);
+        // Drawn in a container of our own, off screen, rather than wherever mermaid would have
+        // put it — which is the body. See `renderTarget`.
+        const { svg: drawn } = await mermaid.render(
+          `kith-diagram-${(seq += 1)}`,
+          source,
+          renderTarget(),
+        );
         if (cancelled) return;
         setSvg(drawn);
         setBroken(false);

@@ -36,6 +36,67 @@ export function mermaidEngine() {
 const RENDER_IDS = ["kith-diagram-", "ma-"];
 
 /**
+ * Somewhere of our own for mermaid to work in.
+ *
+ * `mermaid.render` takes a container as its third argument and, given none, *appends its scratch
+ * element to `<body>`* — which is where every version of this bug comes from. On failure it draws
+ * its own error graphic into that element through the ordinary render path, then throws and
+ * leaves it there: a cartoon bomb the size of a paragraph reading "Syntax error in text", parked
+ * at the bottom of the window under the composer, attached to nothing.
+ *
+ * So it is given a container: one element, ours, made once, off screen, emptied before every
+ * render. Whatever mermaid does in there — draw a diagram, draw a bomb, leave the scratch element
+ * behind — happens somewhere nobody can see and gets cleared by the next render regardless.
+ * That is containment by construction rather than by cleaning up afterwards, which is the only
+ * kind that holds for a failure nobody predicted.
+ *
+ * Off screen rather than `display: none`, because a diagram's layout is measured text and a
+ * `display: none` subtree has no measurements — every label would come out the same size. Full
+ * width, because that is what it had when it was parented to the body, and a narrower box would
+ * wrap labels differently from every diagram drawn before this.
+ *
+ * The one thing it cannot cover is a render *inside* `mermaid-animator`, which calls `render`
+ * itself and passes no container. That path is guarded by parsing first and swept when it throws
+ * — see `sweepOrphans`.
+ */
+let scratch: HTMLDivElement | null = null;
+
+export function renderTarget(): HTMLElement {
+  if (!scratch || !scratch.isConnected) {
+    scratch = document.createElement("div");
+    scratch.dataset.slot = "kith_mermaid_scratch";
+    scratch.setAttribute("aria-hidden", "true");
+    scratch.style.cssText =
+      "position:absolute;left:-99999px;top:0;width:100%;visibility:hidden;pointer-events:none";
+    document.body.append(scratch);
+  }
+  // Whatever the last render left, wanted or not.
+  scratch.textContent = "";
+  return scratch;
+}
+
+/** Is this thing at the top of the body one of mermaid's leftovers?
+ *
+ *  Two rules, and the second is the one that matters. The first is exact — `d` plus an id one of
+ *  our renderers issued — and would stop working the day mermaid changes how it names its
+ *  scratch element, silently, with the bomb reappearing. The second recognises the *graphic*:
+ *  the error icon it draws and the words it writes, neither of which anything in this app has
+ *  any other reason to contain.
+ *
+ *  Only ever asked about a direct child of `<body>`, and only after the render that could have
+ *  put it there has settled. Both halves of that matter: dialogs, popovers and the diagram's own
+ *  full-screen view are all portalled to the body too, and mermaid's scratch element is the same
+ *  element whether a render is using it or has abandoned it — so removing one by name while a
+ *  render is still in flight breaks every diagram in the app. Which it did, once, for about ten
+ *  minutes. */
+function isLeftover(element: Element): boolean {
+  const id = element.id || "";
+  if (id.startsWith("d") && RENDER_IDS.some((prefix) => id.slice(1).startsWith(prefix))) return true;
+  if (element.querySelector(".error-icon, .error-text")) return true;
+  return (element.textContent || "").includes("Syntax error in text");
+}
+
+/**
  * Whatever mermaid left in the body when a render went wrong.
  *
  * `render` builds its diagram in a temporary `#d{id}` element parented to `<body>`, and on
@@ -50,8 +111,9 @@ const RENDER_IDS = ["kith-diagram-", "ma-"];
  * out, and the difference between those two is not knowable from here.
  */
 export function sweepOrphans(): void {
-  const selector = RENDER_IDS.map((id) => `:scope > [id^="d${id}"]`).join(", ");
-  for (const orphan of document.body.querySelectorAll(selector)) orphan.remove();
+  for (const child of [...document.body.children]) {
+    if (isLeftover(child)) child.remove();
+  }
 }
 
 /** The `base` theme with every colour it derives from replaced.

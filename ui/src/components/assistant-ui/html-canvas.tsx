@@ -7,6 +7,7 @@ import { useAuiState } from "@assistant-ui/react";
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
+import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { readCanvasMessage, themeMessage } from "@/lib/canvas-bridge";
 import { useCanvasState } from "@/lib/canvas-state";
 import { FRAME_SANDBOX, isComplete, looksRenderable, sealedDocument } from "@/lib/canvas";
@@ -72,7 +73,25 @@ const GIVE_UP_MS = 2600;
 /** The assistant-ui contract, mirroring `MermaidBlock`. What it supplies is the fallback: the
  *  ordinary code block, built from the `Pre`/`Code` the library hands over, so anything this
  *  component declines to draw renders exactly as it did before this existed. */
-export function HtmlCanvasBlock({ code, components: { Pre, Code } }: SyntaxHighlighterProps) {
+export function HtmlCanvasBlock(props: SyntaxHighlighterProps) {
+  const { code, components: { Pre, Code } } = props;
+  /* Same reasoning as the diagram's: a fence that throws should cost you the drawing, not the
+     conversation it was in. See `ErrorBoundary`. */
+  return (
+    <ErrorBoundary
+      where="A canvas"
+      fallback={
+        <Pre>
+          <Code>{code}</Code>
+        </Pre>
+      }
+    >
+      <CanvasFence {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function CanvasFence({ code, components: { Pre, Code } }: SyntaxHighlighterProps) {
   /* Whether this reply is still being written, asked of the thread rather than guessed from the
      text. The settle timer alone was not enough and the way it failed is worth keeping: a long
      page passes through *many* momentarily-valid states on its way in — the instant `</style>`

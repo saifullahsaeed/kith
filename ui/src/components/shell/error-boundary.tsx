@@ -14,16 +14,30 @@ import { copyText } from "@/lib/files";
  * available: it looks identical to the app being broken beyond repair, and the only recovery
  * anyone would guess at is quitting.
  *
- * Two levels of it, deliberately. One around the whole app so a crash is a message rather
- * than a blank screen, and one around each panel — Mind, the Control Panel, Settings, the
- * thread — so a panel that fails takes only itself down. The chat surviving a broken roadmap
- * graph is the difference between "one thing is wrong" and "Kith is down".
+ * Three levels of it, deliberately. One around the whole app so a crash is a message rather
+ * than a blank screen, one around each panel — Mind, the Control Panel, Settings, the
+ * thread — so a panel that fails takes only itself down, and one around each *fence in a
+ * reply*. The chat surviving a broken roadmap graph is the difference between "one thing is
+ * wrong" and "Kith is down"; the thread surviving a diagram is the difference between "that
+ * diagram did not draw" and losing the conversation you were reading.
+ *
+ * That third level is what `fallback` is for. A drawing that fails has an obvious right answer
+ * — the source, which is what the fence would have shown before anything drew it — and a
+ * centred alert with a "Try again" button in the middle of a paragraph is not it. Given a
+ * fallback, this boundary shows that instead of saying anything itself.
  *
  * `where` names the part that failed, because "something went wrong" is not a bug report and
  * the person reading it is the one who has to decide whether to keep working.
  */
 export class ErrorBoundary extends Component<
-  { children: ReactNode; where: string; compact?: boolean },
+  {
+    children: ReactNode;
+    where: string;
+    compact?: boolean;
+    /** Shown in place of everything below, when the thing that failed is small enough that a
+     *  quieter answer is the better one. */
+    fallback?: ReactNode;
+  },
   { error: Error | null }
 > {
   state: { error: Error | null } = { error: null };
@@ -43,6 +57,9 @@ export class ErrorBoundary extends Component<
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;
+    // Small enough to answer quietly. The console still has the stack — see `componentDidCatch`
+    // — so a fence that silently falls back to its source is still a reported crash.
+    if (this.props.fallback !== undefined) return <>{this.props.fallback}</>;
 
     const details = `${this.props.where}: ${error.message}\n\n${error.stack ?? ""}`;
 

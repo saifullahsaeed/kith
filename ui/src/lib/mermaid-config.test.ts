@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { sweepOrphans } from "@/lib/mermaid-config";
+import { renderTarget, sweepOrphans } from "@/lib/mermaid-config";
 
 function leftBehind(id: string) {
   const orphan = document.createElement("div");
@@ -65,5 +65,32 @@ describe("what mermaid left in the body", () => {
 
   it("is fine when there is nothing to do", () => {
     expect(() => sweepOrphans()).not.toThrow();
+  });
+});
+
+describe("somewhere of our own to render in", () => {
+  it("is off screen, and not display:none", () => {
+    // A diagram's layout is measured text, and a `display: none` subtree has no measurements —
+    // every label would come out the same size.
+    const target = renderTarget();
+    expect(target.style.visibility).toBe("hidden");
+    expect(target.style.display).not.toBe("none");
+    expect(target.style.left.startsWith("-")).toBe(true);
+  });
+
+  it("is one element, however many diagrams there are", () => {
+    expect(renderTarget()).toBe(renderTarget());
+    expect(document.body.querySelectorAll('[data-slot="kith_mermaid_scratch"]')).toHaveLength(1);
+  });
+
+  it("is empty before every render, whatever the last one left in it", () => {
+    const target = renderTarget();
+    target.innerHTML = '<div id="dkith-diagram-1"><svg class="error-icon"></svg></div>';
+    expect(renderTarget().children).toHaveLength(0);
+  });
+
+  it("comes back if something removes it", () => {
+    renderTarget().remove();
+    expect(renderTarget().isConnected).toBe(true);
   });
 });

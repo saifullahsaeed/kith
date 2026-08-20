@@ -192,6 +192,10 @@ function useAnimator({
           }
           setNote(invented.length ? invented.join("; ") : null);
           built = await MermaidAnimator.create(container, code, options(theme, dark, explorable));
+          // The library renders without a container of its own — it cannot be given one — so
+          // whatever it left at the top of the page goes now that its promise has settled. Both
+          // ways round: a render can leave something behind and still succeed.
+          sweepOrphans();
           if (cancelled) {
             built.destroy();
             return;
