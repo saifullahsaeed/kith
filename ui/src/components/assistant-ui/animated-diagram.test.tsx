@@ -11,7 +11,7 @@
  * conversation that will not scroll because the drawing ate the wheel, a typo in a route
  * throwing away a perfectly good picture.
  */
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
@@ -19,7 +19,7 @@ import { PALETTE } from "@/lib/kith-palette";
 
 const CODE = `---
 flow:
-  loop:
+  steps:
     - route: [A, B]
 ---
 flowchart LR
@@ -37,6 +37,8 @@ const fake = vi.hoisted(() => ({
   validation: { ok: true, checked: "graph" } as Record<string, unknown>,
   /** What mermaid is pretended to have laid out, which is what the box measures itself from. */
   viewBox: "0 0 400 260",
+  /** The bar's frame callback, so a test can be the clock. */
+  tick: null as ((at: number, total: number) => void) | null,
 }));
 
 vi.mock("mermaid-animator", () => {
@@ -67,7 +69,9 @@ vi.mock("mermaid-animator", () => {
     markers() {
       return [{ atMs: 0, kind: "route" as const, label: "A → B" }];
     }
-    onTick() {}
+    onTick(listener: ((at: number, total: number) => void) | null) {
+      fake.tick = listener;
+    }
   }
   return {
     MermaidAnimator: FakeAnimator,
@@ -90,6 +94,18 @@ function box() {
   return document.querySelector<HTMLElement>('[data-slot="kith_mermaid_flow"]');
 }
 
+/** A drag on the timeline, from grab to let go, at a fraction along it. jsdom gives every
+ *  element a zero-sized box, so the fraction is fed through `getBoundingClientRect`. */
+function scrub(track: HTMLElement, fraction: number) {
+  // jsdom has no pointer capture at all, and the handler calls it on the way in.
+  track.setPointerCapture = () => {};
+  track.releasePointerCapture = () => {};
+  track.getBoundingClientRect = () =>
+    ({ left: 0, width: 100, top: 0, height: 16, right: 100, bottom: 16, x: 0, y: 0 }) as DOMRect;
+  fireEvent.pointerDown(track, { clientX: fraction * 100, pointerId: 1 });
+  fireEvent.pointerUp(track, { clientX: fraction * 100, pointerId: 1 });
+}
+
 /** The animator's own container: the only div in the figure that it was handed. */
 function stage() {
   return fake.built.at(-1)?.container;
@@ -104,6 +120,7 @@ beforeEach(() => {
   fake.seeked = [];
   fake.validation = { ok: true, checked: "graph" };
   fake.viewBox = "0 0 400 260";
+  fake.tick = null;
 });
 
 describe("an animated mermaid fence", () => {
@@ -173,16 +190,84 @@ describe("an animated mermaid fence", () => {
     expect(stage()?.style.height).toBe("1200px");
   });
 
-  it("has play, pause and a timeline once it is running", async () => {
+  it("has stop, play and a timeline once it is running", async () => {
     render(<AnimatedDiagram code={CODE} still={still} />);
     await settle();
-    expect(screen.getByLabelText("Pause the animation")).toBeInTheDocument();
+    expect(screen.getByLabelText("Stop the animation")).toBeInTheDocument();
     expect(screen.getByLabelText("Seek the animation")).toBeInTheDocument();
     await act(async () => {
-      screen.getByLabelText("Pause the animation").click();
+      screen.getByLabelText("Stop the animation").click();
     });
     expect(screen.getByLabelText("Play the animation")).toBeInTheDocument();
     expect(fake.paused).toBeGreaterThan(0);
+  });
+
+  it("plays once and stops on its last frame", async () => {
+    // The library's clock is `elapsed % duration`, so the only sign that a cycle finished is the
+    // time going backwards. Nothing else can be watched for.
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    await act(async () => {
+      fake.tick?.(2400, 3000);
+      fake.tick?.(12, 3000);
+    });
+    // Held a millisecond short of the end, because seeking to the duration is modulo the
+    // duration, which is the beginning.
+    expect(fake.seeked).toContain(2999);
+    expect(screen.getByLabelText("Play the animation again")).toBeInTheDocument();
+  });
+
+  it("runs it again from the start, not from where it stopped", async () => {
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    await act(async () => {
+      fake.tick?.(2400, 3000);
+      fake.tick?.(12, 3000);
+    });
+    await act(async () => {
+      screen.getByLabelText("Play the animation again").click();
+    });
+    expect(fake.seeked.at(-1)).toBe(0);
+    expect(screen.getByLabelText("Stop the animation")).toBeInTheDocument();
+  });
+
+  it("keeps going round when he asked for a loop", async () => {
+    const looped = CODE.replace("  steps:", "  loop:");
+    render(<AnimatedDiagram code={looped} still={still} />);
+    await settle();
+    await act(async () => {
+      fake.tick?.(2400, 3000);
+      fake.tick?.(12, 3000);
+    });
+    expect(fake.seeked).not.toContain(2999);
+    expect(screen.getByLabelText("Stop the animation")).toBeInTheDocument();
+  });
+
+  it("does not mistake a scrub backwards for the end", async () => {
+    // Every deliberate jump back looks like a wrap from the next frame's point of view.
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    const track = screen.getByLabelText("Seek the animation");
+    await act(async () => {
+      fake.tick?.(1800, 3000);
+      scrub(track, 0.2);
+      fake.tick?.(600, 3000);
+    });
+    expect(screen.getByLabelText("Stop the animation")).toBeInTheDocument();
+    expect(fake.seeked).not.toContain(2999);
+  });
+
+  it("is still running after a scrub that started while it was running", async () => {
+    // The pause that begins a drag has to be lifted by the drag, because the effect that owns
+    // playback hears nothing new when the state it watches has not changed.
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    const track = screen.getByLabelText("Seek the animation");
+    const before = fake.resumed;
+    await act(async () => {
+      scrub(track, 0.5);
+    });
+    expect(fake.resumed).toBeGreaterThan(before);
   });
 
   it("keeps the diagram and says why when the choreography will not compile", async () => {

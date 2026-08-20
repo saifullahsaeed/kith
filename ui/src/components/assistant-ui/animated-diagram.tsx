@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Check, Copy, Maximize2, Pause, Play, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, Maximize2, Pause, Play, RotateCw, X } from "lucide-react";
 
 import type { MermaidAnimator, SceneMarker } from "mermaid-animator";
 
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { animatorTheme } from "@/lib/animator-theme";
 import { toPng } from "@/lib/diagram";
+import { loopsForever } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
 import { mermaidOptions } from "@/lib/mermaid-config";
 import { useDarkMode } from "@/lib/theme";
@@ -44,9 +45,15 @@ import { cn } from "@/lib/utils";
  * scrolling whenever the pointer crosses a diagram. Full screen is where you go to look around,
  * which is the same division the still diagram already has.
  *
- * **It stops when you are not looking at it.** A flow script loops forever. Ten replies down a
- * long conversation, that is ten animation loops running against a renderer that has been
- * frozen by less. Off screen, or covered by the full-screen view, it pauses.
+ * **It plays once.** The library only knows how to go round and round, so this watches for the
+ * wrap and stops on the last frame. A fourth pass explains nothing; it is just something moving
+ * beside the paragraph someone is trying to read. `loop:` instead of `steps:` in the script is
+ * him asking for the repeat, and then it repeats — see `lib/flow-script.loopsForever`.
+ *
+ * **It does not start until it has been seen, and it stops when it is not being.** A reply is
+ * scrolled to, so a diagram five screens down would otherwise play to the end and stop before
+ * anyone reached it — and ten of them would be ten animation loops against a renderer that has
+ * been frozen by less. Nothing runs until the box is on screen, and it pauses when it leaves.
  */
 
 /** How long the code has to stop changing before the animation is built. The still diagram's
@@ -158,6 +165,10 @@ function useAnimator({
             built.destroy();
             return;
           }
+          // `create` starts it. Stopped again immediately, before anything is on screen, so that
+          // one effect below is the only thing that ever decides whether this is running —
+          // otherwise every diagram plays a frame or two of itself on the way to being paused.
+          built.pause();
           if (resumeAt.current) built.seek(resumeAt.current);
           setError(null);
           setAnimator(built);
@@ -204,8 +215,15 @@ export function AnimatedDiagram({
   /** Set the moment the bottom edge is dragged, and never unset: a box that re-measured itself
    *  after you had chosen a size would undo the choice. */
   const [sized, setSized] = useState(false);
-  const [wanted, setWanted] = useState(true);
-  const [visible, setVisible] = useState(true);
+  /** Whether it should be running, which starts as no: see the observer below. */
+  const [wanted, setWanted] = useState(false);
+  const [visible, setVisible] = useState(false);
+  /** Played to the end and holding its last frame. Held here rather than in the bar because the
+   *  full-screen view has to know too — opening it on the end frame, which then instantly ends
+   *  again, is not opening it. */
+  const [ended, setEnded] = useState(false);
+  /** Whether he asked for the repeat. */
+  const looping = useMemo(() => loopsForever(code), [code]);
 
   const { box, animator, error } = useAnimator({
     code,
@@ -236,11 +254,28 @@ export function AnimatedDiagram({
      diagram is not even painted, but its callbacks still run and still write to the DOM, so
      this is the difference between one animation running and every animation in the
      conversation running. */
+  /** Whether it has ever been on screen. First sight is what starts it; a later one is not,
+   *  because scrolling back to something you deliberately stopped and having it start again is
+   *  the control not working. */
+  const seen = useRef(false);
+
   useEffect(() => {
     const el = box.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      // Nothing can be said about visibility, so the honest fallback is the old behaviour.
+      seen.current = true;
+      setVisible(true);
+      setWanted(true);
+      return;
+    }
     const observer = new IntersectionObserver(
-      ([entry]) => setVisible(entry.isIntersecting),
+      ([entry]) => {
+        setVisible(entry.isIntersecting);
+        if (entry.isIntersecting && !seen.current) {
+          seen.current = true;
+          setWanted(true);
+        }
+      },
       // A little ahead of the scroll, so it is already moving by the time it is on screen.
       { rootMargin: "200px" },
     );
@@ -308,8 +343,10 @@ export function AnimatedDiagram({
             <Transport
               animator={animator}
               playing={wanted}
+              ended={ended}
+              looping={looping}
               onPlaying={setWanted}
-              onScrubbed={() => setWanted(true)}
+              onEnded={setEnded}
             />
             <ResizeHandle
               height={height ?? DEFAULT_HEIGHT}
@@ -325,7 +362,10 @@ export function AnimatedDiagram({
         <Lightbox
           code={code}
           dark={dark}
-          startAt={animator?.currentTime() ?? 0}
+          looping={looping}
+          // Where the inline one had got to — unless that is the last frame, which as a starting
+          // point is a full-screen view that opens finished.
+          startAt={ended ? 0 : (animator?.currentTime() ?? 0)}
           onClose={() => setZoomed(false)}
         />
       ) : null}
@@ -348,14 +388,19 @@ export function AnimatedDiagram({
 function Transport({
   animator,
   playing,
+  ended,
+  looping,
   onPlaying,
-  onScrubbed,
+  onEnded,
   className,
 }: {
   animator: MermaidAnimator;
   playing: boolean;
+  /** Played to the end and stopped there. Owned by the caller; reported from here. */
+  ended: boolean;
+  looping: boolean;
   onPlaying: (playing: boolean) => void;
-  onScrubbed: () => void;
+  onEnded: (ended: boolean) => void;
   /** Absolute over the drawing full screen, where the drawing is the whole window; in the flow
    *  of the figure inline, where a bar laid over it would cover the bottom of the diagram. */
   className?: string;
@@ -367,23 +412,45 @@ function Transport({
   const [marks, setMarks] = useState<SceneMarker[]>([]);
   /** True only for the length of a drag, so a scrub does not fight the playhead. */
   const scrubbing = useRef(false);
+  /** Where the clock was on the previous frame, which is how the wrap is spotted. A ref rather
+   *  than a variable inside the effect below, because every deliberate jump *backwards* — a
+   *  replay, a scrub to an earlier point — looks exactly like a wrap from the next frame's point
+   *  of view, and has to be able to say so. Both did, and both ended the animation on the spot:
+   *  replay stopped again a frame after starting, and scrubbing back finished a diagram you were
+   *  in the middle of. */
+  const previous = useRef(0);
 
   useEffect(() => {
     setDuration(animator.duration());
     setMarks(animator.markers());
     let shown = -1;
     animator.onTick((at, total) => {
-      const fraction = total > 0 ? at / total : 0;
+      /* The end of a play-once animation, which is the only end there is to find: the library's
+         clock is `elapsed % duration`, so it has no notion of finishing — a cycle completing
+         shows up here as the time having gone backwards. Caught within a frame of the wrap,
+         which is 16ms of the second pass nobody sees. */
+      let now = at;
+      if (!looping && total > 0 && at < previous.current) {
+        animator.pause();
+        // Not `seek(total)`: that is `total % total`, which is the beginning. A millisecond
+        // short of the end is the last frame, and holding it is the point.
+        animator.seek(total - 1);
+        onEnded(true);
+        onPlaying(false);
+        now = total;
+      }
+      previous.current = at;
+      const fraction = total > 0 ? now / total : 0;
       if (fill.current) fill.current.style.transform = `scaleX(${fraction})`;
       // The readout only says tenths, so it only has to be written ten times a second.
-      const tenths = Math.floor(at / 100);
+      const tenths = Math.floor(now / 100);
       if (clock.current && tenths !== shown) {
         shown = tenths;
-        clock.current.textContent = `${(at / 1000).toFixed(1)}s`;
+        clock.current.textContent = `${(now / 1000).toFixed(1)}s`;
       }
     });
     return () => animator.onTick(null);
-  }, [animator]);
+  }, [animator, looping, onEnded, onPlaying]);
 
   const seekTo = useCallback(
     (event: React.PointerEvent) => {
@@ -391,7 +458,9 @@ function Transport({
       if (!el || duration <= 0) return;
       const rect = el.getBoundingClientRect();
       const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-      animator.seek(fraction * duration);
+      const at = fraction * duration;
+      animator.seek(at);
+      previous.current = at;
       if (fill.current) fill.current.style.transform = `scaleX(${fraction})`;
     },
     [animator, duration],
@@ -404,13 +473,37 @@ function Transport({
         className,
       )}
     >
+      {/* Stop, start, or run it again — and the third is a state of its own rather than the
+          second one over again, because pressing play on an animation stopped one millisecond
+          from its end would play that millisecond, wrap, and stop right back where it was. */}
       <button
         type="button"
-        aria-label={playing ? "Pause the animation" : "Play the animation"}
-        onClick={() => onPlaying(!playing)}
+        aria-label={
+          ended
+            ? "Play the animation again"
+            : playing
+              ? "Stop the animation"
+              : "Play the animation"
+        }
+        onClick={() => {
+          if (ended) {
+            animator.seek(0);
+            previous.current = 0;
+            onEnded(false);
+            onPlaying(true);
+            return;
+          }
+          onPlaying(!playing);
+        }}
         className="text-muted-foreground hover:text-foreground hover:bg-muted/60 grid size-5 shrink-0 place-items-center rounded transition-colors"
       >
-        {playing ? <Pause className="size-3" /> : <Play className="size-3" />}
+        {ended ? (
+          <RotateCw className="size-3" />
+        ) : playing ? (
+          <Pause className="size-3" />
+        ) : (
+          <Play className="size-3" />
+        )}
       </button>
 
       {/* A row of steps, not a bare bar. `markers()` is the compiled timeline — every route,
@@ -437,8 +530,17 @@ function Transport({
         onPointerUp={() => {
           scrubbing.current = false;
           // Whatever the button said before the drag, a scrub is someone asking to watch it from
-          // here — so it plays on, rather than sitting still on a frame they chose.
-          onScrubbed();
+          // here — so it plays on, rather than sitting still on a frame they chose. And it is no
+          // longer finished, wherever it had stopped.
+          //
+          // Resumed here as well as declared, and that is not belt-and-braces. The effect that
+          // owns playback only runs when its state changes, so a drag begun while it was already
+          // playing declares nothing new — and the `pause` that started the drag was never
+          // lifted. It stopped dead on the frame you let go of, with a bar that said it was
+          // running.
+          animator.resume();
+          onEnded(false);
+          onPlaying(true);
         }}
       >
         <div className="bg-muted/70 absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 overflow-hidden rounded-full">
@@ -583,15 +685,18 @@ function ResizeHandle({
 function Lightbox({
   code,
   dark,
+  looping,
   startAt,
   onClose,
 }: {
   code: string;
   dark: boolean;
+  looping: boolean;
   startAt: number;
   onClose: () => void;
 }) {
   const [playing, setPlaying] = useState(true);
+  const [ended, setEnded] = useState(false);
   const { box, animator } = useAnimator({
     code,
     dark,
@@ -629,8 +734,10 @@ function Lightbox({
           className="absolute inset-x-0 bottom-0"
           animator={animator}
           playing={playing}
+          ended={ended}
+          looping={looping}
           onPlaying={setPlaying}
-          onScrubbed={() => setPlaying(true)}
+          onEnded={setEnded}
         />
       ) : null}
       <div className="absolute end-4 top-4 flex items-center gap-1">

@@ -30,6 +30,34 @@ Brackets, parentheses and quotes inside an unquoted label are what mermaid uses 
 label, so one of them makes the whole diagram fail to parse, and a diagram that will not parse
 is shown as its source. Labels of code are most of what you draw, so this is not a rare case.
 
+**And when the shape has an order, draw the order too.** A `flow:` block in the diagram's YAML
+frontmatter animates that same fence: a packet travels the route you name, a node turns `error`,
+`ok` or `busy`, everything off the route dims, and they get a timeline they can stop and scrub.
+Prefer it over a still diagram whenever there is a sequence in what you are explaining — a
+request's path, a failover, a retry, a fold, a queue draining — because the order is the thing
+they came for and an arrow does not carry it. It is a handful of lines on a diagram you were
+drawing anyway:
+
+```mermaid
+---
+flow:
+  steps:
+    - route: [Client, LB, A]
+    - state: { A: error }
+    - route: [Client, LB, B]
+      color: green
+---
+flowchart LR
+  Client[Client] --> LB[Load Balancer]
+  LB --> A[Instance A]
+  LB --> B[Instance B]
+```
+
+Name nodes by their mermaid id, and route only along arrows that exist — a route through a pair
+with no edge between them loses the animation and leaves the still diagram. `steps:` plays once,
+which is what you want; `loop:` repeats, for the rare thing whose point is that it repeats. The
+`drawing-a-canvas` skill has the rest of the syntax.
+
 **Show moving things as a page, in the reply.** An ```html fenced block runs where they read
 it — a real sandboxed page, animation and interaction and all. So when the thing you are
 explaining moves, or is easier to grasp by watching it than by reading about it, write the
@@ -50,6 +78,7 @@ than the one you assumed. Nothing is sent while they fiddle; it rides along when
 build the control when the question is really "which of these", and then read what they chose
 instead of asking them to type it back to you.
 
-A diagram is still better for a shape that holds still, and prose is better than both for
-anything that is neither.
+A still diagram is right when nothing happens in an order, an animated one when something
+does, a page when what moves is not a diagram at all — and prose is better than any of them for
+anything that is not a shape.
 

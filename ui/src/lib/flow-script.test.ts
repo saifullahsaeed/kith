@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { hasFlowScript } from "@/lib/flow-script";
+import { hasFlowScript, loopsForever } from "@/lib/flow-script";
 
 const diagram = "flowchart LR\n  Client --> LB\n  LB --> A";
 
@@ -53,5 +53,31 @@ describe("a mermaid fence asking to move", () => {
   it("needs the dashes on a line of their own, at the top", () => {
     expect(hasFlowScript(`--- flow:\n${diagram}`)).toBe(false);
     expect(hasFlowScript(`${diagram}\n---\nflow:\n  loop: []\n---`)).toBe(false);
+  });
+});
+
+describe("and whether it repeats", () => {
+  const script = (key: string) =>
+    `---\nflow:\n  ${key}:\n    - route: [Client, LB]\n---\n${diagram}`;
+
+  it("plays once when he wrote steps:", () => {
+    // The default, and the one he is told to write. Both names mean the same list to the
+    // library; here they are made to mean what they say.
+    expect(loopsForever(script("steps"))).toBe(false);
+  });
+
+  it("repeats when he wrote loop:", () => {
+    expect(loopsForever(script("loop"))).toBe(true);
+  });
+
+  it("is not a repeat just because the word appears in the diagram", () => {
+    expect(loopsForever(`---\nflow:\n  steps:\n    - route: [A, B]\n---\nflowchart LR\n  loop: --> B`)).toBe(
+      false,
+    );
+    expect(loopsForever(diagram)).toBe(false);
+  });
+
+  it("is nothing at all for a fence with no script", () => {
+    expect(loopsForever(`---\ntitle: t\n---\n${diagram}`)).toBe(false);
   });
 });

@@ -24,12 +24,45 @@ const CLOSES = /^---[ \t]*$/m;
  *  animator reads, and `flow:` in the diagram body is a node called flow. */
 const KEY = /^flow[ \t]*:/m;
 
+/** The step list, under `flow:`, named `loop:` rather than `steps:`. Indented, because it is a
+ *  key of the flow block and not of the document. */
+const LOOPS = /^[ \t]+loop[ \t]*:/m;
+
 export function hasFlowScript(code: string): boolean {
+  return KEY.test(frontmatter(code));
+}
+
+/**
+ * Does this one repeat, or does it play once and stop?
+ *
+ * The library takes `steps:` and `loop:` as two names for the same list and runs both the same
+ * way — round and round, forever, because that is all the animation loop knows how to do. Which
+ * is wrong as a default: an explanation that plays a fourth time is not explaining any more, it
+ * is a thing moving in the corner of the page while someone tries to read the paragraph under
+ * it.
+ *
+ * So the two names are made to mean what they say. `steps:` plays once and holds its last frame;
+ * `loop:` is him asking for the repeat, for the case where the point *is* the repetition — a
+ * poll, a heartbeat, a queue that never empties. Stopping it is `stop`/`play` on the bar either
+ * way.
+ *
+ * Read off the source rather than out of the parsed script, because the parser normalises both
+ * names to `steps` and then nothing downstream can tell which one he wrote.
+ */
+export function loopsForever(code: string): boolean {
+  const front = frontmatter(code);
+  return KEY.test(front) && LOOPS.test(front);
+}
+
+/** The YAML block above the diagram, or "" when there is not one.
+ *
+ *  An unclosed block is the ordinary state of a fence that is still arriving, and is treated as
+ *  all frontmatter: the key is already there or it is not, and waiting for the closing dashes
+ *  would only mean deciding late. */
+function frontmatter(code: string): string {
   const source = code.replace(/^\s+/, "");
-  if (!OPENS.test(source)) return false;
+  if (!OPENS.test(source)) return "";
   const body = source.slice(source.indexOf("\n") + 1);
   const end = body.search(CLOSES);
-  // An unclosed block is the ordinary state of a fence that is still arriving. The key is
-  // already there or it is not; waiting for the closing dashes would only mean deciding late.
-  return KEY.test(end === -1 ? body : body.slice(0, end));
+  return end === -1 ? body : body.slice(0, end);
 }
