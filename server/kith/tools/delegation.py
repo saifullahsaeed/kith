@@ -374,10 +374,29 @@ class _Report:
     the final answer produces a report that reads like a transcript of someone thinking. So
     the buffer is cleared every time a tool call goes out, which leaves exactly the text after
     the last tool result: the report, and only the report.
+
+    **And the stretch before it is kept, because clearing alone lost four real reports.**
+    Measured 2026-08-20: four errands on the Sadeef AI codebase did the work — 26, 27, 24 and
+    43 tool calls, `read_file` twelve to thirty-four times each — and every one came back
+    "The sub-agent finished without reporting anything." No error, nothing stopped. Two ways
+    that happens and both were live:
+
+    * `_final_answer` forces an answer with `tool_choice="none"` and scrubs tool markup on the
+      way out, because a model part-way through a tool-using turn narrates calls as prose. A
+      worker that narrates one *instead of* answering has its whole report scrubbed to "".
+    * The worker says its report and then makes one more call. The clear is correct for
+      narration and catastrophic for a finished report, and nothing here could tell them apart.
+
+    So the last non-empty stretch is held as a fallback. Losing a paragraph of narration is a
+    cosmetic cost; losing forty-three calls of work is the errand failing silently, which is
+    worse than it failing loudly — the caller reads "nothing found" as an answer.
     """
 
     def __init__(self) -> None:
         self.text = ""
+        #: The last non-empty thing it said before a tool call cleared the buffer. The fallback
+        #: when the forced final answer comes back empty.
+        self.said_before = ""
         self.calls: list[str] = []
         self.error = ""
         self.cut_short = False
@@ -391,6 +410,8 @@ class _Report:
         if kind == "delta" and event.get("role") == "text":
             self.text += str(event.get("text") or "")
         elif kind == "tool_call":
+            if self.text.strip():
+                self.said_before = self.text
             self.text = ""
             self.calls.append(str(event.get("name") or ""))
         elif kind == "error":
@@ -403,7 +424,7 @@ class _Report:
         two greps and a report that reads confidently off eleven files are not equally worth
         believing, and the caller cannot tell them apart from the prose.
         """
-        findings = self.text.strip()
+        findings = self.text.strip() or self.said_before.strip()
         answer: dict = {
             # Named on the result, not only asked for in the brief, because the brief is advice
             # to the worker and this is a fact about the value. A scout's report is confident
@@ -414,7 +435,7 @@ class _Report:
             # What was missing was the one thing a summary cannot carry: that it describes the
             # code as found.
             "describes": "the code as it already is — not work anyone has done",
-            "findings": findings or "The sub-agent finished without reporting anything.",
+            "findings": findings or _nothing_came_back(self.calls),
         }
         if self.calls:
             answer["looked_at"] = _tally(self.calls)
@@ -489,6 +510,22 @@ class _Watched(_Report):
         that the looking is over and how much of it there was.
         """
         self._say("done", str(answer.get("looked_at") or "nothing to report"))
+
+
+def _nothing_came_back(calls: list[str]) -> str:
+    """What to say when the worker really did produce no prose at all.
+
+    Naming the work it did is the point. "Nothing found" and "it looked at forty-three things
+    and then said nothing" are the same string to a caller that cannot see inside, and the first
+    one reads as an answer — which is how a silent failure becomes a conclusion.
+    """
+    if not calls:
+        return "The sub-agent made no calls and reported nothing. Treat this as a failure, not as an answer."
+    return (
+        f"The sub-agent made {len(calls)} calls and then reported nothing, so this is a failure "
+        "rather than a finding — do not read it as 'there is nothing there'. Ask again with a "
+        "narrower objective, or look yourself."
+    )
 
 
 def _tally(calls: list[str]) -> str:

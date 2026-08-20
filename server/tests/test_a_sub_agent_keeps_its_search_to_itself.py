@@ -72,6 +72,37 @@ class TestOnlyTheFindingsComeBack:
 
         assert answer["looked_at"] == "list_projects x2"
 
+    def test_the_report_survives_one_more_tool_call_after_it(self, db: Path, monkeypatch):
+        """Clearing on a tool call is right for narration and catastrophic for a finished report.
+
+        Measured 2026-08-20: four errands on a real codebase did 26, 27, 24 and 43 calls —
+        `read_file` twelve to thirty-four times each — and every one came back "finished without
+        reporting anything". No error, nothing stopped. Two ways that happens and both were live:
+        `_final_answer` scrubs tool markup, so a worker that narrates a call instead of answering
+        has its whole report scrubbed to ""; and a worker that reports and then makes one more
+        call has it cleared. Either way the caller reads "nothing found" as an answer.
+        """
+        fake, _ = _rounds(
+            ("The ledger lives at services/turn/meter.py:96.", [_a_call("list_projects")]),
+            ("", []),  # the last round says nothing at all
+        )
+        monkeypatch.setattr(agent_loop, "_stream_once", fake)
+
+        answer = delegation.delegate_subtask(db, {"objective": "where does the ledger live"})
+
+        assert "meter.py:96" in answer["findings"]
+
+    def test_a_worker_that_truly_said_nothing_says_so_loudly(self, db: Path, monkeypatch):
+        """ "Nothing found" and "it looked at forty-three things and said nothing" are the same
+        string to a caller who cannot see inside, and the first reads as an answer."""
+        fake, _ = _rounds(("", [_a_call("list_projects")]), ("", []))
+        monkeypatch.setattr(agent_loop, "_stream_once", fake)
+
+        answer = delegation.delegate_subtask(db, {"objective": "x"})
+
+        assert "failure rather than a finding" in answer["findings"]
+        assert "calls" in answer["findings"]
+
     def test_a_worker_that_dies_still_hands_over_what_it_had(self, db: Path, monkeypatch):
         """Nine files read and the provider lost on the last round is still eight things worth
         having. Reporting only the error throws the whole delegation away."""
