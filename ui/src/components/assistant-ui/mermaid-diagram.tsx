@@ -3,11 +3,15 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Check, Copy, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from "lucide-react";
 
+import { useAuiState } from "@assistant-ui/react";
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 
+import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { naturalSize, toPng } from "@/lib/diagram";
+import { hasFlowScript } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
+import { mermaidConfig } from "@/lib/mermaid-config";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -51,100 +55,6 @@ function mermaidEngine() {
   return engine;
 }
 
-/** The `base` theme with every colour it derives from replaced.
- *
- *  `base` rather than `dark`/`neutral` because it is the only one mermaid means to be
- *  overridden — the named themes hardcode shades that ignore half of what you pass. */
-function themeVariables(dark: boolean) {
-  const c = PALETTE[dark ? "dark" : "light"];
-  return {
-    darkMode: dark,
-    background: "transparent",
-    fontFamily:
-      'ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif',
-    fontSize: "14px",
-
-    // Nodes. A filled box in the accent's soft tint with a solid accent edge, which is the
-    // same treatment the rest of the app gives something it wants you to look at.
-    primaryColor: c.accentSoft,
-    primaryTextColor: c.text,
-    primaryBorderColor: c.accent,
-    secondaryColor: c.muted,
-    secondaryTextColor: c.text,
-    secondaryBorderColor: c.line,
-    tertiaryColor: c.secondSoft,
-    tertiaryTextColor: c.text,
-    tertiaryBorderColor: c.second,
-
-    mainBkg: c.accentSoft,
-    secondBkg: c.muted,
-    lineColor: c.dim,
-    textColor: c.text,
-    border1: c.accent,
-    border2: c.line,
-    nodeBorder: c.accent,
-    nodeTextColor: c.text,
-    clusterBkg: "transparent",
-    clusterBorder: c.line,
-    titleColor: c.text,
-    edgeLabelBackground: c.background,
-
-    // Sequence diagrams.
-    actorBkg: c.accentSoft,
-    actorBorder: c.accent,
-    actorTextColor: c.text,
-    actorLineColor: c.line,
-    signalColor: c.text,
-    signalTextColor: c.text,
-    labelBoxBkgColor: c.accentSoft,
-    labelBoxBorderColor: c.accent,
-    labelTextColor: c.text,
-    loopTextColor: c.text,
-    noteBkgColor: c.secondSoft,
-    noteBorderColor: c.second,
-    noteTextColor: c.text,
-    activationBkgColor: c.muted,
-    activationBorderColor: c.line,
-    sequenceNumberColor: c.background,
-
-    // State and class diagrams.
-    labelColor: c.text,
-    altBackground: c.muted,
-
-    // Gantt.
-    sectionBkgColor: c.muted,
-    sectionBkgColor2: c.background,
-    altSectionBkgColor: c.background,
-    gridColor: c.line,
-    todayLineColor: c.accent,
-    taskBkgColor: c.accentSoft,
-    taskBorderColor: c.accent,
-    taskTextColor: c.text,
-    taskTextOutsideColor: c.text,
-    taskTextLightColor: c.text,
-    taskTextDarkColor: c.text,
-    doneTaskBkgColor: c.muted,
-    doneTaskBorderColor: c.line,
-    activeTaskBkgColor: c.secondSoft,
-    activeTaskBorderColor: c.second,
-    critBorderColor: c.accent,
-    critBkgColor: c.accentSoft,
-
-    // Pie and quadrant, which otherwise reach for their own unrelated palette.
-    pie1: c.accent,
-    pie2: c.second,
-    pie3: c.dim,
-    pie4: c.accentSoft,
-    pie5: c.secondSoft,
-    pie6: c.muted,
-    pieTitleTextColor: c.text,
-    pieSectionTextColor: c.text,
-    pieLegendTextColor: c.dim,
-    pieStrokeColor: c.background,
-    pieOuterStrokeColor: c.line,
-  };
-}
-
 /** Ids have to be unique per render or mermaid reuses a stale `<defs>` for the arrowheads —
  *  which shows up as every edge after the first losing its arrow. */
 let seq = 0;
@@ -154,18 +64,26 @@ let seq = 0;
  *
  *  Thin on purpose. What it supplies is the fallback — the ordinary code block, built from the
  *  `Pre`/`Code` the library hands over — so an invalid diagram degrades to exactly what that
- *  fence rendered as before this component existed. */
+ *  fence rendered as before this component existed.
+ *
+ *  And which of the two renderers draws it, which is one predicate: a `flow:` key in mermaid's
+ *  frontmatter is him asking for the diagram to move. Everything else about the fence is the
+ *  same, including this one — the animated path is handed the still diagram to show while the
+ *  reply is still arriving, and to keep showing if the choreography turns out not to compile. */
 export function MermaidBlock({ code, components: { Pre, Code } }: SyntaxHighlighterProps) {
-  return (
-    <MermaidDiagram
-      code={code}
-      fallback={
-        <Pre>
-          <Code>{code}</Code>
-        </Pre>
-      }
-    />
+  /* Whether this reply is still being written, asked of the thread rather than guessed from the
+     text. The still renderer does not need to know — a fragment of mermaid is a parse failure and
+     it keeps the last drawing that worked — but the animator renders in one go and cannot be
+     given half a diagram, so this is what tells it to wait. */
+  const streaming = useAuiState((state) => state.message.status?.type === "running");
+  const fallback = (
+    <Pre>
+      <Code>{code}</Code>
+    </Pre>
   );
+  const still = <MermaidDiagram code={code} fallback={fallback} />;
+  if (!hasFlowScript(code)) return still;
+  return <AnimatedDiagram code={code} still={still} streaming={streaming} />;
 }
 
 export function MermaidDiagram({ code, fallback }: { code: string; fallback: ReactNode }) {
@@ -185,25 +103,7 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
       if (!source) return;
       try {
         const mermaid = await mermaidEngine();
-        mermaid.initialize({
-          startOnLoad: false,
-          // He is writing this, not a person — and it renders in a desktop app that already
-          // trusts him with a shell. `loose` is what lets `click` bindings and HTML labels
-          // work at all, and refusing them would only mean diagrams that quietly lose half
-          // their labels.
-          securityLevel: "loose",
-          theme: "base",
-          themeVariables: themeVariables(dark),
-          // `htmlLabels: false` makes every label a real `<text>` rather than a `<foreignObject>`
-          // wrapping HTML. That is what makes the drawing *portable*: Chromium refuses to
-          // rasterise a foreignObject inside an SVG image, so with HTML labels the copied PNG
-          // comes out as a picture of the arrows with every word missing. The cost is mermaid's
-          // cleverer label wrapping, which is a fair trade for a diagram you can paste.
-          htmlLabels: false,
-          flowchart: { curve: "basis", padding: 14, useMaxWidth: true, htmlLabels: false },
-          sequence: { useMaxWidth: true, actorMargin: 40 },
-          gantt: { useMaxWidth: true },
-        });
+        mermaid.initialize(mermaidConfig(dark));
         // Parses first so a fragment never reaches the renderer — `render` on bad input leaves
         // an orphaned `#d…` element in the body, and enough of them is a visible pile of
         // half-drawn diagrams at the bottom of the window.

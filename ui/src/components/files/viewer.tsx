@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Download, FileCode2, FileImage, FileText, FileType2, X } from "lucide-react";
+import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
 import { copyText } from "@/lib/files";
+import { hasFlowScript } from "@/lib/flow-script";
 import { cn } from "@/lib/utils";
 import { Code } from "./code-block";
 import { IconAction } from "./icon-action";
@@ -246,12 +248,17 @@ function FileBody({
   // A .mmd is a picture written down, so the picture is the default and the source is the
   // toggle — the same call the SVG beside it already makes.
   if (kind.type === "diagram" && view === "rendered") {
+    // And if it carries a `flow:` script, the picture moves — the same fence in a reply and in a
+    // file are the same drawing, and one of them animating would be the surprise.
+    const still = (
+      <MermaidDiagram
+        code={content}
+        fallback={<Code code={content} language="markdown" numbered />}
+      />
+    );
     return (
       <div className="mx-auto max-w-[68rem] px-6 py-6">
-        <MermaidDiagram
-          code={content}
-          fallback={<Code code={content} language="markdown" numbered />}
-        />
+        {hasFlowScript(content) ? <AnimatedDiagram code={content} still={still} /> : still}
       </div>
     );
   }
