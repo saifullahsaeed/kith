@@ -19,16 +19,27 @@
  * palette (`amber` is the accent, `green` is the second); the rest are chosen to sit in the same
  * warm, low-saturation register rather than borrowed from the library's brighter set, and to
  * stay apart from each other when two packets are on screen at once.
+ *
+ * And then the synonyms, which are here because of a real one: he wrote `color: orange` and lost
+ * a whole animated diagram to it. `amber` is the library's word for that colour, not anybody
+ * else's, and being refused for using the ordinary name of a colour that is *right there in the
+ * palette* is the vocabulary being pedantic rather than helpful. So the obvious other word for
+ * each hue is a name for it too. This is not the safety net — the component forgives a name
+ * nothing here has ever heard of and says so — it is the list of words that are simply correct.
  */
 import type { Theme } from "mermaid-animator";
 
 import { PALETTE } from "@/lib/kith-palette";
 
+/** How a node in a given state is drawn. Read off `Theme` rather than imported, because the
+ *  library declares the type and does not export it from its entry point. */
+type NodeStateStyle = NonNullable<Theme["states"]>[string];
+
 /** The eight names `FLOW_SYNTAX` tells him he may use, in Kith's register.
  *
  *  Light values are deeper than dark ones for the ordinary reason: a packet has to hold its own
  *  against cream at one end and against near-black at the other. */
-const FLOW_COLORS = {
+const HUES = {
   light: {
     amber: "#c77618",
     yellow: "#a1820c",
@@ -51,6 +62,25 @@ const FLOW_COLORS = {
   },
 } as const;
 
+/** The other word for each of those, pointing at the same value. Chosen for what a person — or
+ *  he — reaches for when they mean that colour and do not happen to know the library's name for
+ *  it. `orange` is the one that cost a diagram; the rest are the same mistake waiting. */
+const SAME_COLOUR: Record<string, keyof (typeof HUES)["light"]> = {
+  orange: "amber",
+  gold: "yellow",
+  teal: "cyan",
+  violet: "purple",
+  magenta: "pink",
+  lime: "green",
+  crimson: "red",
+};
+
+function flowColours(dark: boolean): Record<string, string> {
+  const hues: Record<string, string> = { ...HUES[dark ? "dark" : "light"] };
+  for (const [word, hue] of Object.entries(SAME_COLOUR)) hues[word] = hues[hue];
+  return hues;
+}
+
 /** The three built-in node states, drawn from the same three colours a person already reads as
  *  failed, fine and working. */
 const STATES = {
@@ -66,9 +96,43 @@ const STATES = {
   },
 } as const;
 
+/** And the words for those three that are not those three words. A node is failed, fine, or
+ *  working on it; `error`/`ok`/`busy` are one spelling of that and not the obvious one. */
+const SAME_STATE: Record<string, keyof (typeof STATES)["light"]> = {
+  failed: "error",
+  failure: "error",
+  down: "error",
+  broken: "error",
+  healthy: "ok",
+  success: "ok",
+  up: "ok",
+  done: "ok",
+  warning: "busy",
+  pending: "busy",
+  active: "busy",
+  working: "busy",
+  waiting: "busy",
+};
+
+function nodeStates(dark: boolean): Record<string, NodeStateStyle> {
+  const half = STATES[dark ? "dark" : "light"];
+  const states: Record<string, NodeStateStyle> = { ...half };
+  for (const [word, state] of Object.entries(SAME_STATE)) states[word] = half[state];
+  return states;
+}
+
+/** What a name nobody defined is drawn as, when the component decides to draw it anyway rather
+ *  than refuse the diagram. The default packet colour, which is to say: it moves, and it looks
+ *  like this app. */
+export function defaultFlowColour(dark: boolean): string {
+  return HUES[dark ? "dark" : "light"].amber;
+}
+
+/** Fresh objects every call, `flowColors` and `states` included. The component extends them with
+ *  whatever name he invented, and a shared constant would keep that name for the rest of the
+ *  session. */
 export function animatorTheme(dark: boolean): Theme {
   const c = PALETTE[dark ? "dark" : "light"];
-  const half = dark ? "dark" : "light";
   return {
     name: dark ? "kith-dark" : "kith",
     // Only read when a still frame is exported, where a transparent ground would come out as a
@@ -82,8 +146,8 @@ export function animatorTheme(dark: boolean): Theme {
     // rather than a spread so that an ambient diagram, if one ever gets here, still looks like
     // this app instead of like a network graph.
     edgeColors: [c.dim],
-    flowColors: FLOW_COLORS[half],
-    states: STATES[half],
+    flowColors: flowColours(dark),
+    states: nodeStates(dark),
     // What everything off the active route fades to. The point of a flow script is that you can
     // see where the packet is, and the library's own defaults are already the right depth.
     dimOpacity: dark ? 0.15 : 0.2,

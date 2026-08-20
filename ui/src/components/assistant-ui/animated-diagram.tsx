@@ -3,10 +3,10 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Check, Copy, Maximize2, Pause, Play, RotateCw, X } from "lucide-react";
 
-import type { MermaidAnimator, SceneMarker } from "mermaid-animator";
+import type { FlowValidation, MermaidAnimator, SceneMarker, Theme } from "mermaid-animator";
 
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
-import { animatorTheme } from "@/lib/animator-theme";
+import { animatorTheme, defaultFlowColour } from "@/lib/animator-theme";
 import { toPng } from "@/lib/diagram";
 import { loopsForever } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
@@ -87,9 +87,13 @@ function animatorLibrary() {
  *  `mermaid` is `mermaidConfig` rather than the animator's own defaults, and it is spread after
  *  them inside the library, so a moving diagram and a still one are drawn by a mermaid holding
  *  one opinion about Kith's colours. See `lib/mermaid-config.ts`. */
-function options(dark: boolean, explorable: boolean) {
+function options(theme: Theme, dark: boolean, explorable: boolean) {
   return {
-    theme: animatorTheme(dark),
+    // Handed in rather than built here, because by this point it may carry a name he invented
+    // that the validator agreed to — and the renderer validates the script again against the
+    // theme it is given. Rebuilding it here dropped that agreement on the floor: the script
+    // passed the check and then failed the render, for the same reason it had passed.
+    theme,
     mermaid: mermaidOptions(dark),
     pan: explorable,
     zoom: explorable,
@@ -128,6 +132,9 @@ function useAnimator({
   const box = useRef<HTMLDivElement>(null);
   const [animator, setAnimator] = useState<MermaidAnimator | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** What was drawn differently from what he asked for, when the asking was a word nobody
+   *  defines. Not an error: the animation is running. */
+  const [note, setNote] = useState<string | null>(null);
   /** Where the last animator had got to, so that switching theme — which has to rebuild it,
    *  since the palette is baked in at render — does not send the animation back to zero.
    *  Rendering is a pure function of time, so this is exact rather than approximate. */
@@ -151,16 +158,14 @@ function useAnimator({
           // there, and a hop with no edge under it — are both invisible to a validator that has
           // not read the graph. Told about this theme's own colour and state names, or every
           // name Kith adds to the palette would come back as an unknown one.
-          const check = await validateFlowInDiagram(code, {
-            colors: Object.keys(theme.flowColors ?? {}),
-            states: Object.keys(theme.states ?? {}),
-          });
+          const { check, invented } = await agreeOnNames(theme, code, dark, validateFlowInDiagram);
           if (cancelled) return;
           if (!check.ok) {
             setError(check.line ? `${check.message} (line ${check.line})` : check.message);
             return;
           }
-          built = await MermaidAnimator.create(container, code, options(dark, explorable));
+          setNote(invented.length ? invented.join("; ") : null);
+          built = await MermaidAnimator.create(container, code, options(theme, dark, explorable));
           if (cancelled) {
             built.destroy();
             return;
@@ -193,7 +198,54 @@ function useAnimator({
     };
   }, [code, dark, explorable, enabled, delay]);
 
-  return { box, animator, error };
+  return { box, animator, error, note };
+}
+
+/**
+ * Come to terms over the names in his script.
+ *
+ * A colour or a state the theme does not define is a hard refusal, and it takes the whole
+ * animation with it — `color: orange` cost a finished diagram its choreography and left a page
+ * with an apology under it. Which is out of all proportion: the routes were right, the states
+ * were right, the *timing* was right, and one word for a colour was not in a vocabulary he was
+ * never shown.
+ *
+ * So a name nobody has heard of is taken as a name for the default colour, or for the working
+ * state, and the diagram plays. The library reports the offending token in `value`, which is
+ * what makes this exact rather than a guess — no parsing of his YAML here, and no rewriting of
+ * what he wrote. Only the first bad name is reported per pass, so this goes round until the
+ * script is either accepted or failing for a reason that is not a name.
+ *
+ * Bounded, because a script whose every step names a new colour is not a script to be patient
+ * with, and because a loop that fixes and re-checks needs a reason it must stop.
+ */
+const FORGIVE_AT_MOST = 8;
+
+async function agreeOnNames(
+  theme: Theme,
+  code: string,
+  dark: boolean,
+  validate: (code: string, vocabulary: { colors: string[]; states: string[] }) => Promise<FlowValidation>,
+): Promise<{ check: FlowValidation; invented: string[] }> {
+  const invented: string[] = [];
+  const vocabulary = () => ({
+    colors: Object.keys(theme.flowColors ?? {}),
+    states: Object.keys(theme.states ?? {}),
+  });
+  let check = await validate(code, vocabulary());
+  while (!check.ok && check.value && invented.length < FORGIVE_AT_MOST) {
+    if (check.code === "UNKNOWN_COLOR" && theme.flowColors) {
+      theme.flowColors[check.value] = defaultFlowColour(dark);
+      invented.push(`unknown colour "${check.value}" — drawn in amber`);
+    } else if (check.code === "UNKNOWN_STATE" && theme.states) {
+      theme.states[check.value] = theme.states.busy;
+      invented.push(`unknown state "${check.value}" — drawn as busy`);
+    } else {
+      break;
+    }
+    check = await validate(code, vocabulary());
+  }
+  return { check, invented };
 }
 
 export function AnimatedDiagram({
@@ -225,7 +277,7 @@ export function AnimatedDiagram({
   /** Whether he asked for the repeat. */
   const looping = useMemo(() => loopsForever(code), [code]);
 
-  const { box, animator, error } = useAnimator({
+  const { box, animator, error, note } = useAnimator({
     code,
     dark,
     explorable: false,
@@ -340,6 +392,16 @@ export function AnimatedDiagram({
                 <Maximize2 className="size-3.5" />
               </OverlayButton>
             </div>
+            {/* A word that was drawn differently from the way he asked for it. Under the
+                drawing rather than in place of it, because the diagram is running: this is the
+                only thing on screen that says the colour you are looking at is not the colour
+                in the source. */}
+            {note ? (
+              <p className="text-muted-foreground/45 border-border/40 flex items-center gap-1.5 truncate border-t px-3 py-1 font-mono text-[10px]">
+                <AlertTriangle className="size-2.5 shrink-0" />
+                {note}
+              </p>
+            ) : null}
             <Transport
               animator={animator}
               playing={wanted}

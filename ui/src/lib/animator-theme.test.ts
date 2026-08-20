@@ -57,6 +57,49 @@ describe.each([
     }
   });
 
+  it("takes the ordinary word for a colour it has a name of its own for", () => {
+    // `color: orange` cost a finished diagram its animation. `amber` is the library's word for
+    // that colour and nobody else's.
+    for (const [word, hue] of [
+      ["orange", "amber"],
+      ["gold", "yellow"],
+      ["teal", "cyan"],
+      ["violet", "purple"],
+      ["magenta", "pink"],
+      ["lime", "green"],
+      ["crimson", "red"],
+    ]) {
+      expect(validateFlow(routeIn(word), vocabulary(dark))).toMatchObject({ ok: true });
+      const colours = animatorTheme(dark).flowColors ?? {};
+      expect(colours[word]).toBe(colours[hue]);
+    }
+  });
+
+  it("takes the ordinary word for a node state too", () => {
+    for (const [word, state] of [
+      ["failed", "error"],
+      ["down", "error"],
+      ["healthy", "ok"],
+      ["success", "ok"],
+      ["warning", "busy"],
+      ["pending", "busy"],
+    ]) {
+      expect(validateFlow(stateIn(word), vocabulary(dark))).toMatchObject({ ok: true });
+      const states = animatorTheme(dark).states ?? {};
+      expect(states[word]).toEqual(states[state]);
+    }
+  });
+
+  it("hands out its own copy of both", () => {
+    // The component extends these with whatever name he invented; a shared constant would keep
+    // that name for the rest of the session, and the next diagram would inherit it.
+    const theme = animatorTheme(dark);
+    theme.flowColors!.turquoise = "#000";
+    theme.states!.melting = { stroke: "#000", fill: "#000" };
+    expect(animatorTheme(dark).flowColors).not.toHaveProperty("turquoise");
+    expect(animatorTheme(dark).states).not.toHaveProperty("melting");
+  });
+
   it("still refuses a name nobody defined", () => {
     // The behaviour the two tests above exist because of, asserted so that a green run means
     // "the names match" rather than "the validator says yes to everything".

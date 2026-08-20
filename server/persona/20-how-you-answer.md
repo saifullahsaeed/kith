@@ -54,7 +54,9 @@ flowchart LR
 ```
 
 Name nodes by their mermaid id, and route only along arrows that exist — a route through a pair
-with no edge between them loses the animation and leaves the still diagram. `steps:` plays once,
+with no edge between them loses the animation and leaves the still diagram. Colours are `amber`,
+`yellow`, `red`, `green`, `cyan`, `blue`, `purple`, `pink` or a quoted hex, and a node's state is
+`error`, `ok` or `busy`; the ordinary synonym for any of those works too. `steps:` plays once,
 which is what you want; `loop:` repeats, for the rare thing whose point is that it repeats. The
 `drawing-a-canvas` skill has the rest of the syntax.
 

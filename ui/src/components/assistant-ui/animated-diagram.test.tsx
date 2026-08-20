@@ -33,7 +33,12 @@ const fake = vi.hoisted(() => ({
   resumed: 0,
   paused: 0,
   seeked: [] as number[],
-  /** What the validator says about the script, per test. */
+  /** What the validator says about the script. A function, because forgiving a name means
+   *  asking again with a wider vocabulary and getting a different answer. */
+  validate: null as
+    | ((code: string, vocabulary: { colors: string[]; states: string[] }) => Record<string, unknown>)
+    | null,
+  /** The simple case: one fixed answer. */
   validation: { ok: true, checked: "graph" } as Record<string, unknown>,
   /** What mermaid is pretended to have laid out, which is what the box measures itself from. */
   viewBox: "0 0 400 260",
@@ -75,7 +80,8 @@ vi.mock("mermaid-animator", () => {
   }
   return {
     MermaidAnimator: FakeAnimator,
-    validateFlowInDiagram: () => Promise.resolve(fake.validation),
+    validateFlowInDiagram: (code: string, vocabulary: { colors: string[]; states: string[] }) =>
+      Promise.resolve(fake.validate ? fake.validate(code, vocabulary) : fake.validation),
   };
 });
 
@@ -119,6 +125,7 @@ beforeEach(() => {
   fake.paused = 0;
   fake.seeked = [];
   fake.validation = { ok: true, checked: "graph" };
+  fake.validate = null;
   fake.viewBox = "0 0 400 260";
   fake.tick = null;
 });
@@ -268,6 +275,39 @@ describe("an animated mermaid fence", () => {
       scrub(track, 0.5);
     });
     expect(fake.resumed).toBeGreaterThan(before);
+  });
+
+  it("draws a colour nobody defines rather than refusing the diagram", async () => {
+    // What actually happened: `color: orange`, and a finished diagram lost its whole animation
+    // to one word. The library names the offending token, so this is exact.
+    let asked = 0;
+    fake.validate = (_code, vocabulary) => {
+      asked += 1;
+      if (vocabulary.colors.includes("turquoise")) return { ok: true, checked: "graph" };
+      return { ok: false, code: "UNKNOWN_COLOR", message: "unknown color", value: "turquoise" };
+    };
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    expect(asked).toBe(2);
+    expect(fake.built).toHaveLength(1);
+    const theme = fake.built[0].options.theme as { flowColors: Record<string, string> };
+    expect(theme.flowColors.turquoise).toBeTruthy();
+    expect(screen.getByText(/unknown colour "turquoise" — drawn in amber/)).toBeInTheDocument();
+    // Running, not apologising.
+    expect(screen.getByLabelText("Stop the animation")).toBeInTheDocument();
+    expect(screen.queryByTestId("still")).not.toBeInTheDocument();
+  });
+
+  it("gives up on a script that is wrong for a reason that is not a name", async () => {
+    fake.validate = () => ({
+      ok: false,
+      code: "NO_EDGE",
+      message: 'flow: no edge between "A" and "C"',
+    });
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    expect(fake.built).toHaveLength(0);
+    expect(screen.getByText(/no edge between/)).toBeInTheDocument();
   });
 
   it("keeps the diagram and says why when the choreography will not compile", async () => {
