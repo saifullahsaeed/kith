@@ -225,7 +225,7 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # to say why. Skipping it costs nothing and cannot be the wrong call.
         if message.get("role") == "assistant" and not str(message.get("content") or "").strip():
             continue
-        out.append(_with_attachments(message))
+        out.append(_with_canvas(_with_attachments(message)))
     now = _present_state(conversation_id)
     if now:
         # `_live` is for the ledger, not the provider — `openai_compat._to_openai` rebuilds
@@ -236,6 +236,69 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # to ten thousand tokens is indistinguishable from a large persona.
         out.append({"role": "system", "content": now, "_live": True})
     return out
+
+
+#: What a canvas may say about itself before it is talking rather than reporting. Small on
+#: purpose: a control's reading is a word or a number, and anything longer arrived from a page a
+#: model wrote after reading the open web.
+_CANVAS_LIMITS = {"canvases": 8, "values": 32, "text": 200, "title": 80}
+
+
+def _with_canvas(message: dict) -> dict:
+    """Append what they have set on a canvas, as a note under their message.
+
+    A canvas he draws is the first thing in a reply that keeps happening after the reply ends.
+    Someone steps a nine-step walkthrough to the fork that needs them, and without this he learns
+    nothing — not which step, not that they opened it at all.
+
+    Rendered as a plain note under what they said, rather than delivered as a message of its own,
+    and both halves of that are deliberate. Not its own turn, because moving a slider is not a
+    question and this app has been burned by machinery that invents user messages. Not a
+    structured field either: the model reads one thing, which is the conversation, and a note in
+    it is visible in the transcript, foldable like everything else, and impossible to forget to
+    render somewhere.
+
+    Clamped rather than trusted. The values came from a sandboxed page written by a model that
+    reads the web — the UI already validates them at the frame boundary, and this is the second
+    check, because the first one runs on the far side of an HTTP request that anything local can
+    make.
+    """
+    readings = [c for c in (message.get("canvas") or []) if isinstance(c, dict)]
+    if not readings:
+        return {k: v for k, v in message.items() if k != "canvas"}
+
+    blocks: list[str] = []
+    for reading in readings[: _CANVAS_LIMITS["canvases"]]:
+        values = reading.get("values")
+        if not isinstance(values, dict) or not values:
+            continue
+        lines = []
+        for key, value in list(values.items())[: _CANVAS_LIMITS["values"]]:
+            if not isinstance(key, str) or not re.fullmatch(r"[\w.-]{1,40}", key):
+                continue
+            if isinstance(value, bool):
+                shown = "yes" if value else "no"
+            elif isinstance(value, (int, float)):
+                shown = str(value)
+            elif isinstance(value, str):
+                shown = value[: _CANVAS_LIMITS["text"]]
+            else:
+                continue
+            lines.append(f"- {key}: {shown}")
+        if not lines:
+            continue
+        title = str(reading.get("title") or "").strip()[: _CANVAS_LIMITS["title"]]
+        head = f'On the canvas "{title}" they have set:' if title else "On the canvas they have set:"
+        blocks.append(head + "\n" + "\n".join(lines))
+
+    content = message.get("content")
+    if not blocks or not isinstance(content, str):
+        return {k: v for k, v in message.items() if k != "canvas"}
+    joined = "\n\n".join(blocks)
+    return {
+        **{k: v for k, v in message.items() if k != "canvas"},
+        "content": f"{content}\n\n{joined}".strip(),
+    }
 
 
 def _with_attachments(message: dict) -> dict:

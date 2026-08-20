@@ -69,9 +69,10 @@ def shell(path: Path, args: dict):
     "line-numbered. A screenshot or image is shown to you as a picture instead, so you can "
     "judge what you actually made. For anything big, don't read it whole — pass `symbol` to "
     "get one function or class by name, or grep to find the line you want and read a window "
-    "with `offset`/`limit`; those three describe a window into ONE file, so they only apply "
-    "when you ask for one. A read without a range returns the first 400 lines and tells you "
-    "if there's more. "
+    "with `offset`/`limit`, which window every file you asked for. `symbol` is the exception "
+    "and needs a single path — a name can be defined in several of them and there would be no "
+    "right answer. A read without a range returns the first 400 lines and tells you if there's "
+    "more. "
     "If you are about to list four files you have not read before just to work out where "
     "something lives, that is an errand: delegate_subtask reads them somewhere else and hands "
     "you the answer, so your window ends up holding the answer instead of the files.",
@@ -129,22 +130,36 @@ def _read_several(wanted: list[str], args: dict):
     block in the interface — already knows that shape. A second shape for the same tool would
     mean each of them growing a branch.
 
-    ``symbol``, ``offset`` and ``limit`` describe a window into one file, so asking for them
-    alongside four is refused rather than quietly applied to all four or quietly to the first.
-    Both of those are wrong in a way that reads as a correct answer.
+    ``offset`` and ``limit`` are applied to **each** file. All three used to be refused here on
+    the grounds that a window into one file cannot mean four, and that was over-cautious for two
+    of them: "lines 1 to 120 of each of these" is exactly what someone means by it, and it is
+    the natural thing to try — which is what happened, and it cost a whole round at a hundred
+    and twenty thousand tokens to be told no. The description made that worse by promising they
+    "only apply when you ask for one", which reads as *ignored*, not *rejected*.
+
+    ``symbol`` is still refused, and the difference is real rather than a compromise. A window
+    is a position and means the same thing in every file; a symbol is a *name*, and a name that
+    exists in three of the four has no single answer — returning the first one found is wrong in
+    the way the old comment described, a correct-looking answer to a question nobody asked. Ask
+    for the one file you want it from, or grep for where it is.
     """
-    windowing = [name for name in ("symbol", "offset", "limit") if args.get(name) not in (None, "")]
-    if windowing:
+    symbol = str(args.get("symbol") or "").strip()
+    if symbol:
         return {
             "error": (
-                f"{', '.join(windowing)} describes a window into one file, and you asked for "
-                f"{len(wanted)}. Read them whole, or ask for the one you want a window of."
+                f"`symbol` finds one definition by name and you asked for {len(wanted)} files — "
+                f"if `{symbol}` is defined in more than one of them, any answer I gave would look "
+                "right and be arbitrary. Ask for the file you want it from, or grep for it. "
+                "`offset`/`limit` do work across several: they window each file."
             )
         }
     blocks = []
     for one in wanted:
         try:
-            body = read_file(Path(), {"paths": [one]})
+            body = read_file(
+                Path(),
+                {"paths": [one], "offset": args.get("offset"), "limit": args.get("limit")},
+            )
         except Exception as exc:  # a bad path in a batch must not lose the good ones
             body = f"{type(exc).__name__}: {exc}"
         if isinstance(body, dict):

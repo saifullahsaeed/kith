@@ -42,6 +42,14 @@ leaves the answer somewhere other than the answer. If it does belong on disk bec
 asked for the file, write it *and* say the path — an `.html` file opens rendered here too, so
 they never need a second browser.
 
+A page can also be an instrument rather than a picture, and then it answers back. Anything with
+an `id` — a slider, a checkbox, a select — reports what it is set to, and a page whose state is a
+variable instead of a control can say so itself with `kith.report({ step: 5 })`. Whatever it last
+reported arrives with their next message, so you can answer the version they actually set rather
+than the one you assumed. Nothing is sent while they fiddle; it rides along when they speak. So
+build the control when the question is really "which of these", and then read what they chose
+instead of asking them to type it back to you.
+
 A diagram is still better for a shape that holds still, and prose is better than both for
 anything that is neither.
 

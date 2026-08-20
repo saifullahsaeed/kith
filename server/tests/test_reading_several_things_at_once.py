@@ -90,14 +90,31 @@ class TestOneCallReadsSeveralFiles:
 
         assert "alpha" in out and "beta" in out
 
-    @pytest.mark.parametrize("windowing", [{"symbol": "alpha"}, {"offset": 2}, {"limit": 5}])
-    def test_a_window_into_one_file_is_refused_for_several(self, workspace: Path, windowing):
-        """Applying it to all of them and applying it to the first are both wrong, and both
-        wrong in the way that reads as a correct answer."""
-        out = computer.read_file(Path(), {"paths": ["one.py", "two.py"], **windowing})
+    def test_a_symbol_is_refused_for_several(self):
+        """A *name* has no single answer across several files. `symbol: "alpha"` where two of
+        them define `alpha` can only be answered arbitrarily, and an arbitrary answer that looks
+        right is the failure this refusal exists for."""
+        out = computer.read_file(Path(), {"paths": ["one.py", "two.py"], "symbol": "alpha"})
 
         assert "error" in out
-        assert next(iter(windowing)) in out["error"]
+        assert "symbol" in out["error"]
+
+    @pytest.mark.parametrize("windowing", [{"offset": 2}, {"limit": 5}])
+    def test_but_a_window_is_applied_to_each_of_them(self, workspace: Path, windowing):
+        """This asserted a refusal until 2026-08-20, on the grounds that a window into one file
+        cannot mean several. It can: a window is a *position*, and lines 2 onwards means the same
+        thing in every file on the list — unlike a name, which is why `symbol` above still
+        refuses.
+
+        Changed because it was seen costing a real round: four paths and `offset: 1, limit: 120`,
+        refused, at around a hundred and twenty thousand tokens for the privilege. The tool's own
+        description had promised the arguments "only apply when you ask for one", which reads as
+        *ignored* rather than *rejected*, so the model tried the reasonable thing and was refused
+        by a rule it had not been told."""
+        out = computer.read_file(Path(), {"paths": ["one.py", "two.py"], **windowing})
+
+        assert isinstance(out, str), out
+        assert "one.py" in out and "two.py" in out
 
     def test_a_window_still_works_on_a_single_file(self, workspace: Path):
         out = computer.read_file(Path(), {"paths": ["one.py"], "limit": 1})

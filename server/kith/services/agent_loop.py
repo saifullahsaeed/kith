@@ -304,6 +304,29 @@ _ROUND_FAILED_DIRECTIVE = (
     "from where you were.)"
 )
 
+#: Consecutive rounds that came back 200 with nothing in them — no answer, no tool call —
+#: that a turn will absorb before it stops and says so. One, because the first is usually a
+#: blip and the second is the model.
+#:
+#: A round like that is not the model finishing, it is the model saying nothing, and the two
+#: are indistinguishable at the `not tool_calls` branch below — which is why this exists.
+#: Measured on 2026-08-20, conversation 11b95e: three consecutive rounds on
+#: `google/gemini-3.7-flash` returned responseTokens == reasoningTokens — the entire response
+#: spent on reasoning, no content, no call — and each one ended the turn having emitted
+#: nothing at all. From a chair that is the spinner stopping and no reply arriving; his person
+#: asked "?" and then "what are you doing man" three times in four minutes.
+_EMPTY_ROUNDS_BEFORE_GIVING_UP = 1
+
+#: Spent when a round came back empty and the turn is going again. Deliberately not
+#: `_ROUND_FAILED_DIRECTIVE` — nothing failed, the request got through — and deliberately not
+#: `_LANDING_DIRECTIVE`, because narrowing the toolset rewrites the cached prefix and tells him
+#: he is out of budget when he is on round 3 (see `_FAILED_ROUNDS_BEFORE_LANDING`).
+_EMPTY_ROUND_DIRECTIVE = (
+    "(Your last response arrived with nothing in it — no answer and no tool call. It may have "
+    "gone entirely into reasoning. Nothing earlier in this turn was lost, it is all still "
+    "above. Answer in plain text, or call a tool, this round.)"
+)
+
 #: Spent when a turn changed code and recorded nothing about the project. Deliberately not
 #: the generic landing nudge: "leave something behind" reads as "file a comment", which he was
 #: already doing, and the comment is about the task rather than about the project. The thing
@@ -615,6 +638,9 @@ def _run_turn(
     #: Rounds that died in a row, reset by any round that comes back. See
     #: `_FAILED_ROUNDS_BEFORE_LANDING` for why consecutive and why the first one is absorbed.
     failed_rounds = 0
+    #: Rounds that came back with nothing in them, in a row. See
+    #: `_EMPTY_ROUNDS_BEFORE_GIVING_UP`.
+    empty_rounds = 0
 
     for round_index in range(budget):
         # Re-read tools each round so a tool Kith just built is usable right away.
@@ -763,6 +789,35 @@ def _run_turn(
         _record(stats)
         if stats:
             yield {"type": "stats", "stats": stats}
+
+        # A round can come back 200 and still be empty: no content, no tool call, the whole
+        # response spent on reasoning tokens. That is not a finished turn, but it is
+        # indistinguishable from one at the branch below — which took it, returned, and left the
+        # person watching a turn that answered their message with silence. See
+        # `_EMPTY_ROUNDS_BEFORE_GIVING_UP` for the measurement.
+        #
+        # Absorbed once by going again, because it is often a blip. Twice in a row is the model,
+        # and retrying a third time just spends more of their afternoon — so the turn ends the
+        # only honest way it can, by saying out loud that it produced nothing and naming what
+        # produced it. What it must never do is end here quietly.
+        if not tool_calls and not (content or "").strip():
+            empty_rounds += 1
+            if empty_rounds <= _EMPTY_ROUNDS_BEFORE_GIVING_UP:
+                convo.append({"role": "user", "content": _EMPTY_ROUND_DIRECTIVE})
+                continue
+            yield {
+                "type": "error",
+                "message": (
+                    f"{config.model} returned an empty response {empty_rounds} times in a row — "
+                    "all reasoning, no answer and no tool call. Nothing was lost, but there is "
+                    "nothing to show either. Try again, or switch model."
+                ),
+            }
+            return
+
+        # Reset here and not at the top of the round: the question this counter asks is "is this
+        # model answering at all?", and a round has only answered once its response is in hand.
+        empty_rounds = 0
 
         if not tool_calls:
             # He's finished talking, so the turn is over. Work that ends having recorded

@@ -57,6 +57,15 @@ class ChatMessageSchema(Schema):
             "Only accepted for models whose provider lists the modality."
         },
     )
+    canvas = List(
+        Dict(),
+        required=False,
+        metadata={
+            "description": "What the person has set on a canvas he drew, as of sending this "
+            "message: [{title, values: {name: string|number|bool}}]. Reported by the sealed "
+            "frame itself, so treated as untrusted and rendered as a short read-only note."
+        },
+    )
 
 
 class ChatRequestSchema(Schema):
