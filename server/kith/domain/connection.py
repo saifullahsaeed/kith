@@ -55,6 +55,50 @@ def is_openrouter(base_url: str) -> bool:
     return _OPENROUTER_HOST in (base_url or "")
 
 
+#: What Kith says it is, when a request goes out.
+#:
+#: `HTTP-Referer` is not a courtesy header. OpenRouter uses it as the *primary identifier* for
+#: an app in its rankings and analytics, so it has to be the one URL that means this app and
+#: nothing else. Both places that sent it sent `http://localhost` — which identifies every
+#: program ever written on a laptop, i.e. nothing at all. The repository is the honest answer:
+#: it is public, it is stable, and it is where someone following the attribution would want to
+#: land.
+APP_URL = "https://github.com/saifullahsaeed/kith"
+APP_NAME = "Kith"
+
+#: Which marketplace categories this app belongs to, from OpenRouter's own fixed vocabulary —
+#: fifteen slugs across coding, creative, productivity and entertainment. Kith is a peer with a
+#: memory that also writes and runs code, so: `personal-agent` first, `programming-app` second.
+#:
+#: An unrecognised slug is dropped silently rather than refused, so a typo here would never
+#: show up as an error — only as an app that quietly belongs to nothing.
+APP_CATEGORIES: tuple[str, ...] = ("personal-agent", "programming-app")
+
+#: OpenRouter's per-request ceiling. Sliced rather than trusted, so growing the tuple above
+#: cannot start sending a header the other end will partly ignore.
+MAX_CATEGORIES = 2
+
+
+def attribution(base_url: str) -> dict[str, str]:
+    """Who is asking, as headers.
+
+    Two places send a chat request — the stream in `llm.openai_compat` and `infra.websearch`,
+    which builds its own payload — and both had grown their own copy of this dict. Which is the
+    same story `is_openrouter` above is here for, with the same ending: the copies drifted to
+    being identical and wrong together, and nothing owned the question.
+
+    `X-OpenRouter-Title` and `X-OpenRouter-Categories` are OpenRouter's vocabulary and go only
+    to OpenRouter, like the `web` plugin and the `provider`/`usage` extensions. `X-Title` is the
+    older name for the title and still supported there, so it stays — unconditional and
+    carrying the same value, which is why sending both cannot mean two different things.
+    """
+    headers = {"HTTP-Referer": APP_URL, "X-Title": APP_NAME}
+    if is_openrouter(base_url):
+        headers["X-OpenRouter-Title"] = APP_NAME
+        headers["X-OpenRouter-Categories"] = ",".join(APP_CATEGORIES[:MAX_CATEGORIES])
+    return headers
+
+
 def refuses_reasoning(body: str) -> bool:
     """Is this 400 the provider saying reasoning cannot be turned *off*?
 

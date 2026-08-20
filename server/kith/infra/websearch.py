@@ -296,8 +296,7 @@ def _post(config: Config, payload: dict[str, Any]) -> requests.Response:
         headers={
             "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost",
-            "X-Title": "Kith",
+            **connection.attribution(config.base_url),
         },
         timeout=(10, 60),  # Exa fetches live pages; give it room
     )

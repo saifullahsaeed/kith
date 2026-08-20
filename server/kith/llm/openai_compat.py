@@ -223,9 +223,9 @@ def stream_once(
     headers = {
         "Authorization": f"Bearer {config.api_key}",
         "Content-Type": "application/json",
-        # Harmless attribution some providers (e.g. OpenRouter) like to see.
-        "HTTP-Referer": "http://localhost",
-        "X-Title": "Kith",
+        # Who is asking. One place decides it, because `infra.websearch` builds its own chat
+        # request and has to say the same thing — see `domain.connection.attribution`.
+        **connection.attribution(config.base_url),
     }
 
     started = time.time()
