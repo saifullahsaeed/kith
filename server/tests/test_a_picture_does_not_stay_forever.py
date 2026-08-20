@@ -28,7 +28,7 @@ import json
 import pytest
 
 from kith.services import tuning
-from kith.services.agent_loop import _image_from, _without_image
+from kith.services.agent_loop import _image_from, without_image
 from kith.services.turn.history import _carries_image, _compact_images
 
 BIG = "data:image/jpeg;base64," + "A" * 228_000
@@ -58,32 +58,32 @@ class TestTheBase64LeavesTheToolResult:
         assert _image_from(wrapped()) == BIG
 
     def test_and_is_gone_from_the_result_that_goes_into_the_conversation(self):
-        text = json.dumps(_without_image(wrapped()))
+        text = json.dumps(without_image(wrapped()))
         assert "AAAA" not in text
         # The 228,169-character message that used to be sent every round.
         assert len(text) < 1_000
 
     def test_it_says_where_the_picture_went_rather_than_going_quiet(self):
-        cleaned = _without_image(wrapped())
+        cleaned = without_image(wrapped())
         assert "shown to you" in cleaned["result"]["image"]
 
     def test_the_rest_of_the_result_survives(self):
-        cleaned = _without_image(wrapped())
+        cleaned = without_image(wrapped())
         assert cleaned["result"]["path"] == "/x/page-1.jpg"
         assert cleaned["result"]["bytes"] == 171_000
         assert cleaned["ok"] is True
 
     def test_an_unwrapped_result_is_handled_too(self):
         """Being right about only today's shape is what caused this in the first place."""
-        text = json.dumps(_without_image({"path": "/x.png", "image": BIG}))
+        text = json.dumps(without_image({"path": "/x.png", "image": BIG}))
         assert "AAAA" not in text
 
     def test_a_result_with_no_picture_is_untouched(self):
         same = {"ok": True, "result": {"output": "hello", "exitCode": 0}}
-        assert _without_image(same) == same
+        assert without_image(same) == same
 
     def test_a_result_that_is_not_a_dict_is_returned_as_is(self):
-        assert _without_image("just text") == "just text"
+        assert without_image("just text") == "just text"
 
 
 class TestAPictureIsSetDownOnceItHasBeenSeen:

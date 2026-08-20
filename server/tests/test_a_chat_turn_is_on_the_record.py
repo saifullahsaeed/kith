@@ -29,7 +29,6 @@ def feed(db, monkeypatch):
     Patching the attribute looks like it works and changes nothing — three tests once ran
     against the live database that way.
     """
-    import sys
 
     published: list[dict] = []
     monkeypatch.setattr(chat_route, "AGENT_DB_PATH", db)
@@ -41,7 +40,7 @@ def feed(db, monkeypatch):
         def charge_session(self, conversation_id, uncached_in, cost_usd):
             return False  # never over budget; the cap has its own tests
 
-    monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": FakeFeed()})())
+    monkeypatch.setattr(chat_route, "feed", FakeFeed())
     return published
 
 
@@ -97,7 +96,6 @@ class TestTheLiveFeed:
 
     def test_a_feed_that_throws_does_not_take_the_turn_down(self, db, monkeypatch):
         """A line on a panel is never worth losing an answer over."""
-        import sys
 
         monkeypatch.setattr(chat_route, "AGENT_DB_PATH", db)
 
@@ -105,7 +103,7 @@ class TestTheLiveFeed:
             def publish(self, *_a, **_k):
                 raise RuntimeError("no feed today")
 
-        monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": Broken()})())
+        monkeypatch.setattr(chat_route, "feed", Broken())
         watcher = a_turn()
         watcher.saw({"type": "tool_call", "name": "shell", "arguments": {}})
         watcher.finish()  # no exception is the assertion

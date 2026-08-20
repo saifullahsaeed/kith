@@ -353,3 +353,48 @@ class TestStopReachesInsideAnErrand:
         was asked to start."""
         assert stopping.asked_to_stop("") is False
         assert stopping.asked_to_stop("no-such-conversation") is False
+
+
+class TestHisOwnWordsSurviveTheWait:
+    def test_the_reply_that_sent_the_turn_round_again_is_still_in_the_history(self, db: Path, monkeypatch):
+        """A round that answers and calls nothing is the one round nothing records.
+
+        The only place an assistant message is appended to the turn's list is the tool-calling
+        branch, so a turn that went round again for an errand went round with its own last reply
+        missing. Round two's history read `user: go` then straight to `user: (the errand has come
+        back)` — two user messages back to back, and no sign he had said anything at all. He
+        answered again, and the person watched the same reply arrive twice.
+        """
+        rounds: list[list[dict]] = []
+        errands.sent("conv-1", "e1", "the long one")
+
+        def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
+            rounds.append([dict(m) for m in convo])
+            if len(rounds) == 1:
+                errands.deliver("conv-1", "e1", {"findings": "it took a while"})
+                time.sleep(0.05)
+            yield {"type": "turn", "content": f"reply-{len(rounds)}", "tool_calls": [], "stats": {}}
+
+        from kith import tools
+
+        monkeypatch.setattr(agent_loop, "_stream_once", fake)
+        host = tools.host(db, language_server=False, mcp=[])
+        with session_context.working_in("conv-1"):
+            list(
+                agent_loop._run_turn(
+                    [{"role": "user", "content": "go"}],
+                    default_config(),
+                    "host",
+                    db,
+                    host,
+                    max_rounds=4,
+                    conversation_id="conv-1",
+                )
+            )
+
+        assert len(rounds) == 2, "the turn did not go round again"
+        second = rounds[1]
+        assert [m["role"] for m in second] == ["user", "assistant", "user"], (
+            f"his reply is missing from the round that followed it: {[m['role'] for m in second]}"
+        )
+        assert second[1]["content"] == "reply-1"

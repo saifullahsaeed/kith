@@ -40,10 +40,10 @@ def turn(monkeypatch):
     """A turn that does nothing, so what is asserted is the machinery around it."""
     seen: dict = {}
 
-    def _turn(recorder, messages, config, conversation_id, opening="", *, stopping=None):
+    def _turn(recorder, messages, config, conversation_id, opening="", *, stop_switch=None):
         seen["messages"] = messages
         seen["opening"] = opening
-        seen["stopping"] = stopping
+        seen["stopping"] = stop_switch
         seen["conversation"] = session_context.current()
         seen["unattended"] = session_context.unattended()
         seen["live"] = live_turns.current(conversation_id) is not None

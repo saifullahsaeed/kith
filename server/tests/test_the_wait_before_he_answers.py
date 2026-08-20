@@ -20,7 +20,6 @@ thread where it can say what it is doing.
 from __future__ import annotations
 
 import json
-import sys
 import threading
 import time
 from pathlib import Path
@@ -81,7 +80,7 @@ def feed(db: Path, monkeypatch):
         def charge_session(self, conversation_id, uncached_in, cost_usd):
             return False
 
-    monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": FakeFeed()})())
+    monkeypatch.setattr(route, "feed", FakeFeed())
     return published
 
 
@@ -170,6 +169,15 @@ class TestTheMeterTellsTheTruth:
         monkeypatch.setattr(route, "stream_agent", lambda *a, **k: iter(()))
 
         conv = conversations.start(db, "hi")["id"]
+        # A turn already in the transcript, so the stub above — which keeps the first message and
+        # drops the rest — has something to drop.
+        #
+        # This used to pass on an empty conversation, and it is worth saying why: the prompt
+        # carried the message just typed *twice*, because it was recorded and then appended
+        # again. The fold was removing the duplicate. Fixed in `_history_for_turn`, and the test
+        # went red immediately — it had been measuring a bug. See `test_he_is_asked_once.py`.
+        conversations.record(db, conv, "user", "the first thing")
+        conversations.record(db, conv, "assistant", "the first answer")
         response = _chat({"messages": [{"role": "user", "content": "go"}], "conversationId": conv})
         events = [json.loads(line) for line in response.response]
 

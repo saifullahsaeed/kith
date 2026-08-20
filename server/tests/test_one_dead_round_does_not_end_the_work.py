@@ -216,3 +216,77 @@ class TestWhatTheServerCallsWrongStillLands:
 
         assert len(sent) >= 2
         assert agent_loop._LANDING_DIRECTIVE in sent[1], "a 400 is not a blip to carry on from"
+
+
+class TestWhatHeAlreadySaidSurvivesTheRound:
+    def test_a_half_answer_is_in_the_history_the_next_round_reads(self, db: Path, monkeypatch):
+        """The directive's own claim, made true.
+
+        `_ROUND_FAILED_DIRECTIVE` tells him "nothing you did earlier in this turn was lost, it is
+        all still above". That was false in exactly the case it is written for: a stream that
+        dies *after* it has started answering. `content` comes from the terminating `turn` event,
+        which never arrives, so the half-answer went to the screen and to the transcript and was
+        missing from the list the next round is built from — and he was then told, in as many
+        words, that it was still there.
+        """
+        rounds: list[list[dict]] = []
+
+        def dies_mid_sentence(convo, config, host, tools=None, tool_choice="auto", routing=None):
+            rounds.append([dict(m) for m in convo])
+            if len(rounds) == 1:
+                yield {"type": "delta", "role": "text", "text": "I checked the config and "}
+                yield {"type": "delta", "role": "text", "text": "the timeout is set to 30s"}
+                yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
+            else:
+                yield {"type": "turn", "content": "as I was saying", "tool_calls": [], "stats": {}}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", dies_mid_sentence)
+        monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
+
+        list(
+            agent_loop._run_turn(
+                [{"role": "user", "content": "check the config"}],
+                default_config(),
+                "host",
+                db,
+                tools.host(db, language_server=False),
+                max_rounds=40,
+            )
+        )
+
+        assert len(rounds) >= 2, "the turn did not carry on from the dead round"
+        second = rounds[1]
+        said = [m for m in second if m.get("role") == "assistant"]
+        assert said, f"his half-answer is gone: {[m['role'] for m in second]}"
+        assert said[-1]["content"] == "I checked the config and the timeout is set to 30s"
+        # And it is above the directive that claims it is above.
+        assert second[-1]["content"] == agent_loop._ROUND_FAILED_DIRECTIVE
+
+    def test_a_round_that_said_nothing_adds_nothing(self, db: Path, monkeypatch):
+        """A dead round that never spoke leaves no assistant message, as before — an empty one
+        would be a message a provider is entitled to refuse."""
+        rounds: list[list[dict]] = []
+
+        def dies_silently(convo, config, host, tools=None, tool_choice="auto", routing=None):
+            rounds.append([dict(m) for m in convo])
+            if len(rounds) <= _KILLS_A_ROUND:
+                yield {"type": "error", "message": "Cloud model returned 502: upstream unavailable"}
+            else:
+                yield {"type": "turn", "content": "carried on", "tool_calls": [], "stats": {}}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", dies_silently)
+        monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
+
+        list(
+            agent_loop._run_turn(
+                [{"role": "user", "content": "go"}],
+                default_config(),
+                "host",
+                db,
+                tools.host(db, language_server=False),
+                max_rounds=40,
+            )
+        )
+
+        after = rounds[_KILLS_A_ROUND]
+        assert not [m for m in after if m.get("role") == "assistant"]

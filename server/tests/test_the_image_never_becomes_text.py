@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from kith.services.agent_loop import _image_from, _without_image
+from kith.services.agent_loop import _image_from, without_image
 from kith.services.turn.history import _carries_image
 
 
@@ -49,12 +49,12 @@ class TestWhatTheModelReceives:
     def test_the_tool_result_beside_it_carries_no_base64(self):
         """It used to carry the same 600KB a second time — the leak was a dict spread that
         replaced the key on the outer envelope while the data sat on the inner one."""
-        text = json.dumps(_without_image(an_image_result()))
+        text = json.dumps(without_image(an_image_result()))
         assert "base64,AAAA" not in text
         assert len(text) < 400
 
     def test_what_is_left_still_says_which_image(self):
-        left = _without_image(an_image_result())["result"]
+        left = without_image(an_image_result())["result"]
         assert left["path"] == "/tmp/shot.png"
         assert left["bytes"] == 44_019
         assert "picture" in left["image"].lower()

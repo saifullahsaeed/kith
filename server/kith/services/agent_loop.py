@@ -166,9 +166,6 @@ def _is_repeat(name: str, seen: int) -> bool:
     return seen >= 2 and name not in _POLL_TOOLS
 
 
-# Enough to collapse the batches of six searches he actually makes, low enough
-# that a round can't open dozens of sockets (or docker execs) at once.
-
 # Rounds held back at the end of every turn for *landing* the work. Without a
 # reserve, research expands to fill the entire budget: he spends all 40 rounds
 # gathering, gets cut off mid-sentence, and the turn ends having produced nothing
@@ -240,34 +237,14 @@ _LANDING_TOOLS = frozenset(
     }
 )
 
-# Filing a task used to stop the turn, and that mechanism is gone. What stood here was a
-# `delegated` latch: `add_task` or `create_project` succeeding meant "he has decided this
-# happens later", so the doing-tools were taken away and a directive told him to stop working
-# and describe the plan instead.
-#
-# It was right for a conversation that was an intake desk. `CHAT_DIRECTIVE` opened with
-# "CAPTURE, DON'T DO (most important)" — file it, refuse to touch a work tool, say when you'll
-# get to it — and against that, filing a task really was the end of the turn.
-#
-# That design was reversed (see `routes/chat.CHAT_DIRECTIVE`, which now says the opposite in
-# as many words) and this outlived it. The two texts ended up in direct contradiction on the
-# same tool call:
-#
-#     CHAT_DIRECTIVE 2:  "...A project and its first milestone's tasks... Then start on the
-#                         first task in the same breath."
-#     the directive:     "You've handed that to yourself as work for later, so stop working
-#                         on it now."
-#
-# Measured over 523 recorded turns: 51 ended with a narrowed toolset and 13 of those were this,
-# firing on messages like "ok lets start on this you know everything dont wait for me", "ok lets
-# start with that", and "go ahed then" — three rounds in, right after filing the task those very
-# messages asked for. It was the single largest cause of a turn that announced a plan and did
-# nothing, and the plan it announced was the one it had just been told to stop executing.
-#
-# There is a real failure underneath it — filing a task and then burning nineteen rounds on it
-# immediately is neither delegating nor finishing — but that is a *budget* concern, and the
-# landing reserve is already the mechanism for budget. It does not need a second one keyed off
-# a tool name that now means the opposite of what it meant when this was written.
+# Filing a task used to end the turn — a `delegated` latch that took the doing-tools away the
+# moment `add_task` succeeded — and it is gone. Kept as a warning rather than as history,
+# because the shape is easy to reinvent: it was a *second* budget mechanism keyed off a tool
+# name, and it went on firing long after `CHAT_DIRECTIVE` was reversed to say the opposite
+# ("start on the first task in the same breath"). Measured over 523 turns: 51 ended with a
+# narrowed toolset and 13 were this, firing on "ok lets start on this" three rounds in, right
+# after filing the task that message asked for. The landing reserve below is the budget
+# mechanism. There is not room for two.
 
 #: Consecutive dead rounds a turn will absorb before it stops trying to work and starts trying
 #: to land. Counted consecutively and reset by any round that succeeds, because the question
@@ -350,12 +327,6 @@ def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = 
     return ollama.stream_once(messages, config, host, tools=None if tool_choice == "none" else tools)
 
 
-# How many tool rounds a single turn may take before we make it wrap up. A long
-# loop is fine — that's how real agents do multi-step work; what has to stay small
-# is the *payload each round carries* (see the grep/ranged-read/spill-to-file
-# tools and prompt-cache alignment). The thrash-guard stops genuine spinning.
-
-
 def _summarise(prompt: str, *, config: Config, host: str, routing=None) -> str:
     """One text-only model call, for folding a long turn into notes.
 
@@ -414,9 +385,19 @@ def _send_round(
 ) -> Iterator[dict]:
     """One round's model call, attempted up to `_ROUND_ATTEMPTS` times.
 
-    Returns ``(content, tool_calls, stats, failure)`` — ``failure`` is None when a call got
-    through, and the caller decides what a dead round costs. Driven with ``yield from``, which
-    forwards the reasoning/answer deltas and the `retrying` notices and hands back that tuple.
+    Returns ``(content, tool_calls, stats, failure, spoken)`` — ``failure`` is None when a call
+    got through, and the caller decides what a dead round costs. Driven with ``yield from``,
+    which forwards the reasoning/answer deltas and the `retrying` notices and hands back that
+    tuple.
+
+    ``spoken`` is the prose that actually reached the person, accumulated from the deltas as they
+    go past, and it exists for exactly one case: a stream that dies *after* it has started
+    answering. ``content`` comes from the terminating ``turn`` event, which in that case never
+    arrives — so the half-answer was streamed to the screen, written to the transcript, and
+    absent from the list the next round is built from. The directive the caller then appends says
+    "nothing you did earlier in this turn was lost, it is all still above", which was false in
+    precisely the situation it was written for. Empty on a round that got through; the caller
+    uses ``content`` there.
 
     Retrying *here* is safe in a way retrying the turn is not, and the difference is the whole
     design. The tools of every previous round have already run and their results are already in
@@ -432,15 +413,20 @@ def _send_round(
     tool_calls: list[dict] = []
     stats: dict | None = None
     failure: dict | None = None
+    spoken = ""
 
     for attempt in range(1, _ROUND_ATTEMPTS + 1):
         failure = None
         spoke = False
-        content, tool_calls, stats = "", [], None
+        content, tool_calls, stats, spoken = "", [], None, ""
         for event in _stream_once(convo, config, host, tools=schemas, routing=routing):
             kind = event["type"]
             if kind == "delta":
                 spoke = True
+                if event.get("role") == "text":
+                    # Kept, not just forwarded — see the docstring. Prose only: reasoning arrives
+                    # on the same event type under a different role and is not his answer.
+                    spoken += str(event.get("text") or "")
                 yield event  # forward reasoning/answer tokens
             elif kind == "error":
                 failure = event
@@ -462,7 +448,7 @@ def _send_round(
         }
         time.sleep(_backoff(attempt))
 
-    return content, tool_calls, stats, failure
+    return content, tool_calls, stats, failure, spoken
 
 
 def _make_room(
@@ -584,6 +570,19 @@ def stream_agent(
             errands.forget(conversation_id)
 
 
+def _land(convo: list[dict[str, Any]]) -> bool:
+    """Hand the rest of the turn over to landing, and say so. Always returns True.
+
+    Two call sites reach this — the reserve opening at the end of the budget, and a round that
+    died in a way worth making a smaller request about — and each was `landing = True` beside its
+    own copy of the append. Written once so the flag and the sentence that explains it cannot be
+    set apart from each other: a narrowed toolset with no directive is a turn that silently loses
+    two thirds of its tools, and a directive with no narrowing is a lie.
+    """
+    convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
+    return True
+
+
 def _run_turn(
     messages: list[dict[str, Any]],
     config: Config,
@@ -673,8 +672,7 @@ def _run_turn(
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:
-            landing = True
-            convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
+            landing = _land(convo)
         if landing:
             schemas = [s for s in schemas if s["function"]["name"] in _LANDING_TOOLS]
 
@@ -735,7 +733,7 @@ def _run_turn(
         # this one call.
         round_config = replace(config, effort=landing_effort) if landing and landing_effort else config
 
-        content, tool_calls, stats, failure = yield from _send_round(
+        content, tool_calls, stats, failure, spoken = yield from _send_round(
             convo, round_config, host, schemas, retries, routing=routing
         )
 
@@ -753,6 +751,12 @@ def _run_turn(
                 yield {**failure, "message": _gave_up(failure, retries.attempts, retries.first_failed_at)}
                 return
 
+            # What he had already said before the stream died. It reached the screen and the
+            # transcript; without this it does not reach the next round, and the directive below
+            # tells him nothing was lost while the thing he was half-way through saying is gone.
+            if spoken.strip():
+                convo.append({"role": "assistant", "content": spoken})
+
             failed_rounds += 1
             # A transport failure or a 5xx says the provider is unwell and says nothing about
             # the request — so the request is still good, and the honest recovery is to note the
@@ -767,8 +771,7 @@ def _run_turn(
             if _worth_retrying(failure) and failed_rounds <= _FAILED_ROUNDS_BEFORE_LANDING:
                 convo.append({"role": "user", "content": _ROUND_FAILED_DIRECTIVE})
                 continue
-            landing = True
-            convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
+            landing = _land(convo)
             continue
 
         # The provider came back, so whatever went wrong before is not an outage. Reset here
@@ -820,20 +823,6 @@ def _run_turn(
         empty_rounds = 0
 
         if not tool_calls:
-            # He's finished talking, so the turn is over. Work that ends having recorded
-            # nothing is a turn that never happened: the next one starts from the same
-            # blank slate and redoes the same work. Measured on real ticks — every one
-            # that produced durable output was one that ran out of rounds and hit the
-            # landing phase by accident; every early-finishing turn produced nothing.
-            # So the reserve can't be gated on exhausting the budget. Spend it here,
-            # once, and only when there's genuinely nothing to show.
-            #
-            # In CHAT it is the opposite. Saying "why what?" is a complete answer and
-            # there is nothing to file, so nudging him to land work he never started
-            # doubled the cost of every trivial message — two model requests each
-            # carrying the full persona and 51 tool schemas, ~18,500 tokens to answer
-            # one word — and the second reply was him puzzling at a directive that made
-            # no sense: "I haven't been researching anything this turn."
             # He is finished talking, so the turn is over.
             #
             # There used to be a branch here that spent the landing reserve when a turn
@@ -871,6 +860,19 @@ def _run_turn(
             #
             # The two conditions together are exhaustive: nothing ready and nothing out means
             # the board really is drained, and there is no third state.
+
+            # What he just said, kept. This round produced prose and called nothing, and the
+            # only place an assistant message is ever appended is the tool-calling branch below
+            # — so a turn that goes round again for an errand went round with its own last reply
+            # missing from the list. Measured: round two's history was `user: go` followed
+            # straight by `user: (the errand has come back)`, two user messages back to back and
+            # no sign he had answered at all. He then answered again, and the person watched the
+            # same reply arrive twice.
+            #
+            # Appended before the checks rather than inside each branch that continues: the
+            # `return` below throws `convo` away, so this costs nothing on the path that ends.
+            convo.append({"role": "assistant", "content": content})
+
             if errands.has_ready(conversation_id):
                 continue
             if errands.outstanding(conversation_id):
@@ -894,10 +896,15 @@ def _run_turn(
         # and hit the same wall. A turn that cannot be retried is a turn that is simply lost.
         # The tool-calling schema has always allowed content to be absent — that is what a
         # message which *is* the tool call looks like.
-        turn: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
+        # Named `calling` rather than `turn`, which is what it was: `turn` is already this
+        # function's frozen per-turn settings (`frozen.begin` at the top), and rebinding it here
+        # destroyed that object part-way through the round loop. It happened to be survivable
+        # only because every field of it is unpacked into a local immediately. One name, one
+        # thing — the same correction `stop_switch` got in `routes/chat.py`.
+        calling: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
         if content:
-            turn["content"] = content
-        convo.append(turn)
+            calling["content"] = content
+        convo.append(calling)
 
         # Resolve every call in the round up front (ids, thrash-guard) so the only
         # thing left is running them — which lets a run of network-bound calls go
@@ -977,9 +984,7 @@ def _run_turn(
                     # screenshot and never see it — which is exactly what he was doing while
                     # redesigning a UI. The data URI is taken out of the tool result so the
                     # same 600KB is not also sitting there as base64 text.
-                    convo.append(
-                        _tool_result_message(convo, step["name"], json.dumps(_without_image(result)))
-                    )
+                    convo.append(_tool_result_message(convo, step["name"], json.dumps(without_image(result))))
                     convo.append(
                         {
                             "role": "user",
@@ -1023,7 +1028,7 @@ def _is_data_uri(value: Any) -> bool:
     return isinstance(value, str) and value.startswith("data:image/")
 
 
-def _without_image(result: Any) -> Any:
+def without_image(result: Any) -> Any:
     """The tool result with the base64 taken out, at whichever level it sits.
 
     This existed as ``{**result, "image": "(shown below)"}`` and did nothing, which cost a

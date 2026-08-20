@@ -6,7 +6,6 @@ import contextvars
 import json
 import threading
 import time
-from collections import Counter
 
 from flask import Response, jsonify, request
 
@@ -21,21 +20,15 @@ from kith.infra import permissions
 from kith.infra.db import repositories as repo
 from kith.kernel import clock, live_turns, session_context, stopping
 from kith.llm import ledger
-from kith.llm.budget import SEED_CHARS_PER_TOKEN, message_chars
 from kith.schemas import (
     AnswerSchema,
     ChatRequestSchema,
 )
 from kith.services import conversations, history, questions, steering
-from kith.services.activity import describe_call, short_args
-from kith.services.agent_loop import stream_agent
-from kith.services.turn.prompt import (
-    _build_messages,
-    _conversation_chars,
-)
-from kith.services.turn.prompt import (
-    as_sent as prompt_as_sent,
-)
+from kith.services.activity import describe_call, feed, short_args
+from kith.services.agent_loop import stream_agent, without_image
+from kith.services.turn import report
+from kith.services.turn.prompt import _build_messages, _conversation_chars
 from kith.settings import AGENT_DB_PATH
 
 #: Turns in flight, by conversation, so Stop has something to set.
@@ -184,70 +177,25 @@ def fold_now(conversation_id: str):
             "folded": True,
             "fromChars": before,
             "toChars": after,
-            "reading": _reading_after_fold(conversation_id, was, ledger.take(folded, chars_per_token=1.0)),
+            "reading": report.reading_after_fold(
+                conversation_id, was, ledger.take(folded, chars_per_token=1.0)
+            ),
         }
     )
 
 
-def _reading_after_fold(conversation_id: str, was: ledger.Ledger, now: ledger.Ledger) -> dict | None:
-    """How full the window is now that the fold has happened.
+def _ndjson(lines) -> Response:
+    """A streaming response, with the two headers that make it stream.
 
-    A reading has only ever existed as something a turn took on its way past: the loop measures
-    the request it is about to send, and the last such measurement is what the meter shows. A
-    fold is not a turn. It rewrites the stored history and answers, and nothing measures anything
-    — so the meter went on showing a conversation that no longer exists, and the one command
-    whose entire purpose is to make that number smaller left it exactly where it was.
-
-    This does not rebuild the request to find out. Rebuilding means the persona, the live block,
-    the tool schemas as they will be narrowed next turn, and the token ratio the provider's own
-    billing calibrated — four things to get right in order to re-derive a number that is mostly
-    unchanged. A fold moves the stored conversation and nothing else, so: start from the last
-    real reading, subtract what actually left, in the ratio that reading was costed with, and
-    carry the untouched categories across rather than re-estimating them.
-
-    `None` when the conversation has never had a turn, which is the only honest answer — there
-    is no measurement to adjust, and a first reading is the next turn's to take.
+    `X-Accel-Buffering` is the one that matters and the easy one to forget: behind nginx without
+    it the whole turn is buffered and delivered in a single lump at the end, which is a stream
+    that is not a stream. Written once so the second caller cannot be written without it.
     """
-    taken = conversations.latest_reading(conversation_id)
-    reading = taken.get("context") or taken.get("baseline") or {}
-    if not reading.get("lines"):
-        return None
-    # The seed only for readings recorded before `charsPerToken` was sent. A fold typically
-    # removes hundreds of thousands of characters, so the ratio it is divided by is the whole
-    # difference between "the meter moved by the right amount" and "the meter moved".
-    ratio = float(reading.get("charsPerToken") or 0) or SEED_CHARS_PER_TOKEN
-    previous = {str(line.get("key") or ""): int(line.get("tokens") or 0) for line in reading["lines"]}
-    window = int(reading.get("window") or 0)
-
-    lines = []
-    for line in now.lines:
-        # Signed on purpose: the brief the fold wrote is itself context, and in a category that
-        # may have held nothing before. A fold that summarises 400k characters into 3k has to
-        # show the 3k arriving as well as the 400k leaving, or the meter reads low by the size
-        # of the summary and the next turn appears to grow for no reason.
-        removed = (was.of(line.key) - now.of(line.key)) / ratio
-        tokens = max(0, round(previous.get(line.key, 0) - removed))
-        if tokens > 0:
-            lines.append(
-                {
-                    "key": line.key,
-                    "label": line.label,
-                    "tokens": tokens,
-                    # Zero when the window is unknown, exactly as `Line.share_of` does it: the
-                    # absolute figures are real on a local model, only the percentages are not.
-                    "share": round(tokens / window, 4) if window > 0 else 0.0,
-                }
-            )
-
-    used = sum(line["tokens"] for line in lines)
-    return {
-        "window": window,
-        "used": used,
-        "free": max(0, window - used) if window > 0 else 0,
-        "share": round(used / window, 4) if window > 0 else 0.0,
-        "charsPerToken": ratio,
-        "lines": lines,
-    }
+    return Response(
+        lines,
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @api.get("/chat/<conversation_id>/context")
@@ -256,325 +204,7 @@ def _reading_after_fold(conversation_id: str, was: ledger.Ledger, now: ledger.Le
     description="The meter's own categories, subdivided into the calls that filled them.",
 )
 def context_detail(conversation_id: str):
-    """The reading the meter is showing, plus which calls actually filled it.
-
-    **Its own endpoint, rather than more fields on the streamed `context` event.** That event is
-    emitted every turn and persisted into the transcript — 167 of them on one real conversation
-    here — so hanging two and a half thousand items off each would grow every stored turn forever
-    to serve a screen that is open for a few seconds a month, and would charge that cost to
-    everyone who never opens it. A reading is streamed; a breakdown is asked for.
-
-    **The totals are the stored reading's, untouched.** Not recomputed: a fresh `take` here would
-    need the schemas as they will be narrowed next turn, the live block as it will be written, and
-    the ratio the provider's own billing calibrated — four things to get right in order to
-    re-derive a number the meter is already showing correctly. Getting any of them slightly wrong
-    produces a detail screen that quietly disagrees with the rail beside it, and there is no way
-    for the person to tell which of the two is lying.
-
-    **The items are the conversation, not the window, and the response keeps them apart.** A
-    reading measures the request a turn actually sent, which is the conversation *after* the fold
-    — old turns replaced by a brief, their tool results gone with them. `full_messages` is the
-    transcript: everything that ever happened. On one real conversation here those are 556,392
-    and 2,361,997 tokens, so the window is a quarter of the history.
-
-    The first version of this treated the items as a breakdown *of* the reading and printed a
-    repeat figure worth "121% of the window", which is how the confusion announced itself.
-    Reproducing the folded list instead is not an option: folding is a summarisation call, and a
-    screen you open in order to look at something must never spend money to draw itself.
-
-    Both figures are worth having. `lines`/`used` are the window, and agree with the meter. The
-    items and `wasted` are the conversation, totalled separately in `itemsTotal` so nothing has to
-    express one as a share of the other. The items are still the actionable half — a file read
-    fifty-one times is a habit that will refill the window whether or not those particular copies
-    survived the last fold.
-    """
-    taken = conversations.latest_reading(conversation_id)
-    reading = taken.get("context") or taken.get("baseline") or {}
-    # The ratio the reading was costed with, so the items are denominated in its units rather than
-    # in a guess. The seed only for readings recorded before the field existed.
-    ratio = float(reading.get("charsPerToken") or 0) or SEED_CHARS_PER_TOKEN
-    items = ledger.itemise(conversations.full_messages(conversation_id), chars_per_token=ratio)
-
-    return jsonify(
-        {
-            # False on a conversation that has never had a turn. The screen needs to say "nothing
-            # has measured this yet" rather than draw an empty window at 0%, which reads as an
-            # answer and is not one.
-            "reading": bool(reading.get("lines")),
-            "window": int(reading.get("window") or 0),
-            "used": int(reading.get("used") or 0),
-            "free": int(reading.get("free") or 0),
-            "share": float(reading.get("share") or 0.0),
-            "folded": bool(taken.get("folded")),
-            "lines": reading.get("lines") or [],
-            # ── everything below is the conversation, not the window. See above. ──
-            "items": ledger.items_as_wire(items),
-            # Led with, because it is the only figure here that is a decision rather than a fact.
-            "wasted": sum(item.wasted for item in items),
-            # The items' own denominator. Without it the screen has nothing to express `wasted` as
-            # a share of except `used`, which is a different measurement and gave "121%".
-            "itemsTotal": sum(item.tokens for item in items),
-            # ── the prompt itself, message by message ──
-            "sent": _as_sent(conversation_id, ratio),
-            # What the provider actually billed for the last round. Everything else on this
-            # screen is `message_chars` over a ratio; these came back from the provider.
-            "lastRound": _last_round(conversation_id),
-        }
-    )
-
-
-#: How much of a message the list carries. Enough to recognise a row; not enough to make the
-#: response large. The whole text is one request away, for the one you click.
-_PREVIEW_CHARS = 240
-
-
-def _sent_messages(conversation_id: str) -> tuple[list[dict], bool]:
-    """The list a turn would send, and whether a fold is owed before it does."""
-    messages = conversations.full_messages(conversation_id)
-    return prompt_as_sent(messages, default_config(), conversation_id, tool_chars=_tool_block_chars())
-
-
-def _previous_messages(conversation_id: str) -> list[dict] | None:
-    """The prompt the last turn sent, rebuilt.
-
-    Nothing records the literal list a turn sent, and nothing needs to: the prompt is a function
-    of the transcript, so the last turn's prompt is that same function over the transcript as it
-    stood when that turn began — everything up to and including the user message that started it.
-
-    `None` on a conversation whose first turn has not happened yet. Saying "+100% since last turn"
-    against a turn that never ran would be inventing the comparison rather than making one.
-    """
-    messages = conversations.full_messages(conversation_id)
-    starts = [i for i, message in enumerate(messages) if message.get("role") == "user"]
-    if not starts:
-        return None
-    # The turn in progress (or the last one) began at the final user message; the prompt it was
-    # handed ended there. Everything after it is what that turn itself produced.
-    cut = starts[-1]
-    if cut == 0:
-        return None  # the very first turn — there is no prompt before it
-    return prompt_as_sent(messages[:cut], default_config(), conversation_id, tool_chars=_tool_block_chars())[
-        0
-    ]
-
-
-def _key(message: dict) -> tuple:
-    """What makes two messages the same message across two builds of the prompt.
-
-    Content rather than position: a fold changes where a message sits without changing what it
-    is, and diffing by index would report the entire tail as replaced every time one happened.
-    """
-    content = message.get("content")
-    return (
-        str(message.get("role") or ""),
-        str(message.get("tool_name") or ""),
-        content if isinstance(content, str) else json.dumps(content, sort_keys=True),
-        json.dumps(message.get("tool_calls"), sort_keys=True) if message.get("tool_calls") else "",
-    )
-
-
-def _as_sent(conversation_id: str, ratio: float) -> dict:
-    """The prompt, message by message, costed the way the ledger costs it.
-
-    Same `message_chars` and same ratio as the categories above, so a row's tokens and the
-    category it lands in are the same measurement rather than two that nearly agree.
-    """
-    messages, fold_pending = _sent_messages(conversation_id)
-    previous = _previous_messages(conversation_id)
-
-    # What the last turn's prompt held, counted so each message here can be told apart from one
-    # that merely looks like it. A `Counter` rather than a set: the same tool result really can
-    # appear twice, and two copies last turn against two copies now is "kept, kept" — treating it
-    # as a set would call the second one new for the rest of the conversation's life.
-    was = Counter(_key(message) for message in previous or [])
-    seen: Counter = Counter()
-
-    listed = []
-    for index, message in enumerate(messages, start=1):
-        chars = message_chars(message)
-        key = _key(message)
-        live = bool(message.get("_live"))
-        if live:
-            # Neither kept nor added. It is rewritten every single turn — which is the honest
-            # answer, and the one worth teaching: it is why the tail of a prompt is never cached.
-            change = "rewritten"
-        elif previous is None:
-            change = "added"
-        else:
-            seen[key] += 1
-            change = "kept" if seen[key] <= was[key] else "added"
-        listed.append(
-            {
-                "index": index,
-                "role": str(message.get("role") or ""),
-                # "tool" is a role, not an answer — which tool ran is what makes the row
-                # identifiable in a list of forty of them.
-                "tool": str(message.get("tool_name") or ""),
-                "chars": chars,
-                "tokens": int(chars / ratio) if ratio > 0 else 0,
-                "preview": _preview(message),
-                "change": change,
-                "live": live,
-                # The calls this message carries, with the arguments they were made with. A tool
-                # call is a real message in the prompt and the command inside it is usually the
-                # only part that says what it was — the screen folds a call into its result, and
-                # a fold that dropped the arguments would be hiding something that is sent.
-                "calls": _calls_of(message),
-            }
-        )
-
-    # What the last turn carried and this one will not: what a fold or a trim removed. Reported
-    # separately because it is not in the list — it is the part of the answer that is missing
-    # from it, and a screen that only ever grows explains half of context management.
-    remaining = was - seen
-    dropped = []
-    for message in previous or []:
-        key = _key(message)
-        if remaining[key] and not message.get("_live"):
-            remaining[key] -= 1
-            chars = message_chars(message)
-            dropped.append(
-                {
-                    "role": str(message.get("role") or ""),
-                    "tool": str(message.get("tool_name") or ""),
-                    "tokens": int(chars / ratio) if ratio > 0 else 0,
-                    "preview": _preview(message),
-                }
-            )
-
-    by_role: dict[str, dict] = {}
-    for row in listed:
-        seen = by_role.setdefault(row["role"], {"role": row["role"], "tokens": 0, "count": 0})
-        seen["tokens"] += row["tokens"]
-        seen["count"] += 1
-    total = sum(row["tokens"] for row in listed)
-    for seen in by_role.values():
-        seen["share"] = round(seen["tokens"] / total, 4) if total else 0.0
-
-    def costed(items) -> int:
-        return sum(int(message_chars(m) / ratio) if ratio > 0 else 0 for m in items)
-
-    return {
-        # Said out loud rather than papered over: the preview never pays for a fold, so on a
-        # conversation that is due one this is the prompt that would go if it did not.
-        "foldPending": fold_pending,
-        "tokens": total,
-        "messages": listed,
-        # Largest first — "why is this prompt so big" is almost always one role.
-        "byRole": sorted(by_role.values(), key=lambda row: -row["tokens"]),
-        # ── against the prompt the last turn sent ──
-        "hasPrevious": previous is not None,
-        "previousTokens": costed(previous or []),
-        # Carved out of both sides so the arithmetic closes. The live block is rewritten rather
-        # than added, so it is neither growth nor carry-over; leaving it in either total makes
-        # "before + added = after" fail by a few thousand tokens for a reason nobody can find.
-        "previousLiveTokens": costed([m for m in (previous or []) if m.get("_live")]),
-        "addedTokens": sum(row["tokens"] for row in listed if row["change"] == "added"),
-        "dropped": dropped,
-        "droppedTokens": sum(row["tokens"] for row in dropped),
-    }
-
-
-def _calls_of(message: dict) -> list[dict]:
-    """Each tool call on this message, with its arguments rendered to one readable line.
-
-    Structured rather than folded into the preview text, because two callers read it and both
-    want it exact: the screen prints the command, and the pairing that folds a call into its
-    result matches on `name`. Matching instead on a preview that happens to read "calls grep" is
-    a string comparison against prose.
-    """
-    out = []
-    for call in message.get("tool_calls") or []:
-        function = call.get("function") or {}
-        arguments = function.get("arguments")
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except (ValueError, TypeError):
-                arguments = {}
-        if not isinstance(arguments, dict):
-            arguments = {}
-        # One argument is the command, and printing `{"command": "pytest -q"}` around it buys
-        # nothing. More than one and the keys are what tell them apart.
-        if len(arguments) == 1:
-            only = next(iter(arguments.values()))
-            args = only if isinstance(only, str) else json.dumps(only, ensure_ascii=False)
-        else:
-            args = json.dumps(arguments, ensure_ascii=False)
-        out.append(
-            {
-                "name": str(function.get("name") or ""),
-                "args": " ".join(str(args).split())[:_PREVIEW_CHARS],
-            }
-        )
-    return out
-
-
-def _preview(message: dict) -> str:
-    """A line you can scan, which is not the same job as the message body.
-
-    A tool result's content is `json.dumps(result)`, and a result that was itself a JSON string
-    comes out doubly encoded — the first version of this listed `"\\"ok\\": true, \\"result\\":
-    {\\"name\\": ...` for every tool row, which is unreadable and is most of the list. Unwrapped
-    here and only here: the detail pane still shows the literal text the provider receives, since
-    that is the entire point of the screen.
-    """
-    content = message.get("content")
-    if isinstance(content, list):
-        # An attachment-carrying message: its parts, not a JSON dump of the envelope.
-        text = " ".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
-    else:
-        text = _unwrapped(str(content or "")) if message.get("role") == "tool" else str(content or "")
-    if not text.strip() and message.get("tool_calls"):
-        names = [str((call.get("function") or {}).get("name") or "") for call in message["tool_calls"]]
-        text = f"calls {', '.join(n for n in names if n)}"
-    return " ".join(text.split())[:_PREVIEW_CHARS]
-
-
-def _unwrapped(text: str) -> str:
-    """The readable part of a JSON-encoded tool result, or the text unchanged.
-
-    Peels at most twice — a result that is a JSON string inside a JSON envelope is the shape the
-    loop actually produces — and gives up quietly on anything that is not JSON, which is most
-    shell output.
-    """
-    for _ in range(2):
-        try:
-            value = json.loads(text)
-        except (ValueError, TypeError):
-            return text
-        if isinstance(value, dict):
-            # `{"ok": true, "result": ...}` — the result is the part worth showing.
-            inner = value.get("result", value)
-            text = inner if isinstance(inner, str) else json.dumps(inner)
-        elif isinstance(value, str):
-            text = value
-        else:
-            return json.dumps(value)
-    return text
-
-
-def _last_round(conversation_id: str) -> dict | None:
-    """What the provider billed for the most recent round, or None if there has not been one.
-
-    None rather than zeroes: a cost of $0.00 and a model of "" read as facts, and they are the
-    absence of one.
-    """
-    found: dict = {}
-    for entry in conversations.read(conversation_id):
-        if entry.get("type") == "stats":
-            found = entry.get("stats") or {}
-    if not found:
-        return None
-    return {
-        "model": str(found.get("model") or ""),
-        "provider": str(found.get("provider") or ""),
-        "promptTokens": int(found.get("promptTokens") or 0),
-        "responseTokens": int(found.get("responseTokens") or 0),
-        "cachedTokens": int(found.get("cachedTokens") or 0),
-        "cacheWriteTokens": int(found.get("cacheWriteTokens") or 0),
-        "costUsd": float(found.get("costUsd") or 0.0),
-    }
+    return jsonify(report.detail(conversation_id, _tool_block_chars()))
 
 
 @api.get("/chat/<conversation_id>/context/message/<int:index>")
@@ -583,31 +213,7 @@ def _last_round(conversation_id: str) -> dict | None:
     description="The text behind a row in the context screen's list.",
 )
 def context_message(conversation_id: str, index: int):
-    """One message in full, fetched when someone clicks the row.
-
-    Its own request because the list must stay small. One real conversation here is 2.36M tokens
-    of transcript; carrying every message's text in order to draw a list of previews would be a
-    several-megabyte response for a screen that shows one at a time.
-    """
-    messages, _ = _sent_messages(conversation_id)
-    if not 1 <= index <= len(messages):
-        return jsonify({"index": index, "role": "", "tool": "", "text": ""})
-    message = messages[index - 1]
-    content = message.get("content")
-    if isinstance(content, list):
-        text = "\n\n".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
-    else:
-        text = str(content or "")
-    if not text.strip() and message.get("tool_calls"):
-        text = json.dumps(message["tool_calls"], indent=2)
-    return jsonify(
-        {
-            "index": index,
-            "role": str(message.get("role") or ""),
-            "tool": str(message.get("tool_name") or ""),
-            "text": text,
-        }
-    )
+    return jsonify(report.one_message(conversation_id, index, _tool_block_chars()))
 
 
 @api.post("/chat/<conversation_id>/stop")
@@ -675,11 +281,37 @@ def attach_turn(conversation_id: str):
     live = live_turns.current(conversation_id)
     if live is None:
         return Response(status=204)
-    return Response(
-        live_turns.watch(live),
-        mimetype="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _ndjson(live_turns.watch(live))
+
+
+def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
+    """The transcript, with whatever the newest message carries that the transcript does not.
+
+    Two things are true at once and they used to be reconciled by addition. `conversations.record`
+    writes a message's *text* and nothing else — an attachment or a canvas reading lives only in
+    the request that carried it — and `full_messages` rebuilds every message from role and content
+    alone. So the newest message arrives on disk stripped of the parts that are not words.
+
+    Putting them back by merging, not by appending. Appending is what this did, and the message
+    had already been recorded a moment earlier, so both copies went to the model: on every turn
+    after the first, the person's own words were in the prompt twice, back to back. Nothing failed
+    and nothing said so — it read as a longer conversation than it was, and it cost the newest
+    message twice on the one part of the prompt that is never cached.
+
+    Falls back to appending when the tail is not the message it was told about. `record` swallows
+    an OSError rather than take a turn down, and a turn missing the thing it was asked is worse
+    than a turn asked twice.
+    """
+    history = conversations.full_messages(conversation_id)
+    said = str((latest or {}).get("content") or "")
+    recorded = bool(history) and history[-1].get("role") == "user" and history[-1].get("content") == said
+    if not recorded:
+        return [*history, latest or {"role": "user", "content": said}]
+    # Everything but the two fields the transcript already round-trips.
+    carried = {key: value for key, value in (latest or {}).items() if key not in ("role", "content")}
+    if carried:
+        history[-1] = {**history[-1], **carried}
+    return history
 
 
 def begin_turn(conversation_id: str, config, gather, opening: str = ""):
@@ -723,7 +355,7 @@ def begin_turn(conversation_id: str, config, gather, opening: str = ""):
     # Held as a local for the life of this turn, not re-read from `_RUNNING` between events.
     # See `_arm`: the dict says which turn is current, and a turn asking that question about
     # itself gets the wrong answer the moment a second one starts in the same conversation.
-    stopping = _arm(conversation_id)
+    stop_switch = _arm(conversation_id)
 
     def work():
         """Advance the turn to the end, whether or not anyone is still reading.
@@ -788,7 +420,9 @@ def begin_turn(conversation_id: str, config, gather, opening: str = ""):
                 # and an abandoned generator is not a finished one: everything after its last
                 # `yield` — the turn-log row saying what the turn spent, the feed's own "done" —
                 # never ran. Stopping is the one case where you most want that row.
-                for line in _turn(recorder, messages, config, conversation_id, opening, stopping=stopping):
+                for line in _turn(
+                    recorder, messages, config, conversation_id, opening, stop_switch=stop_switch
+                ):
                     live_turns.publish(live, line)
         except Exception as exc:
             # Broad on purpose: this thread is the only one running the turn, and no reader can
@@ -796,7 +430,7 @@ def begin_turn(conversation_id: str, config, gather, opening: str = ""):
             # for an end that never comes.
             live_turns.publish(live, json.dumps({"type": "error", "message": str(exc)}) + "\n")
         finally:
-            _disarm(conversation_id, stopping)
+            _disarm(conversation_id, stop_switch)
             # Anything still waiting belonged to this turn. Carrying it into the next one would
             # put it in front of a model whose recent history no longer matches what it was
             # reacting to.
@@ -833,7 +467,7 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
     live = begin_turn(
         conversation_id,
         default_config(),
-        lambda: [*conversations.full_messages(conversation_id), {"role": "user", "content": trigger}],
+        lambda: _history_for_turn(conversation_id, {"role": "user", "content": trigger}),
         trigger,
     )
     # Drained rather than left to run, which keeps the scheduler exactly as serial as it was:
@@ -923,7 +557,8 @@ class _Recorder:
             self.retried += 1
             return
         if kind in ("tool_call", "tool_result", "stats"):
-            conversations.record_event(self.conversation_id, kind, _readable(event))
+            # Already scrubbed by `_turn` before it got here — see the note at the call site.
+            conversations.record_event(self.conversation_id, kind, event)
 
     def finish(self, error: str | None = None, stopped: bool = False) -> None:
         self._flush()
@@ -985,9 +620,7 @@ def _readable(event: dict) -> dict:
     """
     if event.get("type") != "tool_result":
         return event
-    from kith.services.agent_loop import _without_image
-
-    return {**event, "result": _without_image(event.get("result"))}
+    return {**event, "result": without_image(event.get("result"))}
 
 
 class _MindFeed:
@@ -1009,14 +642,14 @@ class _MindFeed:
     """
 
     def __init__(
-        self, conversation_id: str, opening: str = "", stopping: threading.Event | None = None
+        self, conversation_id: str, opening: str = "", stop_switch: threading.Event | None = None
     ) -> None:
         self.conversation_id = conversation_id
         self.opening = opening
         #: The turn's own stop switch, so a session past its budget can be stopped the same
         #: way a person stops one. The cap used to `rest` the session instead — tell it to
         #: stop keeping going — and there is no keeping going to stop.
-        self.stopping = stopping
+        self.stop_switch = stop_switch
         self.tools: list[str] = []
         self.rounds = 0
         self.tokens_in = 0
@@ -1029,8 +662,6 @@ class _MindFeed:
 
     def _publish(self, kind: str, text: str, **fields) -> None:
         try:
-            from kith.services.activity import feed
-
             feed.publish(kind, text, conversation=self.conversation_id, **fields)
         except Exception:
             # A feed line must never be the thing that takes a turn down.
@@ -1069,11 +700,9 @@ class _MindFeed:
             # Meter the session, and stop the turn if this round took it past its budget. The
             # message telling the person why is written by `charge_session`; what is left here
             # is the acting on it.
-            from kith.services.activity import feed
-
             if feed.charge_session(self.conversation_id, fresh, float(stats.get("costUsd") or 0.0)):
-                if self.stopping is not None:
-                    self.stopping.set()
+                if self.stop_switch is not None:
+                    self.stop_switch.set()
         elif kind == "retrying":
             # The one event in a turn that is otherwise write-only. In the message it is a live
             # line that the error then replaces, so afterwards there is no evidence the retry
@@ -1150,13 +779,11 @@ def chat(payload):
         # The client's own copy is prose-only by design (it strips tool calls before
         # ever sending them), so on a resumed conversation everything in it but the
         # message just typed is ignored and the transcript rebuilds the real thing,
-        # tool history included. Taken whole rather than just its text, so an
-        # attachment riding on it isn't dropped.
+        # tool history included. What the typed message carries beyond its text — an
+        # attachment, a canvas reading — is merged back onto the transcript's copy of
+        # it rather than added beside it; see `_history_for_turn`.
         if resumed:
-            return [
-                *conversations.full_messages(conversation_id),
-                latest_message or {"role": "user", "content": latest},
-            ]
+            return _history_for_turn(conversation_id, latest_message or {"role": "user", "content": latest})
         return client_history
 
     live = begin_turn(conversation_id, config, gather, latest)
@@ -1169,11 +796,7 @@ def chat(payload):
         # which is the point: there is no separate "resume" path to keep in step.
         yield from live_turns.watch(live)
 
-    return Response(
-        generate(),
-        mimetype="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _ndjson(generate())
 
 
 def _turn(
@@ -1183,7 +806,7 @@ def _turn(
     conversation_id: str,
     opening: str = "",
     *,
-    stopping: threading.Event | None = None,
+    stop_switch: threading.Event | None = None,
 ):
     """One turn of the loop, streamed as it happens.
 
@@ -1197,13 +820,13 @@ def _turn(
     feed that never said "done". One exit means the recorder and the feed are finished exactly
     once, whoever decided the turn was over.
 
-    `stopping` is read between events, which is the only place a turn can be interrupted
+    `stop_switch` is read between events, which is the only place a turn can be interrupted
     without abandoning a tool call half-done. `agent_loop` has no cancellation hook of its own,
     so this is as fine-grained as stopping gets, and it is enough: the wait is one tool call,
     not the rest of the turn. None means nothing can stop this one — which is the reminder
     path in `services.scheduler`, where there is no one to click anything.
     """
-    watcher = _MindFeed(conversation_id, opening, stopping=stopping)
+    watcher = _MindFeed(conversation_id, opening, stop_switch=stop_switch)
     stopped = False
     error: str | None = None
     try:
@@ -1242,6 +865,11 @@ def _turn(
             # it is carrying. So the directive above asks him to do the work, and nothing
             # forces him to manufacture evidence of having done it.
         ):
+            # Scrubbed once, here, and everything downstream sees the same object. It used to
+            # be applied twice to every event — once inside `_Recorder.saw` on its way to the
+            # transcript and once again at the `yield` — which meant two walks of every tool
+            # result and two answers to "what did this tool return" that had to agree.
+            event = _readable(event)
             recorder.saw(event)
             watcher.saw(event)
             # Scrubbed on the way out too, not only on the way into the transcript. The model
@@ -1255,13 +883,20 @@ def _turn(
             # It is a real cost as well as a misleading one: 44KB per image over the wire and
             # into the DOM, for a string nothing on the other side can use. The interface only
             # ever tested the field for truthiness to say "looked at it".
-            yield json.dumps(_readable(event)) + "\n"
+            yield json.dumps(event) + "\n"
             if event.get("type") == "error":
+                # `error` is itself a terminator, and nothing follows it. `return` out of a
+                # try/finally runs the `finally` and ends the generator, so the tail below is
+                # skipped — which is the intent here and is asserted.
                 error = event.get("message")
                 return
-            if stopping is not None and stopping.is_set():
+            if stop_switch is not None and stop_switch.is_set():
+                # `break`, not `return`, so the tail below is reached. A stopped turn used to
+                # end with *neither* `done` nor `error` — the stream simply stopped, which from
+                # the client's side is indistinguishable from the connection dropping. There are
+                # three ways a turn ends and it now says which one it was.
                 stopped = True
-                return
+                break
     except Exception as exc:
         # A turn that died on the way out — the provider hung up, the socket broke — rather than
         # one that reported an error event. Named here rather than left to propagate, because

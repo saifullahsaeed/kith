@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import pytest
 
-from kith.api.routes.chat import _reading_after_fold
 from kith.llm import ledger
 from kith.services import conversations
+from kith.services.turn.report import reading_after_fold as _reading_after_fold
 
 #: Deliberately not the seed. A fold removes hundreds of thousands of characters, so the ratio
 #: they are divided by is the difference between the meter moving by the right amount and the

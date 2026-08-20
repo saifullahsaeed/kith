@@ -225,7 +225,14 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # to say why. Skipping it costs nothing and cannot be the wrong call.
         if message.get("role") == "assistant" and not str(message.get("content") or "").strip():
             continue
-        out.append(_with_canvas(_with_attachments(message)))
+        # Canvas first, and the order is load-bearing in both directions. `_with_attachments`
+        # is the narrowing step — it rebuilds the message from role and content alone, which is
+        # how internal keys are kept off the wire — so anything downstream of it has already
+        # lost `canvas` and silently does nothing. And it is the step that can turn `content`
+        # into a list of parts for a vision model, which `_with_canvas` cannot append to.
+        # Reversed, this composed away the whole feature: the readings were dropped on every
+        # message and the unit test never noticed, because it called `_with_canvas` directly.
+        out.append(_with_attachments(_with_canvas(message)))
     now = _present_state(conversation_id)
     if now:
         # `_live` is for the ledger, not the provider — `openai_compat._to_openai` rebuilds

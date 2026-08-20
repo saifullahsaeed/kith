@@ -16,7 +16,6 @@ exactly the one whose cost you want to look at, and it was the only kind that le
 from __future__ import annotations
 
 import json
-import sys
 import threading
 from pathlib import Path
 
@@ -45,7 +44,7 @@ def feed(db: Path, monkeypatch):
         def charge_session(self, conversation_id, uncached_in, cost_usd):
             return False  # never over budget; the cap has its own tests
 
-    monkeypatch.setitem(sys.modules, "kith.services.activity", type("M", (), {"feed": FakeFeed()})())
+    monkeypatch.setattr(route, "feed", FakeFeed())
     return published
 
 
@@ -66,7 +65,7 @@ def _drive(monkeypatch, conversation: str, events: list[dict], stop_after: int) 
     stopping = threading.Event()
     recorder = route._Recorder(conversation)
     seen: list[dict] = []
-    for line in route._turn(recorder, [], route.default_config(), conversation, "go", stopping=stopping):
+    for line in route._turn(recorder, [], route.default_config(), conversation, "go", stop_switch=stopping):
         seen.append(json.loads(line))
         if len(seen) == stop_after:
             stopping.set()
