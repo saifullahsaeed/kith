@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Check, Copy, Maximize2, Pause, Play, RotateCw, X } from "lucide-react";
@@ -8,6 +8,7 @@ import type { FlowValidation, MermaidAnimator, SceneMarker, Theme } from "mermai
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { animatorTheme, defaultFlowColour } from "@/lib/animator-theme";
 import { toPng } from "@/lib/diagram";
+import { useFlowFailures } from "@/lib/flow-failures";
 import { loopsForever } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
 import { mermaidOptions } from "@/lib/mermaid-config";
@@ -40,15 +41,30 @@ import { cn } from "@/lib/utils";
  * drawing standing and says why in one line underneath. The reply is not a red box, and the
  * picture is not lost to a typo in its choreography.
  *
+ * And the line goes to him as well as to them. He cannot see this screen, so without that the
+ * same broken route comes back in the next reply and the one after it — the person is the only
+ * one who ever knew, and fixing it means typing the error out by hand. It rides along with
+ * whatever they say next; see `lib/flow-failures.ts`.
+ *
  * **Inline, it does not pan and does not zoom.** The animator's wheel handler calls
  * `preventDefault` unconditionally, so leaving zoom on would mean the conversation stops
  * scrolling whenever the pointer crosses a diagram. Full screen is where you go to look around,
  * which is the same division the still diagram already has.
  *
- * **It plays once.** The library only knows how to go round and round, so this watches for the
- * wrap and stops on the last frame. A fourth pass explains nothing; it is just something moving
- * beside the paragraph someone is trying to read. `loop:` instead of `steps:` in the script is
- * him asking for the repeat, and then it repeats — see `lib/flow-script.loopsForever`.
+ * **It plays once, and then it is a diagram again.** The library only knows how to go round and
+ * round, so this watches for the wrap and stops. A fourth pass explains nothing; it is just
+ * something moving beside the paragraph someone is trying to read. `loop:` instead of `steps:`
+ * in the script is him asking for the repeat, and then it repeats — see
+ * `lib/flow-script.loopsForever`.
+ *
+ * What is on screen once it has finished is the *still* diagram, swapped back in. Every frame of
+ * a flow script has a focus set, including the first and the last, so every frame dims most of
+ * the picture — there is no moment in the animation that looks like the ordinary drawing, and
+ * leaving it parked on one means leaving three quarters of the diagram greyed out under a
+ * finished explanation. The still renderer is already here and already correct, so the end of
+ * the animation is the still diagram and the replay button swaps back. Both are kept mounted:
+ * re-rendering mermaid at the end of every animation would flash "drawing…" at someone who was
+ * looking at a finished picture.
  *
  * **It does not start until it has been seen, and it stops when it is not being.** A reply is
  * scrolled to, so a diagram five screens down would otherwise play to the end and stop before
@@ -285,6 +301,18 @@ export function AnimatedDiagram({
     delay: SETTLE_MS,
   });
 
+  /* Tell him what his screen cannot. Keyed per diagram so a reply with two broken ones says both,
+     and dropped the moment this one leaves the screen or starts working — a diagram he has since
+     fixed is not something to bring up. */
+  const id = useId();
+  const reportFailure = useFlowFailures((state) => state.report);
+  const forgetFailure = useFlowFailures((state) => state.forget);
+  useEffect(() => {
+    if (error) reportFailure(id, error);
+    else forgetFailure(id);
+    return () => forgetFailure(id);
+  }, [error, id, reportFailure, forgetFailure]);
+
   /* Its own height, and never more than that.
      The animator makes the drawing fill its container — width and height both 100%, its own
      attributes stripped — so unlike the still renderer it has no intrinsic size to pin. Left at
@@ -346,6 +374,9 @@ export function AnimatedDiagram({
   }, [animator, wanted, visible, zoomed]);
 
   const ready = animator !== null;
+  /** Which of the two drawings is the one on screen. The animation while it is playing or
+   *  waiting to be played; the still diagram before it exists and after it has finished. */
+  const showing = ready && !ended ? "animation" : "still";
 
   return (
     <>
@@ -353,11 +384,17 @@ export function AnimatedDiagram({
         data-slot="kith_mermaid_flow"
         className="group border-border/60 bg-card/40 relative my-3 overflow-hidden rounded-xl border"
       >
-        {/* The still diagram, in the flow of the page and giving the figure its size, until the
-            animation is ready to take over. The animator's container is mounted underneath it
-            the whole time and deliberately not hidden with `display: none` — a container with no
-            layout has no geometry, and geometry is what a route through a diagram is made of. */}
-        {ready ? null : error ? <div className="pb-6">{still}</div> : still}
+        {/* The still diagram: on screen before the animation is ready, and again once it has
+            finished, and mounted the whole way through either way. Not unmounted while the
+            animation plays, because putting it back would mean rendering mermaid a second time
+            and flashing a placeholder at the end of every animation.
+
+            The animator's container is mounted underneath it from the start and deliberately not
+            hidden with `display: none` while it is being built — a container with no layout has
+            no geometry, and geometry is what a route through a diagram is made of. */}
+        <div hidden={showing === "animation"} className={cn(error && !ready && "pb-6")}>
+          {still}
+        </div>
         {/* `[&>svg]:h-full!` is not a flourish. The animator strips the drawing's width and
             height and sizes it from its own injected `.ma-container svg { height: 100% }` — which
             loses to this app's global svg reset, and the drawing comes out at width 100% and its
@@ -366,7 +403,8 @@ export function AnimatedDiagram({
         <div
           ref={box}
           data-slot="kith_flow_stage"
-          aria-hidden={!ready}
+          aria-hidden={showing !== "animation"}
+          hidden={ready && showing !== "animation"}
           className={cn(
             "[&>svg]:h-full! [&>svg]:w-full!",
             ready ? "relative" : "pointer-events-none absolute inset-0 opacity-0",

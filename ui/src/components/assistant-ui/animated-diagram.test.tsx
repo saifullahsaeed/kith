@@ -15,6 +15,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
+import { currentFlowFailures, useFlowFailures } from "@/lib/flow-failures";
 import { PALETTE } from "@/lib/kith-palette";
 
 const CODE = `---
@@ -128,6 +129,7 @@ beforeEach(() => {
   fake.validate = null;
   fake.viewBox = "0 0 400 260";
   fake.tick = null;
+  useFlowFailures.getState().clear();
 });
 
 describe("an animated mermaid fence", () => {
@@ -153,7 +155,9 @@ describe("an animated mermaid fence", () => {
     await settle();
     expect(fake.built).toHaveLength(1);
     expect(fake.built[0].code).toBe(CODE);
-    expect(screen.queryByTestId("still")).not.toBeInTheDocument();
+    // Kept mounted and hidden rather than unmounted: it comes back when the animation ends, and
+    // rendering mermaid a second time to put it there would flash a placeholder.
+    expect(screen.getByTestId("still")).not.toBeVisible();
   });
 
   it("gives the animator a container that is laid out, not hidden", async () => {
@@ -295,7 +299,7 @@ describe("an animated mermaid fence", () => {
     expect(screen.getByText(/unknown colour "turquoise" — drawn in amber/)).toBeInTheDocument();
     // Running, not apologising.
     expect(screen.getByLabelText("Stop the animation")).toBeInTheDocument();
-    expect(screen.queryByTestId("still")).not.toBeInTheDocument();
+    expect(screen.getByTestId("still")).not.toBeVisible();
   });
 
   it("gives up on a script that is wrong for a reason that is not a name", async () => {
@@ -347,6 +351,29 @@ describe("an animated mermaid fence", () => {
     await settle();
     expect(screen.getByTestId("still")).toBeInTheDocument();
     expect(screen.getByText(/no edge between/)).toBeInTheDocument();
+  });
+
+  it("tells him the choreography was refused, since he cannot see this screen", async () => {
+    // Without this the same broken route comes back next reply: the person is the only one who
+    // ever saw the error, and fixing it means typing it out by hand.
+    fake.validation = {
+      ok: false,
+      code: "NO_EDGE",
+      message: 'flow: no edge between "CompA" and "Modules"',
+    };
+    const view = render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    expect(currentFlowFailures()).toEqual(['flow: no edge between "CompA" and "Modules"']);
+    // And drops it the moment the diagram is off the screen — a reply nobody is looking at any
+    // more is not context for the next thing they say.
+    view.unmount();
+    expect(currentFlowFailures()).toEqual([]);
+  });
+
+  it("says nothing about a diagram that worked", async () => {
+    render(<AnimatedDiagram code={CODE} still={still} />);
+    await settle();
+    expect(currentFlowFailures()).toEqual([]);
   });
 
   it("takes the animation down with the message", async () => {

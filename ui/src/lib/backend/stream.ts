@@ -1,6 +1,7 @@
 import type { ThreadMessage } from "@assistant-ui/react";
 
 import { currentCanvasState, type CanvasReading } from "@/lib/canvas-state";
+import { currentFlowFailures } from "@/lib/flow-failures";
 
 import type { BackendEvent } from "./types";
 
@@ -63,6 +64,7 @@ type WireMessage = {
   content: string;
   attachments?: WireAttachment[];
   canvas?: CanvasReading[];
+  diagrams?: string[];
 };
 
 /** Convert assistant-ui messages into the server's wire format. */
@@ -89,6 +91,10 @@ export function toWireMessages(messages: readonly ThreadMessage[]): WireMessage[
   const readings = currentCanvasState();
   const last = out[out.length - 1];
   if (readings.length && last?.role === "user") last.canvas = readings;
+  // And any animated diagram whose choreography was refused. Same ride, same reason: the person's
+  // screen knows something he does not, and the next thing they say is when it can be useful.
+  const refused = currentFlowFailures();
+  if (refused.length && last?.role === "user") last.diagrams = refused;
   return out;
 }
 

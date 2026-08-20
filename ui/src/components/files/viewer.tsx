@@ -250,15 +250,17 @@ function FileBody({
   if (kind.type === "diagram" && view === "rendered") {
     // And if it carries a `flow:` script, the picture moves — the same fence in a reply and in a
     // file are the same drawing, and one of them animating would be the surprise.
-    const still = (
-      <MermaidDiagram
-        code={content}
-        fallback={<Code code={content} language="markdown" numbered />}
-      />
-    );
+    const source = <Code code={content} language="markdown" numbered />;
     return (
       <div className="mx-auto max-w-[68rem] px-6 py-6">
-        {hasFlowScript(content) ? <AnimatedDiagram code={content} still={still} /> : still}
+        {hasFlowScript(content) ? (
+          <AnimatedDiagram
+            code={content}
+            still={<MermaidDiagram code={content} fallback={source} bare />}
+          />
+        ) : (
+          <MermaidDiagram code={content} fallback={source} />
+        )}
       </div>
     );
   }

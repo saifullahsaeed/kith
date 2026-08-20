@@ -225,14 +225,15 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # to say why. Skipping it costs nothing and cannot be the wrong call.
         if message.get("role") == "assistant" and not str(message.get("content") or "").strip():
             continue
-        # Canvas first, and the order is load-bearing in both directions. `_with_attachments`
-        # is the narrowing step — it rebuilds the message from role and content alone, which is
-        # how internal keys are kept off the wire — so anything downstream of it has already
-        # lost `canvas` and silently does nothing. And it is the step that can turn `content`
-        # into a list of parts for a vision model, which `_with_canvas` cannot append to.
-        # Reversed, this composed away the whole feature: the readings were dropped on every
-        # message and the unit test never noticed, because it called `_with_canvas` directly.
-        out.append(_with_attachments(_with_canvas(message)))
+        # Canvas and diagrams first, and the order is load-bearing in both directions.
+        # `_with_attachments` is the narrowing step — it rebuilds the message from role and
+        # content alone, which is how internal keys are kept off the wire — so anything
+        # downstream of it has already lost `canvas` and `diagrams` and silently does nothing.
+        # And it is the step that can turn `content` into a list of parts for a vision model,
+        # which neither of the other two can append to. Reversed, this composed away the whole
+        # feature: the readings were dropped on every message and the unit test never noticed,
+        # because it called `_with_canvas` directly.
+        out.append(_with_attachments(_with_canvas(_with_diagrams(message))))
     now = _present_state(conversation_id)
     if now:
         # `_live` is for the ledger, not the provider — `openai_compat._to_openai` rebuilds
@@ -306,6 +307,47 @@ def _with_canvas(message: dict) -> dict:
         **{k: v for k, v in message.items() if k != "canvas"},
         "content": f"{content}\n\n{joined}".strip(),
     }
+
+
+#: What a refused diagram may say about itself. One line each, and few of them: a reply with five
+#: broken diagrams has one problem, not five.
+_DIAGRAM_LIMITS = {"diagrams": 4, "text": 300}
+
+
+def _with_diagrams(message: dict) -> dict:
+    """Append the flow scripts that would not compile, as a note under their message.
+
+    He draws an animated diagram, the choreography names a node that is not in the graph or a hop
+    with no arrow under it, and the animation is refused — the picture is still shown, and one
+    line under it says why. On their screen. He cannot see their screen, so without this the same
+    broken route comes back in the next reply and the one after that, and the only way it is ever
+    fixed is the person typing the error out by hand.
+
+    The validator's own words, unedited, because they are already the fix: "unknown node
+    \"UserTypesEmail\" in a route — nodes in this diagram: Core, Gateway, IdP, User" is the
+    mistake, the vocabulary and the correction in one line.
+
+    A note under what they said rather than a message of its own, for the reasons `_with_canvas`
+    gives at length: a diagram that did not animate is not a question, and this app has been
+    burned by machinery that invents user messages. Clamped rather than trusted for the same
+    reason as well — it arrives over an HTTP request that anything local can make.
+    """
+    refused = [
+        line.strip()[: _DIAGRAM_LIMITS["text"]]
+        for line in (message.get("diagrams") or [])
+        if isinstance(line, str) and line.strip()
+    ][: _DIAGRAM_LIMITS["diagrams"]]
+    without = {k: v for k, v in message.items() if k != "diagrams"}
+    content = message.get("content")
+    if not refused or not isinstance(content, str):
+        return without
+
+    head = (
+        "An animated diagram in your last reply did not run — its flow script would not compile, "
+        "so the diagram was drawn without the animation:"
+    )
+    lines = "\n".join(f"- {line}" for line in refused)
+    return {**without, "content": f"{content}\n\n{head}\n{lines}".strip()}
 
 
 def _with_attachments(message: dict) -> dict:

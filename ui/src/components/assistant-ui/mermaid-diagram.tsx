@@ -71,22 +71,49 @@ let seq = 0;
  *  same, including this one — the animated path is handed the still diagram to show while the
  *  reply is still arriving, and to keep showing if the choreography turns out not to compile. */
 export function MermaidBlock({ code, components: { Pre, Code } }: SyntaxHighlighterProps) {
-  /* Whether this reply is still being written, asked of the thread rather than guessed from the
+  /* Whether anything is still being written, asked of the thread rather than guessed from the
      text. The still renderer does not need to know — a fragment of mermaid is a parse failure and
      it keeps the last drawing that worked — but the animator renders in one go and cannot be
-     given half a diagram, so this is what tells it to wait. */
-  const streaming = useAuiState((state) => state.message.status?.type === "running");
+     given half a diagram, so this is what tells it to wait.
+
+     The *thread*, not this message. A turn is many messages — he draws a diagram in the middle
+     of a long answer and keeps writing for another minute — and a diagram that starts moving
+     while the paragraphs under it are still arriving is a distraction from the thing being
+     read. It waits for the whole turn to land. The message's own status is still checked, for
+     the reloaded-mid-turn case where the thread is idle and a message is not. */
+  const streaming = useAuiState(
+    (state) => state.thread.isRunning || state.message.status?.type === "running",
+  );
   const fallback = (
     <Pre>
       <Code>{code}</Code>
     </Pre>
   );
-  const still = <MermaidDiagram code={code} fallback={fallback} />;
-  if (!hasFlowScript(code)) return still;
-  return <AnimatedDiagram code={code} still={still} streaming={streaming} />;
+  if (!hasFlowScript(code)) return <MermaidDiagram code={code} fallback={fallback} />;
+  return (
+    <AnimatedDiagram
+      code={code}
+      still={<MermaidDiagram code={code} fallback={fallback} bare />}
+      streaming={streaming}
+    />
+  );
 }
 
-export function MermaidDiagram({ code, fallback }: { code: string; fallback: ReactNode }) {
+export function MermaidDiagram({
+  code,
+  fallback,
+  bare = false,
+}: {
+  code: string;
+  fallback: ReactNode;
+  /** Just the drawing: no card, no padding, no toolbar of its own.
+   *
+   *  For the animated fence, which shows this same diagram before its animation is built and
+   *  again after it has finished, inside a figure that already has a border and buttons. Left to
+   *  itself it drew a bordered card inside a bordered card, and swapping between the two moved
+   *  the page by the height of the padding it added. */
+  bare?: boolean;
+}) {
   const dark = useDarkMode();
   const [svg, setSvg] = useState("");
   /** Only true once the code has stopped changing *and* still will not parse. Until then a
@@ -133,6 +160,17 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
   const sized = useMemo(() => (svg ? naturalSize(svg).html : ""), [svg]);
 
   if (broken && !svg) return <>{fallback}</>;
+
+  if (bare) {
+    return svg ? (
+      <div
+        className="flex justify-center overflow-x-auto [&_svg]:h-auto [&_svg]:max-w-full!"
+        dangerouslySetInnerHTML={{ __html: sized }}
+      />
+    ) : (
+      <Drawing />
+    );
+  }
 
   return (
     <>
