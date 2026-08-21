@@ -556,6 +556,15 @@ class _Recorder:
         if kind == "retrying":
             self.retried += 1
             return
+        if kind == "directive":
+            # What the harness told the turn, mid-turn. Kept because it is the only record that
+            # it happened at all: a directive lives in the round's own message list and nowhere
+            # else, so a turn that was nudged four times looked afterwards exactly like one that
+            # was not. Written as its own kind, which `conversations.full_messages` does not
+            # reconstruct — so it is legible in the transcript and never replayed into a later
+            # turn's prompt, which is the whole point of it being turn-local in the first place.
+            conversations.record_event(self.conversation_id, "directive", {"text": event.get("text", "")})
+            return
         if kind in ("tool_call", "tool_result", "stats"):
             # Already scrubbed by `_turn` before it got here — see the note at the call site.
             conversations.record_event(self.conversation_id, kind, event)

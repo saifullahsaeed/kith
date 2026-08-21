@@ -156,7 +156,7 @@ def take(
     mcp = frozenset(mcp_names)
     custom = frozenset(custom_names)
 
-    system_chars = persona_chars = live_chars = 0
+    system_chars = persona_chars = live_chars = directive_chars = 0
     said_chars = tool_chars = skill_chars = code_chars = image_chars = 0
 
     for message in convo:
@@ -170,6 +170,14 @@ def take(
             # thousand tokens is indistinguishable from a large persona, and the number a
             # person checks would not be able to show it.
             live_chars += size
+        elif role == "system" and message.get("_directive"):
+            # What the harness told the turn to do, mid-turn — the landing nudge, a dead round,
+            # an empty one, the budget running out. Its own line for the same reason `live` has
+            # one: it is a cost the harness imposes rather than one the conversation earned, and
+            # folded into either "System prompt" or "Messages" it is a number nobody can act on.
+            # They used to arrive as `role: "user"` and land in Messages, which made a turn that
+            # was nudged four times look like a turn where the person said four more things.
+            directive_chars += size
         elif role == "system":
             text = str(message.get("content") or "") if isinstance(message.get("content"), str) else ""
             # The persona sits at the head of the system prompt, so its cost comes out of that
@@ -214,6 +222,7 @@ def take(
         Line("mcp_tools", "MCP tools", _tokens(mcp_chars, ratio)),
         Line("custom_tools", "His own tools", _tokens(custom_chars, ratio)),
         Line("live", "Where he is right now", _tokens(live_chars, ratio)),
+        Line("directives", "Turn directives", _tokens(directive_chars, ratio)),
         Line("messages", "Messages", _tokens(said_chars, ratio)),
         Line("code", "Code he has read", _tokens(code_chars, ratio)),
         Line("tool_results", "Other tool results", _tokens(tool_chars, ratio)),

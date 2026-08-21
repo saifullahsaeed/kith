@@ -153,6 +153,30 @@ def _gave_up(event: dict, attempts: int, since: float) -> str:
     return f"{message}\n\n(tried {attempts} times{waited} before giving up)"
 
 
+def _cut_off(config: Config) -> str:
+    """A round that ran out of output tokens before it said anything, named as that.
+
+    Two things this has to get right, because the message it replaces got both wrong. It must
+    not blame the model — "try again, or switch model" sent someone looking for a better model
+    when every model would have done the same with 410 tokens to answer in. And it must
+    name the setting that caused it, in the words the settings screen uses, because that is the
+    only thing the person can act on.
+    """
+    ceiling = openai_compat.output_ceiling(config)
+    thinking = openai_compat.thinking_budget(config)
+    where = f"its {ceiling:,}-token output ceiling" if ceiling else "the provider's own output limit"
+    room = (
+        f" — {thinking:,} of it reserved for thinking, {config.num_predict:,} for the reply"
+        if thinking
+        else ""
+    )
+    return (
+        f"{config.model} was cut off before it said anything: the round hit {where}{room}, "
+        "and spent all of it reasoning. Nothing earlier in this turn was lost. Raise 'Longest "
+        "single answer', or think less hard, and ask again."
+    )
+
+
 def _is_repeat(name: str, seen: int) -> bool:
     """Has this exact call been made enough times already to be a stall, not progress?
 
@@ -179,63 +203,62 @@ def _is_repeat(name: str, seen: int) -> bool:
 # ticks get 16, not the full MAX_ROUNDS) and a fixed reserve could otherwise eat
 # most of a short turn.
 
-# What he may still do once he's landing: record, deliver, check things off, hand
-# back. Notably *not* search or fetch — the point of the reserve is that gathering
-# is over. read_file stays because his working notes are where the answer lives.
-_LANDING_TOOLS = frozenset(
+# What the reserve actually takes away: gathering. Named as the small set to *remove* rather
+# than as the large set to keep, and that inversion is the fix for a defect this list had three
+# separate times.
+#
+# It was an allowlist of nineteen names, maintained by hand beside a paragraph of English that
+# tells him what to do with them. So a tool the directive commanded could be a tool the toolset
+# forbade, and the comments record it happening three times, each caught in production and each
+# fixed by adding one more name:
+#
+#   * `write_file` was on the list and `edit_file` was not, so a turn that reached its landing
+#     rounds mid-implementation held only the lossy tool, on source it had not fully read. He
+#     noticed and stopped: "the available file tool exposes read/write only, not an edit/patch
+#     operation... Please provide/enable an edit-capable tool." That is `edit_file`'s own
+#     docstring read back to us by something we had quietly disarmed, and it cost a turn plus a
+#     task parked on a question with a one-line answer.
+#   * `commit` was absent from the one phase whose whole job is "land it" — part of why five
+#     hours of work ended with no commits at all.
+#   * `ask` was absent while `_LANDING_DIRECTIVE` names it outright: "and `ask` if you need
+#     something from your person — it waits for the answer." So the one moment the harness tells
+#     him to put a question to his person was the one moment he could not, and a genuinely stuck
+#     turn could only stop — which from the other side reads as giving up rather than as being
+#     unable to speak.
+#
+# Three of a kind is the mechanism, not the entries. Under an allowlist a newly built tool is
+# forbidden by default and nobody finds out until a turn needs it; under this, it is permitted by
+# default and the only thing that has to be maintained is the answer to "does this go and fetch
+# something". That question has a stable answer, and it is already answered next door: this is
+# `_PARALLEL_SAFE`'s membership test almost word for word — network-bound, side-effect-free, the
+# work of going and looking. Kept as its own name rather than aliased, because two ideas that
+# coincide today are still two ideas, and a tool could become parallel-safe without becoming
+# research.
+_GATHERING_TOOLS = frozenset(
     {
-        "add_deliverable",
-        "check_item",
-        "add_checklist_item",
-        "update_task",
-        "view_task",
-        "list_tasks",
-        "write_file",
-        # The two that were missing, and their absence was exactly backwards. This list had
-        # `write_file` — rewrite the whole file, lossy, the one `edit_file` exists to replace —
-        # and not `edit_file`. So a turn that reached its landing rounds mid-implementation was
-        # left holding only the dangerous tool, on existing source it had not fully read.
-        #
-        # He noticed, and stopped, and said so on the task: "the available file tool exposes
-        # read/write only, not an edit/patch operation, and rewriting these existing files
-        # wholesale would risk unrelated code loss. Please provide/enable an edit-capable
-        # tool." Which is `edit_file`'s own docstring read back to us, correctly, by something
-        # we had quietly disarmed — and it cost a whole turn plus a task parked on a question
-        # that had a one-line answer.
-        "edit_file",
-        "edit_files",
-        "read_file",
-        # Finishing includes checking that what you just wrote works, and then saving the
-        # point. None of these is *gathering*, which is the only thing the reserve exists to
-        # stop — and `commit` being absent from the one phase whose whole job is "land it" is
-        # part of why five hours of work ended with no commits at all.
-        "check_code",
-        "diagnostics",
-        "run_tests",
-        "changes",
-        "commit",
-        "journal",
-        "remember",
-        "reach_out",
-        # The third time this list has been caught forbidding what the directive beside it
-        # commands — see `edit_file` above, and `add_task` in `_PLANNING_TOOLS` below. This one
-        # is the worst of the three, because `_LANDING_DIRECTIVE` names the tool outright: "and
-        # `ask` if you need something from your person — it waits for the answer."
-        #
-        # It was not there. So the one moment the harness tells him to put a question to his
-        # person is the one moment he cannot, and with nothing else to reach for a turn that is
-        # genuinely stuck can only stop — which reads, from the other side, as him giving up
-        # rather than as him being unable to speak. Asked what he wanted here, his person was
-        # unambiguous: stopping when there is really nothing to go on is fine, but a question is
-        # almost always preferable to a stop.
-        #
-        # Landing is also precisely when a question is most likely to be worth asking: the
-        # gathering is over, so anything still missing is not going to be found by looking
-        # harder. And it costs nothing to keep — `ask` blocks on an answer, so it cannot be the
-        # tool a turn spins on.
-        "ask",
+        "web_search",
+        "fetch_url",
+        "browse_page",
+        "search_sources",
+        # Sending someone else to look is still looking, and it is the most expensive kind: an
+        # errand's cost is its own model calls. A turn that is landing must not open a new one.
+        "delegate_subtask",
     }
 )
+
+# The reserve's second job, which the allowlist was also doing and which is easy to lose when
+# inverting it: a turn that is finishing must not open a new front. Widening what landing may do
+# so he can finish the work must not turn the reserve back into an unbounded turn.
+#
+# The line is *new* work, not work. `update_task`, `check_item`, `add_checklist_item` and
+# `add_deliverable` all describe what this turn did and are exactly what landing is for; a task,
+# a project or a milestone is a commitment to do something else later, which is the thing the
+# budget is trying to stop.
+_STARTING_TOOLS = frozenset({"add_task", "create_project", "add_milestone"})
+
+#: What landing takes away. Everything else he keeps, which is the inversion: a tool built
+#: tomorrow is usable while finishing unless it goes and looks or opens new work.
+_NOT_WHILE_LANDING = _GATHERING_TOOLS | _STARTING_TOOLS
 
 # Filing a task used to end the turn — a `delegated` latch that took the doing-tools away the
 # moment `add_task` succeeded — and it is gone. Kept as a warning rather than as history,
@@ -570,17 +593,43 @@ def stream_agent(
             errands.forget(conversation_id)
 
 
-def _land(convo: list[dict[str, Any]]) -> bool:
-    """Hand the rest of the turn over to landing, and say so. Always returns True.
+def _directive(convo: list[dict[str, Any]], text: str) -> dict:
+    """Say something to him that is the harness speaking, not his person. Returns the event.
 
-    Two call sites reach this — the reserve opening at the end of the budget, and a round that
-    died in a way worth making a smaller request about — and each was `landing = True` beside its
-    own copy of the append. Written once so the flag and the sentence that explains it cannot be
-    set apart from each other: a narrowed toolset with no directive is a turn that silently loses
-    two thirds of its tools, and a directive with no narrowing is a lie.
+    Four things in this loop have to interrupt a turn and tell it something: the reserve opening,
+    a round that died, a round that came back empty, and the budget running out. All four used to
+    arrive as `{"role": "user"}` — a person who had not spoken, saying something no person would
+    say — and that has three costs, none of which is theoretical here.
+
+    **It is a lie to the model.** A conversation where the other party keeps interjecting
+    "(You're near the end of this turn's tool budget)" is not a conversation, and the one time a
+    directive landed at the wrong moment he replied to it as though it were his person talking:
+    "I haven't been researching anything this turn." This app has been burned before by
+    machinery that invents user messages, and the canvas surface was deliberately built not to.
+
+    **It was invisible.** These live only in the round's own list, never in the transcript, so
+    nothing recorded that a turn had been told anything. `/context` rebuilds the prompt from the
+    transcript, which meant the one screen whose job is "show me exactly what was sent" was
+    structurally unable to show up to six of the messages that were. Now every one is an event on
+    the stream and a `directive` line in the transcript — recorded but *not* replayed, since
+    `conversations.full_messages` only reconstructs messages and tool calls, so a nudge from
+    turn 5 cannot turn up in turn 50's history.
+
+    **It was miscounted.** `role: "user"` put them in the meter's "Messages" line, mixed in with
+    what was actually said. They have their own line now (`ledger.take`), which is the honest
+    place for a cost the harness imposes rather than one the conversation earned.
+
+    `system` rather than a role of its own because both providers already take it: the cloud path
+    rebuilds every message from role and content, and Ollama forwards the list as given. The
+    underscore key is internal and travels the same way `_live` already does.
+
+    Not everything injected becomes a directive, and the line is content versus instruction. An
+    errand's findings and an image both stay `user`, because they are things to *read* — arriving
+    as a system message they would be read as orders rather than as material. What the harness
+    tells him to do is a directive; what the harness hands him is conversation.
     """
-    convo.append({"role": "user", "content": _LANDING_DIRECTIVE})
-    return True
+    convo.append({"role": "system", "content": text, "_directive": True})
+    return {"type": "directive", "text": text}
 
 
 def _run_turn(
@@ -672,9 +721,10 @@ def _run_turn(
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:
-            landing = _land(convo)
+            yield _directive(convo, _LANDING_DIRECTIVE)
+            landing = True
         if landing:
-            schemas = [s for s in schemas if s["function"]["name"] in _LANDING_TOOLS]
+            schemas = [s for s in schemas if s["function"]["name"] not in _NOT_WHILE_LANDING]
 
         # What he was actually offered this round, and — from here on — what he may actually
         # run. Derived from the finished list rather than from `allow`, so both narrowings
@@ -769,9 +819,10 @@ def _run_turn(
             # point — it is a *different, smaller* request, and one that may well get through
             # where the failed one could not.
             if _worth_retrying(failure) and failed_rounds <= _FAILED_ROUNDS_BEFORE_LANDING:
-                convo.append({"role": "user", "content": _ROUND_FAILED_DIRECTIVE})
+                yield _directive(convo, _ROUND_FAILED_DIRECTIVE)
                 continue
-            landing = _land(convo)
+            yield _directive(convo, _LANDING_DIRECTIVE)
+            landing = True
             continue
 
         # The provider came back, so whatever went wrong before is not an outage. Reset here
@@ -804,9 +855,23 @@ def _run_turn(
         # only honest way it can, by saying out loud that it produced nothing and naming what
         # produced it. What it must never do is end here quietly.
         if not tool_calls and not (content or "").strip():
+            # Unless the provider said why, in which case it is not a mystery and must not be
+            # reported as one. `length` means the round was cut off: it ran out of output
+            # tokens before it reached anything sayable, and everything above about blips and
+            # going again is wrong for it. The nudge cannot help — he never got as far as
+            # choosing not to speak — and a second attempt is the same request against the same
+            # ceiling, so it buys another minute and another six cents of the same silence.
+            #
+            # Measured, 2026-08-20 21:44-21:50: two turns died here, four rounds, ~$0.12, on a
+            # ceiling thinking had a 7,782-of-8,192-token claim on. See `llm.openai_compat`
+            # `REASONING_SHARE` for the arithmetic that produced it.
+            if (stats or {}).get("finishReason") == "length":
+                yield {"type": "error", "message": _cut_off(round_config)}
+                return
+
             empty_rounds += 1
             if empty_rounds <= _EMPTY_ROUNDS_BEFORE_GIVING_UP:
-                convo.append({"role": "user", "content": _EMPTY_ROUND_DIRECTIVE})
+                yield _directive(convo, _EMPTY_ROUND_DIRECTIVE)
                 continue
             yield {
                 "type": "error",
@@ -1112,14 +1177,10 @@ def _final_answer(
     which is indistinguishable from an answer and lands in the transcript and in
     whatever he files. Telling the API rather than the model is what actually stops it.
     """
-    convo.append(
-        {
-            "role": "user",
-            "content": (
-                "(You've used your tool budget for this turn. Stop calling tools and give "
-                "your best final answer now with what you have.)"
-            ),
-        }
+    yield _directive(
+        convo,
+        "(You've used your tool budget for this turn. Stop calling tools and give "
+        "your best final answer now with what you have.)",
     )
     stats: dict | None = None
     # Belt and braces for a model that narrates a call anyway: nothing can run at this

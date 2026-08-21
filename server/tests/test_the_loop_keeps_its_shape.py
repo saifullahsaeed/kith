@@ -54,8 +54,9 @@ def _schema(name: str) -> dict:
     return {"type": "function", "function": {"name": name, "description": "", "parameters": {}}}
 
 
-#: One tool the landing filter keeps, and one it does not. `update_task` is in `_LANDING_TOOLS`;
-#: `web_search` is deliberately not — the reserve exists to stop a turn gathering forever.
+#: One tool the landing filter keeps, and one it does not. `update_task` records what this turn
+#: did, which is what landing is for; `web_search` is in `_GATHERING_TOOLS` and is taken away,
+#: because the reserve exists to stop a turn gathering forever.
 _KEPT = "update_task"
 _DROPPED = "web_search"
 

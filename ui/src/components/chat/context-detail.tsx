@@ -130,6 +130,9 @@ export function ContextDetailScreen({
               <Window detail={detail} groups={groups} note={note} />
               <LastRound round={detail.lastRound} />
               {detail.sent.foldPending ? <FoldPending /> : null}
+              {/* Above the list, because it is a caveat *on* the list rather than another
+                  section of it: these were sent and are not shown below. */}
+              <Directives texts={detail.directives} />
               {/* Led with, because it is the thing itself. Everything below it is analysis of
                   this list, and analysis is what the rail's meter already does in sixty
                   pixels — what it cannot do is show you the message. */}
@@ -206,6 +209,44 @@ function Figure({ label, value, unit }: { label: string; value: string; unit: st
  * would take. On a conversation that is over the threshold, the next real turn will summarise
  * before it sends, so what is listed below is the prompt that would go if it did not.
  */
+/**
+ * What the harness said to the turn, which the list below cannot show.
+ *
+ * A directive — the landing nudge, a round that died, one that came back empty, the budget
+ * running out — is appended to the round's own message list and to nothing else. So it is really
+ * sent, and it is not in the transcript the list is rebuilt from. For a long time that meant this
+ * screen, whose entire claim is that its numbers are the real ones, was silently short by up to
+ * four messages a turn.
+ *
+ * Nothing at all when the last turn ran clean, which is most of them — an empty panel headed
+ * "Directives" would imply the absence is a finding.
+ */
+function Directives({ texts }: { texts: string[] }) {
+  if (texts.length === 0) return null;
+  return (
+    <section className="border-border/60 bg-muted/30 space-y-2 rounded-lg border px-4 py-3">
+      <h3 className="text-[12px] font-medium">
+        The harness also said {texts.length === 1 ? "this" : `these ${texts.length} things`} to the
+        last turn
+      </h3>
+      <p className="text-muted-foreground max-w-prose text-[11px]">
+        Sent as system messages inside the turn and not kept in the transcript, so they are not in
+        the list below — they are counted under “Turn directives” in the breakdown.
+      </p>
+      <ul className="space-y-1.5">
+        {texts.map((text, index) => (
+          <li
+            key={index}
+            className="text-muted-foreground border-border/50 border-l-2 py-0.5 pl-3 font-mono text-[11px] leading-relaxed"
+          >
+            {text}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function FoldPending() {
   return (
     <p className="border-border/60 bg-muted/30 text-muted-foreground rounded-lg border px-4 py-2.5 text-[12px]">

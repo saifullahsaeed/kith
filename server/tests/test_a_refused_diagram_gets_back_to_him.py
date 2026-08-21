@@ -23,9 +23,7 @@ UNKNOWN = 'flow: unknown node "UserTypesEmail" in a route — nodes in this diag
 
 
 def test_the_refusal_arrives_under_what_they_said():
-    message = _with_diagrams(
-        {"role": "user", "content": "and the second one?", "diagrams": [NO_EDGE]}
-    )
+    message = _with_diagrams({"role": "user", "content": "and the second one?", "diagrams": [NO_EDGE]})
     assert message["content"].startswith("and the second one?")
     assert "did not run" in message["content"]
     assert NO_EDGE in message["content"]
@@ -46,18 +44,14 @@ def test_an_empty_list_adds_nothing():
 
 
 def test_every_one_of_them_is_named():
-    message = _with_diagrams(
-        {"role": "user", "content": "fix these", "diagrams": [NO_EDGE, UNKNOWN]}
-    )
+    message = _with_diagrams({"role": "user", "content": "fix these", "diagrams": [NO_EDGE, UNKNOWN]})
     assert NO_EDGE in message["content"]
     assert UNKNOWN in message["content"]
 
 
 def test_a_refusal_cannot_become_a_paragraph():
     """It arrives over HTTP from a page anything local can post to."""
-    message = _with_diagrams(
-        {"role": "user", "content": "hi", "diagrams": ["x" * 5_000, "", "   ", 7, None]}
-    )
+    message = _with_diagrams({"role": "user", "content": "hi", "diagrams": ["x" * 5_000, "", "   ", 7, None]})
     note = message["content"]
     assert len(note) < 500
     # The two that are not strings and the two that are blank are gone, not rendered as "None".

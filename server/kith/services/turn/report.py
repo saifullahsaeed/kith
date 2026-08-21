@@ -366,6 +366,30 @@ def _last_round(conversation_id: str) -> dict | None:
     }
 
 
+def directives(conversation_id: str) -> list[str]:
+    """What the harness told the last turn, mid-turn.
+
+    Not part of `sent`, and it cannot be. `sent` is the prompt a turn would build from the
+    transcript *now*; a directive belongs to one round of one turn that has already happened, and
+    `full_messages` deliberately does not reconstruct one — replaying "you are near the end of
+    your tool budget" into a turn that has not started would be worse than not showing it.
+
+    So it is reported beside the prompt rather than inside it. Without this the screen whose whole
+    job is "show me exactly what was sent" was quietly missing up to four messages per turn that
+    really were sent, with nothing to say so.
+
+    Reset at every user message, so these are the last turn's and not the conversation's.
+    """
+    out: list[str] = []
+    for entry in conversations.read(conversation_id):
+        kind = entry.get("type")
+        if kind == "message" and entry.get("role") == "user":
+            out = []
+        elif kind == "directive":
+            out.append(str(entry.get("text") or ""))
+    return out
+
+
 def detail(conversation_id: str, tool_chars: int) -> dict:
     """The reading the meter is showing, plus which calls actually filled it.
 
@@ -411,6 +435,8 @@ def detail(conversation_id: str, tool_chars: int) -> dict:
         "itemsTotal": sum(item.tokens for item in items),
         # ── the prompt itself, message by message ──
         "sent": _as_sent(conversation_id, ratio, tool_chars),
+        # What the harness added to the last turn and the list above structurally cannot show.
+        "directives": directives(conversation_id),
         # What the provider actually billed for the last round. Everything else on this screen is
         # `message_chars` over a ratio; these came back from the provider.
         "lastRound": _last_round(conversation_id),

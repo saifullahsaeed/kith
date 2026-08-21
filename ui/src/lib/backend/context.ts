@@ -58,6 +58,14 @@ export interface ContextDetail {
 
   /** The prompt itself, message by message. */
   sent: Sent;
+  /** What the harness told the last turn, mid-turn — the landing nudge, a dead round, an empty
+   *  one, the budget running out.
+   *
+   *  Reported beside `sent` rather than inside it, and that is not a layout choice. `sent` is the
+   *  prompt a turn would build from the transcript *now*; a directive belongs to one round of one
+   *  turn that has already happened, and the transcript deliberately does not replay one. Without
+   *  this the screen was quietly missing up to four messages per turn that really were sent. */
+  directives: string[];
   /** What the provider billed for the last round, or null when there has not been one. */
   lastRound: LastRound | null;
 }
@@ -165,6 +173,7 @@ const NOTHING: ContextDetail = {
     dropped: [],
     droppedTokens: 0,
   },
+  directives: [],
   lastRound: null,
 };
 

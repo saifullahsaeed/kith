@@ -92,7 +92,12 @@ class TestOneSilentRound:
         _run(fake, monkeypatch, db)
 
         nudge = sent[1][-1]
-        assert nudge["role"] == "user"
+        # `system`, not `user`. The harness is talking, and it used to do so wearing his person's
+        # role — which is a lie the model can act on: the one time a directive landed at an odd
+        # moment he answered it as though a person had said it ("I haven't been researching
+        # anything this turn"). See `agent_loop._directive`.
+        assert nudge["role"] == "system"
+        assert nudge["_directive"] is True
         assert nudge["content"] == agent_loop._EMPTY_ROUND_DIRECTIVE
         assert "no answer and no tool call" in nudge["content"]
         assert nudge["content"] != agent_loop._ROUND_FAILED_DIRECTIVE
@@ -190,3 +195,42 @@ def test_the_counter_resets_on_a_round_that_spoke(db: Path, monkeypatch, streak:
     assert not [e for e in events if e["type"] == "error"], (
         "no two empty rounds ever landed in a row, so the turn should never have given up"
     )
+
+
+class TestTheNudgeLeavesATrace:
+    """A directive used to happen and leave nothing behind.
+
+    It lives in the round's own message list and nowhere else, so afterwards a turn that had been
+    told four times to stop gathering looked exactly like one that had never been told anything —
+    and `/context`, whose entire job is "show me what was sent", rebuilds the prompt from the
+    transcript and so could not show any of them.
+    """
+
+    def test_it_is_announced_on_the_stream(self, db: Path, monkeypatch):
+        def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
+            yield dict(_empty() if not getattr(fake, "seen", False) else _spoke(), type="turn")
+            fake.seen = True
+
+        events = _run(fake, monkeypatch, db)
+
+        directives = [e for e in events if e["type"] == "directive"]
+        assert directives, "nothing said the turn had been nudged"
+        assert directives[0]["text"] == agent_loop._EMPTY_ROUND_DIRECTIVE
+
+    def test_it_is_not_replayed_into_a_later_turn(self, db: Path, monkeypatch, tmp_path):
+        """Recorded, but as a kind `full_messages` does not reconstruct.
+
+        The whole reason a directive is turn-local is that it is about *this* round. A nudge from
+        turn 5 appearing in turn 50's history would be the transcript telling him he is out of
+        budget on a turn that has not started.
+        """
+        from kith.services import conversations
+
+        conversations.record_event("nudged-1", "message", {"role": "user", "content": "go"})
+        conversations.record_event("nudged-1", "directive", {"text": agent_loop._LANDING_DIRECTIVE})
+        conversations.record_event("nudged-1", "message", {"role": "assistant", "content": "done"})
+
+        replayed = conversations.full_messages("nudged-1")
+
+        assert [m["role"] for m in replayed] == ["user", "assistant"]
+        assert not any(agent_loop._LANDING_DIRECTIVE in str(m.get("content")) for m in replayed)
