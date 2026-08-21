@@ -34,6 +34,55 @@ from kith.llm import budget, caching
 #: was actually asked for.
 REASONING_EFFORTS: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal", "none")
 
+#: What share of ``max_tokens`` each effort level hands to thinking, from OpenRouter's own
+#: documentation: "max" allocates approximately 95% of max_tokens, xhigh 95%, high 80%,
+#: medium 50%, low 20%, minimal 10%.
+#:
+#: This table is the whole bug, so it is worth stating plainly: **effort is not a dial on how
+#: hard the model thinks, it is a fraction of the output ceiling** — thinking spends out of it
+#: first and the answer gets what is left. Kith sent the answer cap (`num_predict`, 8,192,
+#: labelled "Longest single answer") as that ceiling, with effort "max" beside it: a
+#: 7,782-token claim on thinking out of 8,192, and the reply left with whatever thinking did
+#: not want — as little as 410 tokens — on a turn whose rounds were writing 5,000-6,500-token
+#: python scripts. OpenRouter's own docs carry the rule this violates: "max_tokens must be
+#: strictly higher than the reasoning budget to ensure there are tokens available for the final
+#: response after thinking."
+#:
+#: Measured, 2026-08-20 21:44-21:50 on `google/gemini-3.7-flash`: two rounds came back with
+#: `finish_reason: length` and `responseTokens == reasoningTokens` — the whole response spent
+#: thinking, no content and no tool call — and the turn died reporting an empty response and
+#: advising a change of model. The model was never the problem.
+#:
+#: Confirmed against the live provider on 2026-08-21, one prompt asking for a long script, the
+#: two payloads side by side:
+#:
+#:     max_tokens 8,192  + effort max          finish LENGTH  7,612 chars, cut off mid-script
+#:     max_tokens 40,960 + reasoning 32,768    finish stop   63,520 chars, whole script
+REASONING_SHARE: dict[str, float] = {
+    "max": 0.95,
+    "xhigh": 0.95,
+    "high": 0.80,
+    "medium": 0.50,
+    "low": 0.20,
+    "minimal": 0.10,
+    "none": 0.0,
+}
+
+#: The share to reserve for when nobody has said how hard to think — `effort` blank and the
+#: `think` toggle on, which is what a default install sends. The provider decides the amount
+#: and we cannot know it, so the ceiling reserves the middle of the scale: enough that a
+#: thinking model cannot eat the answer, not so much that the request stops resembling what
+#: was asked for.
+_UNSTATED_SHARE = REASONING_SHARE["medium"]
+
+#: The most thinking any one round is given, whatever the arithmetic works out to. Inverting
+#: the share table turns a modest answer cap into an enormous budget at the top of the scale —
+#: 19x the cap at "max", so 155,648 tokens for an 8,192-token cap — and a budget no model can
+#: honour is a request a provider rejects rather than clamps. Gemini's own thinking budgets top
+#: out at 24,576-32,768 tokens and Anthropic's are bounded by `max_tokens`, which is what this
+#: sits inside, so the highest of those is the honest ceiling on the ceiling.
+MAX_THINKING_TOKENS = 32_768
+
 # Optionally pin OpenRouter to one upstream host. Default routing spreads requests
 # across ~20 providers, so consecutive rounds land on different (cold) caches and
 # prefix caching rarely hits. Pinning a caching-capable host keeps every round on
@@ -128,6 +177,53 @@ def _routing_options(config: Config, routing: Routing) -> dict[str, Any]:
     return out
 
 
+def thinking_budget(config: Config) -> int:
+    """How many tokens of thinking one round is allowed, as a number rather than a share.
+
+    Zero when nothing is reasoning — and zero when there is no answer cap, which is not the
+    same reason: with no `max_tokens` on the request there is no ceiling for a share to be
+    taken out of, so there is nothing for thinking to starve and nothing to reserve against.
+    A default install has a cap (8,192), so this is the ordinary case, not the exotic one.
+
+    The arithmetic inverts `REASONING_SHARE`. The share is taken out of the whole ceiling, so
+    for the answer to keep its cap the budget is what has to sit *beside* the cap:
+
+        share x (cap + budget) = budget   ->   budget = cap x share / (1 - share)
+
+    Capped at `MAX_THINKING_TOKENS`, which is what keeps "max" from asking for a budget no
+    provider will grant.
+    """
+    cap = config.num_predict
+    if cap <= 0:
+        return 0
+    effort = (config.effort or "").strip().lower()
+    if effort in REASONING_SHARE:
+        share = REASONING_SHARE[effort]
+    elif config.think:
+        share = _UNSTATED_SHARE
+    else:
+        share = 0.0
+    if share <= 0:
+        return 0
+    return min(MAX_THINKING_TOKENS, int(cap * share / (1 - share)))
+
+
+def output_ceiling(config: Config) -> int:
+    """`max_tokens` for the request: what the answer may write, plus what thinking will take.
+
+    These were one number for a long time and that is what broke: `num_predict` is labelled
+    "Longest single answer" in the settings, the loop reserves context room by it, and the
+    transport was handing that same figure to the provider as the ceiling on *everything the
+    round produces* — thoughts included, and thoughts first. See `REASONING_SHARE`.
+
+    0 means the person asked for no limit (`num_predict` -1, the sentinel), and the caller
+    leaves `max_tokens` off the payload entirely.
+    """
+    if config.num_predict <= 0:
+        return 0
+    return config.num_predict + thinking_budget(config)
+
+
 def _reasoning_options(config: Config) -> dict[str, Any]:
     """Whether he reasons before answering, and how hard.
 
@@ -136,14 +232,25 @@ def _reasoning_options(config: Config) -> dict[str, Any]:
     extension, and a strict OpenAI-compatible host 400s the whole request rather than ignoring
     an unknown key — never to Ollama, which reads `config.think` on its own instead.
 
-    `effort` beats `enabled` when it is set: they are alternative spellings of the same field,
-    and sending both makes the provider pick, which is not a decision to leave to it. Blank
-    effort means "you decide", which is the right default — the sensible amount of thinking
-    for a model is a thing its maker knows better.
+    One spelling per request. `effort`, `max_tokens` and `enabled` are alternative spellings of
+    the same field, and sending two makes the provider pick, which is not a decision to leave
+    to it. Blank effort means "you decide", which is the right default — the sensible amount of
+    thinking for a model is a thing its maker knows better.
+
+    **`max_tokens` is the spelling whenever there is an answer cap to protect**, because it is
+    the only one that bounds thinking independently of the ceiling it shares with the answer.
+    `effort` cannot: it *is* a share of that ceiling, so at the top of the scale there is no
+    ceiling that leaves the cap intact — 95% of anything leaves 5%. Nothing is lost in the
+    translation on the families that matter here, since a budget is what OpenRouter converts
+    effort into for Gemini, Anthropic and Qwen anyway; on a model that only understands effort
+    it converts back, by the same percentages, so a budget of 32,768 against a 40,960 ceiling
+    arrives as "high" rather than "max". That is the one cost of this, and it is worth it: a
+    "max" that cannot answer is not more thinking than a "high" that can.
     """
     effort = (config.effort or "").strip().lower()
     if effort in REASONING_EFFORTS:
-        return {"reasoning": {"effort": effort}}
+        budget = thinking_budget(config)
+        return {"reasoning": {"max_tokens": budget}} if budget else {"reasoning": {"effort": effort}}
     return {"reasoning": {"enabled": bool(config.think)}}
 
 
@@ -217,8 +324,13 @@ def stream_once(
         # the journal, and anything he files. Withholding the schemas caused it;
         # sending them with tool_choice="none" is the fix.
         payload["tool_choice"] = tool_choice
-    if config.num_predict and config.num_predict > 0:
-        payload["max_tokens"] = config.num_predict
+    # The answer's cap plus the room thinking will take out of the ceiling, never the cap on
+    # its own — see `output_ceiling`. Set outside the OpenRouter branch because the starvation
+    # is not an OpenRouter behaviour: a reasoning model bills its thoughts as output tokens
+    # against `max_tokens` whoever is hosting it, and whether or not we asked for any.
+    ceiling = output_ceiling(config)
+    if ceiling > 0:
+        payload["max_tokens"] = ceiling
 
     headers = {
         "Authorization": f"Bearer {config.api_key}",
@@ -305,6 +417,14 @@ def stream_once(
     # 2026-08-01 at $4.12-6.59. Same `openai/gpt-5.6-luna`, up to fifty times the price, and no
     # record of which host did it.
     served_by = ""
+    # Why the response stopped: "stop", "tool_calls", "length", "content_filter". Also arrived
+    # on every response and was also read nowhere, and it is the difference between a model
+    # that had nothing to say and one that was not given room to say it. Without it a round cut
+    # off mid-thought is indistinguishable from a silent one, and the loop reported two of them
+    # as "returned an empty response — try again, or switch model" while the provider was
+    # saying `length` on both. See `REASONING_SHARE`.
+    finish = ""
+    generation = ""
     try:
         for line in response.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data:"):
@@ -326,10 +446,26 @@ def stream_once(
             # OpenAI-compatible host sets it, so this stays blank rather than guessing.
             if not served_by and chunk.get("provider"):
                 served_by = str(chunk["provider"])
+            # The provider's own id for this round, on every chunk beside the one above and
+            # likewise read nowhere. It is what makes a round in a transcript the same object
+            # as a row in the provider's log, which is the difference between reading a bill
+            # and guessing at one: diagnosing the truncation this file now handles meant
+            # matching six rounds to six log rows by wall-clock and token count, because there
+            # was no id to match them by. 29 rounds across 243 conversations were billed for
+            # twice the prompt they sent (`promptTokens` exactly 2x `cachedTokens`, the cost
+            # confirming one fresh copy and one cached), and that question is still open — an
+            # id is how the next round of it gets answered rather than inferred.
+            if not generation and chunk.get("id"):
+                generation = str(chunk["id"])
 
             choices = chunk.get("choices") or []
             if not choices:
                 continue
+            # Carried on the last chunk of a stream, and null on every one before it, so the
+            # last non-empty value is the answer. Kept rather than acted on here: what a
+            # truncated round costs is the loop's decision, not the transport's.
+            if choices[0].get("finish_reason"):
+                finish = str(choices[0]["finish_reason"])
             delta = choices[0].get("delta") or {}
 
             reasoning = delta.get("reasoning") or delta.get("reasoning_content")
@@ -366,7 +502,7 @@ def stream_once(
         "type": "turn",
         "content": answer,
         "tool_calls": tool_calls,
-        "stats": _stats(usage, time.time() - started, config.model, served_by),
+        "stats": _stats(usage, time.time() - started, config.model, served_by, finish, generation),
     }
 
 
@@ -423,7 +559,14 @@ def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _stats(usage: dict | None, elapsed: float, model: str = "", provider: str = "") -> dict[str, float]:
+def _stats(
+    usage: dict | None,
+    elapsed: float,
+    model: str = "",
+    provider: str = "",
+    finish: str = "",
+    generation: str = "",
+) -> dict[str, float]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
@@ -463,6 +606,14 @@ def _stats(usage: dict | None, elapsed: float, model: str = "", provider: str = 
         # has billed anywhere from $0.13 to $6.59 per million uncached prompt tokens on this
         # install. Blank for a plain OpenAI-compatible endpoint that does not say.
         "provider": provider,
+        # Why the response stopped. It travels with the numbers rather than as its own field on
+        # the `turn` event because this dict already goes everywhere the fact is needed — the
+        # loop reads it to tell a cut-off round from a quiet one, and the transcript keeps it,
+        # which is what makes a round diagnosable a day later instead of only while it happens.
+        "finishReason": finish,
+        # The provider's id for this round, so a number here can be taken back to the row it
+        # came from. Blank on any host that does not send one.
+        "generationId": generation,
         "promptTokens": prompt,
         "responseTokens": completion,
         "reasoningTokens": reasoning,

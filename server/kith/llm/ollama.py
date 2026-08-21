@@ -167,6 +167,11 @@ def _stats_from_done(chunk: dict, model: str = "") -> dict[str, float]:
         # Which model produced this row, so a transcript stays attributable across a
         # model switch — the same reason the cloud transport records it.
         "model": model or chunk.get("model") or "",
+        # Ollama's own word for why generation stopped — "stop", "length", "load" — under the
+        # cloud transport's name for the same fact, so the loop reads one key on both
+        # transports. A local model hits `num_predict` the same way a hosted one hits
+        # `max_tokens`, and the round is just as cut off.
+        "finishReason": chunk.get("done_reason") or "",
         "promptTokens": chunk.get("prompt_eval_count") or 0,
         "responseTokens": eval_count,
         "tokensPerSecond": round(tokens_per_second, 1),
