@@ -1,6 +1,7 @@
 "use client";
 
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
+import { PendingSteer } from "@/components/assistant-ui/pending-steer";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { AskPrompt } from "@/components/assistant-ui/ask-prompt";
 import { RichComposerInput } from "@/components/assistant-ui/composer-input/rich-input";
@@ -225,6 +226,10 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
             <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
               <ThreadFollowupSuggestions />
               <AskPrompt conversationId={conversationId} />
+              {/* What you have said to the running turn that it has not read yet. Sits between
+                  the thread and the composer because that is where it is in time: after
+                  everything that has happened, before the next thing you type. */}
+              <PendingSteer conversationId={conversationId} />
               <PermissionPrompt />
               <Composer conversationId={conversationId} />
               <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>

@@ -69,6 +69,9 @@ export type BackendEvent =
    * and the loop is waiting before it does. Shown because the wait is otherwise a pause with
    * nothing in it, which is indistinguishable from the hang it is recovering from. */
   | { type: "retrying"; attempt: number; message: string }
+  /** A tool call still being written, throttled by the transport. Live only — the completed
+   *  `tool_call` carries the same thing in full, so this is never recorded. */
+  | { type: "writing"; name: string; path?: string; chars: number }
   | {
       type: "compacting";
       used?: number;

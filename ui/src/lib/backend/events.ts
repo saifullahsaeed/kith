@@ -48,7 +48,8 @@ export type ChangeKind =
   | "workspace"
   | "question"
   | "permission"
-  | "schedule";
+  | "schedule"
+  | "steer";
 
 export interface Change {
   kind: ChangeKind;

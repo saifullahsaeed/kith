@@ -255,6 +255,7 @@ describe("the map itself", () => {
       "question",
       "permission",
       "schedule",
+      "steer",
     ];
     for (const kind of kinds) {
       expect(STALE_ON[kind], `no keys go stale on "${kind}"`).toBeTruthy();

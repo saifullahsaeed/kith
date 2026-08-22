@@ -241,6 +241,14 @@ let foldedChars: { from: number; to: number } | undefined;
 /** The round being retried, while it is being retried. Cleared the moment anything else
  *  arrives, because by then the retry has plainly worked. */
 let retrying: { attempt: number; message: string } | undefined;
+      /* A tool call being written right now.
+       *
+       * Tool-call arguments stream in silently and a big one takes a while: a 21,591-character
+       * page arrives over roughly a minute during which the interface showed nothing at all, so
+       * watching a file get written was indistinguishable from watching a turn hang. Cleared the
+       * moment the call completes, because the tool row that replaces it says the same thing
+       * better and with a result attached. */
+      let writing: { name: string; path?: string; chars: number } | undefined;
 /** How many rounds were sent again over the whole turn. Never cleared — see `retried` in
  *  TurnUsage for why the live one above is not enough on its own. */
 let retried = 0;
@@ -294,7 +302,7 @@ let retried = 0;
       // Last, so it reads as the message's footer and stays put as rounds arrive.
       // `folded` joins the gate: a fold before the first round is exactly the case where
       // there is nothing else to render and the person is staring at an empty message.
-      if (rounds.length > 0 || context || folded || retrying || retried) {
+      if (rounds.length > 0 || context || folded || retrying || retried || writing) {
         const usage: TurnUsage = {
           rounds,
           context,
@@ -302,6 +310,7 @@ let retried = 0;
           folded,
           foldedChars,
           retrying,
+          writing,
           retried,
         };
         parts.push({ type: "data", name: USAGE_PART, data: usage });
@@ -324,8 +333,17 @@ let retried = 0;
           yield { content: snapshot() };
           continue;
         }
+        if (event.type === "writing") {
+          retrying = undefined;
+          writing = { name: event.name, chars: event.chars, ...(event.path ? { path: event.path } : {}) };
+          yield { content: snapshot() };
+          continue;
+        }
         // Anything else arriving means the round got through.
         retrying = undefined;
+        // And anything that is not more of the same write means the write is over — the
+        // completed `tool_call` row says it better, with its result.
+        writing = undefined;
 
         if (event.type === "delta") {
           append(event.role === "reasoning" ? "reasoning" : "text", event.text);

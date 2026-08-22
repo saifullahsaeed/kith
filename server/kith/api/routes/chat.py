@@ -6,6 +6,7 @@ import contextvars
 import json
 import threading
 import time
+import traceback
 
 from flask import Response, jsonify, request
 
@@ -18,7 +19,7 @@ from kith.config import (
 )
 from kith.infra import permissions
 from kith.infra.db import repositories as repo
-from kith.kernel import clock, live_turns, session_context, stopping
+from kith.kernel import changes, clock, live_turns, session_context, stopping
 from kith.llm import ledger
 from kith.schemas import (
     AnswerSchema,
@@ -253,10 +254,16 @@ def stop_turn(conversation_id: str):
 def steer_turn(conversation_id: str):
     """Change course without killing the run.
 
-    Recorded to the transcript here rather than by the loop, so the conversation reads in the
-    order it happened: what was said, then the round that acted on it. The loop only appends it
-    to the list it is sending — it has no business writing history, and a second writer would
-    be a second answer to "what did they actually say".
+    **Recorded when it is delivered, not when it is queued**, which is a change. It was written to
+    the transcript here, on the reasoning that the conversation should read in the order it
+    happened — and that reasoning survives, because delivery is a round boundary and the round
+    that acts on it is the very next thing. What does not survive is the case where it is never
+    delivered: a steer you take back should never have been in the record, and one the turn never
+    reached should be recorded when it is finally sent, not thirty rounds earlier.
+
+    So the queue is the only place a steer lives until something happens to it, and all three
+    things that can happen to it write the record: taken by a round, sent as its own message, or
+    withdrawn and gone.
     """
     body = request.get_json(silent=True) or {}
     said = str(body.get("message") or body.get("content") or "").strip()
@@ -266,9 +273,34 @@ def steer_turn(conversation_id: str):
         # Not an error. The window asks, finds nothing running, and posts it as a new message —
         # which is the same thing the person meant, one round later.
         return jsonify({"steering": False, "reason": "no turn is running"})
-    conversations.record(AGENT_DB_PATH, conversation_id, "user", said)
     steering.steer(conversation_id, said)
+    changes.publish("steer", conversation=conversation_id)
     return jsonify({"steering": True, "waiting": steering.waiting(conversation_id)})
+
+
+@api.get("/chat/<conversation_id>/steer")
+@api.doc(
+    summary="What is waiting to reach the running turn",
+    description="Steers queued for the next round boundary, in the order they were said.",
+)
+def pending_steers(conversation_id: str):
+    return jsonify({"pending": steering.pending(conversation_id)})
+
+
+@api.delete("/chat/<conversation_id>/steer")
+@api.doc(
+    summary="Take back what has not been delivered",
+    description=(
+        "Drops every steer still queued for this conversation. Reaches nothing a round has "
+        "already taken — that is in the prompt, and the way to change your mind about it is to "
+        "say so."
+    ),
+)
+def withdraw_steers(conversation_id: str):
+    withdrawn = steering.withdraw(conversation_id)
+    if withdrawn:
+        changes.publish("steer", conversation=conversation_id)
+    return jsonify({"withdrawn": withdrawn})
 
 
 @api.get("/chat/<conversation_id>/attach")
@@ -453,11 +485,21 @@ def begin_turn(conversation_id: str, config, gather, opening: str = ""):
             live_turns.publish(live, json.dumps({"type": "error", "message": str(exc)}) + "\n")
         finally:
             _disarm(conversation_id, stop_switch)
-            # Anything still waiting belonged to this turn. Carrying it into the next one would
-            # put it in front of a model whose recent history no longer matches what it was
-            # reacting to.
-            steering.forget(conversation_id)
+            # What nobody got round to reading is sent, not deleted.
+            #
+            # This was `steering.forget` — the turn ends, anything still queued is dropped, on the
+            # reasoning that it belonged to a turn now over and would land in a prompt whose
+            # history no longer matched. The premise is right and the conclusion was wrong: it is
+            # a thing the person typed and nobody answered, and the fix for "it would be stale in
+            # that prompt" is a *new* prompt, not the bin.
+            #
+            # Read before `finish` and sent after it: `live_turns.begin` replaces whatever record
+            # is there, so starting the next turn before this one has released its readers is the
+            # race that leaves a run nobody can watch — see `continue_conversation`.
+            unread = steering.take(conversation_id)
             live_turns.finish(live)  # releases every reader, now and later
+            if unread:
+                _send_unread_steer(conversation_id, unread)
 
     # `copy_context().run` rather than a bare Thread target: everything else this request
     # established in ContextVars — the project, the turn's scratch notes, whether this is
@@ -536,6 +578,53 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
         pass
 
 
+def _deliver_steer(conversation_id: str) -> str:
+    """Hand the running turn what is waiting, and write it down as it goes.
+
+    The record is written here rather than when the person pressed Enter, because until a round
+    takes it a steer is a thing that might still be withdrawn, or might end up being sent as its
+    own message instead. Recording at the moment of delivery means the transcript says what
+    actually reached him, and says it immediately before the round that acted on it.
+
+    The `steer` change is what takes the pending line off the screen: the interface shows what is
+    queued, so the queue emptying is a change to something being displayed.
+    """
+    said = steering.take(conversation_id)
+    if not said:
+        return ""
+    conversations.record(AGENT_DB_PATH, conversation_id, "user", said)
+    changes.publish("steer", conversation=conversation_id)
+    return said
+
+
+def _send_unread_steer(conversation_id: str, said: str) -> None:
+    """Send what the turn never reached, as an ordinary message in a turn of its own.
+
+    Not carried into the old prompt — that was the right objection to keeping it, and a new turn
+    is the answer to it. The message is recorded here and the turn reads it back off the
+    transcript, the same path a typed message takes, because that is what it now is: something
+    said that nobody answered.
+
+    Best-effort and swallowed. This runs in the `finally` of a turn that has already released its
+    readers, and a failure to start the next turn must not be raised into a thread nobody is
+    watching. The text is in the transcript either way, so the worst case is that it waits for the
+    next thing the person says rather than being lost.
+    """
+    try:
+        conversations.record(AGENT_DB_PATH, conversation_id, "user", said)
+        changes.publish("steer", conversation=conversation_id)
+        live = begin_turn(
+            conversation_id,
+            default_config(),
+            lambda: _history_for_turn(conversation_id, {"role": "user", "content": said}),
+            said,
+        )
+        for _ in live_turns.watch(live):
+            pass
+    except Exception:
+        traceback.print_exc()
+
+
 def _tool_block_chars() -> int:
     """How many characters the tool declarations take in a request.
 
@@ -605,6 +694,11 @@ class _Recorder:
             # room and paid for a summary. A reopened conversation should show that its middle
             # is notes rather than the original steps.
             self.folded = True
+            return
+        if kind == "writing":
+            # Live only. A tool call being written is the same call the `tool_call` event will
+            # record in full a moment later, so writing it down would be the same action twice —
+            # and ten times over for a large one.
             return
         if kind == "retrying":
             self.retried += 1
@@ -807,6 +901,8 @@ class _MindFeed:
         "Runs the agentic loop (the model may call its memory/notes/journal/task "
         "tools) and streams `application/x-ndjson`: one JSON object per line.\n"
         '- `{"type":"delta","role":"reasoning"|"text","text":"..."}`\n'
+        '- `{"type":"writing","name":"...","path":"...","chars":N}` — a tool call still being '
+        "written, throttled; live only, never recorded\n"
         '- `{"type":"tool_call","id":"...","name":"...","arguments":{...}}`\n'
         '- `{"type":"tool_result","id":"...","name":"...","result":{...}}`\n'
         '- `{"type":"stats","stats":{...}}` (one per model request, so several per turn — '
@@ -909,7 +1005,7 @@ def _turn(
             # A callable rather than the store itself: taking new input is this module's
             # business, and a loop that imported the queue would be the loop deciding where
             # messages come from.
-            steer=lambda: steering.take(conversation_id),
+            steer=lambda: _deliver_steer(conversation_id),
             # Rounds stay on the declared knob (max_rounds, 40). A conversation wants real
             # room: you are here, so a long turn is one you can watch and stop.
             #

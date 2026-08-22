@@ -69,6 +69,30 @@ def waiting(conversation_id: str) -> int:
         return len(_PENDING.get(conversation_id) or [])
 
 
+def pending(conversation_id: str) -> list[str]:
+    """What is waiting, in the order it was said.
+
+    So the interface can show it. Typing at a running turn used to make the words disappear —
+    out of the composer, into a queue nobody could see, and back onto the screen a round later
+    when the model happened to read them. For the seconds in between there was nothing to look
+    at and no way to tell a steer that had landed from one that had not been sent at all.
+    """
+    with _LOCK:
+        return list(_PENDING.get(conversation_id) or [])
+
+
+def withdraw(conversation_id: str) -> bool:
+    """Take back everything waiting. True if there was something to take back.
+
+    The counterpart to being able to see it: a queue you can watch and not change is a queue
+    that makes you wait for your own mistake to be read out. Only reaches what has not been
+    delivered — once a round has taken it, it is in the prompt and the way to change your mind
+    is to say so.
+    """
+    with _LOCK:
+        return _PENDING.pop(conversation_id, None) is not None
+
+
 def take(conversation_id: str) -> str:
     """Everything waiting, as one message, cleared as it is read.
 
@@ -81,11 +105,17 @@ def take(conversation_id: str) -> str:
 
 
 def forget(conversation_id: str) -> None:
-    """Drop anything waiting. Called when a turn ends, so nothing arrives in the next one.
+    """Drop anything waiting, without sending it.
 
-    Text left over is text nobody has answered — but it belonged to a turn that is now over,
-    and carrying it forward would put it in a prompt whose recent history no longer matches
-    what it was reacting to.
+    No longer what happens at the end of a turn. It used to be: text the turn never got round to
+    reading was discarded, on the reasoning that it belonged to a turn now over and would land in
+    a prompt whose history no longer matched what it was reacting to. The first half is right and
+    the conclusion does not follow — the person said it and nobody answered, and silently deleting
+    what somebody typed is the worst of the three things that could happen to it. It is sent as an
+    ordinary message instead, in a turn of its own, which is a fresh prompt rather than a stale
+    one. See `begin_turn`.
+
+    What is left here is the honest use: a conversation being torn down, and the tests.
     """
     with _LOCK:
         _PENDING.pop(conversation_id, None)

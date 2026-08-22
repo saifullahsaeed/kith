@@ -93,3 +93,27 @@ export async function listSkills(): Promise<SkillSummary[]> {
   const skills = Array.isArray(body) ? body : (body.skills ?? []);
   return skills.filter((one) => one && one.name);
 }
+
+/**
+ * What is queued for the running turn, in the order it was said.
+ *
+ * Typing at a running turn used to make the words vanish — out of the composer, into a queue
+ * nobody could see, and back a round later when the model happened to read them. In between there
+ * was nothing on screen and no way to tell a steer that had landed from one that was never sent.
+ */
+export async function fetchPendingSteers(conversationId: string): Promise<string[]> {
+  if (!conversationId) return [];
+  const response = await fetch(`/api/chat/${conversationId}/steer`);
+  if (!response.ok) return [];
+  const body = (await response.json()) as { pending?: string[] };
+  return body.pending ?? [];
+}
+
+/** Take back everything not yet delivered. Reaches nothing a round has already taken. */
+export async function withdrawSteers(conversationId: string): Promise<boolean> {
+  if (!conversationId) return false;
+  const response = await fetch(`/api/chat/${conversationId}/steer`, { method: "DELETE" });
+  if (!response.ok) return false;
+  const body = (await response.json()) as { withdrawn?: boolean };
+  return Boolean(body.withdrawn);
+}

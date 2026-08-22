@@ -27,6 +27,10 @@ from kith.kernel import events
 #: because both fail quietly: a misspelled kind updates nothing, and a declared kind nobody
 #: publishes is a subscription that can never fire.
 #:
+#: `steer` is the fourth: what is queued for a running turn is on screen now, greyed at the end
+#: of the thread, so the queue filling, emptying or being taken back is a change to something
+#: being displayed.
+#:
 #: `schedule` is the third of these, and the same story: the Work panel now says what is standing
 #: and when it next fires, and a countdown nobody refreshes reads "due" forever the moment the
 #: schedule rolls over. A standing job changing when it will next happen is a change.
@@ -47,6 +51,7 @@ KINDS = (
     "question",
     "permission",
     "schedule",
+    "steer",
 )
 
 

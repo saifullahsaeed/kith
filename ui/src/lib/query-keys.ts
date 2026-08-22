@@ -43,6 +43,8 @@ export const keys = {
   activityRecent: () => ["activity", "recent"] as const,
   /** Mode, pending requests and standing grants, together as the endpoint answers them. */
   permissions: () => ["permissions"] as const,
+  /** What is queued for this conversation's running turn, not yet delivered. */
+  steers: (conversationId: string) => ["steers", conversationId] as const,
   /** The question this conversation is waiting on, if any. */
   question: (conversationId: string) => ["question", conversationId] as const,
   /** Long-running work started from this conversation. */
@@ -99,4 +101,6 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   // A standing job moving its next-fire time. The Work panel counts down to it, so a countdown
   // nobody refreshed would sit on "due" from the moment it rolled over.
   schedule: [["brain"]],
+  // Queued, delivered, or taken back — all three change what the thread is showing.
+  steer: [["steers"]],
 };

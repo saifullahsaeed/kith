@@ -24,6 +24,11 @@ export interface TurnUsage {
    *  end the whole turn; it now costs a pause, and a pause with nothing in it looks exactly
    *  like the hang it is recovering from. */
   retrying?: { attempt: number; message: string };
+  /** A tool call whose arguments are still streaming. A `write_file` of a page arrives over
+   *  something like a minute, and until now that minute showed nothing at all — so watching a
+   *  file be written was indistinguishable from watching a turn hang. Present only while it is
+   *  happening; the completed tool row that replaces it says the same thing with a result. */
+  writing?: { name: string; path?: string; chars: number };
   /** How many rounds this turn had to send again, counted for the whole turn and never
    *  cleared. `retrying` above is live and the answer replaces it — which is fine when a
    *  failure is slow, and useless when it is not: a dead network fails name resolution in
@@ -69,6 +74,25 @@ export function TurnStatus({ usage }: { usage: TurnUsage }) {
       >
         <span className="size-1.5 animate-pulse rounded-full bg-amber-500/60" />
         reconnecting — attempt {usage.retrying.attempt + 1}
+      </div>
+    );
+  }
+  if (usage.writing) {
+    const { name, path, chars } = usage.writing;
+    // The filename when the half-written JSON has given one up, the tool's own name otherwise.
+    // "writing wukong-site/index.html" is a different sentence from "writing".
+    const what = path || name || "a file";
+    return (
+      <div
+        data-slot="kith_turn-status"
+        className="text-muted-foreground/70 flex items-center gap-1.5 font-mono text-[11px] select-none"
+        title={
+          "He is writing this out now. Large files arrive a piece at a time, and the count is " +
+          "how far through it he is — the finished call reports the real size."
+        }
+      >
+        <span className="bg-kith size-1.5 animate-pulse rounded-full" />
+        writing {what} — {chars < 1000 ? `${chars}` : `${(chars / 1000).toFixed(1)}k`} chars
       </div>
     );
   }

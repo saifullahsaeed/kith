@@ -17,6 +17,7 @@ which provider is in use.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -478,7 +479,7 @@ def stream_once(
 
             for part in delta.get("tool_calls") or []:
                 index = part.get("index", 0)
-                slot = calls.setdefault(index, {"id": None, "name": "", "arguments": ""})
+                slot = calls.setdefault(index, {"id": None, "name": "", "arguments": "", "said": 0})
                 if part.get("id"):
                     slot["id"] = part["id"]
                 function = part.get("function") or {}
@@ -486,6 +487,9 @@ def stream_once(
                     slot["name"] = function["name"]
                 if function.get("arguments"):
                     slot["arguments"] += function["arguments"]
+                    progress = _writing(slot)
+                    if progress is not None:
+                        yield progress
     except requests.exceptions.RequestException as exc:
         response.close()
         yield {"type": "error", "message": f"cloud stream interrupted: {exc}"}
@@ -517,6 +521,40 @@ def reachable(config: Config) -> bool:
         return resp.status_code == 200
     except requests.exceptions.RequestException:
         return False
+
+
+#: How much a tool call's arguments must grow before saying so again.
+#:
+#: A `write_file` of a 21,591-character page arrives as roughly a thousand chunks, and one event
+#: each would put a thousand frames on the wire to report one action. Every two thousand
+#: characters is about ten updates for a page that size — enough that the number visibly moves,
+#: few enough that the stream is still about the turn.
+_WRITING_EVERY = 2_000
+
+
+def _writing(slot: dict) -> dict | None:
+    """Say that a tool call is still being written, if it has grown enough to be worth saying.
+
+    Tool-call arguments were accumulated in silence. For a small call that is invisible and
+    correct; for a large one it is the whole minute in which the interface shows nothing at all,
+    and a person watching a page get written sees a spinner and concludes it has hung. The
+    completed call arrives with `21,591 chars` on it — the one moment the size no longer needs
+    reporting.
+
+    The path is pulled out of the half-written JSON when it is there, because "writing
+    wukong-site/index.html" is a different sentence from "writing". `path` is conventionally the
+    first key of the tools that write, so it is usually complete long before the body is; when it
+    is not, this returns nothing for it and the interface says what it does know.
+    """
+    grown = len(slot["arguments"])
+    if grown - int(slot.get("said") or 0) < _WRITING_EVERY:
+        return None
+    slot["said"] = grown
+    event = {"type": "writing", "name": slot.get("name") or "", "chars": grown}
+    found = re.search(r'"(?:path|file|target)"\s*:\s*"((?:[^"\\]|\\.)*)"', slot["arguments"])
+    if found:
+        event["path"] = found.group(1)
+    return event
 
 
 def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

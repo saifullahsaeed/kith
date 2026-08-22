@@ -451,6 +451,12 @@ def _send_round(
                     # on the same event type under a different role and is not his answer.
                     spoken += str(event.get("text") or "")
                 yield event  # forward reasoning/answer tokens
+            elif kind == "writing":
+                # A tool call being written, while it is being written. Counts as having spoken
+                # for the retry decision: the round produced output, and sending it again would
+                # ask for the same page twice.
+                spoke = True
+                yield event
             elif kind == "error":
                 failure = event
                 break
