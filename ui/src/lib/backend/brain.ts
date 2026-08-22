@@ -49,6 +49,12 @@ export interface Deliverable {
   title: string;
   content: string;
   created_at: string;
+  /** Size on disk, for a `file`. Absent when the file has been moved or cannot be read —
+   *  which is a different thing from empty, and reads differently. */
+  bytes?: number;
+  /** When the file itself last changed, ISO. Not the same fact as `created_at`, which is when
+   *  the deliverable was filed: he can rewrite the document ten times without refiling it. */
+  modified?: string;
 }
 export interface TaskDetail extends Task {
   /** The milestone's title, for showing it without another lookup. */

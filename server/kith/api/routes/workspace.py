@@ -44,8 +44,13 @@ def _anchor(path: str, project_id: str | None) -> str:
     return path
 
 
-def _wanted(path: str, project_id: str | None) -> str:
+def wanted(path: str, project_id: str | None) -> str:
     """The file the interface is actually asking for: anchored, then looked for.
+
+    Public because the task page needs the same answer. A deliverable's path is resolved the same
+    way whether it is being served, previewed, or merely measured — and the alternative was a
+    second copy of the anchoring rule in `routes/tasks.py`, which is how two places come to
+    disagree about where a file is.
 
     Two different questions, and they were run together as one. `_anchor` answers *relative to
     what* — a deliverable's path belongs to its project, not to whichever session is open.
@@ -82,7 +87,7 @@ def workspace_file():
     if not path:
         return jsonify({"error": "path required"}), 400
     try:
-        path = _wanted(path, request.args.get("projectId"))
+        path = wanted(path, request.args.get("projectId"))
         # read_raw, not read_file: the viewer wants the real file, not the
         # line-numbered window the model reads.
         return jsonify({"path": path, "content": sandbox.read_raw(path)})
@@ -104,7 +109,7 @@ def workspace_raw():
     if not path:
         return jsonify({"error": "path required"}), 400
     try:
-        target, kind = sandbox.media_file(_wanted(path, request.args.get("projectId")))
+        target, kind = sandbox.media_file(wanted(path, request.args.get("projectId")))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     # conditional=True gives ETag/If-Modified-Since and Range handling for free.
@@ -134,7 +139,7 @@ def workspace_open():
         # One of his files, by workspace path: the common case, and the whole action in
         # a single request.
         if path:
-            path = _wanted(path, body.get("projectId"))
+            path = wanted(path, body.get("projectId"))
             return jsonify({"ok": True, **handoff.open_workspace_file(path, reveal=reveal).public()})
         # An absolute path — his databases, his persona folder, a transcript. Those are
         # not under his workspace, so they arrive already resolved.

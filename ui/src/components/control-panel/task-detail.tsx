@@ -23,6 +23,7 @@ import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { FileViewer, Markdown, MarkdownInline, skipTextRead } from "@/components/files";
 import { EditableText } from "@/components/ui/editable-text";
+import { dayLabel, time } from "@/lib/dates";
 import { keys } from "@/lib/query-keys";
 import { openWorkspaceFile } from "@/lib/files";
 import { cn } from "@/lib/utils";
@@ -70,6 +71,9 @@ export function TaskDetailPage({
   const confirm = useConfirm();
   const cache = useQueryClient();
   const [item, setItem] = useState("");
+  /** A download that could not be read. Said out loud, because the alternative — which this
+   *  page shipped with — was handing you a .txt containing the path and calling it done. */
+  const [refused, setRefused] = useState("");
   // The title being typed, held apart from the loaded task — see the input below for why.
   const [goalDraft, setGoalDraft] = useState<string | null>(null);
   const goalCancelled = useRef(false);
@@ -140,25 +144,53 @@ export function TaskDetailPage({
     });
     if (ok) await del("deliverable", d.id);
   };
+  /* Download the file, rather than a description of it.
+   *
+   * This read the deliverable through `fetchWorkspaceFile`, which returns *text*, and wrote that
+   * into a `text/plain` blob. Two things were wrong with it and the comment it carried only
+   * admitted the smaller one.
+   *
+   * The `catch` fell back to `d.content` — the path — so a file it could not read was saved as a
+   * text file containing its own path, and the download looked like it had worked.
+   *
+   * And on this page it could not have worked anyway: five of the seven deliverables here are
+   * `.docx` and `.pdf`. Decoding bytes as text and re-encoding them as UTF-8 corrupts them, so
+   * even the success path produced a file Word would refuse. Nothing said so, because a
+   * corrupted download is a file you find out about later.
+   *
+   * `/api/workspace/raw` already serves the bytes with the real content type — it is what the
+   * PDF viewer reads — so this takes the blob it returns and saves that. The global `fetch`
+   * wrapper attaches the API token, so no headers are needed here. And a failure is now a
+   * failure: it says so instead of handing you a path in a .txt.
+   */
   const downloadDeliverable = async (d: Detail["deliverables"][number]) => {
-    let text = d.content;
+    let blob: Blob;
+    let name: string;
+
     if (d.kind === "file") {
-      try {
-        // Anchored to the task's project, same as the viewer and Open on this machine. Without
-        // it a relative path resolved against the global workspace root, which is not where he
-        // wrote it — and the `catch` below turned that miss into a silent success: the download
-        // arrived containing the path as its text instead of the file.
-        text = (await fetchWorkspaceFile(d.content, task?.project_id ?? null)).content;
-      } catch {
-        /* fall back to the path */
+      const project = task?.project_id;
+      const url =
+        `/api/workspace/raw?path=${encodeURIComponent(d.content)}` +
+        (project ? `&projectId=${project}` : "");
+      const response = await fetch(url).catch(() => null);
+      if (!response?.ok) {
+        setRefused(`Couldn't read ${d.content} — it may have been moved or renamed.`);
+        return;
       }
+      blob = await response.blob();
+      // The file's own name, so the extension survives. A title with the spaces replaced was
+      // what it used before, which is how `…Specification.docx` arrived as `…Specification`
+      // and opened in nothing.
+      name = d.content.split("/").pop() || d.title || "deliverable";
+    } else {
+      blob = new Blob([d.content], { type: "text/plain;charset=utf-8" });
+      name = (d.title || "deliverable").replace(/\s+/g, "_") + ".txt";
     }
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download =
-      (d.title || "deliverable").replace(/\s+/g, "_") + (d.kind === "file" ? "" : ".txt");
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -513,6 +545,11 @@ export function TaskDetailPage({
                 </span>
               ) : null}
             </H>
+            {refused ? (
+              <p className="text-destructive/90 border-destructive/30 bg-destructive/5 mb-2 rounded-lg border px-3 py-2 text-[12.5px]">
+                {refused}
+              </p>
+            ) : null}
             {task.deliverables.length === 0 ? (
               <p className="rounded-xl border border-dashed border-border/70 px-3 py-4 text-center text-sm text-muted-foreground">
                 Nothing produced yet.
@@ -576,6 +613,27 @@ function DeliverableRow({
       ? d.content
       : `${d.content.length.toLocaleString()} chars`;
 
+  /* What the row can say beyond its name and its path.
+   *
+   * It said neither the date it was filed nor anything about the file, which for a page whose
+   * whole job is "what did this task produce" leaves out most of the answer — seven rows that
+   * differ only in a filename, with no way to tell the one he wrote this morning from the one
+   * from three weeks ago, or the finished document from the 2KB stub.
+   *
+   * Four facts, in the order you would ask for them, and each omitted rather than faked when it
+   * is not known. `modified` only appears when it genuinely differs from `created_at` by more
+   * than a minute — on most deliverables they are the same moment, and printing both would be
+   * two timestamps saying one thing. */
+  const kindLabel = isLink ? "link" : isFile ? extensionOf(d.content) : "text";
+  const facts = [
+    kindLabel,
+    d.bytes !== undefined ? formatBytes(d.bytes) : null,
+    d.created_at ? `filed ${dayLabel(d.created_at)}` : null,
+    d.modified && changedSince(d.created_at, d.modified)
+      ? `edited ${dayLabel(d.modified)}`
+      : null,
+  ].filter(Boolean) as string[];
+
   const preview = () => {
     setOpen(true);
     // A screenshot he attached as a deliverable is shown by the viewer from its own
@@ -611,6 +669,19 @@ function DeliverableRow({
             {d.title}
           </span>
           <span className="block truncate font-mono text-[11px] text-muted-foreground">{sub}</span>
+          {facts.length ? (
+            <span
+              className="text-muted-foreground/60 mt-0.5 block truncate text-[11px]"
+              title={
+                d.created_at
+                  ? `Filed ${dayLabel(d.created_at)} ${time(d.created_at)}` +
+                    (d.modified ? `\nFile last changed ${dayLabel(d.modified)} ${time(d.modified)}` : "")
+                  : undefined
+              }
+            >
+              {facts.join(" · ")}
+            </span>
+          ) : null}
         </button>
       )}
       <div className="flex shrink-0 items-center gap-0.5">
@@ -721,4 +792,31 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
       {children}
     </label>
   );
+}
+
+/** `docs/a/b/Thing.docx` → `docx`. The last thing on the row that identifies what it *is*, and
+ *  the reason a download has to keep the extension. Empty for a file with none. */
+function extensionOf(path: string): string {
+  const name = path.split("/").pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "file";
+}
+
+/** Bytes, in the shortest form that is still honest. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/** Whether the file has really moved on since it was filed.
+ *
+ * A minute of slack, because the file is written and the deliverable filed in the same breath —
+ * so they differ by milliseconds on almost everything, and showing both would be two timestamps
+ * for one event. What is worth saying is the case where he came back and rewrote it. */
+function changedSince(filed: string, modified: string): boolean {
+  const a = new Date(filed).getTime();
+  const b = new Date(modified).getTime();
+  if (Number.isNaN(a) || Number.isNaN(b)) return false;
+  return b - a > 60_000;
 }
