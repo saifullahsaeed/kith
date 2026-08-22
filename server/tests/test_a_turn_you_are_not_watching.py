@@ -233,7 +233,7 @@ class TestAWakeIsNotSomethingYouSaid:
         assert entries[-1]["role"] == "system"
 
     def test_it_does_not_count_as_a_message(self, db):
-        """"12 messages" should mean what a person would count."""
+        """ "12 messages" should mean what a person would count."""
         from kith.infra.db import repositories as repo
         from kith.services import conversations
 

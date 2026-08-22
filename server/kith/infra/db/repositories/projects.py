@@ -92,9 +92,7 @@ def delete_project(path: Path, project_id: int) -> bool:
         # to name, and prints the number. Deleting a project left "Project #15" in the sidebar
         # holding one conversation, which is the deleted project still on screen under an id
         # for a name. See ui/components/chat/history-panel.tsx → groupByProject.
-        db.execute(
-            update(Conversation).where(Conversation.project_id == project_id).values(project_id=None)
-        )
+        db.execute(update(Conversation).where(Conversation.project_id == project_id).values(project_id=None))
         db.execute(delete(Milestone).where(Milestone.project_id == project_id))
         return db.execute(delete(Project).where(Project.id == project_id)).rowcount > 0
 

@@ -322,9 +322,7 @@ def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
     # `full_messages` renders a recorded wake as a `user` turn — the record says `system`, the
     # prompt says what the API needs. So the tail is `user` either way and only the text has to
     # match. See `conversations.full_messages`.
-    recorded = (
-        bool(history) and history[-1].get("role") == "user" and history[-1].get("content") == said
-    )
+    recorded = bool(history) and history[-1].get("role") == "user" and history[-1].get("content") == said
     if not recorded:
         # The fallback for a message that never reached disk. `user` regardless of what the
         # caller called it, because this is the last message of a request and a request has to

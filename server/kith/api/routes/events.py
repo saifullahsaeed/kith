@@ -48,11 +48,7 @@ def _frame(event: events.Event) -> str:
     detectable however late the client reconnects. SSE treats the id as opaque text and echoes it
     back verbatim, so carrying two facts in it costs nothing. See `kernel/events`.
     """
-    return (
-        f"id: {events.EPOCH}-{event.id}\n"
-        f"event: {event.type}\n"
-        f"data: {json.dumps(event.data)}\n\n"
-    )
+    return f"id: {events.EPOCH}-{event.id}\nevent: {event.type}\ndata: {json.dumps(event.data)}\n\n"
 
 
 def _cursor() -> tuple[int | None, str | None]:
