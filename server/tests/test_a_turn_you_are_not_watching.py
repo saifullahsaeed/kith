@@ -243,9 +243,15 @@ class TestAWakeIsNotSomethingYouSaid:
         conversations.record(db, id, "system", "One of your reminders just fired.")
         assert int(repo.conversations.get(db, id)["messages"]) == before
 
-    def test_the_model_still_sees_it_as_system(self, db):
-        """Replayed, because the turn after a wake needs to know why the one before it happened —
-        and replayed *as system*, because nobody said it."""
+    def test_the_prompt_ends_in_something_to_answer(self, db):
+        """`system` in the record, `user` on the wire, and the difference is load bearing.
+
+        A chat request has one slot for the thing being answered — the last message — and it has
+        to be a `user` turn. Sending the wake as `system` left the request ending in a system
+        message with nothing to respond to: four woken turns in a row produced no reply, and
+        DeepSeek eventually refused the shape outright ("Function call should not be used with
+        prefix"). The transcript keeps the honest role; only the prompt view moves it.
+        """
         from kith.services import conversations
 
         started = conversations.start(db, "hello")
@@ -253,8 +259,12 @@ class TestAWakeIsNotSomethingYouSaid:
         conversations.record(db, id, "system", "One of your reminders just fired.")
 
         replayed = conversations.full_messages(id)
-        assert replayed[-1]["role"] == "system"
+        assert replayed[-1]["role"] == "user", "a prompt must end in a turn"
         assert "reminders just fired" in replayed[-1]["content"]
+
+        # And the record still says nobody typed it.
+        entries = [e for e in conversations.read(id) if e.get("type") == "message"]
+        assert entries[-1]["role"] == "system"
 
     def test_the_interface_can_tell_it_apart(self, db):
         """`timeline` carries the role through rather than flattening it into `user`, which is
@@ -279,7 +289,7 @@ class TestAWakeIsNotSomethingYouSaid:
         conversations.record(db, id, "assistant", "checked")
 
         roles = [m["role"] for m in conversations.full_messages(id)]
-        assert roles[-3:] == ["assistant", "system", "assistant"]
+        assert roles[-3:] == ["assistant", "user", "assistant"]
 
 
 class TestTwoTurnsDoNotRaceInOneConversation:

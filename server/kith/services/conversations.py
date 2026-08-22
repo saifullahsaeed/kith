@@ -252,8 +252,11 @@ def messages(conversation_id: str) -> list[dict]:
     """
     out = []
     for entry in read(conversation_id):
-        if entry.get("type") == "message" and entry.get("role") in ("user", "assistant"):
-            out.append({"role": entry["role"], "content": entry.get("content") or ""})
+        if entry.get("type") == "message" and entry.get("role") in ("user", "assistant", "system"):
+            # A wake reads as a `user` turn here for the same reason it does in `full_messages`:
+            # this is a prompt view, and a prompt ends in something to answer.
+            role = "user" if entry["role"] == "system" else entry["role"]
+            out.append({"role": role, "content": entry.get("content") or ""})
     return out
 
 
@@ -292,12 +295,20 @@ def full_messages(conversation_id: str) -> list[dict]:
             if entry["role"] in ("user", "system"):
                 pending = {}  # a turn boundary — nothing from before it can still be open
                 turn += 1
-            # `system` is a turn the harness started — a reminder firing, a background task
-            # finishing. It is replayed because the turn after it needs to know why the one
-            # before it happened, and it is replayed *as system* because it was not said by
-            # anyone: recorded as `user`, as it was, the model reads a scheduler's prose as its
-            # person speaking for the rest of the conversation's life.
-            out.append({"role": entry["role"], "content": entry.get("content") or ""})
+            # A wake is `system` in the transcript and `user` on the wire, and the difference is
+            # the difference between a record and a prompt.
+            #
+            # The record must not say the person spoke, which is why it is stored as `system` —
+            # see `api/routes/chat.continue_conversation`. But a chat request has exactly one slot
+            # for "the thing to answer", and it is the last message, and it has to be `user`.
+            # Sending the wake as `system` left requests ending in a system message with nothing
+            # to respond to: four woken turns in a row produced no reply at all, and DeepSeek
+            # eventually refused the shape outright — "Function call should not be used with
+            # prefix", its reading of a conversation that does not end in a turn. Fixed forward
+            # rather than reverted: the transcript and the interface keep the honest role, and
+            # only the prompt view puts it where the API expects a prompt.
+            role = "user" if entry["role"] == "system" else entry["role"]
+            out.append({"role": role, "content": entry.get("content") or ""})
         elif kind == "tool_call":
             call_id = str(entry.get("id") or "")
             if call_id:

@@ -319,15 +319,18 @@ def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
     """
     history = conversations.full_messages(conversation_id)
     said = str((latest or {}).get("content") or "")
-    # Either role: a wake records `system` and a typed message records `user`, and both arrive
-    # here already written. Checking only for `user` would send a wake twice.
+    # `full_messages` renders a recorded wake as a `user` turn — the record says `system`, the
+    # prompt says what the API needs. So the tail is `user` either way and only the text has to
+    # match. See `conversations.full_messages`.
     recorded = (
-        bool(history)
-        and history[-1].get("role") in ("user", "system")
-        and history[-1].get("content") == said
+        bool(history) and history[-1].get("role") == "user" and history[-1].get("content") == said
     )
     if not recorded:
-        return [*history, latest or {"role": "user", "content": said}]
+        # The fallback for a message that never reached disk. `user` regardless of what the
+        # caller called it, because this is the last message of a request and a request has to
+        # end in something to answer — appending the wake's own `system` role here is the shape
+        # that left four woken turns in a row with no reply.
+        return [*history, {**(latest or {}), "role": "user", "content": said}]
     # Everything but the two fields the transcript already round-trips.
     carried = {key: value for key, value in (latest or {}).items() if key not in ("role", "content")}
     if carried:

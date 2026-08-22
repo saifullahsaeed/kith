@@ -109,5 +109,7 @@ class TestTheNewestMessageIsNotDoubled:
 
         route.continue_conversation(conversation_id, "a build finished")
 
-        assert _woken(started["messages"]) == ["a build finished"]
-        assert _users(started["messages"]) == [], "a wake is not something the person said"
+        # `user` on the wire — a request has to end in something to answer — while the
+        # transcript records `system`, which `test_a_turn_you_are_not_watching` pins.
+        assert _users(started["messages"]) == ["a build finished"]
+        assert _woken(started["messages"]) == [], "the prompt view carries no system turns"

@@ -173,14 +173,34 @@ def _openable_roots() -> list[Path]:
 
     It has to be a list rather than one root because his files are real folders on your
     machine, and the settings page reveals each of them.
+
+    A project's own folder is one of them, and was missing. A project can live anywhere — that is
+    what its `directory` is for — and everything a task produces there is stored relative to it:
+    `docs/Sadeef_V2_Comprehensive_Architecture_Specification.docx` is anchored to the project, not
+    to the workspace root. So the deliverables page could show the file, size it, and download it,
+    and then refuse to open the same file in Word, naming three folders it was never in. Nothing
+    is widened by including them that was not already true: he reads and writes in those folders
+    all day, and this is a person clicking Open on a file the page is already showing them.
     """
     from kith import settings
     from kith.infra import workspace
+    from kith.infra.db import repositories as repo
+    from kith.settings import AGENT_DB_PATH
 
     roots = [workspace.root(), settings.DATA_DIR]
     persona = settings.PERSONA_DIR or settings.DEFAULT_PERSONA_DIR
     if persona:
         roots.append(Path(persona))
+    try:
+        roots.extend(
+            Path(str(project.get("directory") or "").strip())
+            for project in repo.projects.list_projects(AGENT_DB_PATH)
+            if str(project.get("directory") or "").strip()
+        )
+    except Exception:
+        # A folder list that cannot be read must not make every file unopenable. The three
+        # above are still checked, which is what this did before projects were in it at all.
+        pass
     resolved = []
     for root in roots:
         try:
