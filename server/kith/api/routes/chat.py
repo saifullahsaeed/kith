@@ -319,7 +319,13 @@ def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
     """
     history = conversations.full_messages(conversation_id)
     said = str((latest or {}).get("content") or "")
-    recorded = bool(history) and history[-1].get("role") == "user" and history[-1].get("content") == said
+    # Either role: a wake records `system` and a typed message records `user`, and both arrive
+    # here already written. Checking only for `user` would send a wake twice.
+    recorded = (
+        bool(history)
+        and history[-1].get("role") in ("user", "system")
+        and history[-1].get("content") == said
+    )
     if not recorded:
         return [*history, latest or {"role": "user", "content": said}]
     # Everything but the two fields the transcript already round-trips.
@@ -478,11 +484,20 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
     concern that happens to need a turn; it is a turn, started differently, and the turn lives
     here until it moves out of the route entirely.
     """
-    conversations.record(AGENT_DB_PATH, conversation_id, "user", trigger)
+    # `system`, not `user`. This was recorded as a message from the person, and it is not one:
+    # nobody typed "One of your reminders just fired". Three things followed from that and all
+    # three were wrong. On reload the interface rendered a scheduler's prose as something you
+    # said, with an edit pencil offering to change it. Every later turn replayed it to the model
+    # as your words, so a harness instruction became a standing request from your person. And the
+    # conversation's message count grew by one for a turn nobody started.
+    #
+    # It is still a turn boundary — `full_messages` and `timeline` both treat `system` the way
+    # they treat `user` — which is the part the old shape was really buying.
+    conversations.record(AGENT_DB_PATH, conversation_id, "system", trigger)
     live = begin_turn(
         conversation_id,
         default_config(),
-        lambda: _history_for_turn(conversation_id, {"role": "user", "content": trigger}),
+        lambda: _history_for_turn(conversation_id, {"role": "system", "content": trigger}),
         trigger,
     )
     # Drained rather than left to run, which keeps the scheduler exactly as serial as it was:

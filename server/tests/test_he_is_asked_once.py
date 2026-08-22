@@ -43,6 +43,11 @@ def _users(messages: list[dict]) -> list[str]:
     return [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
 
 
+def _woken(messages: list[dict]) -> list[str]:
+    """What the harness said to open a turn — a reminder firing, a background task coming back."""
+    return [str(m.get("content") or "") for m in messages if m.get("role") == "system"]
+
+
 class TestTheNewestMessageIsNotDoubled:
     def test_a_recorded_message_is_not_added_again(self, db, conversation):
         conversations.record(db, conversation, "user", "and then what")
@@ -85,7 +90,13 @@ class TestTheNewestMessageIsNotDoubled:
         assert _users(history) == ["what is the plan", "never written"]
 
     def test_an_unattended_turn_is_asked_once_too(self, db, monkeypatch):
-        """The scheduler's path had the same shape: record the trigger, then append it again."""
+        """The scheduler's path had the same shape: record the trigger, then append it again.
+
+        Asked as `system` now, not `user`. The duplication this test is about is unchanged — it is
+        the role that moved, because nobody types "one of your reminders just fired" and recording
+        it as though they had put a scheduler's prose in the person's mouth: in their bubble on
+        reload, and in the prompt as their words on every turn afterwards.
+        """
         monkeypatch.setattr(route, "AGENT_DB_PATH", db)
         conversation_id = f"asked-once-{next(_next)}"
         started: dict = {}
@@ -98,4 +109,5 @@ class TestTheNewestMessageIsNotDoubled:
 
         route.continue_conversation(conversation_id, "a build finished")
 
-        assert _users(started["messages"]) == ["a build finished"]
+        assert _woken(started["messages"]) == ["a build finished"]
+        assert _users(started["messages"]) == [], "a wake is not something the person said"

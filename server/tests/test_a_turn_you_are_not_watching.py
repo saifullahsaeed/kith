@@ -210,3 +210,73 @@ def _kinds(subscription) -> list[str]:
             return out
         if event.type == "changed":
             out.append(event.data["kind"])
+
+
+class TestAWakeIsNotSomethingYouSaid:
+    """A reminder firing opens a turn with a sentence nobody typed.
+
+    It was recorded as a `user` message, and three things followed. Reopening the conversation
+    showed a scheduler's prose in the person's own bubble with an edit pencil on it. Every later
+    turn replayed it to the model as their words, so a harness instruction became a standing
+    request from the person for the rest of the conversation's life. And the message count grew
+    by one for a turn nobody started.
+    """
+
+    def test_it_is_recorded_as_system(self, db, tmp_path, monkeypatch):
+        from kith.services import conversations
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        conversations.record(db, id, "system", "One of your reminders just fired.")
+
+        entries = [e for e in conversations.read(id) if e.get("type") == "message"]
+        assert entries[-1]["role"] == "system"
+
+    def test_it_does_not_count_as_a_message(self, db):
+        """"12 messages" should mean what a person would count."""
+        from kith.infra.db import repositories as repo
+        from kith.services import conversations
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        before = int(repo.conversations.get(db, id)["messages"])
+        conversations.record(db, id, "system", "One of your reminders just fired.")
+        assert int(repo.conversations.get(db, id)["messages"]) == before
+
+    def test_the_model_still_sees_it_as_system(self, db):
+        """Replayed, because the turn after a wake needs to know why the one before it happened —
+        and replayed *as system*, because nobody said it."""
+        from kith.services import conversations
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        conversations.record(db, id, "system", "One of your reminders just fired.")
+
+        replayed = conversations.full_messages(id)
+        assert replayed[-1]["role"] == "system"
+        assert "reminders just fired" in replayed[-1]["content"]
+
+    def test_the_interface_can_tell_it_apart(self, db):
+        """`timeline` carries the role through rather than flattening it into `user`, which is
+        what let the interface draw it in the person's bubble."""
+        from kith.services import conversations
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        conversations.record(db, id, "system", "One of your reminders just fired.")
+
+        assert conversations.timeline(id)[-1]["role"] == "system"
+
+    def test_it_still_closes_the_turn_before_it(self, db):
+        """The one thing recording it as `user` was really buying. A wake starts a turn, so
+        anything left open by the turn before it is over."""
+        from kith.services import conversations
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        conversations.record(db, id, "assistant", "done")
+        conversations.record(db, id, "system", "One of your reminders just fired.")
+        conversations.record(db, id, "assistant", "checked")
+
+        roles = [m["role"] for m in conversations.full_messages(id)]
+        assert roles[-3:] == ["assistant", "system", "assistant"]

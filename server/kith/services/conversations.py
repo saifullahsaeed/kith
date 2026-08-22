@@ -178,7 +178,9 @@ def record(agent_db: Path, conversation_id: str, role: str, content: str, extra:
     repo.conversations.touch(
         agent_db,
         conversation_id,
-        delta=1,
+        # A `system` message is the harness speaking — a reminder firing, a background task
+        # coming back — and nobody counts those when they say how long a conversation is.
+        delta=0 if role == "system" else 1,
         # `or None` so a reply that is nothing but a code block leaves the last readable
         # line standing rather than blanking the row.
         last_said=(outcome_from(content) or None) if role == "assistant" else None,
@@ -286,10 +288,15 @@ def full_messages(conversation_id: str) -> list[dict]:
     turn_of: dict[int, int] = {}
     for entry in read(conversation_id):
         kind = entry.get("type")
-        if kind == "message" and entry.get("role") in ("user", "assistant"):
-            if entry["role"] == "user":
+        if kind == "message" and entry.get("role") in ("user", "assistant", "system"):
+            if entry["role"] in ("user", "system"):
                 pending = {}  # a turn boundary — nothing from before it can still be open
                 turn += 1
+            # `system` is a turn the harness started — a reminder firing, a background task
+            # finishing. It is replayed because the turn after it needs to know why the one
+            # before it happened, and it is replayed *as system* because it was not said by
+            # anyone: recorded as `user`, as it was, the model reads a scheduler's prose as its
+            # person speaking for the rest of the conversation's life.
             out.append({"role": entry["role"], "content": entry.get("content") or ""})
         elif kind == "tool_call":
             call_id = str(entry.get("id") or "")
@@ -409,9 +416,13 @@ def timeline(conversation_id: str) -> list[dict]:
     calls: dict[str, dict] = {}
     for entry in read(conversation_id):
         kind = entry.get("type")
-        if kind == "message" and entry.get("role") == "user":
+        if kind == "message" and entry.get("role") in ("user", "system"):
+            # `system` reaches the interface as its own role rather than being flattened into
+            # `user`. It used to be recorded as one, so on reload a reminder's own prose came
+            # back as a message from the person — with an edit pencil on it, offering to let
+            # them change something they never said.
             current = {
-                "role": "user",
+                "role": entry.get("role"),
                 "parts": [{"kind": "text", "text": entry.get("content") or ""}],
                 "at": entry.get("at") or "",
             }

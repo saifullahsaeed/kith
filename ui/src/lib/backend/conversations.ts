@@ -67,7 +67,10 @@ export type StoredPart =
     };
 
 export interface StoredTurn {
-  role: "user" | "assistant";
+  /** `system` is a turn the harness started — a reminder firing, a background task finishing.
+   *  It was recorded as `user` until it was noticed that this makes a scheduler's prose come back
+   *  on reload as something the person said, editable. */
+  role: "user" | "assistant" | "system";
   parts: StoredPart[];
   /** When the turn started, ISO. `timeline()` has always sent it; nothing read it until the
    *  footer showed a clock. `""` on a turn from before it was recorded. */

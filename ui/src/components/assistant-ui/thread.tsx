@@ -73,6 +73,7 @@ import {
   RotateCcw,
   SquareIcon,
   XIcon,
+  BellRing,
 } from "lucide-react";
 import {
   createContext,
@@ -244,9 +245,35 @@ const ThreadMessage: FC = () => {
   const isEditing = useAuiState((s) => s.message.composer.isEditing);
 
   if (isEditing) return <EditComposer />;
+  if (role === "system") return <SystemMessage />;
   if (role === "user") return <UserMessage />;
   return <AssistantMessageComponent />;
 };
+
+/**
+ * A turn the harness started, said in the harness's own voice.
+ *
+ * A reminder firing and a background task finishing both open a turn with a sentence nobody typed.
+ * That sentence was recorded as a `user` message, so reopening a conversation showed it as
+ * something the person had said — in their bubble, on their side, with an edit pencil offering to
+ * change words they never wrote. It reads as the app putting things in your mouth, which is
+ * roughly what it was doing.
+ *
+ * So it is drawn as what it is: centred, quiet, no avatar, no actions, nothing to edit. Narrower
+ * than a message and lighter than one, because it is stage direction rather than dialogue — the
+ * reason the next thing happened, not a thing anybody said.
+ */
+const SystemMessage: FC = () => (
+  <MessagePrimitive.Root className="aui-system-message mx-auto w-full max-w-(--thread-max-width) px-4 py-2">
+    <div className="border-border/50 bg-muted/25 text-muted-foreground/80 rounded-lg border border-dashed px-3 py-2 text-[12.5px] leading-relaxed">
+      <span className="text-muted-foreground/50 mb-1 flex items-center gap-1.5 text-[10px] font-medium tracking-[0.08em] uppercase">
+        <BellRing className="size-3" aria-hidden />
+        Woken
+      </span>
+      <MessagePrimitive.Parts />
+    </div>
+  </MessagePrimitive.Root>
+);
 
 /**
  * Select some text in a message, and a "Reply" button appears next to it — click it and that
