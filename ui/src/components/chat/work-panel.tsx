@@ -2,6 +2,7 @@ import { Activity, PanelRightClose } from "lucide-react";
 
 import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { BackgroundTasks } from "@/components/chat/background-tasks";
+import { StandingWork } from "@/components/chat/standing-work";
 import { ContextSection } from "@/components/chat/context-section";
 import { Errands, isErrandLine } from "@/components/chat/errands";
 import { Button } from "@/components/ui/button";
@@ -95,6 +96,11 @@ export function WorkPanel({
       {/* What is running while he does something else. Renders nothing when there is nothing — a
           header over an empty list is furniture. */}
       <BackgroundTasks conversationId={conversationId} />
+
+      {/* And what is going to start on its own. The same question as the one above asked about a
+          different clock — what will happen here that you did not just ask for — and until now
+          the only sign a standing schedule existed was it firing. */}
+      <StandingWork conversationId={conversationId} />
 
       {/* The counters sit directly under the sections rather than being pushed to the bottom of the
           column. Stretching to fill drew a border a thousand pixels below the last real thing, which

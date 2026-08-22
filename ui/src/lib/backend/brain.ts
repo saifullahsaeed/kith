@@ -157,6 +157,8 @@ export interface Source {
 export interface Schedule {
   id: number;
   note: string;
+  /** Which chat this standing job wakes. Null for one bound to nothing, which can wake any. */
+  conversation_id: string | null;
   every_minutes: number | null;
   daily_at: string | null;
   next_fire: string;

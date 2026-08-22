@@ -96,4 +96,7 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   // changes the list as much as it changes the card.
   question: [["question"], ["conversations"]],
   permission: [["permissions"]],
+  // A standing job moving its next-fire time. The Work panel counts down to it, so a countdown
+  // nobody refreshed would sit on "due" from the moment it rolled over.
+  schedule: [["brain"]],
 };

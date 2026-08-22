@@ -9,9 +9,10 @@ from sqlalchemy import delete, select
 from kith.domain.enums import SCHEDULE_STATUSES
 from kith.infra.db.engine import as_dict, session
 from kith.infra.db.models import Schedule
-from kith.infra.db.support import utc_now_iso
+from kith.infra.db.support import notifies, utc_now_iso
 
 
+@notifies("schedule")
 def add_schedule(
     path: Path,
     note: str,
@@ -51,6 +52,7 @@ def due_schedules(path: Path, now_iso: str) -> list[dict]:
         return [as_dict(row) for row in db.scalars(query).all()]
 
 
+@notifies("schedule")
 def reschedule(path: Path, schedule_id: int, next_fire: str) -> dict | None:
     with session(path) as db:
         row = db.get(Schedule, schedule_id)
@@ -62,6 +64,7 @@ def reschedule(path: Path, schedule_id: int, next_fire: str) -> dict | None:
         return as_dict(row)
 
 
+@notifies("schedule")
 def set_schedule_status(path: Path, schedule_id: int, status: str) -> dict | None:
     if status not in SCHEDULE_STATUSES:
         raise ValueError(f"status must be one of {SCHEDULE_STATUSES}")
@@ -74,6 +77,7 @@ def set_schedule_status(path: Path, schedule_id: int, status: str) -> dict | Non
         return as_dict(row)
 
 
+@notifies("schedule")
 def delete_schedule(path: Path, schedule_id: int) -> bool:
     with session(path) as db:
         return db.execute(delete(Schedule).where(Schedule.id == schedule_id)).rowcount > 0

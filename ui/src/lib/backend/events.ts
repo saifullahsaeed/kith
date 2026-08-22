@@ -47,7 +47,8 @@ export type ChangeKind =
   | "process"
   | "workspace"
   | "question"
-  | "permission";
+  | "permission"
+  | "schedule";
 
 export interface Change {
   kind: ChangeKind;

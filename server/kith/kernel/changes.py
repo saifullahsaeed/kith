@@ -27,6 +27,10 @@ from kith.kernel import events
 #: because both fail quietly: a misspelled kind updates nothing, and a declared kind nobody
 #: publishes is a subscription that can never fire.
 #:
+#: `schedule` is the third of these, and the same story: the Work panel now says what is standing
+#: and when it next fires, and a countdown nobody refreshes reads "due" forever the moment the
+#: schedule rolls over. A standing job changing when it will next happen is a change.
+#:
 #: `question` and `permission` were the two that were missing, and their absence had a cost you
 #: could see: with nothing to listen for, the card that asks you something polled every 1.2
 #: seconds and the one asking to be allowed something polled every 2.5, forever, on the chance
@@ -42,6 +46,7 @@ KINDS = (
     "workspace",
     "question",
     "permission",
+    "schedule",
 )
 
 
