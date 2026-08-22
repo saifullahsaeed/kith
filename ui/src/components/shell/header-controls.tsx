@@ -1,13 +1,8 @@
 import { useEffect, useState } from "react";
 import { Check, ChevronDown, Gauge, ShieldCheck } from "lucide-react";
 
-import {
-  fetchPermissions,
-  setPermissionMode,
-  MODE_LABELS,
-  type PermissionMode,
-  type PermissionRequest,
-} from "@/lib/backend";
+import { usePermissions } from "@/hooks/use-permissions";
+import { MODE_LABELS, type PermissionMode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 /**
@@ -47,28 +42,11 @@ export function HeaderControls({
   supportsEffort: boolean;
   onEffort: (effort: string) => void;
 }) {
-  const [mode, setMode] = useState<PermissionMode>("ask");
-  const [pending, setPending] = useState<PermissionRequest[]>([]);
-
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      fetchPermissions()
-        .then((state) => {
-          if (!alive) return;
-          setMode(state.mode);
-          setPending(state.pending);
-        })
-        .catch(() => {});
-    load();
-    // Polled rather than pushed: a request can appear mid-turn with nothomy tick with nobody
-    // watching, and the count in the header is how you find out.
-    const timer = setInterval(load, 4_000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
+  // Pushed, not polled. This read the whole permission state every four seconds because a request
+  // can appear mid-turn with nobody watching and the badge is how you find out — which was true,
+  // and the answer to it was for the server to say so rather than for the header to keep asking.
+  // Shared with the card above the composer: one request, two readers.
+  const { mode, pending, setMode } = usePermissions();
 
   return (
     <div className="flex items-center gap-0.5">
@@ -108,10 +86,7 @@ export function HeaderControls({
           hint: MODE_LABELS[one].hint,
         }))}
         selected={mode}
-        onSelect={(next) => {
-          setMode(next as PermissionMode);
-          void setPermissionMode(next as PermissionMode).catch(() => {});
-        }}
+        onSelect={(next) => setMode(next as PermissionMode)}
       />
     </div>
   );

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
   ChevronRight,
@@ -38,7 +39,7 @@ import {
   rename as renameEntry,
 } from "@/lib/files";
 import { cn } from "@/lib/utils";
-import { useChanges } from "@/hooks/use-changes";
+import { keys } from "@/lib/query-keys";
 import { EmptyState, PageHeader } from "./chrome";
 import { FIELD } from "./types";
 
@@ -46,9 +47,7 @@ import { FIELD } from "./types";
 
 export function WorkspaceFiles() {
   const [path, setPath] = useState(".");
-  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const cache = useQueryClient();
   // The open file lives in a preview dialog, so the folder listing stays put.
   const [file, setFile] = useState<{ path: string; content: string | null; error?: string } | null>(
     null,
@@ -64,46 +63,41 @@ export function WorkspaceFiles() {
   const [busy, setBusy] = useState("");
   const confirm = useConfirm();
 
-  const load = useCallback((p: string) => {
-    setLoading(true);
-    setError("");
-    fetchWorkspace(p)
-      .then((d) => {
-        setEntries(d.entries);
-        setPath(p);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "failed"))
-      .finally(() => setLoading(false));
-  }, []);
+  /* One query per folder, and it pauses while you are typing into the listing.
+   *
+   * He writes files while you are looking at the folder they land in, so this has to follow —
+   * `workspace` events invalidate it through `STALE_ON`. But an inline rename is anchored to the
+   * row it is on, and a new-folder input sits *in* the list: replacing the listing under either is
+   * how a typed name gets thrown away. That was a hand-rolled guard around an interval; here it is
+   * `enabled`, which is the same rule expressed where the fetching happens. A paused query still
+   * takes the invalidation — it is marked stale and refetches the moment the rename is done, so
+   * nothing is missed, only deferred.
+   *
+   * Navigation is `setPath`. The listing follows the key rather than being fetched by hand, which
+   * also means going back to a folder you were just in is instant. */
+  // A failed *write* — a rename refused, a delete that could not — reports separately from a
+  // failed read, which the query owns.
+  const [refused, setRefused] = useState("");
+  const holding = Boolean(editing || creating !== null || busy);
+  const {
+    data: entries = [],
+    error: failed,
+    isFetching: loading,
+  } = useQuery({
+    queryKey: keys.workspace(path),
+    queryFn: async (): Promise<WorkspaceEntry[]> => (await fetchWorkspace(path)).entries,
+    enabled: !holding,
+  });
+  const error = refused || (failed ? (failed instanceof Error ? failed.message : "failed") : "");
 
-  useEffect(() => {
-    load(".");
-  }, [load]);
-
-  // He writes files while you are looking at the folder they land in, and this listed once.
-  // Held back while an inline rename or a new-folder name is being typed, since replacing the
-  // listing under either would throw away what was typed.
-  useEffect(() => {
-    const tick = () => {
-      if (editing || creating !== null || busy) return;
-      load(path);
-    };
-    // A backstop; `kith:workspace-changed` below is what makes a file he just wrote appear.
-    const timer = window.setInterval(tick, 30_000);
-    const onChange = () => tick();
-    window.addEventListener("kith:workspace-changed", onChange);
-    window.addEventListener("focus", tick);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", tick);
-      window.removeEventListener("kith:workspace-changed", onChange);
-    };
-  }, [editing, creating, busy, path, load]);
-
-  // Through a DOM event rather than calling `tick` directly: `tick` is built inside the effect above,
-  // where the guard against clobbering an in-progress rename lives, and lifting it out to satisfy the
-  // dependency list would separate the guard from the thing it guards.
-  useChanges("workspace", () => window.dispatchEvent(new Event("kith:workspace-changed")));
+  /** Go to a folder, or re-read the one you are in. */
+  const load = useCallback(
+    (p: string) => {
+      if (p === path) void cache.invalidateQueries({ queryKey: keys.workspace(p) });
+      else setPath(p);
+    },
+    [cache, path],
+  );
 
   const join = (name: string) => (path === "." ? name : `${path}/${name}`);
   const crumbs = path === "." ? [] : path.split("/");
@@ -132,12 +126,12 @@ export function WorkspaceFiles() {
   /** Run one change, then re-read the folder so what's on screen is what's there. */
   const apply = async (label: string, action: () => Promise<void>) => {
     setBusy(label);
-    setError("");
+    setRefused("");
     try {
       await action();
       load(path);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "that didn't work");
+      setRefused(e instanceof Error ? e.message : "that didn't work");
     } finally {
       setBusy("");
     }

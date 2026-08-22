@@ -17,6 +17,7 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleDot, Lock, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -28,9 +29,9 @@ import {
   type Roadmap,
   type RoadmapNode,
 } from "@/lib/backend";
+import { keys } from "@/lib/query-keys";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
-import { useChanges } from "@/hooks/use-changes";
 
 /**
  * A project's roadmap, as the graph it actually is.
@@ -125,40 +126,37 @@ function Canvas({
   onRoadmap?: (roadmap: Roadmap) => void;
 }) {
   const dark = useDarkMode();
-  const [roadmap, setRoadmap] = useState<Roadmap | null>(null);
-  const [error, setError] = useState("");
+  const cache = useQueryClient();
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  const load = useCallback(() => {
-    fetchRoadmap(projectId)
-      .then(setRoadmap)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, [projectId]);
+  /* A milestone finishing is a `project` change and a task moving under one changes the counts
+   * this draws — both point at `["roadmap"]` through `STALE_ON`, so the graph redraws at the moment
+   * its shape changes. Which is the moment it used to miss: it only polled *while* something was in
+   * progress, so a milestone he finished mid-turn stayed on screen unfinished. */
+  const { data: roadmap = null, error: failed } = useQuery({
+    queryKey: keys.roadmap(projectId),
+    queryFn: () => fetchRoadmap(projectId),
+  });
+  // Writes report separately from the read. A dependency the server refused is a different
+  // sentence from a graph that would not load, and the query only knows about the second.
+  const [refused, setRefused] = useState("");
+  const error = refused || (failed instanceof Error ? failed.message : failed ? String(failed) : "");
 
-  useEffect(load, [load]);
+  /** What a write handed back, straight into the cache — so a dragged edge appears at once. */
+  const settleInto = useCallback(
+    (next: Roadmap) => cache.setQueryData(keys.roadmap(projectId), next),
+    [cache, projectId],
+  );
+
+  const load = useCallback(
+    () => void cache.invalidateQueries({ queryKey: keys.roadmap(projectId) }),
+    [cache, projectId],
+  );
 
   useEffect(() => {
     if (roadmap) onRoadmap?.(roadmap);
   }, [roadmap, onRoadmap]);
-
-  // Always re-read, faster while something is in progress. It only polled *while* working
-  // before, which meant a milestone he finished mid-turn — the exact moment the graph
-  // changes shape — never appeared until something else happened to refetch it.
-  const working = roadmap?.milestones.some((one) => one.tasks_doing > 0) ?? false;
-  // Both kinds: a milestone finishing is a `project` change, and a task moving under one changes the
-  // counts this draws — which is the moment the graph changes shape and the moment it used to miss.
-  useChanges(["project", "task"], () => void load());
-  useEffect(() => {
-    // A backstop. `useChanges` below is what redraws the graph the moment its shape changes;
-    // this covers a dropped stream. (was 4s while a milestone was working, 15s otherwise.)
-    const timer = setInterval(load, 30_000);
-    window.addEventListener("focus", load);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener("focus", load);
-    };
-  }, [working, load]);
 
   // Rebuild the canvas whenever the graph changes. Positions come from the server when
   // someone has arranged them and from the layout when they have not.
@@ -205,12 +203,12 @@ function Canvas({
       // Dragged from predecessor to dependent, which is how the arrows read.
       addDependency(projectId, Number(connection.target), Number(connection.source))
         .then((next) => {
-          setRoadmap(next);
+          settleInto(next);
           onChanged?.();
         })
-        .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+        .catch((err: unknown) => setRefused(err instanceof Error ? err.message : String(err)));
     },
-    [projectId, onChanged],
+    [projectId, onChanged, settleInto],
   );
 
   const deleteEdges = useCallback(
@@ -221,12 +219,13 @@ function Canvas({
         ),
       )
         .then((results) => {
-          if (results.length) setRoadmap(results[results.length - 1]);
+          const last = results[results.length - 1];
+          if (last) settleInto(last);
           onChanged?.();
         })
-        .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+        .catch((err: unknown) => setRefused(err instanceof Error ? err.message : String(err)));
     },
-    [projectId, onChanged],
+    [projectId, onChanged, settleInto],
   );
 
   // Positions are saved when a drag ends, not while it is happening: a request per pointer

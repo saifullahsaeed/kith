@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   ChevronRight,
@@ -23,6 +24,7 @@ import {
 } from "@/lib/backend";
 import { fetchBrain, type Project } from "@/lib/backend/brain";
 import { dayLabel, time } from "@/lib/dates";
+import { keys } from "@/lib/query-keys";
 import { openOnHost } from "@/lib/files";
 import { pathForTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -77,10 +79,11 @@ export function HistoryPanel({
 }: {
   activeId: string;
   onOpen: (id: string) => void;
-  onNew: () => void;
+  /** A fresh chat, optionally already bound to a project — see workspace's `pendingProject`. */
+  onNew: (projectId?: number | null) => void;
   onClose: () => void;
 }) {
-  const [items, setItems] = useState<ConversationSummary[]>([]);
+  const cache = useQueryClient();
   const [limit, setLimit] = useState(PAGE);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<TranscriptHit[] | null>(null);
@@ -91,16 +94,21 @@ export function HistoryPanel({
   const confirm = useConfirm();
   const navigate = useNavigate();
 
-  const load = useCallback(() => {
-    fetchConversations(limit)
-      .then((data) => setItems(data.conversations))
-      .catch(() => {});
-  }, [limit]);
-
-  useEffect(load, [load]);
-  // Reload when the active conversation changes: a new one has just been created and a
-  // resumed one has just moved to the top.
-  useEffect(load, [activeId, load]);
+  /* The list, cached and keyed by how much of it was asked for.
+   *
+   * `activeId` is in the key rather than in an effect that refetches on it: opening a conversation
+   * moves it to the top and creating one adds it, so the answer genuinely differs by which one is
+   * active — and a key that says so gets the right list from cache when you go back to one instead
+   * of refetching for it. A `project` change invalidates this too, because a group here is named
+   * after a project. */
+  const { data: items = [] } = useQuery({
+    queryKey: keys.conversations(limit, activeId),
+    queryFn: async () => (await fetchConversations(limit)).conversations,
+  });
+  const load = useCallback(
+    () => void cache.invalidateQueries({ queryKey: ["conversations"] }),
+    [cache],
+  );
 
   /* Searching the transcripts themselves.
    *
@@ -134,7 +142,12 @@ export function HistoryPanel({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"], [role="menu"], [data-state="open"]')) return;
+      if (
+        document.querySelector(
+          '[role="dialog"], [role="menu"], [data-state="open"]',
+        )
+      )
+        return;
       if (query) setQuery("");
       else onClose();
     };
@@ -146,15 +159,18 @@ export function HistoryPanel({
   // listing's order is the answer to "what was I just doing", and a client that sorts it
   // again is a client that can disagree with it. That order carries through to the groups —
   // the project you touched last ends up on top without anything sorting them.
-  const [projects, setProjects] = useState<Project[]>([]);
-  // Names and statuses for the group headings. Reloaded with the list, because he starts
-  // projects himself mid-conversation, so a name can appear between one open and the next.
-  useEffect(() => {
-    fetchBrain()
-      .then((brain) => setProjects(brain.projects))
-      .catch(() => {});
-  }, [items]);
-  const groups = useMemo(() => groupByProject(items, projects), [items, projects]);
+  /* Names and statuses for the group headings.
+   *
+   * This refetched the entire brain snapshot every time `items` changed — a new object identity on
+   * every list refresh, so in practice on every reload of the panel. It is the same `["brain"]` the
+   * control panel holds, so asking for it here is now free when that is already loaded, and a
+   * `project` change refreshes both at once. */
+  const { data: brain } = useQuery({ queryKey: keys.brain(), queryFn: fetchBrain });
+  const projects: Project[] = brain?.projects ?? [];
+  const groups = useMemo(
+    () => groupByProject(items, projects),
+    [items, projects],
+  );
 
   /* Projects are a short list at the top; chats are the panel.
    *
@@ -168,7 +184,9 @@ export function HistoryPanel({
     const loose = groups.find((group) => group.kind === "chats");
     // Always include the one you are in, even when it is not recent enough to make the cut —
     // a panel that hides the project you are working in is worse than one that shows five.
-    const holding = all.find((group) => group.items.some((one) => one.id === activeId));
+    const holding = all.find((group) =>
+      group.items.some((one) => one.id === activeId),
+    );
     const top = all.slice(0, PROJECTS_SHOWN);
     if (holding && !top.includes(holding)) top.push(holding);
     return {
@@ -186,7 +204,9 @@ export function HistoryPanel({
   // Open by default: the chats, always — they are the list, not a drawer — and the project you
   // are in. A panel that opens entirely shut answers nothing until you click.
   const openByDefault = useMemo(() => {
-    const holding = ordered.find((group) => group.items.some((one) => one.id === activeId));
+    const holding = ordered.find((group) =>
+      group.items.some((one) => one.id === activeId),
+    );
     return new Set([chats?.key, holding?.key].filter(Boolean) as string[]);
   }, [ordered, chats, activeId]);
   // A full page back means there are almost certainly more behind it. The alternative was
@@ -201,7 +221,7 @@ export function HistoryPanel({
         <MessageSquare className="text-muted-foreground size-4" />
         <span className="text-sm font-medium">Conversations</span>
         <div className="flex-1" />
-        <Button size="sm" variant="outline" onClick={onNew}>
+        <Button size="sm" variant="outline" onClick={() => onNew()}>
           <Plus className="size-3.5" />
           New
         </Button>
@@ -293,7 +313,9 @@ export function HistoryPanel({
                     onClick={() => navigate(pathForTab("projects"))}
                     className="text-muted-foreground/50 hover:text-foreground flex items-center gap-0.5 text-[10px] transition-colors"
                   >
-                    {projectCount > shownProjects.length ? `All ${projectCount}` : "Open"}
+                    {projectCount > shownProjects.length
+                      ? `All ${projectCount}`
+                      : "Open"}
                     <ArrowUpRight className="size-3" />
                   </button>
                 </div>
@@ -301,14 +323,18 @@ export function HistoryPanel({
               {ordered.map((group) => {
                 // XOR against the default: no effect syncing state to props, and nothing to
                 // go stale when the active conversation moves to another project.
-                const open = openByDefault.has(group.key) !== toggled.has(group.key);
+                const open =
+                  openByDefault.has(group.key) !== toggled.has(group.key);
                 // The rule between the projects and the conversations. Two different kinds of
                 // thing in one column need a line, or the last project reads as the first chat.
-                const bandStarts = group.kind === "chats" && shownProjects.length > 0;
+                const bandStarts =
+                  group.kind === "chats" && shownProjects.length > 0;
                 return (
                   <section
                     key={group.key}
-                    className={cn(bandStarts && "border-border/40 mt-1.5 border-t pt-1.5")}
+                    className={cn(
+                      bandStarts && "border-border/40 mt-1.5 border-t pt-1.5",
+                    )}
                   >
                     {/* Sticky, so the project you are looking at is named while you are inside
                       it. It needs the panel's own backdrop to sit on, which is why the aside
@@ -325,60 +351,104 @@ export function HistoryPanel({
                       missing — a project and the loose chats are not two projects — and it costs
                       twelve pixels instead of a row. */}
                     <h3 className="bg-sidebar/80 sticky top-0 z-10 backdrop-blur-sm">
-                      <button
-                        type="button"
-                        aria-expanded={open}
-                        onClick={() =>
-                          setToggled((current) => {
-                            const next = new Set(current);
-                            if (!next.delete(group.key)) next.add(group.key);
-                            return next;
-                          })
+                      {/* Right-click a project to start a conversation in it.
+                          The project is already on screen here, named, with its sessions under
+                          it — so this is where you are when you decide the next chat belongs to
+                          it. The alternative was the long way round: new chat, then find the
+                          project again in the session bar's picker. The binding is written once
+                          the conversation has an id; see workspace's `pendingProject`. */}
+                      <ItemMenu
+                        title={group.label}
+                        actions={
+                          group.projectId === null
+                            ? [
+                                {
+                                  label: "New chat",
+                                  onSelect: () => onNew(null),
+                                },
+                              ]
+                            : [
+                                {
+                                  label: "New chat here",
+                                  hint: group.label,
+                                  onSelect: () => onNew(group.projectId),
+                                },
+                                {
+                                  label: "Open in Projects",
+                                  onSelect: () =>
+                                    navigate(pathForTab("projects")),
+                                },
+                              ]
                         }
-                        className={cn(
-                          "hover:text-foreground flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
-                          // Finished projects are still reachable and no longer in the way.
-                          group.finished ? "text-muted-foreground/45" : "text-muted-foreground/85",
-                        )}
                       >
-                        <ChevronRight
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          onClick={() =>
+                            setToggled((current) => {
+                              const next = new Set(current);
+                              if (!next.delete(group.key)) next.add(group.key);
+                              return next;
+                            })
+                          }
                           className={cn(
-                            "size-3 shrink-0 transition-transform",
-                            open && "rotate-90",
+                            "hover:text-foreground flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                            // Finished projects are still reachable and no longer in the way.
+                            group.finished
+                              ? "text-muted-foreground/45"
+                              : "text-muted-foreground/85",
                           )}
-                        />
-                        {group.kind === "chats" ? (
-                          <MessageSquare className="size-3 shrink-0 opacity-60" aria-hidden />
-                        ) : (
-                          <Folder className="size-3 shrink-0 opacity-60" aria-hidden />
-                        )}
-                        <span className="min-w-0 truncate" title={group.label}>
-                          {group.label}
-                        </span>
-                        {/* A dot, not the word. "done" and "paused" spelled out beside a
+                        >
+                          <ChevronRight
+                            className={cn(
+                              "size-3 shrink-0 transition-transform",
+                              open && "rotate-90",
+                            )}
+                          />
+                          {group.kind === "chats" ? (
+                            <MessageSquare
+                              className="size-3 shrink-0 opacity-60"
+                              aria-hidden
+                            />
+                          ) : (
+                            <Folder
+                              className="size-3 shrink-0 opacity-60"
+                              aria-hidden
+                            />
+                          )}
+                          <span
+                            className="min-w-0 truncate"
+                            title={group.label}
+                          >
+                            {group.label}
+                          </span>
+                          {/* A dot, not the word. "done" and "paused" spelled out beside a
                           truncated name were two things fighting for the same inch; the state
                           matters, its spelling does not. */}
-                        {group.status ? (
-                          <span
-                            aria-hidden
-                            title={group.status}
-                            className="bg-muted-foreground/40 size-1.5 shrink-0 rounded-full"
-                          />
-                        ) : null}
-                        {group.status ? <span className="sr-only">{group.status}</span> : null}
-                        {/* The count is what makes a closed section honest — a name on its own
+                          {group.status ? (
+                            <span
+                              aria-hidden
+                              title={group.status}
+                              className="bg-muted-foreground/40 size-1.5 shrink-0 rounded-full"
+                            />
+                          ) : null}
+                          {group.status ? (
+                            <span className="sr-only">{group.status}</span>
+                          ) : null}
+                          {/* The count is what makes a closed section honest — a name on its own
                           gives no reason to open it, and no sense of what is behind it. */}
-                        <span className="text-muted-foreground/40 ms-auto shrink-0 font-normal tabular-nums">
-                          {group.items.length}
-                        </span>
-                        {/* Something still running in a section you cannot see. */}
-                        {!open && group.items.some((one) => one.working) ? (
-                          <span
-                            className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
-                            title="Still working in here"
-                          />
-                        ) : null}
-                      </button>
+                          <span className="text-muted-foreground/40 ms-auto shrink-0 font-normal tabular-nums">
+                            {group.items.length}
+                          </span>
+                          {/* Something still running in a section you cannot see. */}
+                          {!open && group.items.some((one) => one.working) ? (
+                            <span
+                              className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
+                              title="Still working in here"
+                            />
+                          ) : null}
+                        </button>
+                      </ItemMenu>
                     </h3>
                     <ul className={cn("space-y-0.5 pb-1", !open && "hidden")}>
                       {group.items.map((item) => (
@@ -387,10 +457,22 @@ export function HistoryPanel({
                             title={item.title}
                             copy={item.title}
                             actions={[
+                              // The rows are what you right-click, not the heading above them —
+                              // so the same offer is here, named after the project it lands in.
+                              ...(group.projectId !== null
+                                ? [
+                                    {
+                                      label: "New chat here",
+                                      hint: group.label,
+                                      onSelect: () => onNew(group.projectId),
+                                    },
+                                  ]
+                                : []),
                               {
                                 label: "Reveal transcript",
                                 hint: "in Finder",
-                                onSelect: () => void openOnHost(item.transcript, true),
+                                onSelect: () =>
+                                  void openOnHost(item.transcript, true),
                               },
                               {
                                 label: "Rename",
@@ -400,7 +482,10 @@ export function HistoryPanel({
                                     item.title,
                                   );
                                   if (next?.trim())
-                                    void renameConversation(item.id, next.trim()).then(load);
+                                    void renameConversation(
+                                      item.id,
+                                      next.trim(),
+                                    ).then(load);
                                 },
                               },
                             ]}
@@ -415,7 +500,10 @@ export function HistoryPanel({
                                   "It leaves this list. The transcript file stays in his folder.",
                                 confirmLabel: "Remove",
                               });
-                              if (ok) void deleteConversation(item.id, false).then(load);
+                              if (ok)
+                                void deleteConversation(item.id, false).then(
+                                  load,
+                                );
                             }}
                           >
                             {/* A line, not a card.
@@ -483,7 +571,9 @@ export function HistoryPanel({
               {more ? (
                 <button
                   type="button"
-                  onClick={() => setLimit((was) => Math.min(MAX, was + 2 * PAGE))}
+                  onClick={() =>
+                    setLimit((was) => Math.min(MAX, was + 2 * PAGE))
+                  }
                   className="text-muted-foreground/70 hover:text-foreground hover:bg-accent/60 mt-1 w-full rounded-lg px-2.5 py-2 text-[11px] transition-colors"
                 >
                   Load more
@@ -510,6 +600,8 @@ export function HistoryPanel({
 interface Group {
   key: string;
   label: string;
+  /** The project this band is, or null for the loose chats — what "start a chat in here" needs. */
+  projectId: number | null;
   /** What kind of thing this is, which is the distinction the panel was missing.
    *
    * A project and the loose conversations are not two projects, and rendering them as six
@@ -538,11 +630,30 @@ interface Group {
  * "No project" goes last and is a real group, not an empty state: a session for a one-off errand
  * is meant to stay unbound.
  */
-function groupByProject(items: ConversationSummary[], projects: Project[]): Group[] {
+function groupByProject(
+  items: ConversationSummary[],
+  projects: Project[],
+): Group[] {
   const known = new Map(projects.map((project) => [project.id, project]));
   const groups = new Map<string, Group>();
   for (const item of items) {
-    const id = item.projectId;
+    /* A project that no longer exists is not a project.
+     *
+     * `delete_project` orphaned the tasks and dropped the milestones but left the conversations
+     * pointing at the row it had just deleted — and the fallback below turns a dangling id into
+     * a heading, so a project you removed came back as "Project #15" holding the conversations
+     * it used to hold. The server clears them at the source now (repositories/projects.py, and
+     * migration v41 for the ones already written); this is the panel refusing to invent a name
+     * from a number in any case.
+     *
+     * Only once the projects have actually loaded. `projects` is empty on the first render, when
+     * every id is unknown — folding them all into Chats then would rearrange the whole list a
+     * beat after it appeared. */
+    const gone =
+      item.projectId !== null &&
+      projects.length > 0 &&
+      !known.has(item.projectId);
+    const id = gone ? null : item.projectId;
     const key = id === null ? "none" : String(id);
     let group = groups.get(key);
     if (!group) {
@@ -558,7 +669,9 @@ function groupByProject(items: ConversationSummary[], projects: Project[]): Grou
         // project is not a filing failure; it is most of what the app is for.
         label: id === null ? "Chats" : (project?.name ?? `Project #${id}`),
         kind: id === null ? "chats" : "project",
-        status: project && project.status !== "active" ? project.status : undefined,
+        projectId: id,
+        status:
+          project && project.status !== "active" ? project.status : undefined,
         finished: Boolean(project && project.status !== "active"),
         items: [],
       };

@@ -9,12 +9,12 @@ Nothing in this module runs on its own. It is written to, read from, and subscri
 
 from __future__ import annotations
 
-import queue
 import threading
 from collections import deque
 from datetime import UTC, datetime
 
 from kith.infra.db import repositories as repo
+from kith.kernel import events
 from kith.services import tuning
 from kith.settings import AGENT_DB_PATH
 
@@ -53,11 +53,16 @@ def describe_call(name: str, arguments: dict) -> str:
 
 
 class Feed:
-    """One feed for the process: a ring buffer of recent lines and a set of subscribers."""
+    """One feed for the process: a ring buffer of recent lines, and the token meters.
+
+    It used to own a set of subscriber queues too — the same fan-out `kernel/changes` had, written
+    a second time with a different payload. Both are `kernel/events` now. What is left is the part
+    that is actually the feed: the recent lines, which `GET /api/activity/recent` serves as the
+    snapshot a window opens with, and the spend meters that nothing else keeps.
+    """
 
     def __init__(self) -> None:
         self._state_lock = threading.Lock()
-        self._subscribers: set[queue.Queue] = set()
         self._buffer: deque[dict] = deque(maxlen=100)
 
         # Running token tally so cloud spend is visible at a glance. `_in` is every token he
@@ -81,19 +86,15 @@ class Feed:
         # Sessions already stopped for budget, so a late charge can't post the note twice.
         self._session_capped: set[str] = set()
 
-    # -- subscriptions (for the SSE feed) ----------------------------------- #
-
-    def subscribe(self) -> queue.Queue:
-        q: queue.Queue = queue.Queue()
-        with self._state_lock:
-            self._subscribers.add(q)
-        return q
-
-    def unsubscribe(self, q: queue.Queue) -> None:
-        with self._state_lock:
-            self._subscribers.discard(q)
+    # -- what he is doing --------------------------------------------------- #
 
     def recent(self) -> list[dict]:
+        """The snapshot a window opens with, served by `GET /api/activity/recent`.
+
+        A window fetches this once and then follows the stream, which is the ordinary
+        snapshot-then-subscribe shape. The stream used to send it too, on every connect, which is
+        how a reconnect came to duplicate the last hundred lines into the feed.
+        """
         return list(self._buffer)
 
     def publish(
@@ -141,11 +142,11 @@ class Feed:
             item["errand"] = errand
         if conversation:
             item["conversation"] = conversation
-        self._buffer.append(item)
         with self._state_lock:
-            subscribers = list(self._subscribers)
-        for q in subscribers:
-            q.put(item)
+            self._buffer.append(item)
+        # Onto the one log, where it gets an id — which is what lets a client that missed it ask
+        # for it again instead of being sent the whole buffer and deduping by eye.
+        events.publish("activity", item)
 
     # -- what it cost ------------------------------------------------------- #
 

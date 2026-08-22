@@ -8,7 +8,7 @@
  * The payload shape is copied from `processes.check()` with no name, which is what `/api/processes`
  * returns.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@/test/render";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BackgroundTasks } from "./background-tasks";

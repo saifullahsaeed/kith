@@ -7,10 +7,12 @@
   "main": "out/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "icons": "python3 scripts/make-app-icon.py && python3 scripts/make-tray-icon.py",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
-    "//dev:hot": "The window loads the UI from Vite instead of from the Kith server, so a saved .tsx hot-reloads in the app the way it does in a browser tab. Needs `cd ../ui && npm run dev` running first (it serves 8610 and proxies /api to the server on 8611, adding the API token as it forwards). KITH_ORIGIN is all it takes: page load, the health probe, the navigation allowlist and openInApp all read that one value. Renderer only — a change to desktop/src is main-process code and still needs a restart.",
+    "//dev:hot": "The window loads the UI from Vite instead of from the Kith server, so a saved .tsx hot-reloads in the app the way it does in a browser tab. Needs `cd ../ui && npm run dev` running first (it serves 8610 and proxies /api to the server on 8611, adding the API token as it forwards). KITH_ORIGIN is all it takes: page load, the health probe, the navigation allowlist and openInApp all read that one value. Renderer only \u2014 a change to desktop/src is main-process code and still needs a restart.",
     "dev:hot": "npm run build && KITH_ORIGIN=http://127.0.0.1:8610 electron . --dev",
     "package": "npm run freeze && npm run build && electron-builder --dir",
     "dist": "npm run freeze && npm run build && electron-builder",
@@ -23,8 +25,9 @@
   "devDependencies": {
     "@types/node": "^24.13.3",
     "electron": "^43.2.0",
+    "electron-builder": "^25.1.8",
     "typescript": "~6.0.2",
-    "electron-builder": "^25.1.8"
+    "vitest": "^4.1.11"
   },
   "productName": "Kith",
   "build": {

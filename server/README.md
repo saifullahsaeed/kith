@@ -40,7 +40,8 @@ OpenAPI spec: **http://127.0.0.1:8611/openapi.json**
 | POST | `/api/chat/<id>/stop` | Ask the turn running in a conversation to stop |
 | GET | `/api/activity` | The flight recorder — what each turn cost |
 | GET | `/api/activity/status` | Work and plans waiting on you |
-| GET | `/api/activity/stream` | Server-sent activity feed |
+| GET | `/api/activity/recent` | The feed's backlog, plus the log position it was taken at |
+| GET | `/api/events` | The one server-sent stream: `changed` and `activity`, resumable with `Last-Event-ID` |
 
 `POST /api/chat` body:
 

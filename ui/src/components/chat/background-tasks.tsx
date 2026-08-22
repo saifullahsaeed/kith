@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, Terminal } from "lucide-react";
 
-import { useChanges } from "@/hooks/use-changes";
+import { ago, useNow } from "@/hooks/use-now";
+import { keys } from "@/lib/query-keys";
 
 /**
  * What is running in the background, while it runs.
@@ -22,34 +23,32 @@ interface Task {
   name: string;
   command: string;
   alive: boolean;
+  /** The server's own sentence. Kept as the fallback for `startedAt`. */
   for: string;
+  /** Unix seconds. What lets the elapsed time be counted here instead of re-fetched. */
+  startedAt?: number;
 }
 
 export function BackgroundTasks({ conversationId }: { conversationId?: string }) {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [changed, setChanged] = useState(0);
+  // Starting and finishing both publish a `process` change, so the list appears and empties as it
+  // happens rather than on a timer.
+  const { data: tasks = [] } = useQuery({
+    queryKey: keys.processes(conversationId ?? ""),
+    queryFn: async (): Promise<Task[]> => {
+      const response = await fetch(
+        `/api/processes?conversation=${encodeURIComponent(conversationId ?? "")}`,
+      );
+      if (!response.ok) return [];
+      const body = (await response.json()) as { running?: Task[] } | null;
+      return body?.running ?? [];
+    },
+  });
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      fetch(`/api/processes?conversation=${encodeURIComponent(conversationId ?? "")}`)
-        .then((response) => (response.ok ? response.json() : null))
-        .then((body: { running?: Task[] } | null) => {
-          if (alive) setTasks(body?.running ?? []);
-        })
-        .catch(() => {});
-    load();
-    // The elapsed time needs a clock of its own — "12m" goes stale on its own without anything
-    // changing — so this stays, slowly. Starting and finishing arrive as events below.
-    const timer = window.setInterval(load, 30_000);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, [conversationId, changed]);
-
-  // Starting and finishing both publish, so the list appears and empties as it happens.
-  useChanges("process", () => setChanged((n) => n + 1), conversationId);
+  /* The elapsed time is the one thing here that goes stale with nothing having changed, and it
+   * used to be why this refetched every thirty seconds — a poll for a *duration*. The server sends
+   * `startedAt` now, so the data is pushed and the counting is local. A clock, not a poll: see
+   * hooks/use-now.ts. */
+  const now = useNow(30_000);
 
   if (!tasks.length) return null;
 
@@ -78,7 +77,9 @@ export function BackgroundTasks({ conversationId }: { conversationId?: string })
               </span>
             </span>
             <span className="text-muted-foreground/50 shrink-0 font-mono text-[10px] tabular-nums">
-              {task.alive ? task.for : "done"}
+              {/* `startedAt` when the server sent one, and its own sentence otherwise — a running
+                  process from a server that predates the field still reads correctly. */}
+              {task.alive ? (task.startedAt ? ago(task.startedAt, now) : task.for) : "done"}
             </span>
           </li>
         ))}

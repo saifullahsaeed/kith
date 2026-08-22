@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Literal
 
 from kith import settings
-from kith.kernel import live_turns, session_context
+from kith.kernel import changes, live_turns, session_context
 
 #: How each request was answered, by id. Separate from `Request` because that is frozen —
 #: it describes what he wanted, which does not change, and the verdict is a different fact.
@@ -321,6 +321,9 @@ def set_mode(value: str) -> Mode:
     chosen = Mode(value)
     path, store = _store()
     store.update_settings(path, {MODE_KEY: str(chosen)})
+    # The header shows this, and a second window showing the old mode is a second window that
+    # will surprise someone.
+    changes.publish("permission")
     return chosen
 
 
@@ -489,6 +492,10 @@ def _refuse(kind: Kind, what: str, why: str, signature: str, purpose: str = "") 
         _pending[request.id] = request
         while len(_pending) > MAX_PENDING:
             _pending.pop(next(iter(_pending)))
+    # Something is waiting on a person. Published outside the lock, and before the turn parks
+    # itself in `_wait_for` — the interface had no way to learn this except by asking every 2.5
+    # seconds whether a request had appeared.
+    changes.publish("permission")
     return Decision(
         False,
         reason=(
@@ -671,6 +678,8 @@ def release_waiting() -> None:
     # Woken outside the lock: each `set()` releases a thread that will immediately want it.
     for request in waiting:
         request.settled.set()
+    if waiting:
+        changes.publish("permission")
 
 
 # --------------------------------------------------------------------------- #
@@ -701,6 +710,9 @@ def approve(request_id: str, scope: str = "session") -> dict:
         _answered[request.id] = True
     # Outside: waking the waiter hands it a thread that wants this lock immediately.
     request.settled.set()
+    # And the card goes. Hearing when one opens but not when it closes leaves a dialog on screen
+    # for something that has already been allowed.
+    changes.publish("permission")
     return request.public()
 
 
@@ -711,6 +723,7 @@ def deny(request_id: str) -> dict:
             raise KeyError(request_id)
         _answered[request.id] = False
     request.settled.set()
+    changes.publish("permission")
     return request.public()
 
 
@@ -719,6 +732,7 @@ def revoke_all() -> None:
     store.update_settings(path, {GRANTS_KEY: ""})
     with _state:
         _session_grants.clear()
+    changes.publish("permission")
 
 
 def revoke(signature: str) -> bool:
@@ -743,6 +757,8 @@ def revoke(signature: str) -> bool:
         if wanted in _session_grants:
             _session_grants.discard(wanted)
             found = True
+    if found:
+        changes.publish("permission")
     return found
 
 

@@ -13,11 +13,14 @@
  *   2. Wait for the backend to answer /api/health.
  *   3. Only then load the UI.
  *
- * Step 2 exists because of one specific failure: the SPA opens an EventSource for
- * the activity feed as soon as it mounts, and a failed EventSource handshake closes
- * the stream permanently — the browser does not retry. Loading half a second early
- * therefore costs the live feed for the entire session, while the rest of the UI
- * looks perfectly healthy. Waiting is cheap; that bug is invisible and confusing.
+ * Step 2 existed because of one specific failure: the SPA opened an EventSource for the activity
+ * feed as soon as it mounted, and a failed EventSource handshake closes the stream permanently —
+ * the browser does not retry. Loading half a second early therefore cost the live feed for the
+ * entire session while the rest of the UI looked healthy.
+ *
+ * The shell owns that stream now and reconnects with backoff (`server/events.ts`), so that
+ * particular bug is gone. The wait remains because the document itself comes from the server, and
+ * a window that opens on a connection error is a blank window.
  */
 
 import { app, dialog } from "electron";
@@ -30,6 +33,7 @@ import {
   installApplicationMenu,
   lockDownPermissions,
 } from "./hardening";
+import { startEvents, stopEvents } from "./server/events";
 import { registerRenderer, unregisterRenderer } from "./render/renderer-registration";
 import { startRenderService } from "./render/render-service";
 import { createTray, destroyTray } from "./window/tray";
@@ -106,6 +110,14 @@ async function start(): Promise<void> {
   } catch (error) {
     console.warn("[kith] render service unavailable, sandbox will render instead:", error);
   }
+
+  // Start listening before the page loads, and keep listening for as long as the app runs.
+  //
+  // Before the window on purpose: the stream belongs to the app, not to the document. A reload,
+  // a hide, a crashed renderer — the page comes and goes underneath a connection that holds its
+  // `Last-Event-ID` cursor throughout, which is what lets the interface stop polling. See
+  // `server/events.ts`.
+  startEvents();
 
   // Retrying, so a server that restarts underneath us costs a blink rather than the
   // whole window: without this, one failed load left the app with nothing on screen.
@@ -196,6 +208,9 @@ function reportBackendMissing(noBinary = false): void {
 app.on("before-quit", () => {
   markQuitting();
   destroyTray();
+  // Let the stream go before the server is asked to stop, so its retry loop does not spend the
+  // shutdown reconnecting to a port that is closing.
+  stopEvents();
   // An orphaned server keeps the agent ticking and spending, with no window to see it in,
   // and holds the port so the next launch attaches to a copy nothing controls.
   stopServer();

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { answerPermission, fetchPermissions, type PermissionRequest } from "@/lib/backend";
+import { usePermissions } from "@/hooks/use-permissions";
+import { type PermissionRequest } from "@/lib/backend";
 
 const VERB: Record<PermissionRequest["kind"], string> = {
   read: "read",
@@ -25,29 +26,16 @@ const VERB: Record<PermissionRequest["kind"], string> = {
  * something running that you have not read yet.
  */
 export function PermissionPrompt() {
-  const [requests, setRequests] = useState<PermissionRequest[]>([]);
+  // Shared with the badge in the title bar: one request, two readers. It used to be two requests
+  // on two timers, 2.5 and 4 seconds apart, which is also how the two could disagree.
+  const { pending, answer: decide } = usePermissions();
   const [remember, setRemember] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      fetchPermissions()
-        .then((state) => alive && setRequests(state.pending))
-        .catch(() => {});
-    load();
-    const timer = setInterval(load, 2_500);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
-
-  if (requests.length === 0) return null;
-  const request = requests[0];
+  if (pending.length === 0) return null;
+  const request = pending[0] as PermissionRequest;
 
   const answer = (allow: boolean) => {
-    setRequests((was) => was.filter((one) => one.id !== request.id));
-    void answerPermission(request.id, allow, remember ? "always" : "session").catch(() => {});
+    decide(request.id, allow, remember ? "always" : "session");
     setRemember(false);
   };
 
@@ -64,9 +52,9 @@ export function PermissionPrompt() {
             <code className="text-muted-foreground mt-0.5 block font-mono text-[11px] break-all">
               {request.what}
             </code>
-            {requests.length > 1 ? (
+            {pending.length > 1 ? (
               <p className="text-muted-foreground/70 mt-1 text-[11px]">
-                {requests.length - 1} more after this one.
+                {pending.length - 1} more after this one.
               </p>
             ) : null}
           </div>

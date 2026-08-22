@@ -56,6 +56,9 @@ hiddenimports = [
 ]
 # The tool registry imports its modules by walking the package, which static analysis also
 # cannot follow — a missing tool here means Kith silently loses a capability.
+# waitress resolves its adjustments and its logging by name, so a frozen build that only imports
+# `serve` loses pieces of it at runtime.
+hiddenimports += collect_submodules("waitress")
 hiddenimports += collect_submodules("kith.tools")
 hiddenimports += collect_submodules("apiflask")
 hiddenimports += collect_submodules("apispec")

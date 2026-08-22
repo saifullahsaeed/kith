@@ -52,15 +52,24 @@ export async function fetchActivityStatus(): Promise<ActivityStatus> {
   return (await response.json()) as ActivityStatus;
 }
 
-/** Subscribe to the server-sent activity stream. Returns an unsubscribe fn. */
-export function openActivityStream(onItem: (item: ActivityItem) => void): () => void {
-  const source = new EventSource("/api/activity/stream");
-  source.onmessage = (event) => {
-    try {
-      onItem(JSON.parse(event.data) as ActivityItem);
-    } catch {
-      /* ignore malformed frames */
-    }
-  };
-  return () => source.close();
+/**
+ * The last lines of the feed — the snapshot a window opens with.
+ *
+ * `openActivityStream` was here, and it opened an `EventSource` of its own on
+ * `/api/activity/stream`. That stream is gone: the feed comes down `/api/events` as `activity`
+ * events now, one connection for the whole app, with an id on every line. See
+ * `lib/backend/events.ts` and `hooks/use-activity.ts`.
+ */
+export interface ActivityBacklog {
+  activity: ActivityItem[];
+  /** The event-log position this snapshot was taken at. Everything the stream delivers above it is
+   *  new; everything at or below it is already in `activity`. See `hooks/use-activity.ts`. */
+  at: number;
+}
+
+export async function fetchRecentActivity(): Promise<ActivityBacklog> {
+  const response = await fetch("/api/activity/recent");
+  if (!response.ok) throw new Error(`/api/activity/recent returned ${response.status}`);
+  const body = (await response.json()) as Partial<ActivityBacklog>;
+  return { activity: body.activity ?? [], at: body.at ?? 0 };
 }

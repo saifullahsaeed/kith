@@ -4,6 +4,7 @@ import { Onboarding } from "@/components/onboarding/onboarding";
 import { Workspace } from "@/components/shell/workspace";
 import { ConfirmProvider } from "@/components/ui/confirm";
 import { useBackendConfig } from "@/hooks/use-backend-config";
+import { useLiveUpdates } from "@/hooks/use-live";
 import { useSetup } from "@/hooks/use-setup";
 
 /**
@@ -17,6 +18,13 @@ import { useSetup } from "@/hooks/use-setup";
 export default function App() {
   const setup = useSetup();
   const { status, error, config, updateConfig, reload } = useBackendConfig();
+
+  /* The one subscription, above every screen and outside every branch below.
+   *
+   * Here rather than in the workspace on purpose: it must not be torn down and rebuilt as the app
+   * moves between the splash, onboarding and the workspace. A stream that reconnects whenever the
+   * top-level view changes is a stream with a gap at exactly the moment something is happening. */
+  useLiveUpdates();
 
   if (setup.status === "error") return <ConnectionSplash state="error" detail={setup.error} />;
   if (setup.status === "loading" || status === "loading")

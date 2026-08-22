@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Check, ListChecks } from "lucide-react";
 
-import { useChanges } from "@/hooks/use-changes";
+import { keys } from "@/lib/query-keys";
 import { pathForTask } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
@@ -36,38 +36,24 @@ interface WorkingTask {
  * back to a conversation whose work carried on without you.
  */
 export function WorkingOn({ conversationId }: { conversationId: string }) {
-  const [task, setTask] = useState<WorkingTask | null>(null);
-  const [changed, setChanged] = useState(0);
-
-  useEffect(() => {
-    if (!conversationId) {
-      setTask(null);
-      return;
-    }
-    let alive = true;
-    const load = () =>
-      fetch(`/api/chat/${conversationId}/working-on`)
-        .then((response) => (response.ok ? response.json() : null))
-        .then((body: WorkingTask | null) => {
-          if (alive) setTask(body && body.id ? body : null);
-        })
-        .catch(() => {});
-    load();
-    // A backstop, not the mechanism. `useChanges` below is what makes a ticked checklist item
-    // appear at once; this catches the case where the stream dropped and the browser has not
-    // reconnected yet. Slow, because it is now only insurance.
-    // (was 2s, when it was the only way this ever updated)
-    // enough that a tick lands while you are still looking at the round that made it.
-    const timer = setInterval(load, 30_000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [conversationId, changed]);
-
-  // A task moving, or a checklist item ticking, is a `task` event — so the card follows him round by
-  // round instead of up to two seconds behind.
-  useChanges("task", () => setChanged((n) => n + 1));
+  /* A task moving, or a checklist item ticking, is a `task` event, and `STALE_ON` points that at
+   * this key — so the card follows him round by round.
+   *
+   * The 30-second interval that used to sit here as a backstop is gone, and what replaced it is
+   * better than a shorter one: the stream is resumable, so a dropped connection replays what was
+   * missed instead of leaving a gap for a timer to stumble over. Focus and reconnect refetch too.
+   * See lib/query.ts. */
+  const { data: task = null } = useQuery({
+    queryKey: keys.workingOn(conversationId),
+    queryFn: async (): Promise<WorkingTask | null> => {
+      const response = await fetch(`/api/chat/${conversationId}/working-on`);
+      if (!response.ok) return null;
+      const body = (await response.json()) as WorkingTask | null;
+      return body && body.id ? body : null;
+    },
+    // Nothing to ask about until there is a conversation.
+    enabled: Boolean(conversationId),
+  });
 
   if (!task) return null;
 

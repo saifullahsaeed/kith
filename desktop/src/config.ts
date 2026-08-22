@@ -16,10 +16,14 @@ export const HEALTH_URL = `${BACKEND_ORIGIN}/api/health`;
 /**
  * How long to wait for the backend before giving up and showing the problem.
  *
- * This wait is not politeness, it is correctness. If the window loads before the
- * server is listening, the SPA's EventSource gets a connection error, and a failed
- * EventSource handshake closes it *permanently* — no retry. The activity feed would
- * then stay dead for the whole session while the rest of the UI looked fine.
+ * This was correctness rather than politeness: the page opened its own `EventSource`s on mount,
+ * and a failed handshake closes one *permanently* — no retry — so loading half a second early cost
+ * the live feed for the whole session while the rest of the UI looked fine.
+ *
+ * That specific failure is gone. The stream is held by the main process now and retries with
+ * backoff (`server/events.ts`), so an early start costs a reconnect rather than a session. The wait
+ * stays because the *document* still has to come from the server, and a window that opens on a
+ * connection error is a blank window — but it is politeness again now, not a load-bearing hack.
  */
 export const BACKEND_WAIT_MS = 30_000;
 export const BACKEND_POLL_MS = 250;
@@ -39,6 +43,15 @@ export const WINDOW = {
 export const TRAY_GUID = "6f1c0f9e-6a4f-4a1e-9a0a-6b5f2f7a1c31";
 
 const RESOURCES = path.join(__dirname, "..", "resources");
+
+/**
+ * The preload script, compiled beside this file.
+ *
+ * One receive-only channel, so the event stream can live in the main process instead of in the
+ * page — see `preload.ts` for what that buys and `server/events.ts` for why. `__dirname` is `out/`
+ * at runtime, which is where tsc puts both.
+ */
+export const PRELOAD = path.join(__dirname, "preload.js");
 
 /**
  * The 1x path only. macOS picks up the `@2x` sibling automatically, and the

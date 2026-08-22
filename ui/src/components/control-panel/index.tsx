@@ -23,10 +23,12 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { TaskDetailPage } from "@/components/control-panel/task-detail";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
-import { useChanges } from "@/hooks/use-changes";
+import { useNow } from "@/hooks/use-now";
 import {
   createBrainItem,
   deleteBrainItem,
@@ -36,7 +38,7 @@ import {
   setMemoryLevel,
   updateBrainItem,
 } from "@/lib/backend/brain";
-import type { BrainSnapshot, TimelineEvent } from "@/lib/backend/brain";
+import { keys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { NavGroup, TabButton } from "./chrome";
 import { WorkspaceFiles } from "./files";
@@ -66,76 +68,66 @@ export function ControlPanel({
   onClose: () => void;
 }) {
   const confirm = useConfirm();
-  const [snap, setSnap] = useState<BrainSnapshot | null>(null);
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
-  const [loading, setLoading] = useState(false);
+  const cache = useQueryClient();
   const [query, setQuery] = useState("");
-  const [freshAt, setFreshAt] = useState<number>(() => Date.now());
   // Work drills down: projects list → one project → one task.
   const [openProject, setOpenProject] = useState<ProjectRef | null>(null);
   const searchBox = useRef<HTMLInputElement>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 10_000);
-    return () => window.clearInterval(id);
-  }, []);
+  // A clock, not a poll: the relative times on this panel go stale with nothing having changed.
+  // See hooks/use-now.ts for why that distinction is worth naming.
+  const now = useNow(10_000);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [s, t] = await Promise.all([fetchBrain(), fetchTimeline()]);
-      setSnap(s);
-      setTimeline(t);
-      setFreshAt(Date.now());
-    } catch {
-      /* keep last-known */
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  /* One query for the whole panel.
+   *
+   * Everything here comes from one snapshot, and it used to be fetched into `useState` by a `load`
+   * that four subscriptions and a 30-second interval all called — so a turn that filed three tasks
+   * ran it three times over, and the interval ran it again for luck. The cache dedupes that: three
+   * invalidations inside a frame are one refetch, and any other reader of `["brain"]` gets the same
+   * response rather than making its own request. */
+  const board = useQuery({ queryKey: keys.brain(), queryFn: fetchBrain });
+  const events = useQuery({ queryKey: keys.timeline(), queryFn: fetchTimeline });
+  const snap = board.data ?? null;
+  const timeline = events.data ?? [];
+  const loading = board.isFetching || events.isFetching;
+  // What the freshness line reports. `dataUpdatedAt` is when the answer arrived, which is the thing
+  // that was being tracked by hand — and unlike a hand-kept timestamp it cannot drift from the data
+  // it describes. It is 0 until the first success, though, and rendering that as an age gives "29
+  // million minutes ago"; there is nothing to be fresh about before then, so the line waits.
+  const freshAt = Math.max(board.dataUpdatedAt, events.dataUpdatedAt);
+  const everLoaded = freshAt > 0;
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  /* Two keys, not one, and the reason is worth stating: these are two endpoints, and one key must
+   * mean one shape. They were fetched together into a single `["brain"]` entry at first, until the
+   * history panel wanted the project names — which are in the board snapshot — and would have had
+   * to either duplicate the request under its own key or read a shape invented for this screen.
+   * Split, both panels share the snapshot and neither knows the other is there. */
+  const load = useCallback(() => {
+    void cache.invalidateQueries({ queryKey: keys.brain() });
+    void cache.invalidateQueries({ queryKey: keys.timeline() });
+  }, [cache]);
 
-  // Always live, at a pace set by whether anything is actually happening.
-  //
-  // There used to be a Live toggle and a Refresh button, and on a desktop app both were the
-  // wrong idea: what is on screen should simply be current, and a control that exists to
-  // make it current is an admission that it might not be. The reason a toggle existed at all
-  // was cost — polling the whole snapshot every six seconds forever — and the fix for that
-  // is to poll at the rate the situation deserves rather than to make someone manage it.
-  // "Is anything happening" — which is now only ever a task someone is working. This used
-  // to also poll /api/autonomy every five seconds to ask whether a step was running; that
-  // route is gone, so the request was a 404 on a timer and the answer it fed was always
-  // false.
-  const busy = Boolean(snap?.tasks?.some((task) => task.status === "working"));
-  // Everything on this panel comes from one snapshot, so it subscribes to everything that can change
-  // one: the board, a project, a message, a background task starting.
-  useChanges(["task", "project", "message", "process"], () => void load());
+  /* Always live, and nothing here decides when.
+   *
+   * There used to be a Live toggle and a Refresh button, and on a desktop app both were the wrong
+   * idea: what is on screen should simply be current, and a control that exists to make it current
+   * is an admission that it might not be. They went, and what replaced them was a poll whose rate
+   * was tuned to whether anything was happening — 3 seconds while a task was working, 20 otherwise,
+   * later 30 flat as "a backstop" once events arrived.
+   *
+   * None of that is here now. `task`, `project`, `message` and `process` all invalidate `["brain"]`
+   * through `STALE_ON`, so the board refetches when the board moves; refetch-on-focus is in the
+   * cache's defaults, so coming back to the window asks once. What is left is Cmd-R, because it is
+   * what someone would try, and it is one line rather than a lifecycle.
+   */
   useEffect(() => {
-    // A backstop. `useChanges` below is what refreshes the board the moment it moves; this covers a
-    // dropped stream. (was 3s while a task was working, 20s otherwise.)
-    const id = window.setInterval(load, 30_000);
-    return () => window.clearInterval(id);
-  }, [busy, load]);
-
-  // The two desktop idioms that replace the button: coming back to the window refreshes,
-  // and Cmd-R refreshes. Both are what someone would try without being told.
-  useEffect(() => {
-    const onFocus = () => load();
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") {
         event.preventDefault();
         load();
       }
     };
-    window.addEventListener("focus", onFocus);
     window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("keydown", onKey);
-    };
+    return () => window.removeEventListener("keydown", onKey);
   }, [load]);
 
   const remove = async (kind: string, key: string | number, label: string) => {
@@ -232,8 +224,9 @@ export function ControlPanel({
 
   const counts = snap?.counts ?? {};
   const seconds = Math.max(0, Math.round((now - freshAt) / 1000));
-  const freshness =
-    seconds < 30
+  const freshness = !everLoaded
+    ? "loading…"
+    : seconds < 30
       ? "up to date"
       : seconds < 90
         ? "a minute ago"
@@ -279,19 +272,19 @@ export function ControlPanel({
             keeping up — which is the only thing the toggle was ever really telling you. */}
         <span
           className="text-muted-foreground/70 hidden items-center gap-1.5 font-mono text-[11px] tabular-nums sm:flex"
-          title={
-            busy
-              ? "He's working — refreshing every few seconds"
-              : "Refreshes on its own, and whenever you come back to the window"
-          }
+          title="Updates when something changes, and whenever you come back to the window"
         >
+          {/* This used to read "keeping up" whenever a task was working, because the panel polled
+              faster while one was — a statement about its own refresh rate. There is no rate to
+              report now: it updates when the board moves. So the dot says whether a refetch is in
+              flight, and the text says when the answer on screen arrived. */}
           <span
             className={cn(
               "size-1.5 rounded-full",
-              loading ? "bg-kith animate-pulse" : busy ? "bg-kith" : "bg-muted-foreground/40",
+              loading ? "bg-kith animate-pulse" : "bg-muted-foreground/40",
             )}
           />
-          {busy ? "keeping up" : freshness}
+          {freshness}
         </span>
         <Button
           variant="ghost"
@@ -434,7 +427,7 @@ export function ControlPanel({
               {tab === "overview" ? (
                 <Overview snap={snap} timeline={timeline} query={query} onNavigate={openTab} />
               ) : tab === "lifetime" ? (
-                <Lifetime events={timeline.filter((e) => matches(query, e.text))} />
+                <Lifetime events={timeline.filter((event) => matches(query, event.text))} />
               ) : tab === "memory" ? (
                 <Memories {...props} snap={snap} />
               ) : tab === "journal" ? (

@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import queue
-
-from flask import Response, jsonify, request
+from flask import jsonify, request
 
 from kith.api.blueprint import api
 from kith.infra.db import repositories as repo
+from kith.kernel import events
 from kith.services.activity import feed
 from kith.services.turn.meter import usage_snapshot
 from kith.settings import AGENT_DB_PATH
@@ -32,29 +30,28 @@ def activity_status():
     )
 
 
-@api.get("/activity/stream")
-@api.doc(summary="Activity stream", description="Server-sent events of what Kith is doing.")
-def activity_stream():
-    def generate():
-        subscription = feed.subscribe()
-        try:
-            for item in feed.recent():
-                yield f"data: {json.dumps(item)}\n\n"
-            while True:
-                try:
-                    item = subscription.get(timeout=15)
-                except queue.Empty:
-                    yield ": ping\n\n"  # keep-alive; also surfaces disconnects
-                    continue
-                yield f"data: {json.dumps(item)}\n\n"
-        finally:
-            feed.unsubscribe(subscription)
+@api.get("/activity/recent")
+@api.doc(
+    summary="The last lines of the feed",
+    description="What he has been doing, most recent last — the snapshot a window opens with.",
+)
+def activity_recent():
+    """The first half of snapshot-then-subscribe.
 
-    return Response(
-        generate(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
-    )
+    `/api/activity/stream` was here, and it sent these same lines down the stream on every single
+    connection — which, with no id on the wire and no dedupe on the client, is why a reconnect
+    duplicated the last hundred lines into the feed. Separating them is the fix: a window fetches
+    the backlog once, and `/api/events` carries only what happens after it.
+
+    `at` is what makes the seam exact. The stream is already running when a window asks for this,
+    so lines can arrive on it while this request is in flight — and without a cursor the client has
+    to guess whether a streamed line is also in the snapshot. It is the log position this snapshot
+    was taken at, and anything the stream delivers above it is new. Read *before* the buffer, so a
+    line published between the two readings lands on the "still to come" side and is shown once,
+    rather than on the "already have it" side and dropped.
+    """
+    at = events.log.newest
+    return jsonify({"activity": feed.recent(), "at": at})
 
 
 @api.get("/usage")

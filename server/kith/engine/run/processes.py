@@ -262,6 +262,15 @@ class Processes:
                             "command": one.command,
                             "alive": one.running,
                             "for": _ago(one.started),
+                            # And the raw start, so a panel can count the minutes itself.
+                            #
+                            # `for` is a sentence rendered here, which means it is only ever as
+                            # current as the last request — so the interface had to re-ask every
+                            # thirty seconds purely to keep "12m" from reading "11m" all evening.
+                            # That is a poll for a *duration*, not for a change, and it was the
+                            # last timer in the app with a real reason behind it. With the
+                            # timestamp, the data is pushed and the clock is local.
+                            "startedAt": one.started,
                         }
                         for one in self.mine(conversation_id)
                     ]

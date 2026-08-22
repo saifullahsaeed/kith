@@ -17,11 +17,13 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { Dropdown } from "@/components/ui/dropdown";
 import { useConfirm } from "@/components/ui/confirm";
 import { FileViewer, Markdown, MarkdownInline, skipTextRead } from "@/components/files";
 import { EditableText } from "@/components/ui/editable-text";
-import { useChanges } from "@/hooks/use-changes";
+import { keys } from "@/lib/query-keys";
 import { openWorkspaceFile } from "@/lib/files";
 import { cn } from "@/lib/utils";
 import {
@@ -66,7 +68,7 @@ export function TaskDetailPage({
   onChanged: () => void;
 }) {
   const confirm = useConfirm();
-  const [task, setTask] = useState<Detail | null>(null);
+  const cache = useQueryClient();
   const [item, setItem] = useState("");
   // The title being typed, held apart from the loaded task — see the input below for why.
   const [goalDraft, setGoalDraft] = useState<string | null>(null);
@@ -76,14 +78,14 @@ export function TaskDetailPage({
   // shape of the bug this section exists to fix.
   const [planOpen, setPlanOpen] = useState(false);
 
-  const load = useCallback(() => {
-    fetchTaskDetail(taskId)
-      .then(setTask)
-      .catch(() => {});
-  }, [taskId]);
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data: task = null } = useQuery({
+    queryKey: keys.task(taskId),
+    queryFn: () => fetchTaskDetail(taskId),
+  });
+  const load = useCallback(
+    () => void cache.invalidateQueries({ queryKey: keys.task(taskId) }),
+    [cache, taskId],
+  );
   // A task awaiting approval opens with its plan already showing: being asked to approve
   // something you have to click to read is the same failure this section was added to fix, one
   // click further in. Only ever opens — it never slams shut on a status change you did not make.
@@ -91,54 +93,21 @@ export function TaskDetailPage({
     if (task?.status === "planning") setPlanOpen(true);
   }, [task?.status]);
 
-  /**
-   * Keep the page current while it is open.
+  /* Kept current by `task` events, through `STALE_ON` — he ticks a checklist item, adds a comment,
+   * attaches a deliverable, and it appears.
    *
-   * It loaded once and then never again, which is the wrong behaviour for the one screen you
-   * are most likely to be watching *while he works*: he ticks a checklist item, adds a
-   * comment, attaches a deliverable, and none of it appeared until you navigated away and
-   * back. Faster while the task is his current one, because that is when things change.
+   * What was here: a 30-second interval, a `focus` listener, a DOM event to bridge them, and a
+   * guard that skipped any refresh while a field on the page had something typed in it. All four
+   * are gone, and the guard is worth a sentence because deleting a guard should never be quiet.
    *
-   * The guard matters as much as the poll. Replacing state underneath someone who is typing
-   * in the description would throw their sentence away, so a refresh is skipped whenever a
-   * field on this page has focus — you cannot lose an edit to a background fetch.
+   * It was protecting against server data replacing what someone was typing — and none of these
+   * fields is written from server data while it is being edited. `EditableText` copies `value` into
+   * its own draft when you click the pencil and never reads it again until you are done; the title
+   * renders `goalDraft ?? task.goal`, where the draft wins; the new-checklist-item box is local.
+   * The two controls that *are* driven by the task — the priority and milestone selects — hold no
+   * typed text to lose. So the guard was covering a case the components already handle, at the cost
+   * of a page that stopped updating while you had a comment box focused.
    */
-  const active = task?.status === "working";
-  useEffect(() => {
-    const tick = () => {
-      // Skip only when there is genuinely an edit in flight — a field with something typed in
-      // it. The first version skipped whenever *any* field had focus, and the comment box is
-      // a field people leave focused: one click on it and the page stopped updating
-      // altogether, which is worse than the problem this guard exists to prevent.
-      const editing = document.activeElement;
-      const midEdit =
-        editing instanceof HTMLElement &&
-        (editing.isContentEditable ||
-          ((editing instanceof HTMLInputElement || editing instanceof HTMLTextAreaElement) &&
-            editing.value.trim().length > 0));
-      if (!midEdit) load();
-    };
-    // A backstop now. `useChanges` below is what makes a ticked item or a status change appear at
-    // once; this covers a dropped stream. (was 3s while working, 12s otherwise.)
-    const timer = window.setInterval(tick, 30_000);
-    // Through `tick` rather than `load`, so a change arriving while you are mid-sentence in the
-    // description is still skipped — the guard is the point, not the interval.
-    const onChange = () => tick();
-    window.addEventListener("kith:task-changed", onChange);
-    // Coming back to the window is the other moment you expect it to be current.
-    window.addEventListener("focus", tick);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", tick);
-      window.removeEventListener("kith:task-changed", onChange);
-    };
-  }, [active, load]);
-
-  // A DOM event rather than calling `tick` directly, because `tick` is built inside the effect above
-  // where the mid-edit guard lives, and lifting it out to satisfy the hook's dependency list would
-  // put the guard and the thing it guards in two places.
-  useChanges("task", () => window.dispatchEvent(new Event("kith:task-changed")));
-
   const refresh = () => {
     load();
     onChanged();
@@ -259,7 +228,9 @@ export function TaskDetailPage({
                 }
                 // A blank title is a slip, not an instruction.
                 if (!next || next === task.goal) return;
-                setTask({ ...task, goal: next });
+                // Straight into the cache: the field it came from is a draft, and the rendered
+                // title should not wait a round trip to catch up with it.
+                cache.setQueryData(keys.task(taskId), { ...task, goal: next });
                 void patch({ goal: next });
               }}
               onKeyDown={(e) => {
@@ -415,7 +386,7 @@ export function TaskDetailPage({
                 placeholder="What this task is, and what 'done' looks like…"
                 render={(v) => <Markdown>{v}</Markdown>}
                 onSave={(v) => {
-                  setTask({ ...task, description: v });
+                  cache.setQueryData(keys.task(taskId), { ...task, description: v });
                   patch({ description: v });
                 }}
               />

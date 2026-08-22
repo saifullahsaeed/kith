@@ -7,7 +7,7 @@
  * React reused across a change of question). Neither is a type error. Both are two lines of
  * test.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@/test/render";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

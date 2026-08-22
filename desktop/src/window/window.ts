@@ -1,17 +1,21 @@
 /**
  * The main window: creation, close behaviour, and where links are allowed to go.
  *
- * No preload and no contextBridge, on purpose. Every security-relevant
- * `webPreferences` default in current Electron is already the safe one
- * (contextIsolation on, nodeIntegration off, sandbox on), and the renderer only
- * ever needs `fetch` to its own origin — exactly what it already does in a browser.
- * Adding a preload would mean widening the attack surface to gain nothing.
+ * There is a preload now, and there was not for a long time. The old reasoning — every
+ * security-relevant `webPreferences` default is already the safe one, and the renderer only ever
+ * needs `fetch` to its own origin — was right about the defaults and wrong about the gain. What it
+ * buys is the event stream held by the main process rather than by the page: one connection that
+ * survives a reload, sends the API token like every other call, and stays out of Chromium's
+ * six-connections-per-origin pool. See `preload.ts` and `server/events.ts`.
+ *
+ * The surface is one receive-only function. Nothing here lets the page *ask* the shell for
+ * anything, and `contextIsolation` and `sandbox` both stay on.
  */
 
 import { BrowserWindow, shell } from "electron";
 
 import { loadWhenReady, recoverFromBackendRestarts } from "../server/backend";
-import { BACKEND_ORIGIN, EXTERNAL_SCHEMES, WINDOW } from "../config";
+import { BACKEND_ORIGIN, EXTERNAL_SCHEMES, PRELOAD, WINDOW } from "../config";
 import { restoredBounds, trackWindowState } from "./window-state";
 
 let mainWindow_: BrowserWindow | null = null;
@@ -54,6 +58,8 @@ export function createMainWindow(): BrowserWindow {
     // being drawn underneath them.
     trafficLightPosition: { x: 13, y: 20 },
     webPreferences: {
+      // One receive-only channel for the app's event stream, and nothing else on it.
+      preload: PRELOAD,
       // Stated rather than assumed. These ARE the defaults; writing them down
       // means a future edit has to disagree in public rather than by omission.
       contextIsolation: true,
@@ -68,10 +74,13 @@ export function createMainWindow(): BrowserWindow {
       // flag — it no longer does, and that was checked here rather than assumed:
       // a PDF renders complete with toolbar and page thumbnails with plugins off.
       // Turning it on to be safe would widen what the renderer can load for nothing.
-      // Required, not a tuning knob. Closing the window HIDES it, and Chromium
-      // throttles timers and network in hidden windows — which would quietly
-      // starve the SSE activity feed exactly when the app is meant to be sitting
-      // in the tray watching him work.
+      // Required, not a tuning knob. Closing the window HIDES it, and Chromium throttles
+      // timers and network in hidden windows.
+      //
+      // This was here for the activity feed's `EventSource`, which is no longer in the page —
+      // the shell holds that stream and pushes to hidden windows deliberately. What still needs
+      // it is the turn itself: `POST /api/chat` is a fetch belonging to the document, and a turn
+      // running while the app sits in the tray is the ordinary case rather than the exception.
       backgroundThrottling: false,
     },
   });

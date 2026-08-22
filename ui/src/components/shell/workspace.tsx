@@ -20,7 +20,7 @@ import { HistoryPanel } from "@/components/chat/history-panel";
 import { SessionBar } from "@/components/chat/session-bar";
 import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
-import { useChanges } from "@/hooks/use-changes";
+import { useServerEvent } from "@/hooks/use-live";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
@@ -37,6 +37,7 @@ import {
   createBackendAdapter,
   resumeTurn,
   fetchConversation,
+  setConversationProject,
   USAGE_PART,
   type ContextLedger,
   type StoredTurn,
@@ -135,7 +136,11 @@ export function Workspace({
    * message you were reading is the same message `shift` places further down the list. Pinning
    * an element is immune to anything settling above it, because its position is recomputed each
    * time rather than assumed. */
-  const anchor = useRef<{ index: number; shift: number; offset: number } | null>(null);
+  const anchor = useRef<{
+    index: number;
+    shift: number;
+    offset: number;
+  } | null>(null);
   const [threadKey, setThreadKey] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   // What this session is working on. Held here rather than fetched inside the bar because
@@ -215,11 +220,19 @@ export function Workspace({
      `resumeTurn` is already idempotent about this (it returns nothing when no turn is live, and the
      `isRunning` guard drops the case where this window started the turn itself), so an extra call is
      free and a missed event is the only thing that costs anything. */
-  useChanges("turn", rejoin, conversationId);
+  // `useServerEvent` rather than a query, because this is not data: there is nothing to refetch,
+  // there is a stream to attach to. See hooks/use-live.ts — it is the one shape in the app that
+  // stayed imperative, and deliberately so.
+  useServerEvent("turn", rejoin, conversationId);
 
   const openConversation = useCallback(async (id: string) => {
     const detail = await fetchConversation(id).catch(() => null);
     if (!detail) return;
+    // Whatever project was picked for a chat that never got typed into, let it go. Without this,
+    // "New chat here" followed by opening an existing conversation re-files *that* conversation
+    // under the project — the effect below cannot tell the id it is handed apart from the one a
+    // first turn would have produced, so the only place that knows is here.
+    pendingProject.current = null;
     setConversationId(id);
     setProjectId(detail.projectId ?? null);
     setTimeline(detail.timeline);
@@ -242,14 +255,20 @@ export function Workspace({
     if (next === shown) return;
     // Remember which message you were reading before the thread is torn down; see `anchor`.
     const grown = toThreadMessages(timeline.slice(-next));
-    const viewport = document.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
+    const viewport = document.querySelector<HTMLElement>(
+      '[data-slot="aui_thread-viewport"]',
+    );
     anchor.current = null;
     if (viewport) {
       const top = viewport.getBoundingClientRect().top;
-      const messages = [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")];
+      const messages = [
+        ...viewport.querySelectorAll<HTMLElement>("[data-message-id]"),
+      ];
       // The first message still on screen — the one you are actually reading, rather than the
       // one scrolled off above it.
-      const index = messages.findIndex((m) => m.getBoundingClientRect().bottom > top);
+      const index = messages.findIndex(
+        (m) => m.getBoundingClientRect().bottom > top,
+      );
       if (index >= 0) {
         anchor.current = {
           index,
@@ -280,7 +299,9 @@ export function Workspace({
    * change height and the answer is still recomputed from where the element actually is.
    */
   useEffect(() => {
-    const viewport = document.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
+    const viewport = document.querySelector<HTMLElement>(
+      '[data-slot="aui_thread-viewport"]',
+    );
     if (!viewport) return;
 
     const look = () => setNearTop(viewport.scrollTop < viewport.clientHeight);
@@ -306,11 +327,14 @@ export function Workspace({
       const until = performance.now() + RESTORE_MS;
       const pin = () => {
         if (done) return;
-        const messages = viewport.querySelectorAll<HTMLElement>("[data-message-id]");
+        const messages =
+          viewport.querySelectorAll<HTMLElement>("[data-message-id]");
         const mine = messages[held.index + held.shift];
         if (mine) {
           const drift =
-            mine.getBoundingClientRect().top - viewport.getBoundingClientRect().top - held.offset;
+            mine.getBoundingClientRect().top -
+            viewport.getBoundingClientRect().top -
+            held.offset;
           if (Math.abs(drift) > 1) viewport.scrollTop += drift;
         }
         if (performance.now() < until) frame = requestAnimationFrame(pin);
@@ -335,9 +359,19 @@ export function Workspace({
     };
   }, [threadKey, conversationId]);
 
-  const newConversation = useCallback(() => {
+  /* A project chosen for a conversation that does not exist yet.
+   *
+   * "Start a chat in this project" is asked from the history panel, where the project is in
+   * front of you — but a fresh chat has no id until the first turn comes back from the stream,
+   * and the binding is written against an id. So the choice is held here and written the moment
+   * there is something to write it against. Shown immediately in the session bar meanwhile,
+   * which is true: it is what the next turn will be bound to. */
+  const pendingProject = useRef<number | null>(null);
+
+  const newConversation = useCallback((project: number | null = null) => {
+    pendingProject.current = project;
     setConversationId("");
-    setProjectId(null);
+    setProjectId(project);
     setTimeline([]);
     setShown(WINDOW);
     setResumed([]);
@@ -370,6 +404,16 @@ export function Workspace({
 
   useEffect(() => {
     remember(conversationId);
+    // Write the pending project before re-reading, not after: `refreshSession` would otherwise
+    // fetch the server's null and clear the project you picked a second before the id existed.
+    const wanted = pendingProject.current;
+    if (conversationId && wanted !== null) {
+      pendingProject.current = null;
+      void setConversationProject(conversationId, wanted)
+        .then(() => setProjectId(wanted))
+        .catch(refreshSession);
+      return;
+    }
     refreshSession();
   }, [conversationId, refreshSession]);
 
@@ -413,7 +457,6 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.conversationId]);
 
-
   /* Which panels the window can currently afford.
    *
    * `squeezed` is kept apart from `workOpen` on purpose: one is the window's opinion and the
@@ -424,7 +467,9 @@ export function Workspace({
    * Opening Work by hand while narrow wins — you asked for it — until the window crosses the
    * threshold again, which is the point at which the question is genuinely being re-asked. */
   const [viewport, setViewport] = useState(() => window.innerWidth);
-  const [squeezed, setSqueezed] = useState(() => window.innerWidth < WORK_YIELDS_BELOW);
+  const [squeezed, setSqueezed] = useState(
+    () => window.innerWidth < WORK_YIELDS_BELOW,
+  );
   useEffect(() => {
     let wasNarrow = window.innerWidth < WORK_YIELDS_BELOW;
     const measure = () => {
@@ -453,13 +498,19 @@ export function Workspace({
   // window. A remembered 720 on a 1100px window is a chat column of nothing.
   const workRoom = Math.max(
     WORK_MIN,
-    Math.min(workWidth, viewport - CHAT_FLOOR - (historyOpen && !covering ? HISTORY_WIDTH : 0)),
+    Math.min(
+      workWidth,
+      viewport - CHAT_FLOOR - (historyOpen && !covering ? HISTORY_WIDTH : 0),
+    ),
   );
 
   const startResize = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     const onMove = (ev: PointerEvent) => {
-      const w = Math.max(WORK_MIN, Math.min(WORK_MAX, window.innerWidth - ev.clientX));
+      const w = Math.max(
+        WORK_MIN,
+        Math.min(WORK_MAX, window.innerWidth - ev.clientX),
+      );
       setWorkWidth(w);
     };
     const onUp = () => {
@@ -507,7 +558,9 @@ export function Workspace({
   // He adopts a project by working on one, so what the session is bound to can change
   // part-way through a turn. One re-read per completed step or turn, which is the cheapest
   // signal that anything could have changed at all.
-  const finished = activity.activity.filter((item) => item.kind === "done").length;
+  const finished = activity.activity.filter(
+    (item) => item.kind === "done",
+  ).length;
   useEffect(refreshSession, [finished, refreshSession]);
   // The room glows green while he is working, and is otherwise his own amber.
   const wash = working ? "var(--roam)" : "var(--kith)";
@@ -517,7 +570,10 @@ export function Workspace({
       <AssistantRuntimeProvider key={threadKey} runtime={runtime}>
         <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
           {/* Ambient wash — leans green while he works, amber while he's here. */}
-          <div className="kith-ambient" style={{ ["--wash" as string]: wash }} />
+          <div
+            className="kith-ambient"
+            style={{ ["--wash" as string]: wash }}
+          />
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             <AppHeader
               working={working}
@@ -526,14 +582,16 @@ export function Workspace({
               effort={config.effort}
               // Offered unless the provider has said otherwise: an unknown model is the
               // normal case right after a switch, and the transport retries a reasoning 400.
-              supportsEffort={!config.capabilities?.known || config.capabilities.reasoning}
+              supportsEffort={
+                !config.capabilities?.known || config.capabilities.reasoning
+              }
               onEffort={(effort) => {
                 onSaveConfig({ ...config, effort });
                 void patchServerConfig({ effort });
               }}
               historyOpen={historyOpen}
               onOpenHistory={() => setHistoryOpen((open) => !open)}
-              onNewConversation={newConversation}
+              onNewConversation={() => newConversation()}
               unread={inbox.unread}
               workOpen={workVisible}
               onOpenInbox={() => {
@@ -561,7 +619,8 @@ export function Workspace({
                   <div
                     className={cn(
                       "border-border/60 w-64 shrink-0 border-e",
-                      covering && "absolute inset-y-0 start-0 z-30 bg-background shadow-2xl",
+                      covering &&
+                        "absolute inset-y-0 start-0 z-30 bg-background shadow-2xl",
                     )}
                   >
                     {/* One boundary per panel, so a panel that throws takes only itself down.
@@ -576,8 +635,8 @@ export function Workspace({
                           // conversation you just opened is the one thing it must not do.
                           if (covering) setHistoryOpen(false);
                         }}
-                        onNew={() => {
-                          newConversation();
+                        onNew={(project) => {
+                          newConversation(project ?? null);
                           if (covering) setHistoryOpen(false);
                         }}
                         onClose={() => setHistoryOpen(false)}
@@ -642,8 +701,8 @@ export function Workspace({
                             onClick={loadEarlier}
                             className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors"
                           >
-                            Load {Math.min(WINDOW, timeline.length - shown)} earlier ·{" "}
-                            {timeline.length - shown} above
+                            Load {Math.min(WINDOW, timeline.length - shown)}{" "}
+                            earlier · {timeline.length - shown} above
                           </button>
                         </div>
                       ) : null}
@@ -685,7 +744,11 @@ export function Workspace({
         {/* Drop a file anywhere in the window and it lands on the composer. Disabled — but
             still swallowing the drop — while something is covering the thread, since attaching
             to a composer nobody can see is a file that has vanished. */}
-        <DropZone enabled={!route.settingsTab && !panelOpen && !inboxOpen && !route.contextOpen} />
+        <DropZone
+          enabled={
+            !route.settingsTab && !panelOpen && !inboxOpen && !route.contextOpen
+          }
+        />
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. Given this session's project, because the paths it is
             handed are mostly relative ones out of his prose and his tool results, and a
@@ -693,7 +756,9 @@ export function Workspace({
             it the viewer asked the global workspace root and got "there's no
             .kith/work/task-76.md" for a file that was never missing. */}
         <WorkspaceFileViewer projectId={projectId} />
-        {inboxOpen ? <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} /> : null}
+        {inboxOpen ? (
+          <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} />
+        ) : null}
         {route.contextOpen ? (
           <ErrorBoundary where="The context breakdown">
             <ContextDetailScreen
@@ -782,7 +847,8 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     let retried = 0;
     for (const part of turn.parts) {
       if (part.kind === "text") content.push({ type: "text", text: part.text });
-      else if (part.kind === "reasoning") content.push({ type: "reasoning", text: part.text });
+      else if (part.kind === "reasoning")
+        content.push({ type: "reasoning", text: part.text });
       else if (part.kind === "tool") {
         content.push({
           type: "tool-call",
@@ -808,11 +874,17 @@ function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
         // `{}` — not absent — on a turn recorded before this field existed; `window` is
         // always present on a real reading, never on that placeholder. `turn-usage.tsx`
         // falls back to `context` when this is undefined.
-        baseline = part.baseline?.window ? (part.baseline as ContextLedger) : undefined;
+        baseline = part.baseline?.window
+          ? (part.baseline as ContextLedger)
+          : undefined;
         folded = part.folded;
         retried = part.retried ?? 0;
       } else {
-        rounds.push({ uncached: part.uncached, cached: part.cached, out: part.out });
+        rounds.push({
+          uncached: part.uncached,
+          cached: part.cached,
+          out: part.out,
+        });
       }
     }
     // Last, so the figure lands at the foot of the turn and nothing is split around it.

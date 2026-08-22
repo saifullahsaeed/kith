@@ -669,6 +669,23 @@ def _migrations():
             conn.execute("UPDATE tasks SET key = ? WHERE id = ?", (_key_for(created, task_id), task_id))
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS tasks_key ON tasks(key)")
 
+    def v41_unbind_deleted_projects(conn):
+        """Cut conversations loose from projects that no longer exist.
+
+        `delete_project` orphaned the tasks and dropped the milestones but never touched the
+        conversations, so deleting a project left its sessions pointing at a missing row. That
+        is not a quiet inconsistency: the history panel groups by `project_id`, finds nothing to
+        name the group with, and falls back to the number — so a deleted project came back as
+        "Project #15" in the sidebar, holding the conversations it used to hold.
+
+        The repository is fixed, which stops new ones. This clears the ones already written.
+        """
+        conn.execute(
+            "UPDATE conversations SET project_id = NULL "
+            "WHERE project_id IS NOT NULL "
+            "AND project_id NOT IN (SELECT id FROM projects)"
+        )
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -710,6 +727,7 @@ def _migrations():
         v38_no_notes_or_people,
         v39_task_account,
         v40_task_key,
+        v41_unbind_deleted_projects,
     ]
 
 

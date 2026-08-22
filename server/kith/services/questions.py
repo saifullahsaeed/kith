@@ -28,7 +28,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 
-from kith.kernel import session_context
+from kith.kernel import changes, session_context
 
 #: How long a question waits before giving up on being answered.
 _DEADLINE_SECONDS = 15 * 60
@@ -137,6 +137,9 @@ def ask(conversation_id: str, raw: list, deadline: float = _DEADLINE_SECONDS) ->
         # way to tell which turn is waiting on which.
         previous = _OPEN.get(conversation_id)
         _OPEN[conversation_id] = question
+    # The card exists now. Without this the interface had no way to learn that except by asking
+    # every 1.2 seconds whether one had appeared.
+    changes.publish("question", conversation=conversation_id)
     if previous is not None:
         previous.replies = None
         previous.answered.set()
@@ -156,8 +159,13 @@ def ask(conversation_id: str, raw: list, deadline: float = _DEADLINE_SECONDS) ->
         return {"ok": True, "answered": True, "answers": question.replies}
     finally:
         with _LOCK:
-            if _OPEN.get(conversation_id) is question:
+            gone = _OPEN.get(conversation_id) is question
+            if gone:
                 del _OPEN[conversation_id]
+        # And the card is gone. A widget that hears when one opens and not when it closes shows a
+        # question that has been answered until something else happens to move.
+        if gone:
+            changes.publish("question", conversation=conversation_id)
 
 
 def _tell_them(conversation_id: str, asked: list[dict]) -> None:
@@ -234,6 +242,7 @@ def answer(question_id: str, replies: list) -> bool:
         with _LOCK:
             if _OPEN.get(question.conversation_id) is question:
                 del _OPEN[question.conversation_id]
+    changes.publish("question", conversation=question.conversation_id)
     return True
 
 
@@ -244,6 +253,7 @@ def release(conversation_id: str) -> None:
     if question is not None:
         question.replies = None
         question.answered.set()
+        changes.publish("question", conversation=conversation_id)
 
 
 #: What the interrupted turn's missing tool result says, written on the next start.
@@ -307,6 +317,7 @@ def recover_interrupted() -> int:
                 asked=questions_asked,
                 interrupted=True,
             )
+        changes.publish("question", conversation=conversation_id)
         found += 1
     return found
 

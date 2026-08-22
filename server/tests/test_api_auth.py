@@ -126,20 +126,27 @@ class TestWhatStaysOpen:
         # The shell polls this before a window exists, and it returns nothing but liveness.
         assert client.get("/api/health").status_code == 200
 
-    def test_the_activity_stream_is_open_to_our_own_page(self, client):
-        # An EventSource cannot send headers. Putting the token in the query string would
-        # print it into the request log on every reconnect — a worse leak than the one being
-        # closed — so this is gated on being same-origin instead.
-        assert (
-            client.get("/api/activity/stream", headers={"Sec-Fetch-Site": "same-origin"}).status_code == 200
-        )
+    def test_the_event_stream_is_open_to_our_own_page(self, client):
+        # A browser `EventSource` cannot send headers. Putting the token in the query string
+        # would print it into the request log on every reconnect — a worse leak than the one
+        # being closed — so this is gated on being same-origin instead.
+        #
+        # The desktop app does not use this door: its stream is held by the Electron main
+        # process, which sends the token like every other call. What is exempt here is a
+        # browser tab opened against the server directly.
+        response = client.get("/api/events", headers={"Sec-Fetch-Site": "same-origin"})
+        try:
+            assert response.status_code == 200
+        finally:
+            # A live stream holds a subscriber until its response is closed.
+            response.close()
 
-    def test_the_activity_stream_refuses_another_site(self, client):
-        response = client.get("/api/activity/stream", headers={"Sec-Fetch-Site": "cross-site"})
+    def test_the_event_stream_refuses_another_site(self, client):
+        response = client.get("/api/events", headers={"Sec-Fetch-Site": "cross-site"})
         assert response.status_code == 403
 
     def test_a_cross_origin_header_also_refuses_the_stream(self, client):
-        response = client.get("/api/activity/stream", headers={"Origin": "https://evil.example"})
+        response = client.get("/api/events", headers={"Origin": "https://evil.example"})
         assert response.status_code == 403
 
     def test_the_schema_stays_readable(self, client):

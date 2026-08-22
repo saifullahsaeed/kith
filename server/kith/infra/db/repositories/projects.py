@@ -9,7 +9,7 @@ from sqlalchemy import delete as sql_delete
 
 from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES, TASK_ACTIVE
 from kith.infra.db.engine import as_dict, session
-from kith.infra.db.models import Milestone, MilestoneDep, Project, Task
+from kith.infra.db.models import Conversation, Milestone, MilestoneDep, Project, Task
 from kith.infra.db.repositories.tasks import list_tasks
 from kith.infra.db.support import notifies, utc_now_iso
 
@@ -86,6 +86,15 @@ def delete_project(path: Path, project_id: int) -> bool:
         # Orphan the tasks rather than delete them — the work outlives the grouping,
         # and cascading here would silently destroy finished tasks and deliverables.
         db.execute(update(Task).where(Task.project_id == project_id).values(project_id=None))
+        # And the conversations, for the same reason and one more. This was missed, so every
+        # session bound to a deleted project kept pointing at a row that no longer existed —
+        # and a dangling id is not invisible: the history panel groups by it, finds no project
+        # to name, and prints the number. Deleting a project left "Project #15" in the sidebar
+        # holding one conversation, which is the deleted project still on screen under an id
+        # for a name. See ui/components/chat/history-panel.tsx → groupByProject.
+        db.execute(
+            update(Conversation).where(Conversation.project_id == project_id).values(project_id=None)
+        )
         db.execute(delete(Milestone).where(Milestone.project_id == project_id))
         return db.execute(delete(Project).where(Project.id == project_id)).rowcount > 0
 

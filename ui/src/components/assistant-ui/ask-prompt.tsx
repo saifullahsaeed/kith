@@ -1,5 +1,6 @@
 import { useThreadRuntime } from "@assistant-ui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, ChevronRight, CornerDownLeft, Pencil } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,7 @@ import {
   type OpenQuestion,
   type Reply,
 } from "@/lib/backend/questions";
+import { keys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 
 /** One step of the pager. Disabled rather than hidden, so the control does not move about
@@ -84,11 +86,14 @@ function asText(open: OpenQuestion, replies: Reply[]): string {
  * on 2026-08-14 it reproduced on the reverted build, with that change nowhere in the tree — six
  * sockets held, no request for four minutes, a question open server-side the whole time and no
  * socket left to fetch it with. `useChanges` was building one `EventSource` per subscriber
- * against a six-per-origin HTTP/1.1 limit; it shares one now, and `use-changes.ts` carries the
- * measurements.
+ * against a six-per-origin HTTP/1.1 limit. One connection for the whole app now, held by the
+ * desktop shell's main process — see `lib/backend/events.ts` and `hooks/use-live.test.ts`, which
+ * carries the measurements.
  *
- * So the stream event is worth reconsidering on its own merits — there are free sockets now. It
- * was never what froze the renderer, and it was never going to be what fixed it either.
+ * And the stream event *is* how this card is raised, in the end. It was reconsidered on its own
+ * merits once there were free sockets, which is what the last paragraph here said to do: `question`
+ * is a kind of change the server publishes, so the poll is gone. It was never what froze the
+ * renderer, and it was never going to be what fixed it either.
  */
 export function AskPrompt({ conversationId }: { conversationId: string }) {
   // Optional, because drawing the card does not need a runtime and only the recovered-question
@@ -96,7 +101,18 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
   // this on its own — a component that cannot be mounted without the whole thread around it is
   // harder to test than it needs to be, for a dependency it uses on one branch.
   const runtime = useThreadRuntime({ optional: true });
-  const [open, setOpen] = useState<OpenQuestion | null>(null);
+  const cache = useQueryClient();
+  /* Pushed now, not polled.
+   *
+   * This asked every 1.2 seconds, forever, in every open conversation — because nothing told it
+   * when a question appeared. `question` is a kind of change the server publishes now, from the
+   * moment `ask` puts the card up to the moment it comes down, so this refetches when there is
+   * something to refetch and sits still otherwise. The note above about this being "worth
+   * reconsidering on its own merits — there are free sockets now" is what this is. */
+  const { data: open = null } = useQuery({
+    queryKey: keys.question(conversationId),
+    queryFn: () => fetchOpenQuestion(conversationId),
+  });
   const [replies, setReplies] = useState<Reply[]>([]);
   const [at, setAt] = useState(0);
   /** How far you have got. Forward paging stops here so it never skips a question you have
@@ -110,34 +126,16 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
   // is a selection quietly clearing itself under your cursor.
   const shown = useRef<string>("");
 
+  // A different question means starting again rather than carrying answers across. The ref is
+  // what makes this safe to run on every change of `open`: under StrictMode the effect runs
+  // twice, and resetting twice is what a selection clearing itself under your cursor looks like.
   useEffect(() => {
-    let alive = true;
-    const load = () =>
-      fetchOpenQuestion(conversationId)
-        .then((found) => {
-          if (!alive || found?.id === shown.current) return;
-          shown.current = found?.id ?? "";
-          setOpen(found);
-          // A different question: start again rather than carry answers across.
-          setReplies((found?.questions ?? []).map(() => ({ chosen: [], text: "", skipped: false })));
-          setAt(0);
-          setFurthest(0);
-        })
-        .catch(() => {});
-    load();
-    // Brisk, because this is the one thing on screen the turn is actually waiting for.
-    //
-    // This rate once read as Chromium throttling a background interval: fifty polls a minute with
-    // the app focused, twelve in three and a half minutes without. The interval was innocent. That
-    // is the rate at which a socket came free in a connection pool `useChanges` had exhausted, and
-    // a fetch cannot leave the renderer until one does — which is also why quitting and reopening
-    // fetched immediately, and read as the fix. Fixed in `use-changes.ts`, not here.
-    const timer = setInterval(load, 1_200);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [conversationId]);
+    if ((open?.id ?? "") === shown.current) return;
+    shown.current = open?.id ?? "";
+    setReplies((open?.questions ?? []).map(() => ({ chosen: [], text: "", skipped: false })));
+    setAt(0);
+    setFurthest(0);
+  }, [open]);
 
   const send = useCallback(
     async (final: Reply[]) => {
@@ -154,11 +152,13 @@ export function AskPrompt({ conversationId }: { conversationId: string }) {
         runtime?.append({ role: "user", content: [{ type: "text", text: asText(open, final) }] });
       }
       // Cleared either way: if the server no longer has it, the turn moved on without us and
-      // leaving the card up would invite answering something nobody is waiting for.
-      setOpen(null);
+      // leaving the card up would invite answering something nobody is waiting for. Answering
+      // also publishes a `question` change, so this is the immediate half of a reconciliation
+      // already on its way rather than a guess.
+      cache.setQueryData(keys.question(conversationId), null);
       setSending(false);
     },
-    [open, sending, runtime],
+    [open, sending, runtime, cache, conversationId],
   );
 
   if (!open || open.questions.length === 0) return null;

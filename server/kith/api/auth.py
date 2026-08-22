@@ -50,17 +50,18 @@ FILENAME = "api.token"
 #: ``/api/health`` — the shell polls this before the window exists to know whether the
 #: server is up. It returns nothing but liveness.
 #:
-#: ``/api/activity/stream`` — an EventSource, which cannot send headers. Putting the token
-#: in the query string instead would print it into Werkzeug's request log on every
-#: reconnect, which is a worse leak than the one being closed. It is gated on being
-#: same-origin instead (see :func:`_same_origin`), so a web page cannot subscribe; a local
-#: process can, and gets a feed of status and token counts, no content. That trade is
-#: written down rather than discovered.
+#: ``/api/events`` — a browser `EventSource`, which cannot send headers. Putting the token in the
+#: query string instead would print it into the request log on every reconnect, which is a worse
+#: leak than the one being closed. So it is gated on being same-origin instead (see
+#: :func:`_same_origin`): a web page cannot subscribe, a local process can, and what it gets is
+#: status lines, token counts and the *names* of things that changed — never a value.
 #:
-#: ``/api/changes`` — the same EventSource constraint and the same trade, with less to trade: it
-#: carries the *name* of what changed and a conversation id, never a value. A local process learning
-#: that "tasks changed" learns nothing it could not learn by watching the file mtimes.
-OPEN_PATHS = frozenset({"/api/health", "/api/activity/stream", "/api/changes"})
+#: This used to be two entries, `/api/activity/stream` and `/api/changes`, and shrinking it to one
+#: is most of what could be shrunk. The rest is real: **the desktop app no longer relies on this
+#: exemption at all.** Its stream is held by the Electron main process over Node's HTTP client,
+#: which sends `X-Kith-Token` like every other call — so the exemption now covers only a browser
+#: tab opened against the server directly, which is a development shape rather than the product.
+OPEN_PATHS = frozenset({"/api/health", "/api/events"})
 
 #: ``/api/canvas/<id>`` — a frame's ``src``, and a navigation cannot carry a custom header any
 #: more than an EventSource can. Same trade, and a smaller one: the id is 24 random bytes handed
