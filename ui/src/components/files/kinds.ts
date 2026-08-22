@@ -92,6 +92,38 @@ const IMAGES: Record<string, string> = {
   svg: "SVG",
 };
 
+/**
+ * Things the browser plays.
+ *
+ * The same argument as `IMAGES`, one medium along, and the gap that produced the worst answer the
+ * viewer gave: an `.mp4` matched nothing here, fell through to `plain`, and was read as *text* —
+ * so a four-megabyte video came back as "that file is too big to open here (3975240 bytes; max
+ * 2000000)". Two wrong statements in one line. It was never going to be text, and the limit it
+ * named is the limit on reading text.
+ *
+ * Every format here is one Chromium decodes natively, which is the whole test for being on the
+ * list. Anything else still gets `NeedsAnApp`, which is the honest answer.
+ */
+const VIDEO: Record<string, string> = {
+  mp4: "MP4",
+  m4v: "MP4",
+  webm: "WebM",
+  ogv: "Ogg",
+  // Usually H.264 in a QuickTime container, which Chromium plays. When it is ProRes it will not,
+  // and the element says so itself rather than this list pretending to know which.
+  mov: "QuickTime",
+};
+
+const AUDIO: Record<string, string> = {
+  mp3: "MP3",
+  m4a: "M4A",
+  aac: "AAC",
+  wav: "WAV",
+  flac: "FLAC",
+  oga: "Ogg",
+  opus: "Opus",
+};
+
 /** Mermaid source, which is a picture written down — same argument as SVG, one step earlier. */
 const DIAGRAMS = new Set(["mmd", "mermaid"]);
 /** A page he wrote to be looked at, not read. Same call as `.mmd`: the thing it draws is the
@@ -106,6 +138,8 @@ export type Kind =
   | { type: "code"; lang: string; label: string }
   | { type: "plain"; label: string }
   | { type: "image"; label: string }
+  | { type: "video"; label: string }
+  | { type: "audio"; label: string }
   | { type: "pdf"; label: string };
 
 export function classify(name: string): Kind {
@@ -114,6 +148,8 @@ export function classify(name: string): Kind {
   // Before the language tables, because `svg` is in both: it is a picture first and its
   // markup second, and the source toggle is how you get to the markup.
   if (IMAGES[ext]) return { type: "image", label: IMAGES[ext] };
+  if (VIDEO[ext]) return { type: "video", label: VIDEO[ext] };
+  if (AUDIO[ext]) return { type: "audio", label: AUDIO[ext] };
   if (DIAGRAMS.has(ext)) return { type: "diagram", label: "Diagram" };
   if (PAGES.has(ext)) return { type: "page", label: "Page" };
   if (ext === "pdf") return { type: "pdf", label: "PDF" };
@@ -140,6 +176,7 @@ export function classify(name: string): Kind {
  */
 export function skipTextRead(name: string): boolean {
   const kind = classify(name);
+  if (kind.type === "video" || kind.type === "audio") return true;
   return kind.type === "pdf" || (kind.type === "image" && kind.label !== "SVG");
 }
 
@@ -147,4 +184,11 @@ export function skipTextRead(name: string): boolean {
  *  is the normal case, not a failure. */
 export function looksBinary(error: string): boolean {
   return /binary file/i.test(error);
+}
+
+/** The server refuses a file past the size it will read as text. That is not an error to print
+ *  in red and stop at — the file is fine, it is just not going to be read here, and the way out
+ *  is the same two buttons that answer "not text". */
+export function looksTooBig(error: string): boolean {
+  return /too big to (open|show)/i.test(error);
 }

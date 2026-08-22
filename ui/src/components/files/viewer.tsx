@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import { Download, FileCode2, FileImage, FileText, FileType2, X } from "lucide-react";
+import {
+  Download,
+  FileAudio,
+  FileCode2,
+  FileImage,
+  FileText,
+  FileType2,
+  FileVideo,
+  X,
+} from "lucide-react";
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
 import { copyText } from "@/lib/files";
@@ -8,11 +17,19 @@ import { hasFlowScript } from "@/lib/flow-script";
 import { cn } from "@/lib/utils";
 import { Code } from "./code-block";
 import { IconAction } from "./icon-action";
-import { classify, looksBinary } from "./kinds";
+import { classify, looksBinary, looksTooBig } from "./kinds";
 import type { Kind } from "./kinds";
 import { HtmlCanvas } from "@/components/assistant-ui/html-canvas";
 import { Markdown } from "./markdown";
-import { HostActions, ImageBody, Loading, NeedsAnApp, PdfBody } from "./media";
+import {
+  AudioBody,
+  HostActions,
+  ImageBody,
+  Loading,
+  NeedsAnApp,
+  PdfBody,
+  VideoBody,
+} from "./media";
 
 /* ── The preview dialog ─────────────────────────────────────────────────── */
 
@@ -57,7 +74,11 @@ export function FileViewer({
   const [view, setView] = useState<"rendered" | "source">("rendered");
   useEffect(() => setView("rendered"), [name]);
 
-  const media = kind.type === "image" || kind.type === "pdf";
+  const media =
+    kind.type === "image" ||
+    kind.type === "pdf" ||
+    kind.type === "video" ||
+    kind.type === "audio";
   // An SVG is a picture and a document at once, so it gets the toggle: the markup is
   // frequently the thing being checked. A PNG has no source to show.
   //
@@ -113,6 +134,10 @@ export function FileViewer({
         <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-background/70 text-sky-500 ring-1 ring-border/60">
           {kind.type === "image" ? (
             <FileImage className="size-4" />
+          ) : kind.type === "video" ? (
+            <FileVideo className="size-4" />
+          ) : kind.type === "audio" ? (
+            <FileAudio className="size-4" />
           ) : kind.type === "pdf" ? (
             <FileType2 className="size-4" />
           ) : kind.type === "code" ? (
@@ -181,6 +206,10 @@ export function FileViewer({
           // exactly how a screenshot used to be reported as needing another application.
           kind.type === "pdf" ? (
             <PdfBody path={name} projectId={projectId} />
+          ) : kind.type === "video" ? (
+            <VideoBody path={name} projectId={projectId} />
+          ) : kind.type === "audio" ? (
+            <AudioBody path={name} projectId={projectId} />
           ) : (
             <ImageBody path={name} alt={base} projectId={projectId} />
           )
@@ -188,6 +217,15 @@ export function FileViewer({
           // Not an error — an xlsx simply isn't text, and saying so in red while
           // hiding the useful action in a 16px icon was the wrong way round.
           <NeedsAnApp name={base} onOpenOnHost={onOpenOnHost} />
+        ) : error && looksTooBig(error) ? (
+          // Also not an error. A file past the read limit is a file that exists and is fine;
+          // the only thing that cannot happen is reading it *here*. It used to be a red line
+          // quoting two byte counts, which is the least actionable way to say so.
+          <NeedsAnApp
+            name={base}
+            onOpenOnHost={onOpenOnHost}
+            because="It's too big to read in here"
+          />
         ) : error ? (
           <p className="p-5 text-sm text-destructive">{error}</p>
         ) : content == null ? (

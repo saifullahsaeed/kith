@@ -222,16 +222,57 @@ export function Workspace({
 
   /* Push the messages into the thread that is already mounted.
    *
-   * The whole of what `threadKey` used to do, without the teardown. `cancelRun` first, and it is
-   * not tidiness: the runtime is shared across conversations, so a stream still being read when
-   * the messages are swapped would append the conversation you *left* into the one you just
-   * opened. Cancelling stops this window reading. It no longer stops the turn — see the note in
-   * `lib/backend/adapter.ts` — which is the point: the work carries on, and `rejoin` below picks
-   * it up again when you come back.
+   * The whole of what `threadKey` used to do, without the teardown. The runtime is shared across
+   * conversations, so a stream still being read when the messages are swapped would append the
+   * conversation you *left* into the one you just opened. Cancelling stops this window reading; it
+   * does not stop the turn — see the note in `lib/backend/adapter.ts` — which is the point: the
+   * work carries on and `rejoin` picks it up again when you come back.
+   *
+   * **And the reset waits for the cancel to land, which the first version of this did not.**
+   * `cancelRun` aborts the controller and returns; the run is still unwinding, and its own
+   * `finally` then calls `updateMessage({status: cancelled})` against a message id that `reset`
+   * has already cleared out of the repository. Switching away from a running chat therefore
+   * dropped the old turn's dying write into the conversation you had just opened — the thread
+   * would sit there looking stuck, and when the abandoned turn finally ended the state settled and
+   * the switch appeared to happen by itself, a minute after it was asked for. Both halves of
+   * "I can't switch while one is running, and then it switches on its own" are that one race.
+   *
+   * So: cancel, wait for the thread to actually stop running, then replace the messages. Bounded,
+   * because a run that never settles must not leave you looking at the wrong conversation for
+   * ever — after two seconds the swap happens regardless, which is the old behaviour and no worse.
    */
   useEffect(() => {
-    if (runtime.thread.getState().isRunning) runtime.thread.cancelRun();
-    runtime.thread.reset(resumed);
+    const thread = runtime.thread;
+    if (!thread.getState().isRunning) {
+      thread.reset(resumed);
+      return;
+    }
+
+    let settled = false;
+    let unsubscribe: (() => void) | undefined;
+    let timer: number | undefined;
+
+    const swap = () => {
+      if (settled) return;
+      settled = true;
+      unsubscribe?.();
+      if (timer !== undefined) window.clearTimeout(timer);
+      thread.reset(resumed);
+    };
+
+    thread.cancelRun();
+    // Subscribed before the check below, so a run that settles between the two is not missed.
+    unsubscribe = thread.subscribe(() => {
+      if (!thread.getState().isRunning) swap();
+    });
+    timer = window.setTimeout(swap, 2_000);
+    if (!thread.getState().isRunning) swap();
+
+    return () => {
+      settled = true;
+      unsubscribe?.();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [runtime, resumed]);
 
   /* And the composer goes with the conversation.
