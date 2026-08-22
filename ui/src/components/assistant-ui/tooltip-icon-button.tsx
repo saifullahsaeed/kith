@@ -22,7 +22,10 @@ export const TooltipIconButton = forwardRef<
   TooltipIconButtonProps
 >(({ children, tooltip, side = "bottom", className, ...rest }, ref) => {
   return (
-    <TooltipProvider delayDuration={0}>
+    // A hover, not a mouse crossing the room. At zero, every pass over the header opened a
+    // slab of text on top of whatever was under it — most visibly the conversations panel's own
+    // heading, two inches below the button that opens it.
+    <TooltipProvider delayDuration={450}>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
