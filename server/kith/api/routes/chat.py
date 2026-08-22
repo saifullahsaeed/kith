@@ -484,6 +484,28 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
     concern that happens to need a turn; it is a turn, started differently, and the turn lives
     here until it moves out of the route entirely.
     """
+    # A turn already running here is told, rather than raced.
+    #
+    # Nothing checked. The scheduler called this whenever a reminder came due, so a reminder
+    # firing forty seconds into a turn started a *second* turn in the same conversation, and both
+    # ran at once: two threads writing `said` events into one transcript, interleaved, each
+    # finishing with its own answer. From a chair that is one reply that appears to split in half
+    # and then argue with itself about the same test suite. It is also the race
+    # `queued-send.ts` describes — two turns sharing one live-turn slot and one stop switch, where
+    # the loser is a run nobody can stop, and `live_turns.begin` replacing the record is what
+    # orphans it.
+    #
+    # Steering is the mechanism that already exists for this: text delivered into a running turn
+    # at its next round boundary. `steering.steer`'s own docstring says the caller should have
+    # just asked `live_turns.current`, which is what this is. A wake is the harness changing the
+    # subject, which is a steer with a different author.
+    #
+    # Falling through when the steer is refused — the queue is full, or the turn ended between the
+    # check and the call — because a reminder that says nothing is worse than one that says it a
+    # moment later in a turn of its own.
+    if live_turns.current(conversation_id) is not None and steering.steer(conversation_id, trigger):
+        return
+
     # `system`, not `user`. This was recorded as a message from the person, and it is not one:
     # nobody typed "One of your reminders just fired". Three things followed from that and all
     # three were wrong. On reload the interface rendered a scheduler's prose as something you

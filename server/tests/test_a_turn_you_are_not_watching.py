@@ -280,3 +280,66 @@ class TestAWakeIsNotSomethingYouSaid:
 
         roles = [m["role"] for m in conversations.full_messages(id)]
         assert roles[-3:] == ["assistant", "system", "assistant"]
+
+
+class TestTwoTurnsDoNotRaceInOneConversation:
+    """A reminder firing mid-turn used to start a second turn beside the first.
+
+    Both ran at once, both wrote `said` events into one transcript, and they interleaved — so one
+    reply appeared to split in half and then talk past itself about the same test suite. Observed
+    on 2026-08-22 in conversation 20260819-193414906: "ok when suite is done please push and watch
+    the CI", then forty seconds later a standing reminder, then two narratives braided together
+    and two final answers back to back with nothing between them.
+
+    It is also the race `queued-send.ts` warns about — two turns sharing one live-turn slot and
+    one stop switch, where `live_turns.begin` replacing the record orphans the loser and nobody
+    can stop it.
+    """
+
+    def test_a_wake_steers_a_running_turn_rather_than_starting_one(self, db, monkeypatch):
+        from kith.api.routes import chat as route
+        from kith.services import steering
+
+        monkeypatch.setattr(route, "AGENT_DB_PATH", db)
+        started: list = []
+        monkeypatch.setattr(route, "begin_turn", lambda *a, **k: started.append(a) and None)
+
+        turn = live_turns.begin("c-race")
+        try:
+            steering.forget("c-race")
+            route.continue_conversation("c-race", "One of your reminders just fired.")
+
+            assert started == [], "no second turn"
+            assert steering.take("c-race") == "One of your reminders just fired."
+        finally:
+            steering.forget("c-race")
+            live_turns.finish(turn)
+
+    def test_a_wake_with_nothing_running_starts_a_turn_as_before(self, db, monkeypatch):
+        from kith.api.routes import chat as route
+
+        monkeypatch.setattr(route, "AGENT_DB_PATH", db)
+        started: list = []
+        monkeypatch.setattr(route, "begin_turn", lambda *a, **k: started.append(a) and None)
+        monkeypatch.setattr(route.live_turns, "watch", lambda live: iter(()))
+
+        route.continue_conversation("c-quiet", "One of your reminders just fired.")
+        assert len(started) == 1
+
+    def test_a_refused_steer_falls_through_to_a_turn(self, db, monkeypatch):
+        """A reminder that says nothing is worse than one that says it a moment later."""
+        from kith.api.routes import chat as route
+        from kith.services import steering
+
+        monkeypatch.setattr(route, "AGENT_DB_PATH", db)
+        monkeypatch.setattr(steering, "steer", lambda cid, text: False)
+        started: list = []
+        monkeypatch.setattr(route, "begin_turn", lambda *a, **k: started.append(a) and None)
+        monkeypatch.setattr(route.live_turns, "watch", lambda live: iter(()))
+
+        turn = live_turns.begin("c-full")
+        try:
+            route.continue_conversation("c-full", "One of your reminders just fired.")
+            assert len(started) == 1
+        finally:
+            live_turns.finish(turn)
