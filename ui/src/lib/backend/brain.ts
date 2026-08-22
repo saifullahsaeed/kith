@@ -293,3 +293,19 @@ export async function ingestSource(input: {
     throw new Error(err.error || "couldn't ingest that");
   }
 }
+
+/**
+ * Just the projects — names, statuses, folders.
+ *
+ * `fetchBrain` is the whole database: 303KB here, of which 204KB is the journal and 75KB is tasks.
+ * A list that groups conversations by project needs 5.5KB of that. It did not matter while the
+ * panel asked once; it started mattering when `task` became a change that invalidates the snapshot,
+ * because a turn ticking checklist items then re-sent a third of a megabyte per tick for the
+ * browser to parse and discard.
+ */
+export async function fetchProjects(): Promise<Project[]> {
+  const response = await fetch("/api/projects");
+  if (!response.ok) throw new Error(`/api/projects returned ${response.status}`);
+  const body = (await response.json()) as { projects?: Project[] };
+  return body.projects ?? [];
+}

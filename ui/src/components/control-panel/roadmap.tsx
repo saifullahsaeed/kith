@@ -1,6 +1,15 @@
-import { useEffect, useState } from "react";
-import { Check, CircleDot, Plus } from "lucide-react";
-import { RoadmapGraph } from "@/components/control-panel/roadmap-graph";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { Check, CircleDot, Loader2, Plus } from "lucide-react";
+
+/* Loaded when a roadmap is actually looked at, not when the app starts.
+ *
+ * `@xyflow/react` and its stylesheet are the graph and nothing else, and the graph lives two
+ * screens in — control panel, a project, its workflow. Statically imported it rode in the main
+ * bundle, which every window pays to parse before it can draw a chat. Mermaid and its cytoscape
+ * layout engine were already split this way; this is the same call for the same reason. */
+const RoadmapGraph = lazy(() =>
+  import("@/components/control-panel/roadmap-graph").then((mod) => ({ default: mod.RoadmapGraph })),
+);
 import type { Roadmap as RoadmapData } from "@/lib/backend";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/ui/date-picker";
@@ -66,13 +75,22 @@ export function Roadmap({
         Workflow
       </SectionLabel>
 
-      <RoadmapGraph
-        projectId={project.id}
-        selected={selected}
-        onSelect={setSelected}
-        onChanged={refresh}
-        onRoadmap={setRoadmap}
-      />
+      <Suspense
+        fallback={
+          <div className="border-border/60 text-muted-foreground/60 flex h-48 items-center justify-center gap-2 rounded-xl border border-dashed text-sm">
+            <Loader2 className="size-4 animate-spin" />
+            Drawing the workflow…
+          </div>
+        }
+      >
+        <RoadmapGraph
+          projectId={project.id}
+          selected={selected}
+          onSelect={setSelected}
+          onChanged={refresh}
+          onRoadmap={setRoadmap}
+        />
+      </Suspense>
 
       <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-card/40 p-1.5 pl-3 focus-within:border-ring/60">
         <input

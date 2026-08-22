@@ -22,7 +22,7 @@ import {
   type ConversationSummary,
   type TranscriptHit,
 } from "@/lib/backend";
-import { fetchBrain, type Project } from "@/lib/backend/brain";
+import { fetchProjects, type Project } from "@/lib/backend/brain";
 import { dayLabel, time } from "@/lib/dates";
 import { keys } from "@/lib/query-keys";
 import { openOnHost } from "@/lib/files";
@@ -165,8 +165,10 @@ export function HistoryPanel({
    * every list refresh, so in practice on every reload of the panel. It is the same `["brain"]` the
    * control panel holds, so asking for it here is now free when that is already loaded, and a
    * `project` change refreshes both at once. */
-  const { data: brain } = useQuery({ queryKey: keys.brain(), queryFn: fetchBrain });
-  const projects: Project[] = brain?.projects ?? [];
+  const { data: projects = [] } = useQuery({
+    queryKey: keys.projects(),
+    queryFn: fetchProjects,
+  });
   const groups = useMemo(
     () => groupByProject(items, projects),
     [items, projects],

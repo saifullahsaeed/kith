@@ -19,6 +19,26 @@ def brain_snapshot():
     return jsonify(brain.snapshot(AGENT_DB_PATH))
 
 
+@api.get("/projects")
+@api.doc(
+    summary="Just the projects",
+    description="Names, statuses and folders — what a list of projects needs and nothing else.",
+)
+def projects():
+    """The cheap answer to "what projects are there".
+
+    `/api/brain` is the whole database — 303KB of it here, of which 204KB is 589 journal entries
+    and 75KB is 94 tasks. The conversations panel groups its rows by project, so it needs names and
+    statuses: 5.5KB, 1.8% of what it was being sent.
+
+    That was tolerable while the panel fetched it once. It stopped being tolerable when `task`
+    became a change that invalidates the snapshot: a turn ticking checklist items now re-sent a
+    third of a megabyte, for the browser to parse and throw away, once per tick — to redraw four
+    project names.
+    """
+    return jsonify({"projects": repo.projects.list_projects(AGENT_DB_PATH)})
+
+
 @api.get("/brain/timeline")
 @api.doc(summary="Kith's lifetime", description="Everything that has happened, merged newest-first.")
 def brain_timeline():

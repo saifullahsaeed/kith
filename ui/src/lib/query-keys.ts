@@ -23,6 +23,9 @@ import type { ChangeKind } from "@/lib/backend/events";
 export const keys = {
   /** The board: projects, tasks, milestones — everything `GET /api/brain` answers with. */
   brain: () => ["brain"] as const,
+  /** Names and statuses only. The conversations panel groups by project and needs nothing else;
+   *  `brain()` is the whole database and is a third of a megabyte. */
+  projects: () => ["projects"] as const,
   /** The lifetime event log. A second endpoint, so a second key — one key must mean one shape. */
   timeline: () => ["timeline"] as const,
   /** One project's roadmap graph. */
@@ -89,7 +92,7 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   // Tasks are on the board, in the roadmap, in the detail panel and in the working-on card.
   task: [["brain"], ["task"], ["roadmap"], ["workingOn"], ["timeline"]],
   // A project's name and status reach the board, its roadmap, and the history panel's groups.
-  project: [["brain"], ["roadmap"], ["conversations"], ["timeline"]],
+  project: [["brain"], ["projects"], ["roadmap"], ["conversations"], ["timeline"]],
   // The inbox badge, and the board's own count of what is waiting on you.
   message: [["messages"], ["brain"], ["timeline"]],
   process: [["processes"]],
