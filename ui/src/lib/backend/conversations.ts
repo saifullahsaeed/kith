@@ -19,8 +19,12 @@ export interface ConversationSummary {
    *  project — which is most of them, and is fine. It decides which project's memory he is
    *  shown here and which tasks he advances when this session is left working. */
   projectId: number | null;
-  /** Whether he keeps taking steps here without being asked again. */
+  /** A turn is running in this conversation right now. Held in the server's memory rather than in
+   *  a column, because it is what is happening this second — see `live_turns.live()`. */
   working: boolean;
+  /** It is blocked on an answer from you. The more actionable of the two: working needs nothing
+   *  from you, waiting needs only you — see `questions.waiting()`. */
+  waiting: boolean;
 }
 
 /** One conversation, opened. Its metadata plus everything needed to render it back.

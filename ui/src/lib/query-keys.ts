@@ -92,6 +92,8 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   message: [["messages"], ["brain"], ["timeline"]],
   process: [["processes"]],
   workspace: [["workspace"]],
-  question: [["question"]],
+  // The panel marks which conversation is blocked on you, so a question opening or being answered
+  // changes the list as much as it changes the card.
+  question: [["question"], ["conversations"]],
   permission: [["permissions"]],
 };

@@ -440,12 +440,32 @@ export function HistoryPanel({
                           <span className="text-muted-foreground/40 ms-auto shrink-0 font-normal tabular-nums">
                             {group.items.length}
                           </span>
-                          {/* Something still running in a section you cannot see. */}
-                          {!open && group.items.some((one) => one.working) ? (
+                          {/* What is happening inside, whether or not you can see the rows.
+                            *
+                            * This was `!open && …`, on the reasoning that an open section shows
+                            * you its own rows — which is true only if the row is on screen. Twenty
+                            * conversations under a project means the one that is working is as
+                            * likely to be scrolled past as not, and a heading is the thing you
+                            * scan. So it says so either way, and counts rather than merely
+                            * existing, because "one of these is waiting" and "four of them are"
+                            * are different sizes of problem. */}
+                          {group.waiting > 0 ? (
                             <span
-                              className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
-                              title="Still working in here"
-                            />
+                              className="bg-kith/15 text-kith flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums"
+                              title={`${group.waiting} waiting for your answer`}
+                            >
+                              <span className="bg-kith size-1.5 animate-pulse rounded-full" />
+                              {group.waiting}
+                            </span>
+                          ) : null}
+                          {group.working > 0 ? (
+                            <span
+                              className="bg-roam/15 text-roam flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular-nums"
+                              title={`${group.working} still working`}
+                            >
+                              <span className="bg-roam size-1.5 animate-pulse rounded-full" />
+                              {group.working}
+                            </span>
                           ) : null}
                         </button>
                       </ItemMenu>
@@ -545,10 +565,25 @@ export function HistoryPanel({
                               >
                                 {item.lastSaid || item.title}
                               </span>
-                              {/* He carries on by himself in a session you have left. Nothing
-                                said which ones, so a conversation working away in the background
-                                looked exactly like one that had finished. */}
-                              {item.working ? (
+                              {/* Two states a row can be in that its text cannot say.
+                                *
+                                * `waiting` first, and not only for tidiness: a conversation that is
+                                * working needs nothing from you and one that is waiting needs only
+                                * you, so when a turn has parked on a question the answer is the
+                                * whole story and "still working" is the wrong word for it. Amber
+                                * because that is his colour when he is *not* running — he is
+                                * standing there — against the green of work in progress.
+                                *
+                                * Both were unreachable until the state behind them was real:
+                                * `working` was read from a database column that does not exist, so
+                                * this dot could never light, and `waiting` had no representation
+                                * outside the conversation at all. */}
+                              {item.waiting ? (
+                                <span
+                                  className="bg-kith mt-1.5 size-1.5 shrink-0 animate-pulse rounded-full"
+                                  title="Waiting for your answer"
+                                />
+                              ) : item.working ? (
                                 <span
                                   className="bg-roam mt-1.5 size-1.5 shrink-0 animate-pulse rounded-full"
                                   title="Still working in this conversation"
@@ -612,6 +647,11 @@ interface Group {
   /** Shown beside the name when the project is not active — being bound to a closed one is
    *  *why* nothing is happening in these sessions, which is the thing worth knowing. */
   status?: string;
+  /** How many conversations in here have a turn running. */
+  working: number;
+  /** How many are blocked on an answer from you. Counted apart because they are a different
+   *  request: one is progress you can ignore, the other is progress that has stopped for you. */
+  waiting: number;
   /** Done, paused, archived. Sorted to the bottom and rendered quietly: four finished projects
    *  were each taking a full row above twenty-three live conversations. */
   finished: boolean;
@@ -673,11 +713,19 @@ function groupByProject(
         status:
           project && project.status !== "active" ? project.status : undefined,
         finished: Boolean(project && project.status !== "active"),
+        working: 0,
+        waiting: 0,
         items: [],
       };
       groups.set(key, group);
     }
     group.items.push(item);
+  }
+  // Counted here rather than in the heading, so the numbers exist whether or not that section
+  // is being rendered open.
+  for (const group of groups.values()) {
+    group.working = group.items.filter((one) => one.working).length;
+    group.waiting = group.items.filter((one) => one.waiting).length;
   }
   // Insertion order inside each band is already most-recently-active first, because `items`
   // arrives newest first — so the project you touched last is at the top of its band without

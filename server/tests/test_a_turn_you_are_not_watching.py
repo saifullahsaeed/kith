@@ -132,6 +132,52 @@ class TestTheListingSaysWhichRowIsAlive:
         assert mine["working"] is False
 
 
+class TestWhatTheRowsSay:
+    def test_a_conversation_blocked_on_a_question_is_waiting(self, db):
+        """The state the panel had no way to show. A parked question announced itself once, as a
+        badge and a notification, and then nothing — so a card you scrolled past is a turn sitting
+        there for its full deadline looking hung."""
+        from kith.services import conversations, questions
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        questions._OPEN[id] = questions.Question(id="q1", conversation_id=id, asked=[])
+        try:
+            mine = next(row for row in conversations.recent(db, 10) if row["id"] == id)
+            assert mine["waiting"] is True
+            assert mine["working"] is False
+        finally:
+            questions._OPEN.pop(id, None)
+
+    def test_answered_is_no_longer_waiting(self, db):
+        from kith.services import conversations, questions
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        question = questions.Question(id="q1", conversation_id=id, asked=[])
+        questions._OPEN[id] = question
+        try:
+            question.replies = []  # answered
+            mine = next(row for row in conversations.recent(db, 10) if row["id"] == id)
+            assert mine["waiting"] is False
+        finally:
+            questions._OPEN.pop(id, None)
+
+    def test_working_and_waiting_are_different_questions(self, db):
+        """One needs nothing from you; the other needs only you. A row that conflated them would
+        put "still working" on a turn that has stopped and is asking."""
+        from kith.services import conversations
+
+        started = conversations.start(db, "hello")
+        id = str(started["id"])
+        turn = live_turns.begin(id)
+        try:
+            mine = next(row for row in conversations.recent(db, 10) if row["id"] == id)
+            assert (mine["working"], mine["waiting"]) == (True, False)
+        finally:
+            live_turns.finish(turn)
+
+
 class TestSayingSo:
     def test_beginning_a_turn_publishes(self):
         """What makes the header current without asking. Both directions matter: the interface

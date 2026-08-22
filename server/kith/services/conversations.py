@@ -37,6 +37,7 @@ from typing import Any
 
 from kith.infra.db import repositories as repo
 from kith.kernel import live_turns
+from kith.services import questions
 
 #: Cap on a title. Long enough to recognise a conversation, short enough for a sidebar.
 TITLE_CHARS = 60
@@ -74,6 +75,9 @@ class Conversation:
     #: two projects at once possible: you switch sessions and the work switches with you.
     project_id: int | None = None
     working: bool = False
+    #: Blocked on an answer from you. The more actionable of the two: working needs nothing from
+    #: you, waiting needs only you.
+    waiting: bool = False
 
     def public(self) -> dict:
         return {
@@ -87,6 +91,7 @@ class Conversation:
             "transcript": str(transcript_path(self.id)),
             "projectId": self.project_id,
             "working": self.working,
+            "waiting": self.waiting,
         }
 
 
@@ -136,8 +141,11 @@ def recent(agent_db: Path, limit: int = 50) -> list[dict]:
     # never light up. It is not a column because it is not a fact about a row; it is what is
     # happening in memory this second, which only `live_turns` knows.
     live = set(live_turns.live())
+    # And which are blocked on you, which is the one worth crossing the room for.
+    blocked = set(questions.waiting())
     for row in rows:
         row["working"] = str(row.get("id") or "") in live
+        row["waiting"] = str(row.get("id") or "") in blocked
         if row.get("last_said") or not int(row.get("messages") or 0):
             continue
         said = _last_said(transcript_path(str(row.get("id") or "")))
@@ -765,6 +773,7 @@ def _to_public(row: dict) -> dict:
         last_said=str(row.get("last_said") or ""),
         project_id=int(row["project_id"]) if row.get("project_id") else None,
         working=bool(row.get("working")),
+        waiting=bool(row.get("waiting")),
     ).public()
 
 

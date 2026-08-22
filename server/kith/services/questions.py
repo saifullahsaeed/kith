@@ -197,6 +197,19 @@ def _tell_them(conversation_id: str, asked: list[dict]) -> None:
         pass
 
 
+def waiting() -> list[str]:
+    """Which conversations are blocked on an answer from the person.
+
+    The counterpart to `live_turns.live()`, and the more urgent of the two: a conversation that is
+    working needs nothing from you, and one that is waiting needs only you. Until now the
+    difference was invisible from outside the conversation — a parked question announced itself as
+    a badge and a notification when it was asked, and then nothing, so a card you scrolled past is
+    a turn that sits there for its full fifteen-minute deadline looking hung.
+    """
+    with _LOCK:
+        return [id for id, question in _OPEN.items() if question.replies is None]
+
+
 def open_question(conversation_id: str) -> dict | None:
     """What this conversation is waiting to be asked, if anything.
 
