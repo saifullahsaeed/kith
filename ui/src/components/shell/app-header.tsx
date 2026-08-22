@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
  * now), then his inbox, work, panel, and settings. */
 export function AppHeader({
   working,
+  elsewhere = [],
+  onGoToWorking,
   status,
   model,
   effort = "",
@@ -43,6 +45,10 @@ export function AppHeader({
   onOpenWork: () => void;
   onOpenPanel: () => void;
   onOpenSettings: () => void;
+  /** Conversations other than this one with a turn running. */
+  elsewhere?: string[];
+  /** Go to the one that is working, or open the list when several are. */
+  onGoToWorking?: (conversationId: string) => void;
 }) {
   const doing = cleanStatus(status);
 
@@ -89,6 +95,31 @@ export function AppHeader({
       ) : null}
 
       <PresenceOrb working={working} idle={!working} size={11} />
+      {/* Work carrying on in a chat you are not looking at.
+          It had no representation here at all — the only sign was a 6px dot on a row inside the
+          conversations panel, which you had to have open to see, so a turn running somewhere else
+          was indistinguishable from nothing happening. This is the smallest honest thing: a count,
+          the same amber as him, and a way to get there. Absent entirely when nothing is running,
+          because a control that is usually greyed out is furniture. */}
+      {elsewhere.length > 0 ? (
+        <TooltipIconButton
+          tooltip={
+            elsewhere.length === 1
+              ? "Working in another conversation — go to it"
+              : `Working in ${elsewhere.length} other conversations`
+          }
+          side="bottom"
+          variant="ghost"
+          size="icon"
+          className="text-roam hover:bg-accent/60 size-7 shrink-0"
+          onClick={() => onGoToWorking?.(elsewhere.length === 1 ? (elsewhere[0] ?? "") : "")}
+        >
+          <span className="relative flex items-center justify-center">
+            <span className="bg-roam absolute size-4 animate-ping rounded-full opacity-20" />
+            <span className="font-mono text-[11px] tabular-nums">{elsewhere.length}</span>
+          </span>
+        </TooltipIconButton>
+      ) : null}
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="font-medium tracking-tight">Kith</span>
         <span className="truncate font-mono text-[11px] tracking-wide">

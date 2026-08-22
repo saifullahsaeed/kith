@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AssistantRuntimeProvider,
   useLocalRuntime,
@@ -24,6 +25,7 @@ import { useServerEvent } from "@/hooks/use-live";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
+import { keys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import {
   parseLocation,
@@ -37,6 +39,7 @@ import {
   createBackendAdapter,
   resumeTurn,
   fetchConversation,
+  fetchLiveTurns,
   setConversationProject,
   USAGE_PART,
   type ContextLedger,
@@ -98,11 +101,19 @@ export function Workspace({
   // Which conversation the chat is in. Held in a ref as well as state: the adapter reads
   // it fresh on every run, and a resumed conversation must not rebuild the runtime while a
   // stream is open.
+  const cache = useQueryClient();
   const [conversationId, setConversationId] = useState("");
   const conversationRef = useRef("");
   conversationRef.current = conversationId;
-  // Messages to seed the thread with when resuming. Bumping `threadKey` remounts the
-  // runtime, which is the only way to replace a local runtime's messages wholesale.
+  /* Messages to seed the thread with when resuming.
+   *
+   * This used to be paired with a `threadKey` bump on the `AssistantRuntimeProvider`, on the
+   * stated grounds that remounting was "the only way to replace a local runtime's messages
+   * wholesale". Half of that was true: `useLocalRuntime` does `useState(() => new
+   * LocalRuntimeCore(opt, initialMessages))`, so `initialMessages` is read once at construction
+   * and never again. But the runtime exposes `thread.reset(messages)` for exactly this, and using
+   * it means a conversation switch no longer destroys and rebuilds the whole thread — which is
+   * what made switching feel like a page load, dropped the composer draft, and reset the scroll. */
   const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
   /* The whole conversation as fetched, and how much of its tail is actually mounted.
    *
@@ -141,7 +152,6 @@ export function Workspace({
     shift: number;
     offset: number;
   } | null>(null);
-  const [threadKey, setThreadKey] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
   // What this session is working on. Held here rather than fetched inside the bar because
   // it changes from two directions — you set it, and so does he, by starting a project or
@@ -210,7 +220,34 @@ export function Workspace({
     });
   }, [conversationId, runtime]);
 
-  useEffect(rejoin, [rejoin, threadKey]);
+  /* Push the messages into the thread that is already mounted.
+   *
+   * The whole of what `threadKey` used to do, without the teardown. `cancelRun` first, and it is
+   * not tidiness: the runtime is shared across conversations, so a stream still being read when
+   * the messages are swapped would append the conversation you *left* into the one you just
+   * opened. Cancelling stops this window reading. It no longer stops the turn — see the note in
+   * `lib/backend/adapter.ts` — which is the point: the work carries on, and `rejoin` below picks
+   * it up again when you come back.
+   */
+  useEffect(() => {
+    if (runtime.thread.getState().isRunning) runtime.thread.cancelRun();
+    runtime.thread.reset(resumed);
+  }, [runtime, resumed]);
+
+  /* And the composer goes with the conversation.
+   *
+   * Not smoothness — correctness. The remount used to clear the draft as a side effect of
+   * destroying everything; without it, half a sentence typed in one chat follows you into the next
+   * one and looks like something you wrote there. Per-conversation drafts would be better than
+   * either, and are a feature rather than a fix: this is the behaviour that was already intended.
+   *
+   * Keyed on the conversation and not on `resumed`, so widening the window with "load earlier"
+   * leaves what you were typing alone. */
+  useEffect(() => {
+    runtime.thread.composer.setText("");
+  }, [runtime, conversationId]);
+
+  useEffect(rejoin, [rejoin]);
 
   /* And again whenever a turn *starts* in this conversation, which is the half that was missing.
      The effect above only fires when you open a conversation, so a turn the server began on its own
@@ -225,9 +262,20 @@ export function Workspace({
   // stayed imperative, and deliberately so.
   useServerEvent("turn", rejoin, conversationId);
 
-  const openConversation = useCallback(async (id: string) => {
-    const detail = await fetchConversation(id).catch(() => null);
-    if (!detail) return;
+  const openConversation = useCallback(
+    async (id: string) => {
+      /* Through the cache, so going back to a conversation you were just in is instant.
+       *
+       * This awaited a fresh `fetchConversation` every time, which meant a click on a row did
+       * nothing at all until the round trip came back — and switching back and forth between two
+       * chats paid for the same transcript over and over. `fetchQuery` hands back what is already
+       * held when it is still fresh and fetches when it is not; a `turn` event invalidates
+       * `["conversation"]`, so one whose turn finished while you were away is refetched rather
+       * than restored without its reply. */
+      const detail = await cache
+        .fetchQuery({ queryKey: keys.conversation(id), queryFn: () => fetchConversation(id) })
+        .catch(() => null);
+      if (!detail) return;
     // Whatever project was picked for a chat that never got typed into, let it go. Without this,
     // "New chat here" followed by opening an existing conversation re-files *that* conversation
     // under the project — the effect below cannot tell the id it is handed apart from the one a
@@ -237,18 +285,16 @@ export function Workspace({
     setProjectId(detail.projectId ?? null);
     setTimeline(detail.timeline);
     setShown(WINDOW);
-    setResumed(toThreadMessages(detail.timeline.slice(-WINDOW)));
-    setThreadKey((n) => n + 1);
-    remember(id);
-  }, []);
+      setResumed(toThreadMessages(detail.timeline.slice(-WINDOW)));
+      remember(id);
+    },
+    [cache],
+  );
 
-  /* Widen the window by another page and rebuild the thread.
+  /* Widen the window by another page.
    *
-   * A remount (`threadKey`) rather than a prepend, because `useLocalRuntime` reads
-   * `initialMessages` once — prepending is exactly what it cannot do, and working around that
-   * properly means moving to `useExternalStoreRuntime`. Acceptable here only because this is an
-   * explicit click on a conversation you are already looking at, not something that happens
-   * while you scroll. No refetch: the whole timeline is already in hand.
+   * `reset` with the longer list rather than a prepend, because a local runtime has no prepend —
+   * see the note on `resumed`. No refetch: the whole timeline is already in hand.
    */
   const loadEarlier = useCallback(() => {
     const next = Math.min(shown + WINDOW, timeline.length);
@@ -279,7 +325,6 @@ export function Workspace({
     }
     setShown(next);
     setResumed(grown);
-    setThreadKey((n) => n + 1);
   }, [shown, timeline]);
 
   /* Watch the thread's own scroll box: whether you are near the top, and putting you back where
@@ -357,7 +402,7 @@ export function Workspace({
         window.removeEventListener(event, stop);
       }
     };
-  }, [threadKey, conversationId]);
+  }, [conversationId, resumed]);
 
   /* A project chosen for a conversation that does not exist yet.
    *
@@ -375,7 +420,6 @@ export function Workspace({
     setTimeline([]);
     setShown(WINDOW);
     setResumed([]);
-    setThreadKey((n) => n + 1);
     remember("");
   }, []);
 
@@ -549,12 +593,25 @@ export function Workspace({
     };
   }, [navigate]);
 
-  // Nothing works on its own, so nothing is mid-work between turns. The green wash and the
-  // session bar's "working" state both wait on the reliability work, which gives them one
-  // honest meaning: a session is busy if and only if a turn is live in it. Until then they
-  // are off rather than lying — see docs/superpowers/specs/2026-08-08-remove-the-self-
-  // directed-loop-design.md.
-  const working = false;
+  /* Whether he is working, and where — which this could not honestly say until now.
+   *
+   * It was `const working = false`, with a comment explaining that the green wash and the session
+   * bar were switched off rather than lying, waiting on "the reliability work, which gives them one
+   * honest meaning: a session is busy if and only if a turn is live in it". That meaning exists now:
+   * `live_turns.live()` is the set of conversations with a turn actually running, `turn` events
+   * invalidate it the moment one starts or finishes, and the stream those events arrive on is
+   * resumable — so a missed one costs a beat rather than a wrong screen.
+   *
+   * Both halves are wanted and they are different. `working` is about the conversation in front of
+   * you, and drives the wash and the orb. `elsewhere` is the one this app was missing entirely: a
+   * turn carrying on in a chat you are not looking at, which until now announced itself only as a
+   * 6px dot inside a panel you had to have open to see. */
+  const { data: live = [] } = useQuery({
+    queryKey: keys.liveTurns(),
+    queryFn: fetchLiveTurns,
+  });
+  const working = conversationId !== "" && live.includes(conversationId);
+  const elsewhere = live.filter((id) => id !== conversationId);
   // He adopts a project by working on one, so what the session is bound to can change
   // part-way through a turn. One re-read per completed step or turn, which is the cheapest
   // signal that anything could have changed at all.
@@ -567,7 +624,10 @@ export function Workspace({
 
   return (
     <TooltipProvider>
-      <AssistantRuntimeProvider key={threadKey} runtime={runtime}>
+      {/* No `key` any more. It was bumped on every conversation switch to force a remount, which
+          is what made switching feel like a page load; the messages are replaced with
+          `thread.reset` instead — see the note on `resumed`. */}
+      <AssistantRuntimeProvider runtime={runtime}>
         <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
           {/* Ambient wash — leans green while he works, amber while he's here. */}
           <div
@@ -592,6 +652,13 @@ export function Workspace({
               historyOpen={historyOpen}
               onOpenHistory={() => setHistoryOpen((open) => !open)}
               onNewConversation={() => newConversation()}
+              elsewhere={elsewhere}
+              onGoToWorking={(id) => {
+                // One: go straight to it, which is the whole point of knowing where. Several: open
+                // the list, because picking is the question and the panel is where it is answered.
+                if (id) void openConversation(id);
+                else setHistoryOpen(true);
+              }}
               unread={inbox.unread}
               workOpen={workVisible}
               onOpenInbox={() => {

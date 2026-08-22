@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from kith.infra.db import repositories as repo
+from kith.kernel import live_turns
 
 #: Cap on a title. Long enough to recognise a conversation, short enough for a sidebar.
 TITLE_CHARS = 60
@@ -127,7 +128,16 @@ def recent(agent_db: Path, limit: int = 50) -> list[dict]:
     actually asked — and it is the last line of each file, not the whole of it.
     """
     rows = repo.conversations.recent(agent_db, limit)
+    # Which of these are working right now.
+    #
+    # `working` has been on the public shape all along and nothing ever set it: it was read from
+    # `row.get("working")`, and there is no such column — so the history panel's "still working"
+    # dot, the only sign the app had that a conversation you were not looking at was alive, could
+    # never light up. It is not a column because it is not a fact about a row; it is what is
+    # happening in memory this second, which only `live_turns` knows.
+    live = set(live_turns.live())
     for row in rows:
+        row["working"] = str(row.get("id") or "") in live
         if row.get("last_said") or not int(row.get("messages") or 0):
             continue
         said = _last_said(transcript_path(str(row.get("id") or "")))

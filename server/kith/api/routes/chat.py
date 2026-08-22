@@ -216,6 +216,21 @@ def context_message(conversation_id: str, index: int):
     return jsonify(report.one_message(conversation_id, index, _tool_block_chars()))
 
 
+@api.get("/chat/live")
+@api.doc(
+    summary="Which conversations are working",
+    description="Conversation ids with a turn running right now.",
+)
+def live_conversations():
+    """What lets the interface say he is working, and where.
+
+    Registered above `/chat/<conversation_id>/...` deliberately: Flask matches static rule
+    segments before converters, so `live` cannot be swallowed as a conversation id — but reading
+    the file top to bottom should not require knowing that.
+    """
+    return jsonify({"conversations": live_turns.live()})
+
+
 @api.post("/chat/<conversation_id>/stop")
 @api.doc(
     summary="Stop the turn running in a conversation",

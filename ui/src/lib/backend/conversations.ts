@@ -125,3 +125,22 @@ export async function searchConversations(query: string): Promise<TranscriptHit[
   const body = (await response.json()) as { hits?: TranscriptHit[] };
   return body.hits ?? [];
 }
+
+/**
+ * Which conversations have a turn running right now.
+ *
+ * A turn is live in the server's memory and nowhere else — the transcript only shows it once it is
+ * over — so this is the one question only the server can answer, and the interface spent a long
+ * time not asking it. `workspace.tsx` had `const working = false` with a comment saying the
+ * presence orb and the ambient wash were waiting for one honest meaning of busy. This is it: a
+ * session is busy if and only if a turn is live in it.
+ *
+ * Ids rather than a count, because "something is running" and "*that* conversation is running" are
+ * different sentences and only the second tells you where to go.
+ */
+export async function fetchLiveTurns(): Promise<string[]> {
+  const response = await fetch("/api/chat/live");
+  if (!response.ok) return [];
+  const body = (await response.json()) as { conversations?: string[] };
+  return body.conversations ?? [];
+}

@@ -71,6 +71,24 @@ def current(conversation_id: str) -> LiveTurn | None:
     return None if turn is None or turn.done else turn
 
 
+def live() -> list[str]:
+    """Which conversations have a turn running right now.
+
+    The interface asks because it has nothing else to ask. A turn is live in memory here and
+    nowhere else — the transcript only shows it once it is over — so "is he working, and where" is
+    a question only this module can answer, and the app spent a long time not asking: the presence
+    orb and the ambient wash were hardcoded off, with a comment saying they were waiting for one
+    honest meaning of busy. This is that meaning: a session is busy if and only if a turn is live
+    in it.
+
+    A list of ids rather than a count, because "something is running" and "*that* conversation is
+    running" are different sentences and the second is the useful one — it is what lets the header
+    say which chat to go back to.
+    """
+    with _REGISTRY:
+        return [id for id, turn in _LIVE.items() if not turn.done]
+
+
 def publish(turn: LiveTurn, line: str) -> None:
     """Record one line and hand it to everyone watching."""
     with turn.lock:

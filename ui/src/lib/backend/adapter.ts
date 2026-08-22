@@ -149,26 +149,27 @@ export function createBackendAdapter(conversation?: {
         ...(conversation?.get() ? { conversationId: conversation.get() } : {}),
       });
 
-      /* Stopping is now said, not inferred.
+      /* Stopping is said, and it is not said from here.
        *
-       * It used to be inferred: aborting the fetch hung up, and the turn died because the
-       * server-side generator stopped being advanced. That is exactly what also killed a turn
-       * when you switched conversations — the same closed socket, two completely different
-       * intentions — so the turn no longer ends when the connection does. Which means Stop has
-       * to say so, or it would quietly do nothing.
+       * There was a `POST /api/chat/<id>/stop` on this signal's `abort`, and its own comment
+       * described the bug it was meant to fix: "aborting the fetch hung up, and the turn died…
+       * That is exactly what also killed a turn when you switched conversations — the same closed
+       * socket, two completely different intentions." The fix was to make stopping explicit. Then
+       * it was hung on `abort`, which is not a statement of intent — it fires for a person pressing
+       * Stop, for a view being torn down, for a component unmounting, for a switch. So the bug came
+       * straight back through a different door: leaving a conversation ended the work in it.
        *
-       * Fire-and-forget: this is a best-effort request on the way out, and there is nothing
-       * useful to do if it fails. No conversation id yet (a brand-new chat aborted before the
-       * server named it) means there is no turn to stop.
+       * An abort means only "this reader is going away". The turn lives on the server, on its own
+       * thread, and outliving its reader is the entire point — `live_turns` keeps everything it says
+       * so a later reader gets the backlog and then the rest. The Stop button posts `/stop` itself
+       * (see thread.tsx), which is where the intent actually is, and `/stop` as a slash command has
+       * always done the same.
+       *
+       * The trade, stated: a send while a turn is running would abort this run without ending the
+       * server's, leaving two turns racing for one live-turn slot. Both routes in are already
+       * closed — Enter steers into the running turn and ⌘⏎ waits for it — and the ordinary paths
+       * out of that race were always worse than losing a turn to a switch.
        */
-      abortSignal?.addEventListener(
-        "abort",
-        () => {
-          const id = conversation?.get();
-          if (id) void fetch(`/api/chat/${id}/stop`, { method: "POST" }).catch(() => {});
-        },
-        { once: true },
-      );
 
       /* Getting the turn *started*, with retries. See `RETRIES` for what is and is not retried,
        * and why this stops the moment the response body begins. */

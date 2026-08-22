@@ -29,7 +29,7 @@ import { useConfirm } from "@/components/ui/confirm";
 import { PresenceOrb } from "@/components/shell/presence";
 import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
-import { steerTurn } from "@/lib/commands";
+import { steerTurn, stopTurn } from "@/lib/commands";
 import { currentConversation, dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
 import { time, when } from "@/lib/dates";
@@ -552,7 +552,7 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
             drops silently) moved into `paste.ts` along with the rest of the rules. */}
         <RichComposerInput placeholder="say something to Kith…" autoFocus />
         </ComposerPrimitive.Unstable_TriggerPopoverRoot>
-        <ComposerAction />
+        <ComposerAction conversationId={conversationId} />
       </div>
       {/* A command has no reply to appear in, so it says what it did here. Without this,
           `/fold` was indistinguishable from a keystroke that did nothing. */}
@@ -836,7 +836,7 @@ const SteerButton: FC = () => {
   );
 };
 
-const ComposerAction: FC = () => {
+const ComposerAction: FC<{ conversationId: string }> = ({ conversationId }) => {
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-end">
       <div className="flex items-center gap-1.5">
@@ -885,6 +885,11 @@ const ComposerAction: FC = () => {
          * the run and loses what it found; sending steers, and keeps every tool result so far.
          * You get whichever one your input is already asking for. */}
         <AuiIf condition={(s) => s.thread.isRunning && s.composer.isEmpty}>
+          {/* Stop says so, rather than being inferred from a closed connection.
+              `Cancel` stops this window reading; the `/stop` it posts is what ends the turn on the
+              server. Two actions because they are two different things — which is the distinction
+              the adapter used to collapse, so that leaving a conversation killed the work in it.
+              Order does not matter: neither depends on the other. */}
           <ComposerPrimitive.Cancel asChild>
             <TooltipIconButton
               tooltip="Stop — ends the turn and loses what it found"
@@ -894,6 +899,9 @@ const ComposerAction: FC = () => {
               size="icon"
               className="aui-composer-cancel size-7 rounded-full"
               aria-label="Stop generating"
+              onClick={() => {
+                if (conversationId) void stopTurn(conversationId);
+              }}
             >
               <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
             </TooltipIconButton>

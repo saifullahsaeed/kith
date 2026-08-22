@@ -47,6 +47,10 @@ export const keys = {
   question: (conversationId: string) => ["question", conversationId] as const,
   /** Long-running work started from this conversation. */
   processes: (conversationId: string) => ["processes", conversationId] as const,
+  /** One conversation's stored messages — what opening it needs. */
+  conversation: (id: string) => ["conversation", id] as const,
+  /** Which conversations have a turn running right now. */
+  liveTurns: () => ["turns", "live"] as const,
   /** The task this conversation is working through. */
   workingOn: (conversationId: string) => ["workingOn", conversationId] as const,
   /** One folder's listing in his workspace. */
@@ -71,7 +75,15 @@ type Prefix = readonly (string | number | null)[];
  */
 export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   // A turn starting or finishing changes what he is doing and what he is working through.
-  turn: [["activity", "status"], ["workingOn"]],
+  turn: [
+    ["activity", "status"],
+    ["workingOn"],
+    ["turns", "live"],
+    ["conversations"],
+    // The stored transcript grows by a turn, so a conversation opened from cache after one
+    // finished would be missing the reply.
+    ["conversation"],
+  ],
   // Tasks are on the board, in the roadmap, in the detail panel and in the working-on card.
   task: [["brain"], ["task"], ["roadmap"], ["workingOn"], ["timeline"]],
   // A project's name and status reach the board, its roadmap, and the history panel's groups.
