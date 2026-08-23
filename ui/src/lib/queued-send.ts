@@ -49,10 +49,15 @@ export function currentConversation(): string {
 /**
  * Whether a ⌘⏎ message is sitting here waiting for the turn to end, and who to tell.
  *
- * The wait happens inside the adapter (`if (takeQueuedFlag()) await waitUntilIdle(...)`), which
- * blocks *before* the fetch — so for up to twenty minutes assistant-ui shows your message in the
- * thread, shows the turn as running, and has sent nothing. That is indistinguishable from a
- * message that was sent and got no reply, which is the one reading it must not have.
+ * The wait happens in `holdUntilIdle`, which the composer calls directly — so for up to twenty
+ * minutes nothing has been sent, and without saying so that is indistinguishable from a message
+ * that was sent and got no reply, which is the one reading it must not have.
+ *
+ * It went through the adapter once, behind a flag the composer set on ⌘⏎ and the adapter read
+ * before its fetch. That flag outlived its own mechanism: `queueNextSend` lost its last caller
+ * when the composer started calling `holdUntilIdle` itself, so the adapter went on asking a
+ * question whose answer could no longer be yes. Three comments still described it as the live
+ * path.
  *
  * Published here rather than returned, because the composer that needs to say "waiting" and the
  * adapter that is doing the waiting are separated by the assistant-ui runtime and cannot reach
@@ -82,9 +87,9 @@ export function isHolding(): boolean {
  *
  * **The flag-and-wait version did not work, and could not have.** It set a flag and then called
  * the runtime's `send`, whose first line is `abortController.abort()` — so the turn it was
- * meant to wait behind was killed by the very act of queueing behind it. `waitUntilIdle` then
- * asked whether anything was running, was told no (correctly — it had just been stopped), and
- * sent immediately. ⌘⏎ was a Stop with extra steps. The adapter's own comment says the abort
+ * meant to wait behind was killed by the very act of queueing behind it. The wait then asked
+ * whether anything was running, was told no (correctly — it had just been stopped), and sent
+ * immediately. ⌘⏎ was a Stop with extra steps. The adapter's own comment says the abort
  * happens before it gets there; the conclusion drawn from it was the wrong one.
  *
  * So the wait happens *before* the runtime is touched, in the keystroke, exactly as steering
@@ -135,22 +140,6 @@ export function dropHeld(): void {
   setHolding(false);
 }
 
-/** Set by ⌘⏎, read once by the send it belongs to. */
-let queuedNext = false;
-
-/** Called by the composer when ⌘⏎ is used. */
-export function queueNextSend(): void {
-  queuedNext = true;
-}
-
-/** Read *and clear*. The flag belongs to one send; a stale one would silently make the next
- *  ordinary message wait too. */
-export function takeQueuedFlag(): boolean {
-  const was = queuedNext;
-  queuedNext = false;
-  return was;
-}
-
 /** How often to ask whether the turn has ended. Two seconds is under the round time of
  *  anything real, so the wait ends within a round of the turn actually finishing, and it is
  *  slow enough that a ten-minute turn costs a few hundred cheap requests rather than thousands. */
@@ -161,24 +150,9 @@ const POLL_MS = 2000;
  *  sending it into a conversation that is still busy. */
 const GIVE_UP_MS = 20 * 60 * 1000;
 
-/**
- * Resolve once no turn is running in this conversation.
- *
- * Uses `/attach`, which answers 204 when there is nothing to watch — a probe that already
- * exists and costs the server nothing, rather than a status endpoint invented for this.
- */
-export async function waitUntilIdle(conversationId: string): Promise<void> {
-  if (!conversationId) return;
-  setHolding(true);
-  try {
-    await pollUntilIdle(conversationId);
-  } finally {
-    // Cleared on every path — a give-up, a thrown fetch, an unmount. A composer stuck saying
-    // "waiting to send" about a message that already went is the same lie in the other
-    // direction.
-    setHolding(false);
-  }
-}
+/* `waitUntilIdle` was here — the same body as `holdUntilIdle` without the held text. Its only
+ * caller was the adapter branch behind the dead `queuedNext` flag, so removing that left it
+ * unreachable. `pollUntilIdle` below is the part both of them were really made of. */
 
 async function pollUntilIdle(conversationId: string): Promise<void> {
   const until = Date.now() + GIVE_UP_MS;

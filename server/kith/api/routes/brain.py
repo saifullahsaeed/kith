@@ -39,6 +39,22 @@ def projects():
     return jsonify({"projects": repo.projects.list_projects(AGENT_DB_PATH)})
 
 
+@api.get("/schedules")
+@api.doc(
+    summary="Just the standing jobs",
+    description="What repeats, when it next fires, and which chat it wakes.",
+)
+def schedules():
+    """The same cheap answer as `/projects`, for the Work panel.
+
+    The Standing section reads `schedules` — an array that is usually empty and here holds one row
+    — and was reading it out of `/api/brain`, which is 303KB of journal and tasks. That panel is
+    open the whole time, so it held the whole database in cache and refetched it on every `task`
+    change, to redraw a countdown.
+    """
+    return jsonify({"schedules": repo.schedules.list_schedules(AGENT_DB_PATH)})
+
+
 @api.get("/brain/timeline")
 @api.doc(summary="Kith's lifetime", description="Everything that has happened, merged newest-first.")
 def brain_timeline():

@@ -17,7 +17,15 @@ import {
   type Pick as ModelPick,
   type Tier,
 } from "@/lib/backend";
-import { RANKINGS, rank, turnCost, value } from "@/lib/models";
+import {
+  applyFilters,
+  capabilitiesOf,
+  FILTERS,
+  RANKINGS,
+  rank,
+  turnCost,
+  value,
+} from "@/lib/models";
 import { cn } from "@/lib/utils";
 
 /** A catalogue can run to hundreds of entries. Rendering them all costs a visible
@@ -61,6 +69,10 @@ export function ModelStep({
 }) {
   const [query, setQuery] = useState("");
   const [ranking, setRanking] = useState(RANKINGS[0]);
+  /* Requirements, not an axis — see `FILTERS`. Held as a set because they AND together: each one
+   * you add is another thing the model must do, which is the whole reason they are worth having
+   * beside a ranking rather than folded into it. */
+  const [required, setRequired] = useState<Set<string>>(() => new Set());
   const [opened, setOpened] = useState("");
 
   const picks = useMemo(
@@ -73,15 +85,25 @@ export function ModelStep({
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
+    // Requirements first, then the words, then the order. Filtering before searching means the
+    // "N more" count below is a count of things you could actually use.
+    const capable = applyFilters(models, required);
     const pool = needle
-      ? models.filter(
+      ? capable.filter(
           (entry) =>
             entry.id.toLowerCase().includes(needle) || entry.name.toLowerCase().includes(needle),
         )
-      : models;
+      : capable;
     const ordered = rank(pool, ranking);
-    return { rows: ordered.slice(0, MAX_ROWS), total: ordered.length };
-  }, [query, models, ranking]);
+    return { rows: ordered.slice(0, MAX_ROWS), total: ordered.length, capable: capable.length };
+  }, [query, models, ranking, required]);
+
+  const toggle = (key: string) =>
+    setRequired((was) => {
+      const next = new Set(was);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
 
   // Only where the provider publishes measurements. On a plain OpenAI-compatible
   // endpoint there is nothing to rank by, and a leaderboard of dashes is worse than the
@@ -145,6 +167,48 @@ export function ModelStep({
           </>
         ) : null}
 
+        {/* Requirements, which chain. Separate row and separate shape from Rank by on purpose:
+            one of those is a choice between axes and only one can be true, these are conditions
+            and any number can. Making them look alike is how a person learns the wrong thing
+            about which are exclusive. */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-1">
+          <span className="text-muted-foreground/60 me-1 text-[11px]">Must</span>
+          {FILTERS.map((one) => {
+            const on = required.has(one.key);
+            return (
+              <button
+                key={one.key}
+                type="button"
+                title={one.hint}
+                aria-pressed={on}
+                onClick={() => toggle(one.key)}
+                className={cn(
+                  "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                  on
+                    ? "border-kith/40 bg-kith-soft text-kith font-medium"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent/60 border-transparent",
+                )}
+              >
+                {one.label}
+              </button>
+            );
+          })}
+          {required.size > 0 ? (
+            <button
+              type="button"
+              onClick={() => setRequired(new Set())}
+              className="text-muted-foreground/60 hover:text-foreground ms-1 text-[11px] underline underline-offset-2"
+            >
+              clear
+            </button>
+          ) : null}
+        </div>
+        {required.size > 0 ? (
+          <p className="text-muted-foreground/70 mt-1.5 text-[11px]">
+            {filtered.capable} of {models.length} models do all of that.
+          </p>
+        ) : null}
+
         <div className="mt-2 overflow-hidden rounded-md border">
           {measured ? (
             <div className="text-muted-foreground/50 bg-muted/40 flex items-center gap-3 border-b px-3 py-1.5 text-[10px] font-medium tracking-wide uppercase">
@@ -163,7 +227,11 @@ export function ModelStep({
           <div className="max-h-[32rem] overflow-y-auto">
             {filtered.rows.length === 0 ? (
               <p className="text-muted-foreground p-4 text-center text-sm">
-                Nothing matches “{query}”.
+                {required.size > 0 && query
+                  ? `Nothing matching “${query}” does all of that.`
+                  : required.size > 0
+                    ? "No model does all of that."
+                    : `Nothing matches “${query}”.`}
               </p>
             ) : (
               filtered.rows.map((option, index) => (
@@ -363,12 +431,34 @@ function Row({
             </span>
             <span className="text-muted-foreground/50 flex items-center gap-1.5 text-[10px]">
               <span className="truncate font-mono">{option.id}</span>
+              {/* What it can be given and what it can do, on the row rather than one model at a
+                  time behind the chevron. The catalogue has carried all of this since before the
+                  picker was written; comparing two models on it meant opening both. */}
               {option.supportsTools === false ? (
-                <span className="text-destructive shrink-0">no tools</span>
+                <span className="text-destructive shrink-0" title="Cannot call tools — Kith is a loop around tool calls, so this model cannot do the job">
+                  no tools
+                </span>
               ) : null}
-              {option.openWeights ? <span className="shrink-0">open</span> : null}
+              {capabilitiesOf(option)
+                .filter((can) => can !== "tools")
+                .map((can) => (
+                  <span
+                    key={can}
+                    className="border-border/50 text-muted-foreground/60 shrink-0 rounded border px-1 leading-[1.3]"
+                    title={CAN_MEANS[can]}
+                  >
+                    {can}
+                  </span>
+                ))}
+              {option.context ? (
+                <span className="shrink-0 tabular-nums" title="Context window">
+                  {formatContext(option.context)} ctx
+                </span>
+              ) : null}
               {option.retiresOn ? (
-                <span className="shrink-0 text-orange-400">retires {option.retiresOn}</span>
+                <span className="shrink-0 text-orange-400" title="The provider intends to withdraw it on this date">
+                  retires {option.retiresOn}
+                </span>
               ) : null}
             </span>
           </span>
@@ -505,3 +595,12 @@ function shortName(id: string): string {
   const slash = id.indexOf("/");
   return slash === -1 ? id : id.slice(slash + 1);
 }
+
+/** What each capability word means, for the hover. The words are short so a row stays scannable;
+ *  the sentence is here so short does not mean cryptic. */
+const CAN_MEANS: Record<string, string> = {
+  images: "Takes pictures as input — a screenshot, a diagram, a photo",
+  files: "Takes files directly, rather than needing their text pasted in",
+  reasoning: "Has a thinking budget the effort control can actually move",
+  open: "Weights are published, so it can outlive whoever serves it today",
+};

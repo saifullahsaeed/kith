@@ -309,3 +309,11 @@ export async function fetchProjects(): Promise<Project[]> {
   const body = (await response.json()) as { projects?: Project[] };
   return body.projects ?? [];
 }
+
+/** Just the standing jobs. `fetchBrain` is the whole database; the Work panel needs this array. */
+export async function fetchSchedules(): Promise<Schedule[]> {
+  const response = await fetch("/api/schedules");
+  if (!response.ok) throw new Error(`/api/schedules returned ${response.status}`);
+  const body = (await response.json()) as { schedules?: Schedule[] };
+  return body.schedules ?? [];
+}

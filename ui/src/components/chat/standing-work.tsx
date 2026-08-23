@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Repeat } from "lucide-react";
 
 import { useNow } from "@/hooks/use-now";
-import { fetchBrain, type Schedule } from "@/lib/backend/brain";
+import { fetchSchedules, type Schedule } from "@/lib/backend/brain";
 import { keys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 
@@ -25,13 +25,19 @@ import { cn } from "@/lib/utils";
  * is furniture.
  */
 export function StandingWork({ conversationId }: { conversationId?: string }) {
-  const { data: brain } = useQuery({ queryKey: keys.brain(), queryFn: fetchBrain });
+  // `/api/schedules`, not the whole database. This panel is open the whole time, so reading
+  // `brain` held 303KB of journal and tasks in cache and refetched it on every task change to
+  // redraw a countdown — see `fetchSchedules`.
+  const { data: schedules = [] } = useQuery({
+    queryKey: keys.schedules(),
+    queryFn: fetchSchedules,
+  });
 
   // A minute is the finest a schedule can be set to, so a clock any faster than this is spending
   // renders to show the same words. See hooks/use-now.ts on why a clock is not a poll.
   const now = useNow(30_000);
 
-  const standing = (brain?.schedules ?? []).filter(
+  const standing = schedules.filter(
     (one) =>
       one.status === "active" &&
       (!one.conversation_id || one.conversation_id === conversationId),

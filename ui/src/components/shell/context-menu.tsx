@@ -60,6 +60,19 @@ export function ContextMenu() {
 
   useEffect(() => {
     const onContextMenu = (event: MouseEvent) => {
+      /* Somewhere below already claimed this click.
+       *
+       * A Radix `ContextMenuTrigger` calls `preventDefault()` on its own `onContextMenu`, and
+       * React 19 delegates to `#root` — which is *below* `document`, so that handler has already
+       * run and marked the event by the time this one does. Without this check both menus open at
+       * the same coordinates: Radix's, and this one because the card contains an editable field or
+       * because there is a selection somewhere on the page. This one paints on top (`z-index: 100`
+       * against Radix's `z-50`) and is inert, because Radix's modal layer puts `pointer-events:
+       * none` on the body — so the visible menu is the one you cannot click.
+       *
+       * The docstring above already promises this does not happen. It is the first statement in
+       * the handler so that nothing else runs on an event that was never ours. */
+      if (event.defaultPrevented) return;
       const target = editableAncestor(event.target);
       const editable = target !== null;
       const selected = hasRealSelection(target);

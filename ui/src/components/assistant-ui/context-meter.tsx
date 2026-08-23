@@ -1,4 +1,7 @@
 import type { ContextLedger } from "@/lib/backend/types";
+// The one definition. This file kept a private copy of the same 0.8, so the meter could have gone
+// on colouring at a threshold the server had stopped folding at.
+import { FOLDS_AT } from "@/lib/context-groups";
 import { formatCompact, formatTokens } from "@/lib/tokens";
 
 /**
@@ -19,7 +22,7 @@ import { formatCompact, formatTokens } from "@/lib/tokens";
  * once he is folding — three states, matching what is actually about to happen to his memory.
  */
 
-const FOLDS_AT = 0.8;
+
 
 //: Enough distinct steps that adjacent categories separate, without inventing a palette. These
 //: are opacity steps on the foreground colour, so the bar works in either theme without a

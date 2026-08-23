@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, FolderOpen, Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { usePrompt } from "@/components/ui/prompt";
 import { useConfirm } from "@/components/ui/confirm";
 import {
   addPersonaFragment,
@@ -38,6 +39,7 @@ export function PersonaTab() {
   const [selected, setSelected] = useState<string>("");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const prompt = usePrompt();
   const [error, setError] = useState("");
   const confirm = useConfirm();
 
@@ -163,16 +165,15 @@ export function PersonaTab() {
             className="mt-2 w-full"
             disabled={busy}
             onClick={() => {
-              const name = window.prompt(
-                "Name the fragment. The number decides where it lands in the merge.",
-                "50-my-fragment.md",
-              );
-              if (name?.trim()) {
-                void act(
-                  () => addPersonaFragment(name.trim(), "<!-- why this exists -->\n"),
-                  name.trim(),
-                );
-              }
+              void prompt({
+                title: "Name the fragment",
+                description: "The number decides where it lands in the merge.",
+                initial: "50-my-fragment.md",
+                confirmLabel: "Add",
+              }).then((name) => {
+                if (!name) return;
+                void act(() => addPersonaFragment(name, "<!-- why this exists -->\n"), name);
+              });
             }}
           >
             <Plus className="size-3.5" />
@@ -208,10 +209,14 @@ export function PersonaTab() {
                 size="sm"
                 disabled={busy}
                 onClick={() => {
-                  const next = window.prompt("Rename this fragment", current.name);
-                  if (next?.trim() && next.trim() !== current.name) {
-                    void act(() => renamePersonaFragment(current.name, next.trim()), next.trim());
-                  }
+                  void prompt({
+                    title: "Rename this fragment",
+                    initial: current.name,
+                  }).then((next) => {
+                    if (next && next !== current.name) {
+                      void act(() => renamePersonaFragment(current.name, next), next);
+                    }
+                  });
                 }}
               >
                 Rename

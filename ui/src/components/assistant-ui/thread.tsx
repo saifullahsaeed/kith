@@ -718,7 +718,7 @@ const QueuedNotice: FC = () => {
  * the only thing that explained the choice disappeared. ⌘⏎ was undiscoverable by construction.
  *
  * Idle keeps saying ⏎ / ⇧⏎ and nothing else, because ⌘⏎ idle is not a third option: the flag is
- * set, `waitUntilIdle` finds nothing running and returns at once, and the message sends exactly
+ * set, `holdUntilIdle` finds nothing running and returns at once, and the message sends exactly
  * as ⏎ would. Listing "after this" with no *this* would be teaching a key that does nothing.
  */
 const ComposerHint: FC = () => (

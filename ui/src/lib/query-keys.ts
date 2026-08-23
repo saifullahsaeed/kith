@@ -54,6 +54,8 @@ export const keys = {
   processes: (conversationId: string) => ["processes", conversationId] as const,
   /** One conversation's stored messages — what opening it needs. */
   conversation: (id: string) => ["conversation", id] as const,
+  /** Standing jobs only. The Work panel is open the whole time and needs nothing else. */
+  schedules: () => ["schedules"] as const,
   /** Which conversations have a turn running right now. */
   liveTurns: () => ["turns", "live"] as const,
   /** The task this conversation is working through. */
@@ -103,7 +105,7 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   permission: [["permissions"]],
   // A standing job moving its next-fire time. The Work panel counts down to it, so a countdown
   // nobody refreshed would sit on "due" from the moment it rolled over.
-  schedule: [["brain"]],
+  schedule: [["brain"], ["schedules"]],
   // Queued, delivered, or taken back — all three change what the thread is showing.
   steer: [["steers"]],
 };

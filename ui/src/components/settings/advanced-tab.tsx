@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { formatBytes } from "@/lib/bytes";
 import { ChevronDown, FolderOpen, Loader2, RotateCcw, Search, TerminalSquare } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -576,10 +577,3 @@ function Field({
 }
 
 /** Bytes at the coarseness a person reads: nobody wants 1,721,233. */
-function formatBytes(count: number): string {
-  if (!count) return "0 B";
-  if (count < 1024) return `${count} B`;
-  if (count < 1024 * 1024) return `${(count / 1024).toFixed(0)} KB`;
-  if (count < 1024 * 1024 * 1024) return `${(count / 1024 / 1024).toFixed(1)} MB`;
-  return `${(count / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}

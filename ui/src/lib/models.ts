@@ -161,3 +161,115 @@ export function rank(models: ModelOption[], by: Ranking): ModelOption[] {
     })
     .map((entry) => entry.model);
 }
+
+/* ── Filters ──────────────────────────────────────────────────────────────
+ *
+ * Separate from `RANKINGS`, and the distinction is the point. A ranking answers "best by which
+ * measure" and there can only be one at a time; a filter answers "must have this" and they
+ * combine. The picker offered only the first, so "a cheap model that takes images and does tool
+ * calls" was a question you answered by reading 361 rows.
+ *
+ * Every one of these reads a field the catalogue already carries and the panel already showed
+ * one model at a time — so this is not new data, it is the same data asked as a question.
+ * `null` means the provider did not say, and an unknown is never treated as a yes: a filter for
+ * tool support must not hand back a model that merely failed to mention it. */
+
+export interface ModelFilter {
+  key: string;
+  label: string;
+  /** What it means, and why you would want it. Shown on hover. */
+  hint: string;
+  /** Grouped in the bar so mutually-informative ones sit together. */
+  group: "can" | "shape" | "cost";
+  matches: (model: ModelOption) => boolean;
+}
+
+/** Context windows worth drawing a line at, in tokens. */
+const BIG_CONTEXT = 200_000;
+/** Dollars per million input tokens, below which a model is cheap to run all day. */
+const CHEAP_IN = 1;
+
+export const FILTERS: ModelFilter[] = [
+  {
+    key: "tools",
+    label: "Tools",
+    hint: "Calls tools. Kith is a loop around tool calls, so a model without this cannot do the job at all — unknown does not count as yes.",
+    group: "can",
+    matches: (m) => m.supportsTools === true,
+  },
+  {
+    key: "images",
+    label: "Images",
+    hint: "Takes pictures as input — screenshots, diagrams, a photo of a whiteboard.",
+    group: "can",
+    matches: (m) => m.supportsImages,
+  },
+  {
+    key: "files",
+    label: "Files",
+    hint: "Takes files directly, rather than needing their text pasted in.",
+    group: "can",
+    matches: (m) => m.supportsFiles,
+  },
+  {
+    key: "reasoning",
+    label: "Reasoning",
+    hint: "Has a thinking budget an effort setting can actually move. On anything else the Thinking control means nothing.",
+    group: "can",
+    matches: (m) => m.supportsReasoning,
+  },
+  {
+    key: "open",
+    label: "Open weights",
+    hint: "The weights are published, so the model can outlive whoever is serving it today.",
+    group: "shape",
+    matches: (m) => m.openWeights,
+  },
+  {
+    key: "big-context",
+    label: "200K+ context",
+    hint: "A window big enough to hold a long conversation without folding it into notes every turn.",
+    group: "shape",
+    matches: (m) => (m.context ?? 0) >= BIG_CONTEXT,
+  },
+  {
+    key: "staying",
+    label: "Not retiring",
+    hint: "No withdrawal date announced. A model with one will stop answering on a day already in the calendar.",
+    group: "shape",
+    matches: (m) => !m.retiresOn,
+  },
+  {
+    key: "cheap",
+    label: "Under $1/M in",
+    hint: "Cheap enough to leave running. Input price is the one that matters here, because a turn re-sends its whole history every round.",
+    group: "cost",
+    matches: (m) => m.promptPerMTok !== null && m.promptPerMTok < CHEAP_IN,
+  },
+  {
+    key: "cached",
+    label: "Quotes caching",
+    hint: "Publishes a cached-read price. Kith caches every request, so on a warm round most of the prompt bills at that rate — usually a tenth of input.",
+    group: "cost",
+    matches: (m) => m.cacheReadPerMTok !== null,
+  },
+];
+
+/** Everything that passes every chosen filter. AND, not OR: each one you add is another
+ *  requirement, which is what makes them worth chaining. */
+export function applyFilters(models: ModelOption[], chosen: ReadonlySet<string>): ModelOption[] {
+  if (chosen.size === 0) return models;
+  const active = FILTERS.filter((one) => chosen.has(one.key));
+  return models.filter((model) => active.every((one) => one.matches(model)));
+}
+
+/** What a model can be given and what it can do, as short words for a row. */
+export function capabilitiesOf(model: ModelOption): string[] {
+  const out: string[] = [];
+  if (model.supportsTools === true) out.push("tools");
+  if (model.supportsImages) out.push("images");
+  if (model.supportsFiles) out.push("files");
+  if (model.supportsReasoning) out.push("reasoning");
+  if (model.openWeights) out.push("open");
+  return out;
+}

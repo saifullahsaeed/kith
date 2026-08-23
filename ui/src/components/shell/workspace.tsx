@@ -209,13 +209,28 @@ export function Workspace({
      twice. */
   const rejoin = useCallback(() => {
     if (!conversationId) return;
-    void resumeTurn(conversationId).then((stream) => {
-      if (!stream) return;
+    const wanted = conversationId;
+    void resumeTurn(wanted).then((attached) => {
+      if (!attached) return;
+      /* Two reasons to walk away, and both have to close the stream rather than drop it.
+       *
+       * The conversation moved while the fetch was in flight — a switch takes one round trip and
+       * this took another, so by now the thread may hold someone else's messages, and resuming
+       * into it would pour that conversation's turn into this one. Checked against the ref rather
+       * than the captured value, because the ref is what the adapter reads too.
+       *
+       * Or the thread is already streaming, which is the ordinary case: this window started the
+       * turn, `live_turns.begin` published `turn`, and the event came back to us. Reading it twice
+       * would render every token twice.
+       *
+       * Either way `discard()`, not `return`. See `resumeTurn`: the generator has not started, so
+       * letting it go leaves the response body open and a server thread writing into it. */
+      if (conversationRef.current !== wanted) return attached.discard();
       const state = runtime.thread.getState();
-      if (state.isRunning) return;
+      if (state.isRunning) return attached.discard();
       runtime.thread.resumeRun({
         parentId: state.messages.at(-1)?.id ?? null,
-        stream: () => stream,
+        stream: () => attached.stream,
       });
     });
   }, [conversationId, runtime]);
@@ -303,6 +318,9 @@ export function Workspace({
   // stayed imperative, and deliberately so.
   useServerEvent("turn", rejoin, conversationId);
 
+  /** Counts opens, so a slow one cannot land on top of a later fast one. */
+  const opening = useRef(0);
+
   const openConversation = useCallback(
     async (id: string) => {
       /* Through the cache, so going back to a conversation you were just in is instant.
@@ -313,10 +331,14 @@ export function Workspace({
        * held when it is still fresh and fetches when it is not; a `turn` event invalidates
        * `["conversation"]`, so one whose turn finished while you were away is refetched rather
        * than restored without its reply. */
+      /* Which click this was. Two rows clicked quickly are two fetches in flight, and without a
+       * sequence they land in whichever order the network settles them — so the conversation you
+       * end up in is the one that answered fastest, not the one you asked for last. */
+      const mine = ++opening.current;
       const detail = await cache
         .fetchQuery({ queryKey: keys.conversation(id), queryFn: () => fetchConversation(id) })
         .catch(() => null);
-      if (!detail) return;
+      if (!detail || opening.current !== mine) return;
     // Whatever project was picked for a chat that never got typed into, let it go. Without this,
     // "New chat here" followed by opening an existing conversation re-files *that* conversation
     // under the project — the effect below cannot tell the id it is handed apart from the one a
@@ -469,6 +491,11 @@ export function Workspace({
   // gone. Runs once: if the stored conversation has since been deleted, `openConversation`
   // finds nothing and this quietly stays a fresh chat.
   useEffect(() => {
+    // Not when the URL already names one. A notification opens `/chat/<id>`, and restoring the
+    // last conversation alongside it is two opens racing for the same screen — the effect below
+    // asks for the one you were sent to, this one asks for the one you left, and whichever
+    // answers second wins. The route is the more specific instruction, so it takes precedence.
+    if (route.conversationId) return;
     let stored = "";
     try {
       stored = localStorage.getItem(LAST_CONVERSATION) || "";
@@ -476,16 +503,31 @@ export function Workspace({
       /* private mode, or no storage — a fresh chat is a fine answer */
     }
     if (stored) void openConversation(stored);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openConversation]);
 
   // The session's own state, re-read whenever the conversation changes underneath us — a
   // chat started from an empty composer gets its id from the stream, not from us.
   const refreshSession = useCallback(() => {
     if (!conversationId) return;
-    void fetchConversation(conversationId)
+    /* Through the cache, like `openConversation`.
+     *
+     * This is called on every completed step of a turn — `useEffect(refreshSession, [finished])`
+     * below — and it was an uncached `fetchConversation`, so a turn that ran forty tool calls
+     * refetched and re-parsed the whole transcript forty times. Six megabytes of JSONL on the
+     * conversation this was found in, to read one nullable `projectId` off the top of it.
+     *
+     * `fetchQuery` serves it from the cache inside the 60s `staleTime` and dedupes with whatever
+     * `openConversation` already fetched; a `turn` event invalidates the key, so the reading is
+     * still current when it matters. */
+    void cache
+      .fetchQuery({
+        queryKey: keys.conversation(conversationId),
+        queryFn: () => fetchConversation(conversationId),
+      })
       .then((detail) => setProjectId(detail.projectId ?? null))
       .catch(() => {});
-  }, [conversationId]);
+  }, [cache, conversationId]);
 
   useEffect(() => {
     remember(conversationId);

@@ -3,6 +3,7 @@ import { ContextMenu } from "@/components/shell/context-menu";
 import { Onboarding } from "@/components/onboarding/onboarding";
 import { Workspace } from "@/components/shell/workspace";
 import { ConfirmProvider } from "@/components/ui/confirm";
+import { PromptProvider } from "@/components/ui/prompt";
 import { useBackendConfig } from "@/hooks/use-backend-config";
 import { useLiveUpdates } from "@/hooks/use-live";
 import { useSetup } from "@/hooks/use-setup";
@@ -48,8 +49,12 @@ export default function App() {
   return (
     // Every "are you sure?" in the app goes through this instead of window.confirm.
     <ConfirmProvider>
-      <ContextMenu />
-      <Workspace config={config} onSaveConfig={updateConfig} onConnectionSaved={reload} />
+      {/* The other half of what `window.confirm`/`window.prompt` used to do. Electron implements
+          the first and throws on the second, which is why asking for a name needs a real dialog. */}
+      <PromptProvider>
+        <ContextMenu />
+        <Workspace config={config} onSaveConfig={updateConfig} onConnectionSaved={reload} />
+      </PromptProvider>
     </ConfirmProvider>
   );
 }

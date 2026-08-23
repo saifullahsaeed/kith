@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useState, type FC, type ReactNode } from "react";
+import { formatBytes } from "@/lib/bytes";
 import { useThreadRuntime } from "@assistant-ui/react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -831,11 +832,6 @@ const Row: FC<{ value: Record<string, unknown> }> = ({ value }) => {
 };
 
 /** Bytes, as a person would say them. */
-function formatBytes(count: number): string {
-  if (count < 1024) return `${count} B`;
-  if (count < 1024 * 1024) return `${Math.round(count / 1024)} KB`;
-  return `${(count / 1024 / 1024).toFixed(1)} MB`;
-}
 
 /**
  * The result, minus the parts that are bookkeeping rather than news.

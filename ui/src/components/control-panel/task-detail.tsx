@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { formatBytes } from "@/lib/bytes";
 import {
   Lock,
   ArrowLeft,
@@ -803,11 +804,6 @@ function extensionOf(path: string): string {
 }
 
 /** Bytes, in the shortest form that is still honest. */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-}
 
 /** Whether the file has really moved on since it was filed.
  *

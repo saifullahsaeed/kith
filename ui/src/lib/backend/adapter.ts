@@ -8,7 +8,7 @@ import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
 import { foldNow, stopTurn } from "@/lib/commands";
-import { takeQueuedFlag, useConversationForSteering, waitUntilIdle } from "@/lib/queued-send";
+import { useConversationForSteering } from "@/lib/queued-send";
 import { readEvents, toWireMessages } from "./stream";
 import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
@@ -138,11 +138,13 @@ export function createBackendAdapter(conversation?: {
        * Steering is NOT done here, and that is the whole design: reaching this function at all
        * means `performRoundtrip` has already run, and its first line aborts the turn in flight.
        * A steer routed through the runtime would kill the work it was meant to redirect. So the
-       * keystroke steers directly (see `rich-input`), and only a queued send ever gets here
-       * while something is running.
+       * keystroke steers directly, and ⌘⏎ waits directly — both in `rich-input`, which is where
+       * the intent is.
+       *
+       * There was an `if (takeQueuedFlag()) await waitUntilIdle(...)` here, and it could not fire:
+       * the composer stopped setting that flag when it started calling `holdUntilIdle` itself, so
+       * this branch had been asking a question whose answer could no longer be yes.
        */
-      if (takeQueuedFlag()) await waitUntilIdle(conversation?.get() ?? "");
-
       const body = JSON.stringify({
         messages: toWireMessages(messages),
         // Omitted on the first turn; the server opens one and tells us which.
@@ -405,12 +407,28 @@ let retried = 0;
  * Returns null when nothing is running, which is the ordinary case — opening an idle
  * conversation must not look like starting a turn in it.
  */
-export async function resumeTurn(conversationId: string): Promise<AsyncGenerator<ChatModelRunResult> | null> {
+export async function resumeTurn(
+  conversationId: string,
+): Promise<{ stream: AsyncGenerator<ChatModelRunResult>; discard: () => void } | null> {
   if (!conversationId) return null;
   const response = await fetch(`/api/chat/${conversationId}/attach`).catch(() => null);
   // 204 is "nothing is running"; a body is the backlog followed by the rest as it happens.
   if (!response || response.status === 204 || !response.ok || !response.body) return null;
-  return readTurn(response);
+  /* Handed back with a way to throw it away, because every caller has a path where it decides not
+   * to read this after all — and dropping it is not free.
+   *
+   * `readTurn` is an async generator whose body has not run yet, so its `finally` has not been
+   * armed: letting it go collects nothing, `getReader()` is never called, and the response body
+   * stays open. On the server that is a `live_turns.watch` generator blocked writing to a reader
+   * that will never drain, with its own watcher-discard `finally` equally unreached. Once per
+   * turn, because `rejoin` fires on the `turn` event this window's own send just caused and then
+   * declines the stream at its `isRunning` guard.
+   *
+   * `stream.return()` would not do it for the same reason the leak exists — the generator never
+   * started. Cancelling the body is what actually closes it, which is what `queued-send.ts`
+   * already does on this same endpoint. */
+  const body = response.body;
+  return { stream: readTurn(response), discard: () => void body.cancel().catch(() => {}) };
 }
 
 /** The text of the message just sent, or "" — commands are only ever the whole of it. */

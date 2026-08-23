@@ -22,11 +22,6 @@ export interface Usage {
   out: number;
 }
 
-/** The number worth showing: what was read fresh plus what was written. */
-export function realTokens(usage: Usage): number {
-  return usage.uncached + usage.out;
-}
-
 export function formatTokens(count: number): string {
   return count.toLocaleString();
 }
@@ -44,27 +39,3 @@ export function formatCompact(count: number): string {
   return `${(count / 1_000_000).toFixed(2)}M`;
 }
 
-/** Roll a turn's requests into one figure. Summing is right for all three fields:
- *  each round is a separate request that read, hit cache and wrote independently. */
-export function sumUsage(all: Usage[]): Usage {
-  return all.reduce(
-    (total, one) => ({
-      uncached: total.uncached + one.uncached,
-      cached: total.cached + one.cached,
-      out: total.out + one.out,
-    }),
-    { uncached: 0, cached: 0, out: 0 },
-  );
-}
-
-/**
- * The breakdown, for a title attribute. Only mentions the cache when there was one —
- * on a local model every prompt token is read fresh and a "0 from cache" would read
- * like something was broken.
- */
-export function usageTitle(usage: Usage): string {
-  const parts = [`${formatTokens(usage.uncached)} read`];
-  if (usage.cached > 0) parts.push(`${formatTokens(usage.cached)} from cache`);
-  parts.push(`${formatTokens(usage.out)} written`);
-  return parts.join(" · ");
-}

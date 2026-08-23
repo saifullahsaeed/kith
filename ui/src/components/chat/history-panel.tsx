@@ -14,6 +14,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ItemMenu } from "@/components/ui/item-menu";
 import { useConfirm } from "@/components/ui/confirm";
+import { usePrompt } from "@/components/ui/prompt";
 import {
   deleteConversation,
   fetchConversations,
@@ -84,6 +85,7 @@ export function HistoryPanel({
   onClose: () => void;
 }) {
   const cache = useQueryClient();
+  const prompt = usePrompt();
   const [limit, setLimit] = useState(PAGE);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<TranscriptHit[] | null>(null);
@@ -499,15 +501,15 @@ export function HistoryPanel({
                               {
                                 label: "Rename",
                                 onSelect: () => {
-                                  const next = window.prompt(
-                                    "Rename this conversation",
-                                    item.title,
-                                  );
-                                  if (next?.trim())
-                                    void renameConversation(
-                                      item.id,
-                                      next.trim(),
-                                    ).then(load);
+                                  // `window.prompt` does not exist in Electron — it throws, the
+                                  // throw escapes Radix's `onSelect`, and the menu just closed
+                                  // with nothing happening. See `ui/prompt.tsx`.
+                                  void prompt({
+                                    title: "Rename this conversation",
+                                    initial: item.title,
+                                  }).then((next) => {
+                                    if (next) void renameConversation(item.id, next).then(load);
+                                  });
                                 },
                               },
                             ]}
