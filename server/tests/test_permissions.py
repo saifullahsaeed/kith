@@ -26,7 +26,10 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(permissions, "_store", lambda: (store, _Store()))
     permissions._session_grants.clear()
     permissions._pending.clear()
+    # The settings read is cached; a store swapped in per test must not inherit the last one's.
+    permissions.forget_settings()
     yield
+    permissions.forget_settings()
 
 
 class _Store:
@@ -145,6 +148,30 @@ class TestModes:
     def test_an_unknown_stored_mode_falls_back_to_asking(self):
         _Store.values["permission_mode"] = "whatever"
         assert permissions.mode() is permissions.Mode.ASK
+
+    def test_switching_the_mode_bites_at_once(self, tmp_path):
+        """The settings read is cached, and the mode is the master switch — a five-second window
+        of the old one is five seconds of the gate not being what the screen says it is.
+
+        Reads the mode *first* so the cache is warm before the switch. Without that, the write
+        lands on an empty cache and this passes whether or not anything invalidates it.
+        """
+        permissions.set_mode("bypass")
+        assert permissions.check_path("delete", Path("/etc/hosts"), tmp_path).allowed
+
+        permissions.set_mode("ask")
+        assert not permissions.check_path("delete", Path("/etc/hosts"), tmp_path).allowed
+
+    def test_revoking_everything_bites_at_once(self, tmp_path):
+        """Same, for the grants half of the cached read."""
+        permissions.set_mode("ask")
+        decision = permissions.check_command("git push", tmp_path)
+        permissions.approve(decision.request.id, scope="always")
+        permissions._session_grants.clear()
+        assert permissions.check_command("git push", tmp_path).allowed  # warms the cache
+
+        permissions.revoke_all()
+        assert not permissions.check_command("git push", tmp_path).allowed
 
 
 class TestApproval:

@@ -335,9 +335,44 @@ def _store():
     return CONFIG_DB_PATH, config_store
 
 
-def mode() -> Mode:
+#: The two settings this module reads, cached. Same argument as `_linked` below, and measured
+#: rather than assumed: `config_store.load_settings` costs ~286µs, against ~7µs for the path
+#: resolve every check already does — 40x — and `check_path` runs on every file operation and
+#: once per path in every destructive command. `linked_project_roots`, which is cached, is only
+#: ~2.9x a settings read, so the uncached pair was the larger cost of the two.
+#:
+#: **Invalidated on every write rather than left to the TTL**, because one of these two values is
+#: the master switch. Switching bypass → ask has to bite now, not in five seconds; the TTL is a
+#: backstop for a database edited from outside this process, which is not a supported path.
+_settings_cache: tuple[float, dict] | None = None
+_SETTINGS_TTL = 5.0
+
+
+def forget_settings() -> None:
+    """Drop the settings cache. Called by every writer here, and by tests."""
+    global _settings_cache
+    with _state:
+        _settings_cache = None
+
+
+def _settings() -> dict:
+    global _settings_cache
+    now = time.monotonic()
+    with _state:
+        if _settings_cache is not None and now - _settings_cache[0] < _SETTINGS_TTL:
+            return _settings_cache[1]
     path, store = _store()
-    raw = str(store.load_settings(path).get(MODE_KEY) or Mode.ASK)
+    loaded = dict(store.load_settings(path))
+    # Read outside the lock, stored under it — same shape as `linked_project_roots`: two threads
+    # arriving together do the read twice and agree, where holding the lock across the query
+    # would serialise every file operation behind it.
+    with _state:
+        _settings_cache = (now, loaded)
+        return loaded
+
+
+def mode() -> Mode:
+    raw = str(_settings().get(MODE_KEY) or Mode.ASK)
     try:
         return Mode(raw)
     except ValueError:
@@ -348,6 +383,7 @@ def set_mode(value: str) -> Mode:
     chosen = Mode(value)
     path, store = _store()
     store.update_settings(path, {MODE_KEY: str(chosen)})
+    forget_settings()
     # The header shows this, and a second window showing the old mode is a second window that
     # will surprise someone.
     changes.publish("permission")
@@ -355,14 +391,14 @@ def set_mode(value: str) -> Mode:
 
 
 def always_grants() -> set[str]:
-    path, store = _store()
-    raw = store.load_settings(path).get(GRANTS_KEY) or ""
+    raw = _settings().get(GRANTS_KEY) or ""
     return {line for line in str(raw).splitlines() if line.strip()}
 
 
 def _remember_always(signature: str) -> None:
     path, store = _store()
     store.update_settings(path, {GRANTS_KEY: "\n".join(sorted(always_grants() | {signature}))})
+    forget_settings()
 
 
 def granted(signature: str) -> bool:
@@ -800,6 +836,7 @@ def deny(request_id: str) -> dict:
 def revoke_all() -> None:
     path, store = _store()
     store.update_settings(path, {GRANTS_KEY: ""})
+    forget_settings()
     with _state:
         _session_grants.clear()
     changes.publish("permission")
@@ -822,6 +859,7 @@ def revoke(signature: str) -> bool:
         remaining.discard(wanted)
         path, store = _store()
         store.update_settings(path, {GRANTS_KEY: "\n".join(sorted(remaining))})
+        forget_settings()
     # A grant can be standing, session-only, or both; dropping it should mean dropping it.
     with _state:
         if wanted in _session_grants:
