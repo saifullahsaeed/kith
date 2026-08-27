@@ -317,7 +317,7 @@ class Connection:
         whether that cloud is OpenRouter. Anything else is local.
         """
         if base_url and api_key:
-            kind = ProviderKind.OPENROUTER if _OPENROUTER_HOST in base_url else ProviderKind.OPENAI_COMPATIBLE
+            kind = ProviderKind.OPENROUTER if is_openrouter(base_url) else ProviderKind.OPENAI_COMPATIBLE
             return cls(kind=kind, model=model, base_url=base_url, api_key=api_key)
         return cls.local(model=model, base_url=base_url)
 

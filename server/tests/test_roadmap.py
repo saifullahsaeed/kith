@@ -297,9 +297,9 @@ class TestADependencyHasToPointAtSomething:
         from kith.tools import registry
 
         first = repo.projects.add_milestone(db, project, "Scope it")
-        add = registry.get("add_milestone")
-        handler = add.run if hasattr(add, "run") else add
-        result = handler(db, {"project_id": project, "title": "Build it", "after": [0]})
+        result = registry.require("add_milestone").run(
+            db, {"project_id": project, "title": "Build it", "after": [0]}
+        )
 
         # The milestone is still created — losing it as well would turn one mistake into two.
         assert result["id"] != first["id"]

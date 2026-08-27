@@ -32,7 +32,7 @@ from kith.services import agent_loop, tuning
 
 def _errors(*messages: str):
     """Streams that fail, then one that succeeds — one canned response per call."""
-    responses = [[{"type": "error", "message": m}] for m in messages]
+    responses: list[list[dict]] = [[{"type": "error", "message": m}] for m in messages]
     responses.append([{"type": "turn", "content": "done", "tool_calls": [], "stats": {}}])
     calls: list[int] = []
 

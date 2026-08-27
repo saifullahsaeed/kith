@@ -52,6 +52,18 @@ if [[ "$what" == "all" || "$what" == "server" ]]; then
   cd "${here}/server"
   step "ruff"   .venv/bin/python -m ruff check kith/ tests/
   step "format" .venv/bin/python -m ruff format --check kith/ tests/
+  # Everything `pyrightconfig.json` covers: kith/, tests/, scripts/, app.py.
+  #
+  # Before this step existed nothing ran pyright at all, and 215 errors had accumulated — 44 in
+  # `kith/`, including a possibly-unbound name and two return annotations that had been wrong
+  # since the fields they describe were added. In `tests/` it found worse: a test whose only
+  # live assertion was a substring search of a source file, and a helper calling a repository
+  # function that no longer exists.
+  #
+  # `tests/` runs with the four Optional rules off (see pyrightconfig.json). In a test,
+  # `repo.get(id)["status"] == "done"` subscripts an Optional deliberately — a None there fails
+  # the test, which is the assertion. Everything else is enforced the same everywhere.
+  step "types"  .venv/bin/python -m pyright
   step "pytest" .venv/bin/python -m pytest tests/ -q
 fi
 

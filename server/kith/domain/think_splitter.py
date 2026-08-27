@@ -81,8 +81,9 @@ class ThinkSplitter:
         partial start of any tag straddling a chunk boundary."""
         cut = len(text)
         for tag in tags:
-            max_n = min(cut, len(tag) - 1)
-            for n in range(max_n, 0, -1):
+            # `len(text)`, not `cut`: a shorter cut taken for an earlier tag must not limit how
+            # far back this one is allowed to look for its own partial suffix.
+            for n in range(min(len(text), len(tag) - 1), 0, -1):
                 if tag.startswith(text[len(text) - n :]):
                     cut = min(cut, len(text) - n)
                     break

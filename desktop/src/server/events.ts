@@ -72,9 +72,33 @@ let cursor = "";
  * visible.
  */
 function fanOut(event: ServerEvent): void {
+  for (const listener of listeners) {
+    try {
+      listener(event);
+    } catch {
+      // A listener in this process must not be able to break the stream for the window.
+    }
+  }
   const window = getMainWindow();
   if (!window || window.isDestroyed()) return;
   window.webContents.send(CHANNEL, event);
+}
+
+/** Anything in the main process that wants the same events the window gets. */
+const listeners = new Set<(event: ServerEvent) => void>();
+
+/**
+ * Listen to the stream from inside the main process.
+ *
+ * This connection is already open, already resumable, and already carries `turn`, `question`,
+ * `permission` and `schedule` — which is exactly what the menu bar wants to know. Before this it
+ * had no way to reach any of it, so the tray polled two REST endpoints when you clicked it and
+ * knew nothing in between. A second EventSource for a second consumer in the same process would
+ * have been a second thing to reconnect and a second cursor to keep.
+ */
+export function onServerEvent(listener: (event: ServerEvent) => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 /** Open the stream, and keep it open. */

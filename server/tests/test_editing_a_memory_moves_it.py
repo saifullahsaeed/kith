@@ -91,5 +91,5 @@ class TestEditingAMemory:
         assert [m["content"] for m in rows if m["id"] == made["id"]] == ["after"]
 
     def test_editing_a_memory_that_is_gone_says_so_rather_than_embedding_nothing(self, db, fake_embedder):
-        assert brain.update(db, "memory", 9_999, {"content": "ghost"}) is None
+        assert brain.update(db, "memory", "9999", {"content": "ghost"}) is None
         assert fake_embedder == []

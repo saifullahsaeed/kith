@@ -1048,23 +1048,24 @@ def _run_turn(
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
             for step, result in zip(batch, results, strict=True):
                 yield {"type": "tool_result", "id": step["id"], "name": step["name"], "result": result}
-                image = _image_from(result)
-                if image:
+                images = _images_from(result)
+                if images:
                     # A tool result is a JSON string and cannot carry an image part, so the
-                    # picture arrives as the next message instead. Without this he could take a
+                    # pictures arrive as the next message instead. Without this he could take a
                     # screenshot and never see it — which is exactly what he was doing while
-                    # redesigning a UI. The data URI is taken out of the tool result so the
+                    # redesigning a UI. The data URIs are taken out of the tool result so the
                     # same 600KB is not also sitting there as base64 text.
+                    #
+                    # All of them in one message rather than one message each: they were asked
+                    # for together and are usually looked at against each other — seven screens
+                    # of the same app, in this case — so splitting them would put six turns of
+                    # nothing between the first and the last.
                     convo.append(_tool_result_message(convo, step["name"], json.dumps(without_image(result))))
-                    convo.append(
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": f"Here is {result.get('path', 'the image')}:"},
-                                {"type": "image_url", "image_url": {"url": image}},
-                            ],
-                        }
-                    )
+                    parts: list[dict] = []
+                    for picture in images:
+                        parts.append({"type": "text", "text": f"Here is {picture['path'] or 'the image'}:"})
+                        parts.append({"type": "image_url", "image_url": {"url": picture["image"]}})
+                    convo.append({"role": "user", "content": parts})
                     continue
                 convo.append(_tool_result_message(convo, step["name"], json.dumps(result)))
 
@@ -1081,18 +1082,34 @@ def _run_turn(
     yield from _final_answer(convo, config, host, schemas, routing=routing)
 
 
-def _image_from(result: Any) -> str:
-    """A data URI a tool wants the model to look at, or "".
+def _images_from(result: Any) -> list[dict]:
+    """Every picture a tool wants the model to look at, as ``[{"path", "image"}]``.
 
-    One key, checked in one place. Tools that produce pictures — reading a screenshot today,
-    rendering something tomorrow — opt in by returning it, and nothing else in the loop needs
-    to know which tools those are.
+    One shape, checked in one place. Tools that produce pictures opt in by returning them, and
+    nothing else in the loop needs to know which tools those are.
+
+    Plural because it was singular, and `read_file` takes a list of paths. One image was found
+    and delivered; a batch of three was not found at all, so a call that read three screenshots
+    put none of them in front of him — see the note in `tools/computer._read_many`. Both shapes
+    are read here: `image` for a tool that returns one file, `images` for a tool that returns
+    several, so neither side had to change to fit the other.
     """
     if not isinstance(result, dict):
-        return ""
+        return []
     inner = result.get("result") if isinstance(result.get("result"), dict) else result
-    value = inner.get("image") if isinstance(inner, dict) else None
-    return value if isinstance(value, str) and value.startswith("data:image/") else ""
+    if not isinstance(inner, dict):
+        return []
+    one = inner.get("image")
+    if _is_data_uri(one):
+        return [{"path": inner.get("path"), "image": one}]
+    many = inner.get("images")
+    if isinstance(many, list):
+        return [
+            {"path": item.get("path"), "image": item["image"]}
+            for item in many
+            if isinstance(item, dict) and _is_data_uri(item.get("image"))
+        ]
+    return []
 
 
 def _is_data_uri(value: Any) -> bool:
@@ -1122,10 +1139,23 @@ def without_image(result: Any) -> Any:
         return result
     out = dict(result)
     inner = out.get("result")
-    if isinstance(inner, dict) and _is_data_uri(inner.get("image")):
-        out["result"] = {**inner, "image": _SHOWN}
+    if isinstance(inner, dict):
+        out["result"] = _stripped(inner)
+    if _is_data_uri(out.get("image")) or isinstance(out.get("images"), list):
+        out = _stripped(out)
+    return out
+
+
+def _stripped(value: dict) -> dict:
+    """One level, with any data URI in it replaced by the sentence saying where it went."""
+    out = dict(value)
     if _is_data_uri(out.get("image")):
         out["image"] = _SHOWN
+    if isinstance(out.get("images"), list):
+        out["images"] = [
+            {**item, "image": _SHOWN} if isinstance(item, dict) and _is_data_uri(item.get("image")) else item
+            for item in out["images"]
+        ]
     return out
 
 

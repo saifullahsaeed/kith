@@ -85,6 +85,7 @@ class TestWhereItWouldGo:
 
     def test_the_command_targets_that_prefix_and_nothing_else(self):
         command = install.command_for("python")
+        assert command is not None
         assert "--prefix" in command and str(install.prefix()) in command
         assert " -g" not in command and "--global" not in command
 

@@ -4,7 +4,7 @@
 own toolset and its own round budget, and hand the answer back as its result. **No change to
 the loop is required**, and none should be made on the strength of "subagents need it".
 
-That was checked by running it, not by reading it. Against an unmodified `agent_loop.py`:
+That was checked by running it, not by reading it. Against an unmodified `services/agent_loop.py`:
 
 ```
 child ran:                        True

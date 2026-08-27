@@ -84,7 +84,21 @@ def tool(
 
 
 def get(name: str) -> Tool | None:
+    """The tool, or None. For asking *whether* a tool exists — see `require` to use one."""
     return _REGISTRY.get(name)
+
+
+def require(name: str) -> Tool:
+    """The tool, or a KeyError naming what is actually registered.
+
+    `get(name).run(...)` reads fine and fails badly: a renamed or unregistered tool surfaces as
+    `AttributeError: 'NoneType' object has no attribute 'run'`, which names neither the tool
+    asked for nor the ones available. Every caller that intends to *use* a tool wants this.
+    """
+    try:
+        return _REGISTRY[name]
+    except KeyError:
+        raise KeyError(f"no tool {name!r}. Registered: {', '.join(sorted(_REGISTRY))}") from None
 
 
 def names() -> list[str]:

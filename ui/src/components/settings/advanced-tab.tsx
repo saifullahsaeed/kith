@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { formatBytes } from "@/lib/bytes";
-import { ChevronDown, FolderOpen, Loader2, RotateCcw, Search, TerminalSquare } from "lucide-react";
+import {
+  ChevronDown,
+  FolderOpen,
+  Loader2,
+  RotateCcw,
+  Search,
+  TerminalSquare,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -17,7 +24,6 @@ import {
   type Tunable,
   type TuningSnapshot,
 } from "@/lib/backend";
-
 
 /**
  * Everything else, with the consequences written down.
@@ -48,7 +54,9 @@ const SHORT: Record<string, string> = {
 export function AdvancedTab() {
   const confirm = useConfirm();
   const [snapshot, setSnapshot] = useState<TuningSnapshot | null>(null);
-  const [draft, setDraft] = useState<Record<string, number | string | boolean>>({});
+  const [draft, setDraft] = useState<Record<string, number | string | boolean>>(
+    {},
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -65,7 +73,8 @@ export function AdvancedTab() {
    * finding what you touched. Reading only `isDefault` — the server's view — meant editing a
    * setting left the Changed button disabled, which is the moment you most want it.
    */
-  const isTouched = (knob: Tunable) => !knob.isDefault || draft[knob.key] !== undefined;
+  const isTouched = (knob: Tunable) =>
+    !knob.isDefault || draft[knob.key] !== undefined;
 
   /** Does this knob survive the find box and the changed-only filter? */
   const matches = (knob: Tunable) => {
@@ -74,7 +83,9 @@ export function AdvancedTab() {
     if (!needle) return true;
     // The key and the environment variable are searchable too: someone who read a comment or a
     // stack trace knows `live_tool_chars`, not "Tool output kept in full".
-    return `${knob.label} ${knob.help} ${knob.key} ${knob.env}`.toLowerCase().includes(needle);
+    return `${knob.label} ${knob.help} ${knob.key} ${knob.env}`
+      .toLowerCase()
+      .includes(needle);
   };
 
   const load = useCallback(() => {
@@ -83,7 +94,9 @@ export function AdvancedTab() {
         setSnapshot(next);
         setDraft({});
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      );
   }, []);
 
   useEffect(load, [load]);
@@ -116,9 +129,14 @@ export function AdvancedTab() {
    */
   async function move(current: string) {
     setError("");
-    const picked = await pickFolder("Choose a folder for Kith to work in", current);
+    const picked = await pickFolder(
+      "Choose a folder for Kith to work in",
+      current,
+    );
     if (picked === null) {
-      setError("No desktop app running, so there's no folder chooser. Set KITH_WORKSPACE instead.");
+      setError(
+        "No desktop app running, so there's no folder chooser. Set KITH_WORKSPACE instead.",
+      );
       return;
     }
     if (!picked || picked === current) return;
@@ -142,7 +160,8 @@ export function AdvancedTab() {
     }
   }
 
-  if (error && !snapshot) return <p className="text-destructive text-sm">{error}</p>;
+  if (error && !snapshot)
+    return <p className="text-destructive text-sm">{error}</p>;
   if (!snapshot) {
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-sm">
@@ -160,7 +179,14 @@ export function AdvancedTab() {
     .filter((group) => seeking || group.key === active)
     .map((group) => ({ ...group, settings: group.settings.filter(matches) }))
     .filter((group) => group.settings.length > 0);
-  const shownCount = groups.reduce((sum, group) => sum + group.settings.length, 0);
+  const shownCount = groups.reduce(
+    (sum, group) => sum + group.settings.length,
+    0,
+  );
+  //: Whether "This computer" is one of the groups on screen. The folder list and the standing
+  //: grants hang off this rather than off `tab`, so a search that surfaces a machine setting
+  //: brings them with it instead of showing settings about the machine with the machine hidden.
+  const onMachine = groups.some((group) => group.key === "machine");
   const changedCount = snapshot.groups.reduce(
     (sum, group) => sum + group.settings.filter(isTouched).length,
     0,
@@ -175,7 +201,10 @@ export function AdvancedTab() {
         and nothing could be found.
       */}
       <div className="bg-background/95 sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 px-1 py-2 backdrop-blur">
-        <div className="relative min-w-48 flex-1">
+        {/* Capped. `flex-1` was right when the pane was 768 wide and is not now the tab asks for
+            the window: a search box the width of a desk is not easier to type in, it just moves
+            the Changed filter to the far edge, a long way from the thing it filters. */}
+        <div className="relative min-w-48 max-w-md flex-1">
           <Search className="text-muted-foreground/50 pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2" />
           <input
             type="search"
@@ -206,7 +235,11 @@ export function AdvancedTab() {
           settings and the wrong one inside a tab. The count is worth showing — Connections has
           eleven and MCP has two, and knowing that before you click is the point of a tab strip.
           A dot means something in there differs from its default. */}
-      <div className="-mx-1 flex flex-wrap gap-1 px-1" role="tablist" aria-label="Setting groups">
+      <div
+        className="-mx-1 flex flex-wrap gap-1 px-1"
+        role="tablist"
+        aria-label="Setting groups"
+      >
         {snapshot.groups.map((group) => {
           const changed = group.settings.filter(isTouched).length;
           const on = !seeking && group.key === active;
@@ -233,29 +266,47 @@ export function AdvancedTab() {
               <span className="text-muted-foreground/50 font-mono text-[10px] tabular-nums">
                 {group.settings.length}
               </span>
-              {changed ? <span className="bg-kith size-1.5 rounded-full" aria-label="changed" /> : null}
+              {changed ? (
+                <span
+                  className="bg-kith size-1.5 rounded-full"
+                  aria-label="changed"
+                />
+              ) : null}
             </button>
           );
         })}
       </div>
 
       <p className="text-muted-foreground text-xs leading-relaxed">
-        Every one of these changes how he behaves, and takes effect on his next turn — nothing here
-        needs a restart. Each says what it does; open <strong className="font-medium">why</strong> on
-        a row for what it costs you to get wrong.
+        Every one of these changes how he behaves, and takes effect on his next
+        turn — nothing here needs a restart. Each says what it does; open{" "}
+        <strong className="font-medium">why</strong> on a row for what it costs
+        you to get wrong.
       </p>
 
       {!shownCount ? (
         <p className="text-muted-foreground py-8 text-center text-sm">
-          Nothing matches {query ? <code className="font-mono">{query}</code> : "that"}.
+          Nothing matches{" "}
+          {query ? <code className="font-mono">{query}</code> : "that"}.
         </p>
       ) : null}
 
+      {/*
+        The two blocks below belong to one group and used to be drawn under every one of them.
+        `groups` is already filtered to the tab you are on (or, while searching, to whatever
+        matched) — but these sat outside that map, so "On this computer" and the standing grants
+        appeared beneath the chat settings, the context settings and the rest, on a screen whose
+        whole organising idea is that a tab is a subject. They are about this machine, so they
+        show when this machine's settings do: on the "This computer" tab, and in a search that
+        surfaces it.
+      */}
       {groups.map((group) => (
         <section key={group.key}>
           <div className="mb-3">
             <h2 className="text-sm font-semibold">{group.label}</h2>
-            <p className="text-muted-foreground text-xs leading-relaxed">{group.blurb}</p>
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              {group.blurb}
+            </p>
           </div>
           <div className="divide-y rounded-xl border">
             {group.settings.map((knob) => (
@@ -273,7 +324,8 @@ export function AdvancedTab() {
                     // counts as "no change" when blank is already what is stored. Treating ""
                     // as always-discard made those three impossible to clear from here.
                     const same = value === knob.value;
-                    if (same || (value === "" && knob.value === "")) delete next[knob.key];
+                    if (same || (value === "" && knob.value === ""))
+                      delete next[knob.key];
                     else next[knob.key] = value;
                     return next;
                   })
@@ -285,76 +337,92 @@ export function AdvancedTab() {
         </section>
       ))}
 
-      <section>
-        <div className="mb-3 flex items-baseline gap-3">
-          <h2 className="text-sm font-semibold">On this computer</h2>
-          <p className="text-muted-foreground min-w-0 flex-1 text-xs">
-            He works in real folders now, not a container. These are the ones, with what is in them
-            — clickable, because a path you can only read is a path you have to retype.
-          </p>
-          <span className="text-muted-foreground/70 font-mono text-[11px] tabular-nums">
-            {formatBytes(snapshot.paths.reduce((sum, path) => sum + (path.bytes ?? 0), 0))} total
-          </span>
-        </div>
-        <div className="divide-y rounded-xl border">
-          {snapshot.paths.map((path) => (
-            <div key={path.label} className="flex items-start gap-3 p-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-medium">{path.label}</span>
-                  {path.bytes !== undefined ? (
-                    <span className="text-muted-foreground/70 font-mono text-[10px] tabular-nums">
-                      {formatBytes(path.bytes)}
-                      {path.entries !== undefined ? ` · ${path.entries} items` : ""}
-                    </span>
-                  ) : null}
-                  {path.env ? (
-                    <code className="text-muted-foreground/50 ms-auto font-mono text-[10px]">
-                      {path.env}
-                    </code>
+      {onMachine ? (
+        <section>
+          <div className="mb-3 flex items-baseline gap-3">
+            {/* Not "On this computer", which is the group's own heading three inches above it now
+              that this only renders on that tab. Two identical headings in a column read as a
+              rendering fault. */}
+            <h2 className="text-sm font-semibold">Where his things live</h2>
+            <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+              He works in real folders now, not a container. These are the ones,
+              with what is in them — clickable, because a path you can only read
+              is a path you have to retype.
+            </p>
+            <span className="text-muted-foreground/70 font-mono text-[11px] tabular-nums">
+              {formatBytes(
+                snapshot.paths.reduce(
+                  (sum, path) => sum + (path.bytes ?? 0),
+                  0,
+                ),
+              )}{" "}
+              total
+            </span>
+          </div>
+          <div className="divide-y rounded-xl border">
+            {snapshot.paths.map((path) => (
+              <div key={path.label} className="flex items-start gap-3 p-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-sm font-medium">{path.label}</span>
+                    {path.bytes !== undefined ? (
+                      <span className="text-muted-foreground/70 font-mono text-[10px] tabular-nums">
+                        {formatBytes(path.bytes)}
+                        {path.entries !== undefined
+                          ? ` · ${path.entries} items`
+                          : ""}
+                      </span>
+                    ) : null}
+                    {path.env ? (
+                      <code className="text-muted-foreground/50 ms-auto font-mono text-[10px]">
+                        {path.env}
+                      </code>
+                    ) : null}
+                  </div>
+                  <code className="text-muted-foreground mt-0.5 block font-mono text-[11px] break-all">
+                    {path.value}
+                  </code>
+                  {path.note ? (
+                    <p className="text-muted-foreground/70 mt-0.5 text-[11px]">
+                      {path.note}
+                    </p>
                   ) : null}
                 </div>
-                <code className="text-muted-foreground mt-0.5 block font-mono text-[11px] break-all">
-                  {path.value}
-                </code>
-                {path.note ? (
-                  <p className="text-muted-foreground/70 mt-0.5 text-[11px]">{path.note}</p>
+                {path.change ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={busy || path.pinned}
+                    onClick={() => void move(path.value)}
+                    title={
+                      path.pinned
+                        ? `Fixed by ${path.env} in the environment — unset it to choose here.`
+                        : "Pick a different folder for him to work in"
+                    }
+                  >
+                    Change…
+                  </Button>
+                ) : null}
+                {path.open ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => void openOnHost(path.value, true)}
+                    title="Show it in Finder"
+                  >
+                    <FolderOpen className="size-3.5" />
+                    Reveal
+                  </Button>
                 ) : null}
               </div>
-              {path.change ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={busy || path.pinned}
-                  onClick={() => void move(path.value)}
-                  title={
-                    path.pinned
-                      ? `Fixed by ${path.env} in the environment — unset it to choose here.`
-                      : "Pick a different folder for him to work in"
-                  }
-                >
-                  Change…
-                </Button>
-              ) : null}
-              {path.open ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  onClick={() => void openOnHost(path.value, true)}
-                  title="Show it in Finder"
-                >
-                  <FolderOpen className="size-3.5" />
-                  Reveal
-                </Button>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
-      <StandingGrants />
+      {onMachine ? <StandingGrants /> : null}
 
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
 
@@ -379,7 +447,10 @@ export function AdvancedTab() {
         <span className="text-muted-foreground text-xs">
           {dirty ? `${Object.keys(draft).length} changed` : "Nothing to save."}
         </span>
-        <Button onClick={() => commit(() => saveTuning(draft))} disabled={!dirty || busy}>
+        <Button
+          onClick={() => commit(() => saveTuning(draft))}
+          disabled={!dirty || busy}
+        >
           {busy ? <Loader2 className="size-4 animate-spin" /> : null}
           {busy ? "Saving…" : "Save"}
         </Button>
@@ -444,7 +515,7 @@ function Row({
           The registry writes every help string as "what it does, then what breaks at the
           extremes" — 33 of 35 have that second sentence — so the split is already in the data.
         */}
-        <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">
+        <p className="text-muted-foreground mt-0.5 max-w-prose text-xs leading-relaxed">
           {does}
           {consequence && !open ? (
             <button
@@ -457,17 +528,28 @@ function Row({
           ) : null}
         </p>
         {consequence && open ? (
-          <p className="text-muted-foreground/70 border-kith/30 mt-1 border-s-2 ps-2 text-xs leading-relaxed">
+          <p className="text-muted-foreground/70 border-kith/30 mt-1 max-w-prose border-s-2 ps-2 text-xs leading-relaxed">
             {consequence}
           </p>
         ) : null}
       </div>
 
       <label className="flex shrink-0 items-center gap-2">
-        <span className={knob.kind === "text" && !knob.choices?.length ? "w-64" : "w-32"}>
-          <Field knob={knob} shown={shown} changed={changed} onChange={onChange} />
+        <span
+          className={
+            knob.kind === "text" && !knob.choices?.length ? "w-64" : "w-32"
+          }
+        >
+          <Field
+            knob={knob}
+            shown={shown}
+            changed={changed}
+            onChange={onChange}
+          />
         </span>
-        <span className="text-muted-foreground/70 w-14 text-[11px]">{knob.unit}</span>
+        <span className="text-muted-foreground/70 w-14 text-[11px]">
+          {knob.unit}
+        </span>
       </label>
     </div>
   );

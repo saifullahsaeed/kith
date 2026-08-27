@@ -188,6 +188,69 @@ class TestApproval:
             permissions.check_path("read", Path(f"/etc/thing{i}"), tmp_path)
         assert len(permissions.pending()) <= permissions.MAX_PENDING
 
+    def test_answered_verdicts_do_not_pile_up_forever(self, tmp_path):
+        """`_answered` is keyed by request id and had nothing removing anything from it. A
+        parked call drops its own on the way past, so what accumulated were the ones nobody
+        came back for — and in a desktop app that runs for days, that is every one of them."""
+        for i in range(permissions._MAX_ANSWERED + 40):
+            decision = permissions.check_path("read", Path(f"/etc/leak{i}"), tmp_path)
+            permissions.deny(decision.request.id)
+        assert len(permissions._answered) <= permissions._MAX_ANSWERED
+
+    def test_approving_a_command_with_a_purpose_still_grants_the_command(self, tmp_path):
+        """The signature is decided by the check and carried on the request. It used to be
+        rebuilt in `approve` by splitting `why` on the word "involves" — which only holds while
+        `why` is the sentence the check wrote, and `_refuse` replaces it with a caller's
+        `purpose` whenever one is given. Approved that way, the grant was stored under the
+        purpose text and never matched the check again, so "always" quietly did nothing."""
+        decision = permissions.check_command("git push", tmp_path, purpose="he wants to publish the release")
+        assert decision.request.why == "he wants to publish the release"
+        permissions.approve(decision.request.id, scope="session")
+
+        assert permissions.check_command("git push", tmp_path).allowed
+
+
+class TestAGrantStopsAtItsOwnEdge:
+    """A path grant covers what is inside it. Matching the *text* also covered everything that
+    merely starts the same way, which is a different folder with a similar name."""
+
+    def _grant(self, target: Path, tmp_path: Path) -> None:
+        decision = permissions.check_path("read", target, tmp_path)
+        permissions.approve(decision.request.id, scope="session")
+
+    def test_a_sibling_with_a_longer_name_is_not_covered(self, tmp_path):
+        approved = tmp_path / "outside" / "Documents"
+        neighbour = tmp_path / "outside" / "Documents-private" / "keys.txt"
+        self._grant(approved, tmp_path / "workspace")
+
+        assert permissions.check_path("read", approved / "report.txt", tmp_path / "workspace").allowed
+        assert not permissions.check_path("read", neighbour, tmp_path / "workspace").allowed
+
+    def test_scratch_space_is_not_worth_a_prompt(self, tmp_path):
+        """Deleting from /tmp is not "your files" in any sense worth asking about. A plain `rm`
+        rather than `rm -rf`, which the dangerous list catches before the skip list is reached."""
+        assert permissions.check_command("rm /tmp/build-cache/stale.o", tmp_path).allowed
+
+    def test_a_folder_that_merely_starts_like_scratch_is_still_checked(self, tmp_path):
+        """The skip list was matched on the text, and here a false match means the path check
+        does not run at all — a bypass rather than an over-grant. `/tmpfoo` is not `/tmp`."""
+        assert not permissions.check_command("rm /tmpfoo/secret.txt", tmp_path).allowed
+
+    def test_a_folder_that_merely_starts_like_a_program_dir_is_still_checked(self, tmp_path):
+        """Writes skip /usr and friends so an interpreter path in an ordinary command does not
+        prompt. /usrdata is somebody's data."""
+        assert permissions.check_command("cp report.csv /usr/local/share/x", tmp_path).allowed
+        assert not permissions.check_command("cp report.csv /usrdata/customers.db", tmp_path).allowed
+
+    def test_a_file_grant_does_not_cover_a_file_named_after_it(self, tmp_path):
+        approved = tmp_path / "outside" / "notes.txt"
+        self._grant(approved, tmp_path / "workspace")
+
+        assert permissions.check_path("read", approved, tmp_path / "workspace").allowed
+        assert not permissions.check_path(
+            "read", tmp_path / "outside" / "notes.txt.bak", tmp_path / "workspace"
+        ).allowed
+
 
 class TestTakingBackOneGrant:
     """All-or-nothing was the only option, and that is not how anyone feels about these.

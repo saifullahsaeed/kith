@@ -39,3 +39,19 @@ export function formatCompact(count: number): string {
   return `${(count / 1_000_000).toFixed(2)}M`;
 }
 
+/**
+ * Roughly how many tokens a piece of text costs, from its length.
+ *
+ * One divisor, in one place, because there were two: Settings → Persona divided by 4 and
+ * Settings → Skills by 3.7, one nav click apart, so the same 11,144 characters were worth 2,786
+ * tokens on one screen and 3,012 on the next. Neither was wrong exactly — it is an estimate over
+ * a tokenizer nobody here has — but two of them is worse than either, because the disagreement is
+ * the thing a person notices and it makes both numbers untrustworthy.
+ *
+ * 3.7 rather than 4: it is the closer figure for English prose under a BPE tokenizer, and it errs
+ * high, which is the right direction for a number that exists to answer "can I afford to add
+ * another one of these".
+ */
+export function estimateTokens(chars: number): number {
+  return Math.round(chars / 3.7);
+}

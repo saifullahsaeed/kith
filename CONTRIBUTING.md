@@ -11,8 +11,8 @@ make ui            # build the interface
 make server        # backend + UI on http://127.0.0.1:8611
 ```
 
-`make help` lists the rest. Docker is needed for exactly one thing — the sandbox container that
-acts as his computer — and the server creates it on demand.
+`make help` lists the rest. Nothing here needs Docker: Kith works in a real folder on your
+machine with the tools you already have, and `infra/permissions.py` is what bounds him.
 
 ## Before you open a pull request
 
@@ -25,6 +25,10 @@ acts as his computer — and the server creates it on demand.
 Run the script rather than the individual commands. It exists because
 `pytest | tail -1 && ruff` reports the exit status of `tail`, so a red suite scrolls past as one
 line of green — that happened twice in one night and a commit went out on top of it.
+
+The server side runs ruff, ruff format, pyright and pytest. The type check is a gate and sits at
+zero — [`server/docs/typing.md`](server/docs/typing.md) covers what it checks, the one rule set
+relaxed inside `tests/`, and the helpers that keep it there.
 
 ## House style
 
@@ -50,7 +54,7 @@ reader what broke.
 behaviour and watch it go red. A test that passes against both versions is documentation, not a
 guard.
 
-**Never widen the permission surface quietly.** `services/permissions.py` is the only thing
+**Never widen the permission surface quietly.** `infra/permissions.py` is the only thing
 standing between the model and the disk. New shell-adjacent capability needs a matching gate and
 a test, and if you leave a known gap, name it in a comment — as the module already does for
 reads through the shell.

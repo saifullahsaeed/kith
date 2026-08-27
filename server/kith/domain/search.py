@@ -6,10 +6,11 @@ same key he thinks with, so that option only exists when he thinks through OpenR
 Encoding that dependency here, once, is what keeps the UI from offering an option that
 cannot work.
 
-Pure: no network, no database, no config. `as_kind` is here because it is a constructor for
-the enum above it and touches nothing else; the *names* those values are stored under are in
-`settings.py`, with the two environment variables they mirror — which is where every other
-config-store key in this tree lives, beside the thing that owns the setting.
+Pure: no network and no database. `as_kind` is here because it is a constructor for the enum
+above it and touches nothing else; the *names* those values are stored under are in `settings.py`,
+with the two environment variables they mirror — which is where every other config-store key in
+this tree lives, beside the thing that owns the setting. The default SearXNG address is read from
+there for the same reason, since `settings` sits below this module and cannot read back.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from kith.domain.connection import Connection
+from kith.settings import DEFAULT_SEARX_URL
 
 
 class SearchKind(StrEnum):
@@ -46,11 +48,6 @@ def as_kind(raw: object) -> SearchKind | None:
         return SearchKind(text)
     except ValueError:
         return None
-
-
-#: Where a SearXNG instance usually lives. Part of what the option *means*, rather
-#: than something an operator tunes, so it lives with the type.
-DEFAULT_SEARX_URL = "http://127.0.0.1:8888"
 
 
 @dataclass(frozen=True)

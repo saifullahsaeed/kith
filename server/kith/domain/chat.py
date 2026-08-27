@@ -25,9 +25,8 @@ class Config:
     num_predict: int
     system: str
     think: bool
-    #: How hard to think before answering: "" (leave it to the provider), "none", "minimal",
-    #: "low", "medium", "high", "xhigh" or "max" — OpenRouter's full reasoning-effort scale
-    #: (`kith.llm.openai_compat.REASONING_EFFORTS`). Only sent to models whose OpenRouter
+    #: How hard to think before answering: "" (leave it to the provider), or any value in
+    #: `kith.domain.enums.REASONING_EFFORTS`. Only sent to models whose OpenRouter
     #: entry lists `reasoning` in supported_parameters — sending it elsewhere is a 400 on
     #: the whole request, not a field quietly ignored.
     effort: str = ""

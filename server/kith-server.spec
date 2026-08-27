@@ -40,6 +40,11 @@ if not UI_DIST.is_dir():
 datas = [
     # Read at runtime from SERVER_ROOT, which is the bundle directory when frozen.
     (str(HERE / "persona"), "persona"),
+    # Same reasoning as the persona, and for a reason the persona created: it names
+    # `drawing-a-canvas` by name, so the skill has to be in the box or the sentence is a
+    # dead pointer for everyone who did not install it themselves. `running-a-project` is in
+    # here for the other reason — see `settings.BUNDLED_SKILLS_DIR` for both.
+    (str(HERE / "skills"), "skills"),
     # The interface. Served by this process, so KITH_UI_DIST points here at startup.
     (str(UI_DIST), "ui"),
 ]

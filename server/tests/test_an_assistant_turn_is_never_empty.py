@@ -125,30 +125,56 @@ class TestTheShapeOnTheWire:
         assert assistant[0]["content"] == "Let me look at the config."
 
 
+def _replayed(messages: list[dict]) -> list[dict]:
+    """The replayed conversation, without the live-state block `_assemble` appends.
+
+    That trailing system message is rebuilt every turn and is not part of what is being
+    replayed, so it is noise for these assertions.
+    """
+    return [m for m in messages if m.get("role") != "system"]
+
+
 class TestReplayingHistory:
     def test_an_empty_assistant_message_is_not_replayed(self):
         """Insurance. Nothing writes one today, but a conversation that acquired one would be
-        permanently unusable: every later message rebuilds the same history and fails the
-        same way, with nothing on screen to say why."""
-        from kith.api.routes import chat
+        permanently unusable: every later message rebuilds the same history and fails the same
+        way, with nothing on screen to say why.
 
-        history = [
+        Against `prompt._assemble`, which is where the guard lives and what both `_build_messages`
+        and `as_sent` go through. This used to reach for `chat._history` and fall back to grepping
+        `prompt`'s source for a fragment of the condition when it was missing — and `chat._history`
+        has not existed for some time, so the grep was all that ever ran. A test that asserts a
+        string appears in a source file passes just as well when the line is commented out.
+        """
+        from kith.services.turn import prompt
+
+        folded = [
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "   "},
             {"role": "user", "content": "still there?"},
         ]
-        built = chat._history(history, conversation_id="") if hasattr(chat, "_history") else None
-        if built is None:
-            import inspect
+        built = _replayed(prompt._assemble([], folded, conversation_id=""))
+        assert [m["role"] for m in built] == ["user", "user"]
+        assert [m["content"] for m in built] == ["hello", "still there?"]
 
-            # `prompt`, not `chat`. The guard lives in `_build_messages`, which moved to
-            # `services/turn/prompt.py` — and this assertion would have gone on passing
-            # against a module that no longer contained the code, because it only asks
-            # whether the text appears *somewhere* in the file it is handed.
-            from kith.services.turn import prompt
+    def test_an_assistant_message_with_real_text_is_replayed(self):
+        """The other half, so the test above cannot pass by dropping every assistant turn."""
+        from kith.services.turn import prompt
 
-            source = inspect.getsource(prompt)
-            assert 'message.get("role") == "assistant" and not str' in source
-            return
-        roles = [m["role"] for m in built if m["role"] != "system"]
-        assert roles == ["user", "user"]
+        folded = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "I had something to say"},
+        ]
+        built = _replayed(prompt._assemble([], folded, conversation_id=""))
+        assert [m["role"] for m in built] == ["user", "assistant"]
+
+    def test_a_replayed_tool_call_survives_having_no_content(self):
+        """An assistant message carrying `tool_calls` and no text is not an empty turn — it is
+        a replayed call, and the guard above must not eat it."""
+        from kith.services.turn import prompt
+
+        call = [{"function": {"name": "read_file", "arguments": "{}"}}]
+        assembled = prompt._assemble([], [{"role": "assistant", "tool_calls": call}], conversation_id="")
+        built = _replayed(assembled)
+        assert [m["role"] for m in built] == ["assistant"]
+        assert built[0]["tool_calls"] == call

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   ChevronRight,
@@ -29,6 +29,7 @@ import { keys } from "@/lib/query-keys";
 import { openOnHost } from "@/lib/files";
 import { pathForTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
+import { Layer, useLayer } from "@/hooks/use-layer";
 
 /** How many to ask for at first, and the most the server will hand over in one call
  *  (`/api/conversations` clamps to 500). Past that, search is the way in — a list of a
@@ -86,6 +87,7 @@ export function HistoryPanel({
 }) {
   const cache = useQueryClient();
   const prompt = usePrompt();
+  const layer = useLayer(Layer.Panel);
   const [limit, setLimit] = useState(PAGE);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<TranscriptHit[] | null>(null);
@@ -103,9 +105,21 @@ export function HistoryPanel({
    * active — and a key that says so gets the right list from cache when you go back to one instead
    * of refetching for it. A `project` change invalidates this too, because a group here is named
    * after a project. */
-  const { data: items = [] } = useQuery({
+  const { data: items = [], isPending } = useQuery({
     queryKey: keys.conversations(limit, activeId),
     queryFn: async () => (await fetchConversations(limit)).conversations,
+    /* Keep the list on screen while the next one loads.
+     *
+     * `activeId` is in the key on purpose — opening a conversation moves it to the top and
+     * creating one adds it, so the answer genuinely differs by which is active. The cost was that
+     * every switch is a key with no cached data: `items` fell back to `[]` and the whole sidebar
+     * was replaced by "Nothing yet" until the fetch returned. Starting a chat, opening one you had
+     * not opened since the panel mounted, and pressing Load more all made the list you were
+     * reading vanish and come back.
+     *
+     * `keepPreviousData` shows the last list against the new key until the new one arrives, which
+     * is nearly always the same rows in a slightly different order. */
+    placeholderData: keepPreviousData,
   });
   const load = useCallback(
     () => void cache.invalidateQueries({ queryKey: ["conversations"] }),
@@ -143,7 +157,7 @@ export function HistoryPanel({
    * this conversation?" also closed the list you were tidying. */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || !layer.frontmost()) return;
       if (
         document.querySelector(
           '[role="dialog"], [role="menu"], [data-state="open"]',
@@ -205,14 +219,35 @@ export function HistoryPanel({
     };
   }, [groups, projects, activeId]);
 
-  // Open by default: the chats, always — they are the list, not a drawer — and the project you
-  // are in. A panel that opens entirely shut answers nothing until you click.
+  /* Open by default: the chats, always — they are the list, not a drawer — the project you are in,
+   * and the project you just started a chat in.
+   *
+   * That last one is not a nicety. A new chat has no id until its first turn, so `activeId` is ""
+   * and no group holds it — which meant pressing + on a project collapsed that project and
+   * expanded Chats, in the same frame as the thread cleared. You asked for a chat in Sadeef One
+   * and the panel answered by closing Sadeef One. Held until the conversation actually lands
+   * somewhere, at which point `holding` takes over and this is forgotten. */
+  const [startedIn, setStartedIn] = useState<number | null>(null);
+  useEffect(() => {
+    if (activeId) setStartedIn(null);
+  }, [activeId]);
+
   const openByDefault = useMemo(() => {
     const holding = ordered.find((group) =>
       group.items.some((one) => one.id === activeId),
     );
-    return new Set([chats?.key, holding?.key].filter(Boolean) as string[]);
-  }, [ordered, chats, activeId]);
+    const started =
+      startedIn === null ? undefined : ordered.find((group) => group.projectId === startedIn);
+    return new Set(
+      [chats?.key, holding?.key, started?.key].filter(Boolean) as string[],
+    );
+  }, [ordered, chats, activeId, startedIn]);
+
+  /** Start a chat in a project, and keep that project open while it is being started. */
+  const startIn = (projectId: number | null) => {
+    setStartedIn(projectId);
+    onNew(projectId);
+  };
   // A full page back means there are almost certainly more behind it. The alternative was
   // showing 100 of seventeen hundred with nothing on screen saying so, which is a silent
   // truncation dressed as a complete list.
@@ -296,7 +331,9 @@ export function HistoryPanel({
         </div>
       ) : (
         <div className="kith-fade-bottom min-h-0 flex-1 overflow-y-auto p-2">
-          {items.length === 0 ? (
+          {/* Only once the list has actually answered. "Nothing yet" while a fetch is in flight is
+              a statement about the network dressed as a statement about your conversations. */}
+          {isPending ? null : items.length === 0 ? (
             <p className="text-muted-foreground p-4 text-center text-sm">
               Nothing yet. Say something to him and it will be kept here.
             </p>
@@ -354,7 +391,7 @@ export function HistoryPanel({
                       An icon rather than a word for the kind. It is the distinction the panel was
                       missing — a project and the loose chats are not two projects — and it costs
                       twelve pixels instead of a row. */}
-                    <h3 className="bg-sidebar/80 sticky top-0 z-10 backdrop-blur-sm">
+                    <h3 className="bg-sidebar/80 group/heading sticky top-0 z-10 flex items-center backdrop-blur-sm">
                       {/* Right-click a project to start a conversation in it.
                           The project is already on screen here, named, with its sessions under
                           it — so this is where you are when you decide the next chat belongs to
@@ -375,7 +412,7 @@ export function HistoryPanel({
                                 {
                                   label: "New chat here",
                                   hint: group.label,
-                                  onSelect: () => onNew(group.projectId),
+                                  onSelect: () => startIn(group.projectId),
                                 },
                                 {
                                   label: "Open in Projects",
@@ -396,7 +433,7 @@ export function HistoryPanel({
                             })
                           }
                           className={cn(
-                            "hover:text-foreground flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                            "hover:text-foreground flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium transition-colors",
                             // Finished projects are still reachable and no longer in the way.
                             group.finished
                               ? "text-muted-foreground/45"
@@ -473,6 +510,31 @@ export function HistoryPanel({
                           ) : null}
                         </button>
                       </ItemMenu>
+                      {/* Start a chat in this project, from the project.
+                        *
+                        * The right-click menu has offered this since the panel learned to group by
+                        * project, and a menu is where an action goes to be undiscovered — you have
+                        * to already suspect it is there. The row is where the decision happens, so
+                        * the button belongs on the row.
+                        *
+                        * A sibling of the toggle, not a control inside it: the heading is a button
+                        * and a button cannot contain one. Which is also why the toggle is
+                        * `flex-1` now rather than `w-full`.
+                        *
+                        * Revealed on hover *and* on its own focus, because hover-only is how a
+                        * control becomes unreachable by keyboard — the sweep found exactly that on
+                        * the task lane's Delete, and repeating it here would be knowing better. */}
+                      {group.projectId !== null ? (
+                        <button
+                          type="button"
+                          onClick={() => startIn(group.projectId)}
+                          title={`New chat in ${group.label}`}
+                          aria-label={`New chat in ${group.label}`}
+                          className="text-muted-foreground/50 hover:text-foreground hover:bg-accent/60 focus-visible:ring-ring/50 me-1.5 shrink-0 rounded p-1 opacity-0 transition group-hover/heading:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none"
+                        >
+                          <Plus className="size-3.5" />
+                        </button>
+                      ) : null}
                     </h3>
                     <ul className={cn("space-y-0.5 pb-1", !open && "hidden")}>
                       {group.items.map((item) => (
@@ -488,7 +550,7 @@ export function HistoryPanel({
                                     {
                                       label: "New chat here",
                                       hint: group.label,
-                                      onSelect: () => onNew(group.projectId),
+                                      onSelect: () => startIn(group.projectId),
                                     },
                                   ]
                                 : []),

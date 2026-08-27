@@ -40,7 +40,7 @@ def _chat(payload: dict):
     from flask import Flask
 
     with Flask(__name__).test_request_context("/api/chat", json=payload):
-        return route.chat()
+        return route.chat()  # type: ignore[call-arg]  # @api.input supplies `payload`
 
 
 @pytest.fixture(autouse=True)

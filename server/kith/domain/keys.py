@@ -14,8 +14,9 @@ argument, URL and filename already uses.
 **Time-ordered on purpose.** A random key would do for uniqueness and would make a directory
 listing meaningless — and these end up in filenames, where sorting by name is how a person finds
 the recent one. The first eleven characters are milliseconds since the epoch in hex, which stays
-eleven characters until the year 10889; the last five are random, which is 1,048,576 keys per
-millisecond before two can collide.
+eleven characters until the year 10889; the last eight are random, which is 4.3 billion keys per
+millisecond before two can collide. Nineteen characters in total — see ``KEY_LENGTH``, which is
+the number to read rather than one written out in prose here.
 
 Hex rather than base32: it is unambiguous to read aloud, safe in a filename on every filesystem,
 and case-insensitively distinct, which matters because macOS will not distinguish `a1b` from
@@ -55,8 +56,8 @@ def looks_like_a_key(text: str) -> bool:
     """Is this one of ours, rather than an integer id or a slug?
 
     Length and alphabet only. It is asked of filenames, where the alternative is a number that
-    has been there since long before keys existed, and the two cannot be confused: a key is 16
-    hex characters and an id is at most a few digits.
+    has been there since long before keys existed, and the two cannot be confused: a key is
+    ``KEY_LENGTH`` hex characters and an id is at most a few digits.
     """
     candidate = str(text or "").strip().lower()
     if len(candidate) != KEY_LENGTH:

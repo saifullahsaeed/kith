@@ -299,7 +299,7 @@ class TestTheTools:
         from kith.tools import registry
 
         (workspace_root / "m.py").write_text(PY_SOURCE)
-        result = registry.get("outline").run(tmp_path / "agent.db", {"path": "m.py"})
+        result = registry.require("outline").run(tmp_path / "agent.db", {"path": "m.py"})
 
         assert result["definitions"] == 5
         assert "class Thing" in result["outline"]
@@ -308,7 +308,7 @@ class TestTheTools:
         from kith.tools import registry
 
         (workspace_root / "a.py").write_text("def alpha():\n    pass\n")
-        result = registry.get("repo_map").run(tmp_path / "agent.db", {})
+        result = registry.require("repo_map").run(tmp_path / "agent.db", {})
 
         assert result["filesShown"] >= 1
         assert "alpha" in result["map"]
@@ -318,7 +318,7 @@ class TestTheTools:
         from kith.tools import registry
 
         (workspace_root / "notes.xyz").write_text("hello")
-        result = registry.get("outline").run(tmp_path / "agent.db", {"path": "notes.xyz"})
+        result = registry.require("outline").run(tmp_path / "agent.db", {"path": "notes.xyz"})
 
         assert "error" in result
 
@@ -326,6 +326,6 @@ class TestTheTools:
         from kith.tools import registry
 
         (workspace_root / "a.py").write_text("def alpha():\n    pass\n")
-        result = registry.get("repo_map").run(tmp_path / "agent.db", {"budget_tokens": 10_000_000})
+        result = registry.require("repo_map").run(tmp_path / "agent.db", {"budget_tokens": 10_000_000})
 
         assert len(result["map"]) < 12_000 * 3.7 * 1.6

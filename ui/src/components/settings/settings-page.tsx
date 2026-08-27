@@ -21,15 +21,31 @@ import { PersonaTab } from "@/components/settings/persona-tab";
 import { SkillsTab } from "@/components/settings/skills-tab";
 import type { SettingsTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
+import { Layer, useLayer } from "@/hooks/use-layer";
 
 /**
- * The tabs, and how wide each one wants to be.
+ * The tabs, and how much of the pane each one wants.
  *
  * Width was the shell's decision — one `max-w-3xl` over all of them — which is right
  * only for the tabs that are forms and prose, where a long line is a line you lose your
  * place in. The model tab is a table: eight columns of scores and prices, squeezed into
  * 768px on a window three times that, wrapping every price onto two rows to make room
  * for whitespace on either side. So the tab says, and the shell obeys.
+ *
+ * That was half the thought. The shell was also deciding, for everyone, that a tab is a
+ * *document*: it pads, it centres, and it owns the scrollbar. Right for a form — wrong for
+ * the persona tab, which is a two-pane editor. Given a 1500x1330 pane it drew itself 770
+ * wide and 640 tall and left the rest of the window as blank background, because a document
+ * is as tall as its content and its content was a textarea with a height hard-coded in rem.
+ * Widening it would not have helped; there was no width to widen, only an axis the flag
+ * could not talk about.
+ *
+ * So `wide` became `layout`, over both axes:
+ *
+ *   reading — a measure, the shell scrolls. Forms and prose. The default.
+ *   wide    — no measure, the shell scrolls. Tables.
+ *   fill    — the whole pane, no padding, no measure; the tab is `h-full` and scrolls its
+ *             own regions. Editors, which need to know how tall they are.
  */
 const TABS: {
   id: SettingsTab;
@@ -37,10 +53,16 @@ const TABS: {
   hint: string;
   icon: typeof Cpu;
   /** Omitted means the reading measure. */
-  wide?: boolean;
+  layout?: "reading" | "wide" | "fill";
 }[] = [
-  { id: "model", label: "Model", hint: "where he thinks", icon: Cpu, wide: true },
-  { id: "persona", label: "Persona", hint: "who he is, in his own files", icon: FileText },
+  { id: "model", label: "Model", hint: "where he thinks", icon: Cpu, layout: "wide" },
+  {
+    id: "persona",
+    label: "Persona",
+    hint: "who he is, in his own files",
+    icon: FileText,
+    layout: "fill",
+  },
   { id: "skills", label: "Skills", hint: "what he knows how to do", icon: Puzzle },
   { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench },
   { id: "chat", label: "Conversation", hint: "reply length and reasoning", icon: MessageSquare },
@@ -49,6 +71,14 @@ const TABS: {
     label: "Advanced",
     hint: "his pace, limits and addresses",
     icon: SlidersHorizontal,
+    // A form, so `reading` looks like the right call and is not. A row here is a label and its
+    // help on the left and a number on the right, and the measure was being applied to the
+    // *row* — so on a wide window the pane drew itself 768px and put the rest of the screen
+    // in the margins, with thirty rows of two-line help stacking into a page you scroll for
+    // a long time. The measure belongs to the prose, which keeps it (`max-w-prose` on the two
+    // paragraphs in `Row`); the row wants the width, so the field it is about is beside it
+    // rather than a wrap away.
+    layout: "wide",
   },
 ];
 
@@ -83,6 +113,7 @@ export function SettingsPage({
   onConnectionSaved: () => void;
   onClose: () => void;
 }) {
+  const layer = useLayer(Layer.Overlay);
   const [snapshot, setSnapshot] = useState<SetupSnapshot | null>(null);
   const [error, setError] = useState("");
 
@@ -94,17 +125,27 @@ export function SettingsPage({
 
   useEffect(load, [load]);
 
-  // Escape closes, like every other overlay in the app.
+  /* Escape closes, like every other overlay in the app — but only when Escape has nothing
+   * nearer to close.
+   *
+   * This was bound to `window` with no test at all, so it also fired *through* anything opened
+   * on top of it. Open Persona's "Name the fragment" prompt, change your mind, press Escape:
+   * Radix dismissed the dialog and this dismissed the whole of Settings behind it, so a
+   * cancelled rename dropped you back in the chat. See `useLayer` for who owns a key. */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape" || !layer.frontmost()) return;
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const layout = TABS.find((entry) => entry.id === tab)?.layout ?? "reading";
+  const filling = layout === "fill" && !error && snapshot !== null;
+
   return (
-    <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
+    <div className="bg-background text-foreground fixed inset-0 z-30 flex flex-col">
       {/* Ambient wash so the page feels like the same warm room as the rest of the app. */}
       <div className="kith-ambient opacity-70" />
 
@@ -160,11 +201,23 @@ export function SettingsPage({
           </div>
         </nav>
 
-        <div className="min-w-0 flex-1 overflow-y-auto px-6 py-6">
+        <div
+          className={cn("min-w-0 flex-1", filling ? "flex min-h-0" : "overflow-y-auto px-6 py-6")}
+        >
+          {/* A filling tab gets the pane bare and is trusted with it. Everything else keeps the
+              wrapper it had — including the two messages below, which is why `filling` is false
+              until there is a snapshot: a one-line "Reading his setup…" pinned to the very corner
+              of an unpadded pane is not a layout anyone chose.
+
+              `flex-col` and not the row it was. A row lays its child out along the main axis, so
+              the tab became a flex item at `flex: 0 1 auto` and sized to its own content — about
+              900px of header text — leaving 600px of the pane empty and looking for all the world
+              like the measure was still being applied. A column stretches its children across the
+              cross axis, which is the width, which is what "fill" was supposed to mean. */}
           <div
             className={cn(
-              "mx-auto",
-              TABS.find((entry) => entry.id === tab)?.wide ? "max-w-none" : "max-w-3xl",
+              filling ? "flex min-h-0 flex-1 flex-col" : "mx-auto",
+              filling ? "" : layout === "wide" ? "max-w-none" : "max-w-3xl",
             )}
           >
             {error ? (
@@ -195,7 +248,7 @@ export function SettingsPage({
                 }}
               />
             ) : tab === "persona" ? (
-              <PersonaTab />
+              <PersonaTab connection={snapshot.connection} />
             ) : tab === "chat" ? (
               <ChatTab config={config} connection={snapshot.connection} onSave={onSaveConfig} />
             ) : (

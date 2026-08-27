@@ -225,3 +225,34 @@ def isolated_tuning(tmp_path_factory):
     tuning.use_file(path)
     yield path
     tuning.use_file(None)
+
+
+@pytest.fixture(autouse=True)
+def never_the_real_persona(tmp_path_factory, monkeypatch):
+    """No test can write into `server/persona`, which is who he is, not the suite's fixture.
+
+    The fourth of these, found the way the other three were: by a test writing into it. One
+    reload short of correct — `settings.PERSONA_DIR` is read at import from the environment,
+    so a test that sets `KITH_PERSONA_DIR` and reloads only `kith.services.persona` gets a
+    module still pointing at the shipped folder. It saved "Your name is Atlas." over
+    `00-who.md` and nothing failed; the suite passed, and the only trace was one line in
+    `git status` that looks exactly like an intentional edit.
+
+    That is the whole danger with this folder in particular. A stray transcript is litter you
+    eventually notice. A stray persona edit is a behaviour change to the product, it survives
+    into a commit, and it ships.
+
+    Seeded with a copy of the real fragments rather than left empty, because tests that assert
+    on the prompt want a persona that looks like one, and an empty folder would make them pass
+    for the wrong reason.
+    """
+    live = tmp_path_factory.mktemp("persona")
+    shutil.copytree(kith.settings.BUNDLED_PERSONA_DIR, live, dirs_exist_ok=True)
+    monkeypatch.setattr(kith.settings, "DEFAULT_PERSONA_DIR", live)
+    monkeypatch.setattr(kith.settings, "BUNDLED_PERSONA_DIR", live)
+    monkeypatch.setattr(kith.settings, "PERSONA_DIR", "")
+    monkeypatch.delenv("KITH_PERSONA_DIR", raising=False)
+    for name, module in list(sys.modules.items()):
+        if name.startswith("kith.") and hasattr(module, "_DEFAULT_DIR"):
+            monkeypatch.setattr(module, "_DEFAULT_DIR", live, raising=False)
+    yield live

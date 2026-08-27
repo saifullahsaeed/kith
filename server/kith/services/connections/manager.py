@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from kith.config import CONTEXT_KEY, ollama_host
+from kith.config import CAPABILITIES_KEY, CONTEXT_KEY, ollama_host
 from kith.domain.connection import Connection, ModelInfo, Pick, ProviderKind, Tier
 from kith.infra.db import config_store
 from kith.services.connections import providers
@@ -27,10 +27,6 @@ from kith.services.connections.providers import ProviderError
 #: A derived check alone cannot tell "never set up" from "set up locally, Ollama is
 #: simply off right now", and re-running onboarding on the second case would be wrong.
 ONBOARDED_KEY = "onboarded"
-
-#: What the chosen model can be given. Cached at adoption because asking the provider on
-#: every render would put a network call behind a button's disabled state.
-CAPABILITIES_KEY = "model_capabilities"
 
 #: Where a cloud key waits while a local connection is in use. Switching provider used to
 #: delete it outright, which meant "try the local model for a minute" cost you a trip to

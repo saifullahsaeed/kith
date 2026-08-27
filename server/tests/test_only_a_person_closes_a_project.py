@@ -32,7 +32,7 @@ def test_asking_anyway_is_refused_not_silently_dropped(db: Path) -> None:
     the field would read as "saved" while doing nothing — this has to say why not."""
     project = repo.projects.add_project(db, "p")
 
-    out = registry.get("update_project").run(db, {"id": project["id"], "status": "done"})
+    out = registry.require("update_project").run(db, {"id": project["id"], "status": "done"})
 
     assert "error" in out
     assert "person" in out["error"].lower()
@@ -43,6 +43,6 @@ def test_an_allowed_status_still_goes_through(db: Path) -> None:
     """The refusal must not have taken the rest of the tool down with it."""
     project = repo.projects.add_project(db, "p")
 
-    registry.get("update_project").run(db, {"id": project["id"], "status": "paused"})
+    registry.require("update_project").run(db, {"id": project["id"], "status": "paused"})
 
     assert repo.projects.get_project(db, project["id"])["status"] == "paused"

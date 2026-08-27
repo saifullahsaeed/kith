@@ -127,7 +127,7 @@ class TestTheBriefFollowsTheBoard:
     def test_filing_a_task_writes_its_brief(self, linked):
         from kith.tools import registry
 
-        registry.get("add_task").run(
+        registry.require("add_task").run(
             linked["db"],
             {
                 "goal": "Wire the login form",
@@ -147,7 +147,7 @@ class TestTheBriefFollowsTheBoard:
         whenever the board changes rather than being a second place to change it."""
         from kith.tools import registry
 
-        made = registry.get("add_task").run(
+        made = registry.require("add_task").run(
             linked["db"],
             {
                 "goal": "Wire the login form",
@@ -155,7 +155,7 @@ class TestTheBriefFollowsTheBoard:
                 "project_id": linked["id"],
             },
         )
-        registry.get("add_checklist_item").run(
+        registry.require("add_checklist_item").run(
             linked["db"], {"id": int(made["id"]), "text": "the proxy port was wrong"}
         )
 
@@ -166,5 +166,5 @@ class TestTheBriefFollowsTheBoard:
         """A one-off errand belongs to nobody's repository."""
         from kith.tools import registry
 
-        registry.get("add_task").run(linked["db"], {"goal": "Buy milk"})
+        registry.require("add_task").run(linked["db"], {"goal": "Buy milk"})
         assert not any("buy-milk" in name for name in self.briefs(linked["project"]))

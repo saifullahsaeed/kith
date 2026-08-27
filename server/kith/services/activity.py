@@ -131,7 +131,7 @@ class Feed:
         used to be accepted and silently dropped, which on a feed looks exactly like a line
         that was never published.
         """
-        item = {"kind": kind, "text": text, "at": _now()}
+        item: dict[str, object] = {"kind": kind, "text": text, "at": _now()}
         if tokens:
             item["tokens"] = tokens
         if tool:

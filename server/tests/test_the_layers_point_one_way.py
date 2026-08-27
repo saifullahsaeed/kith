@@ -214,6 +214,8 @@ def _edges() -> dict[tuple[str, str], list[str]]:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
+            if not isinstance(node, ast.Import | ast.ImportFrom):
+                continue
             for target in _targets(node):
                 there = _package(target)
                 if there == here or there not in RANK:
@@ -277,6 +279,8 @@ def test_the_kernel_imports_nothing_from_kith():
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
+            if not isinstance(node, ast.Import | ast.ImportFrom):
+                continue
             for target in _targets(node):
                 if _package(target) != "kernel":
                     offences.append(f"{path.relative_to(SOURCE.parent)}:{node.lineno} -> {target}")
@@ -345,11 +349,9 @@ def test_each_context_variable_is_built_exactly_once():
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            is_ctxvar = (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "ContextVar"
-            )
+            if not isinstance(node, ast.Call):
+                continue
+            is_ctxvar = isinstance(node.func, ast.Name) and node.func.id == "ContextVar"
             if is_ctxvar and node.args and isinstance(node.args[0], ast.Constant):
                 built[str(node.args[0].value)].append(f"{path.relative_to(SOURCE.parent)}:{node.lineno}")
     twice = {name: where for name, where in built.items() if len(where) > 1}

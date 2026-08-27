@@ -23,15 +23,19 @@ def _fail(exc: Exception, status: int = 400):
     description=(
         "Every fragment including the disabled ones, in merge order, with its text. "
         "`merged` is what actually reaches the model — the fragments joined, comments "
-        "stripped — so the size of the thing being edited is visible while editing it."
+        "stripped — so the size of the thing being edited is visible while editing it. "
+        "`parts` is that same text still separated by the file it came from, because a "
+        "reader who finds a sentence in the merge needs to know which fragment to open."
     ),
 )
 def get_persona():
-    merged = persona.load_persona()
+    parts = persona.merged_parts()
+    merged = "\n\n".join(part["text"] for part in parts)
     return jsonify(
         {
             "folder": str(persona.persona_dir()),
             "fragments": persona.fragments(),
+            "parts": parts,
             "merged": merged,
             "chars": len(merged),
         }

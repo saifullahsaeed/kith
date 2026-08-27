@@ -22,14 +22,14 @@ __all__ = ["KINDS", "create", "delete", "snapshot", "timeline", "update"]
 
 def delete(path: Path, kind: str, key: str) -> bool:
     entry = require(kind, "remove")
-    return bool(entry.remove(path, entry.key(key)))
+    return bool(entry.operation("remove")(path, entry.key(key)))
 
 
 def create(path: Path, kind: str, data: dict) -> dict:
     entry = require(kind, "add")
-    return entry.add(path, data)
+    return entry.operation("add")(path, data)
 
 
 def update(path: Path, kind: str, key: str, data: dict) -> dict | Any | None:
     entry = require(kind, "edit")
-    return entry.edit(path, entry.key(key), data)
+    return entry.operation("edit")(path, entry.key(key), data)

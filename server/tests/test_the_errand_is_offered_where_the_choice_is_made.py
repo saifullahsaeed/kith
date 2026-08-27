@@ -34,7 +34,7 @@ from kith.tools import registry
 
 
 def described(name: str) -> str:
-    entry = registry.get(name)
+    entry = registry.require(name)
     assert entry is not None, f"{name} is not registered"
     return entry.description
 

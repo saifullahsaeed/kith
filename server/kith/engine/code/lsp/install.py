@@ -162,7 +162,7 @@ def run(family: str) -> tuple[bool, str]:
                 "--no-fund",
                 "--no-audit",
                 "--silent",
-                *installable(family).split(),
+                *(installable(family) or "").split(),
             ],
             capture_output=True,
             text=True,

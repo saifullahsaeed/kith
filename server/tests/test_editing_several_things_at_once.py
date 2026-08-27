@@ -321,7 +321,7 @@ class TestTheToolWrapper:
         from kith.tools import registry
 
         write(workspace_root, "t.py", "q = 1\n")
-        tool = registry.get("edit_files")
+        tool = registry.require("edit_files")
         assert tool is not None
 
         result = tool.run(
@@ -334,5 +334,5 @@ class TestTheToolWrapper:
     def test_a_non_list_is_refused_rather_than_crashing(self, workspace_root, tmp_path):
         from kith.tools import registry
 
-        result = registry.get("edit_files").run(tmp_path / "agent.db", {"edits": "not a list"})
+        result = registry.require("edit_files").run(tmp_path / "agent.db", {"edits": "not a list"})
         assert "error" in result

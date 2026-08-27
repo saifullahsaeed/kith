@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from sqlalchemy import delete, func, select
 
-from kith.infra.db.engine import as_dict, session
+from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Source, SourceChunk
 from kith.infra.db.support import utc_now_iso
 from kith.infra.db.vectors import cosine, pack_vector, unpack_vector
@@ -114,12 +115,21 @@ def delete_source(path: Path, source_id: int) -> bool:
         # Chunks first: they reference the source, and leaving them behind would
         # keep the text searchable after the source was supposedly deleted.
         db.execute(delete(SourceChunk).where(SourceChunk.source_id == source_id))
-        return db.execute(delete(Source).where(Source.id == source_id)).rowcount > 0
+        return changed(db.execute(delete(Source).where(Source.id == source_id))) > 0
 
 
-def _rank(rows, query_vec: list[float], vector_of, limit: int) -> list[tuple[float, object]]:
-    """Cosine-rank rows by their stored vector, best first, dropping non-matches."""
-    scored = []
+def _rank[Row](
+    rows: Iterable[Row],
+    query_vec: list[float],
+    vector_of: Callable[[Row], bytes | None],
+    limit: int,
+) -> list[tuple[float, Row]]:
+    """Cosine-rank rows by their stored vector, best first, dropping non-matches.
+
+    Generic in the row type so a caller gets back what it put in. Returning `object` meant every
+    `row.title` / `row.source_id` that unpacks these results was unprovable.
+    """
+    scored: list[tuple[float, Row]] = []
     for row in rows:
         similarity = cosine(query_vec, unpack_vector(vector_of(row)))
         if similarity > 0:

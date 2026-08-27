@@ -158,7 +158,7 @@ def stream_once(
         response.close()
 
 
-def _stats_from_done(chunk: dict, model: str = "") -> dict[str, float]:
+def _stats_from_done(chunk: dict, model: str = "") -> dict[str, str | int | float]:
     """Convert Ollama's nanosecond durations and counts into friendly stats."""
     eval_count = chunk.get("eval_count") or 0
     eval_duration = chunk.get("eval_duration") or 0

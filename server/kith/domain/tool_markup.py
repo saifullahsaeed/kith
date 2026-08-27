@@ -130,7 +130,10 @@ class ToolMarkupFilter:
     def flush(self) -> str:
         """Whatever is still held, scrubbed — call once the stream ends."""
         remaining, self._held = self._held, ""
-        if self._suppressing:
+        # Reset with the buffer. Leaving it set meant a filter fed again after a flush
+        # suppressed everything from the first character, having been told the stream ended.
+        was_suppressing, self._suppressing = self._suppressing, False
+        if was_suppressing:
             # An unclosed block runs to the end of the answer; none of it is prose.
             return ""
         return strip_tool_markup(remaining)

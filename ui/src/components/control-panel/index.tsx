@@ -53,6 +53,7 @@ import { Schedules } from "./schedules";
 import { Sources } from "./sources";
 import { INPUT, KIND_LABEL } from "./types";
 import type { ProjectRef, Tab } from "./types";
+import { Layer, useLayer } from "@/hooks/use-layer";
 
 export function ControlPanel({
   tab,
@@ -69,6 +70,7 @@ export function ControlPanel({
 }) {
   const confirm = useConfirm();
   const cache = useQueryClient();
+  const layer = useLayer(Layer.Panel);
   const [query, setQuery] = useState("");
   // Work drills down: projects list → one project → one task.
   const [openProject, setOpenProject] = useState<ProjectRef | null>(null);
@@ -194,8 +196,9 @@ export function ControlPanel({
         // An open context menu owns Escape. Radix closes it without stopping the event
         // reaching here, so without this check right-clicking a card and pressing
         // Escape closed the entire panel — which is what happened the first time I
-        // tried it.
-        if (document.querySelector('[role="menu"], [role="dialog"]')) return;
+        // tried it. That test now lives in `useLayer`, along with the four other copies
+        // of it this file's version had already drifted from.
+        if (!layer.frontmost()) return;
         // Something below already dealt with it — a date picker closing its calendar, a field
         // reverting its own draft. Handled once, by whoever is nearest.
         if (event.defaultPrevented) return;

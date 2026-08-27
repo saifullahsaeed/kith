@@ -80,7 +80,7 @@ class TestTheMeterDescribesTheRoundItIsIn:
         this cannot.
         """
 
-        def once(rounds: int) -> int:
+        def once(rounds: int) -> tuple[list[str], int]:
             seen: list[list[str]] = []
 
             def fake_stream(convo, config, host_url, tools=None, tool_choice="auto", routing=None):

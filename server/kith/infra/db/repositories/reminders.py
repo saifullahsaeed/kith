@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 
 from kith.domain.enums import REMINDER_STATUSES
-from kith.infra.db.engine import as_dict, session
+from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Reminder
 from kith.infra.db.support import utc_now_iso
 
@@ -59,4 +59,4 @@ def set_reminder_status(path: Path, reminder_id: int, status: str) -> dict | Non
 
 def delete_reminder(path: Path, reminder_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(Reminder).where(Reminder.id == reminder_id)).rowcount > 0
+        return changed(db.execute(delete(Reminder).where(Reminder.id == reminder_id))) > 0

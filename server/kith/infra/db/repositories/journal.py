@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import delete, select
 
-from kith.infra.db.engine import as_dict, session
+from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import JournalEntry
 from kith.infra.db.support import utc_now_iso
 
@@ -27,4 +27,4 @@ def list_journal(path: Path, limit: int = 50) -> list[dict]:
 
 def delete_journal(path: Path, entry_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(JournalEntry).where(JournalEntry.id == entry_id)).rowcount > 0
+        return changed(db.execute(delete(JournalEntry).where(JournalEntry.id == entry_id))) > 0

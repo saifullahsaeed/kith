@@ -26,14 +26,8 @@ import requests
 
 from kith.domain import connection
 from kith.domain.chat import Config, Routing
+from kith.domain.enums import REASONING_EFFORTS
 from kith.llm import budget, caching
-
-#: OpenRouter's full reasoning-effort scale, descending. Confirmed against their own
-#: SDK types (``ReasoningEffort``/``ChatRequestReasoningEffort``, both generated from
-#: their OpenAPI spec) rather than guessed — a value outside this set used to fall
-#: through to the plain enabled/disabled switch below, silently overriding whatever
-#: was actually asked for.
-REASONING_EFFORTS: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal", "none")
 
 #: What share of ``max_tokens`` each effort level hands to thinking, from OpenRouter's own
 #: documentation: "max" allocates approximately 95% of max_tokens, xhigh 95%, high 80%,
@@ -427,8 +421,11 @@ def stream_once(
     finish = ""
     generation = ""
     try:
-        for line in response.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data:"):
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+            line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8", "replace")
+            if not line.startswith("data:"):
                 continue
             data = line[len("data:") :].strip()
             if data == "[DONE]":
@@ -604,7 +601,7 @@ def _stats(
     provider: str = "",
     finish: str = "",
     generation: str = "",
-) -> dict[str, float]:
+) -> dict[str, str | int | float]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)

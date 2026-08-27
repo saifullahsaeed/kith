@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from kith.domain.chat import Routing
-from kith.domain.tuning import GROUPS, TUNABLES, Tunable, for_key
+from kith.domain.tuning import BY_KEY, GROUPS, TUNABLES, Tunable, for_key
 from kith.settings import DATA_DIR
 
 #: The prefix rows used to carry in the settings table, kept only so the one-time move
@@ -115,7 +115,19 @@ def _read(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         print(f"[tuning] {path} is not a JSON object — using defaults")
         return {}
-    return {key: item for key, item in raw.items() if key != _BANNER}
+    kept = {key: item for key, item in raw.items() if key != _BANNER and key in BY_KEY}
+    # Said out loud for the same reason a malformed file is, and it is the same symptom: a key
+    # nothing reads is a setting that does nothing. Two of them — `min_gap` and `task_tick_cap`,
+    # left behind when the tick loop was removed — sat in a real settings file for months. They
+    # could not be seen on the Advanced screen either, because that screen is drawn from the
+    # declared knobs, so the only way to find them was to read the file and then grep the tree.
+    #
+    # Dropped as well as reported, so the next write leaves them out rather than carrying them
+    # forward forever.
+    stale = sorted(set(raw) - set(kept) - {_BANNER})
+    if stale:
+        print(f"[tuning] {path} sets {', '.join(stale)}, which nothing reads — ignoring")
+    return kept
 
 
 def _write(values: dict[str, Any]) -> None:
@@ -350,7 +362,7 @@ def _paths() -> list[dict]:
             "label": "These settings",
             "value": str(settings_file()),
             "env": "",
-            "bytes": _stamp(settings_file())[1] if _stamp(settings_file()) else 0,
+            "bytes": stamped[1] if (stamped := _stamp(settings_file())) else 0,
             "open": True,
             "note": "Everything on this page, as JSON you can edit. Only what you changed is in it.",
         },

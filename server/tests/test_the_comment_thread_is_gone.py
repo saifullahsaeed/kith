@@ -52,11 +52,13 @@ class TestTheTaskNoLongerCarriesThem:
     def test_task_detail_has_no_comments(self, db: Path):
         task = repo.tasks.add_task(db, "Do it")
         detail = repo.tasks.task_detail(db, int(task["id"]))
+        assert detail is not None
         assert "comments" not in detail
 
     def test_it_still_carries_what_replaced_them(self, db: Path):
         task = repo.tasks.add_task(db, "Do it")
         detail = repo.tasks.task_detail(db, int(task["id"]))
+        assert detail is not None
         for kept in ("plan", "checklist", "deliverables"):
             assert kept in detail
 

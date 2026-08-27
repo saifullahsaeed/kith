@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { renderTarget, sweepOrphans } from "@/lib/mermaid-config";
+import { mermaidConfig, renderTarget, sweepOrphans } from "@/lib/mermaid-config";
 
 function leftBehind(id: string) {
   const orphan = document.createElement("div");
@@ -92,5 +92,51 @@ describe("somewhere of our own to render in", () => {
   it("comes back if something removes it", () => {
     renderTarget().remove();
     expect(renderTarget().isConnected).toBe(true);
+  });
+});
+
+/**
+ * Every kind of drawing has to look like it came from here.
+ *
+ * mermaid themes flowcharts from `themeVariables` and then, for several diagram types, quietly
+ * does not: `xychart` falls back to a hardcoded `#3498db`, quadrant and timeline to palettes of
+ * their own. Nobody notices while the only thing anyone draws is boxes and arrows — and the
+ * persona had taught exactly that, listing "a flow, a sequence, a state machine" as what counts
+ * as a shape. The moment it also says to reach for a chart, an unthemed chart is what ships:
+ * stock blue on cream, looking pasted in from another application.
+ */
+describe("a drawing that is not a flowchart", () => {
+  const stock = ["#3498db", "#ECECFF", "#FFF4DD", "#ff0000", "#4d4d4d"];
+
+  it("is coloured from the same palette as everything else", () => {
+    for (const dark of [false, true]) {
+      const vars = mermaidConfig(dark).themeVariables as Record<string, never>;
+      const palette = (vars.xyChart as unknown as { plotColorPalette: string }).plotColorPalette;
+      expect(palette.split(",")).toHaveLength(6);
+      for (const colour of stock) expect(palette.toLowerCase()).not.toContain(colour.toLowerCase());
+      // The same six, in the same order, as the pie — one set of numbers shown two ways in one
+      // reply should not change colour between them.
+      expect(palette.split(",")[0]).toBe(vars.pie1);
+      expect(palette.split(",")[1]).toBe(vars.pie2);
+    }
+  });
+
+  it("has its axes and labels themed, not left to the default", () => {
+    const vars = mermaidConfig(false).themeVariables as Record<string, never>;
+    const chart = vars.xyChart as unknown as Record<string, string>;
+    for (const key of ["titleColor", "xAxisLabelColor", "yAxisLineColor", "dataLabelColor"]) {
+      expect(chart[key], key).toBeTruthy();
+    }
+    expect(vars.quadrantPointFill).toBeTruthy();
+    expect(vars.cScale0).toBeTruthy();
+  });
+
+  it("is told to fit the column, like the flowchart already was", () => {
+    // Without this each renders at its own fixed pixel width, so a chart wider than the thread
+    // is clipped rather than scaled — which reads as broken, not as narrow.
+    const config = mermaidConfig(false) as unknown as Record<string, { useMaxWidth?: boolean }>;
+    for (const kind of ["flowchart", "sequence", "xyChart", "pie", "quadrantChart", "timeline"]) {
+      expect(config[kind]?.useMaxWidth, kind).toBe(true);
+    }
   });
 });

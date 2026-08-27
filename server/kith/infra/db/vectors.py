@@ -12,9 +12,12 @@ def pack_vector(vec: list[float] | None) -> bytes | None:
     return array("f", vec).tobytes() if vec else None
 
 
-def unpack_vector(blob: bytes) -> array:
+def unpack_vector(blob: bytes | None) -> array:
+    """Read a packed vector back. A row with no vector yields an empty one, which `cosine`
+    scores at 0 — "never embedded" and "no similarity" want the same answer here."""
     vec = array("f")
-    vec.frombytes(blob)
+    if blob:
+        vec.frombytes(blob)
     return vec
 
 

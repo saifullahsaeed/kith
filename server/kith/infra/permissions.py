@@ -47,6 +47,13 @@ from kith.kernel import changes, live_turns, session_context
 
 #: How each request was answered, by id. Separate from `Request` because that is frozen —
 #: it describes what he wanted, which does not change, and the verdict is a different fact.
+#:
+#: A verdict only has to survive from `approve`/`deny` until the parked call reads it, and
+#: `_wait_for` drops its own on the way past. What is left are the ones nobody came back for —
+#: a waiter that had already timed out, or a request answered with no call parked on it — and
+#: nothing removed those, so this grew for the life of the process. `_remember_verdict` bounds
+#: it. Evicting a verdict is safe in the one direction that matters: a reader that finds
+#: nothing treats it as a refusal.
 _answered: dict[str, bool] = {}
 
 MODE_KEY = "permission_mode"
@@ -55,6 +62,11 @@ GRANTS_KEY = "permission_grants"
 #: How many pending requests to keep. They are questions awaiting an answer, not a log;
 #: past a handful the oldest are stale and the list becomes noise.
 MAX_PENDING = 12
+
+#: How many verdicts to hold. Generous against `MAX_PENDING` because a verdict may be written
+#: for a request that has already been evicted from `_pending`, and the reader deserves to find
+#: it; small enough that it cannot grow without bound.
+_MAX_ANSWERED = MAX_PENDING * 8
 
 
 class Mode(StrEnum):
@@ -224,6 +236,14 @@ class Request:
     kind: Kind
     what: str
     why: str
+    #: What approving this grants, decided by the check that raised it.
+    #:
+    #: Carried rather than re-derived. `approve` used to rebuild it from `why` by splitting on
+    #: the word "involves", which only works while `why` is the sentence the check wrote — and
+    #: `_refuse` replaces `why` with a caller's `purpose` whenever one is given. A dangerous
+    #: command approved through a caller that supplies one was stored under the purpose text
+    #: and never matched the check's signature again, so "always allow" silently did nothing.
+    signature: str = ""
     at: float = field(default_factory=time.time)
     #: Set by `approve` or `deny`. The tool call that raised this request is parked on it.
     #: Only ever `.set()`, never reassigned — this dataclass is frozen, and the verdict itself
@@ -286,6 +306,13 @@ _next_id = 0
 _state = threading.RLock()
 
 
+def _remember_verdict(request_id: str, allowed: bool) -> None:
+    """Record how a request was answered. Caller holds `_state`."""
+    _answered[request_id] = allowed
+    while len(_answered) > _MAX_ANSWERED:
+        _answered.pop(next(iter(_answered)))
+
+
 def _store():
     """The database, and deliberately not `settings.json`.
 
@@ -341,21 +368,59 @@ def _remember_always(signature: str) -> None:
 def granted(signature: str) -> bool:
     """Has this exact thing been allowed before?
 
-    Path grants match by prefix so approving a folder approves what is in it — approving
-    ``~/Downloads`` and then being asked again for every file in it is the kind of gate
-    people turn off entirely.
+    A path grant covers what is *inside* it, so approving a folder approves its contents —
+    approving ``~/Downloads`` and then being asked again for every file in it is the kind of
+    gate people turn off entirely.
+
+    Containment is asked of the path, not of the string. `startswith` on the text says yes to
+    every sibling that merely begins the same way: a grant on `~/Documents` covered
+    `~/Documents-private`, and a grant on `notes.txt` covered `notes.txt.bak`. Neither is
+    inside anything that was approved.
     """
     with _state:
         if signature in _session_grants:
             return True
         allowed = _session_grants | always_grants()
     for grant in allowed:
-        if grant.startswith("path:") and signature.startswith("path:"):
-            if signature[5:].startswith(grant[5:]):
-                return True
-        elif grant == signature:
+        if grant == signature:
+            return True
+        if grant.startswith("path:") and signature.startswith("path:") and _covers(grant[5:], signature[5:]):
             return True
     return False
+
+
+def _under(target: Path, roots: tuple[str, ...]) -> bool:
+    """Is `target` one of these directories, or inside one?
+
+    The same question `_covers` asks, for the fixed prefix lists. Also by path rather than by
+    text: `str(target).startswith(("/tmp", "/usr"))` skipped `/tmpfoo` and `/usrdata` too, and
+    for these lists a false match means the path check is not run at all.
+    """
+    for root in roots:
+        if not root:
+            continue
+        try:
+            if target.is_relative_to(Path(root)):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _covers(grant: str, wanted: str) -> bool:
+    """Is `wanted` the granted path, or inside it?
+
+    Both are already resolved absolute paths — `check_path` builds every signature from
+    `_resolve`. Never raises: a grant that cannot be read as a path grants nothing, which is
+    the safe answer and keeps a malformed row from taking the gate down.
+    """
+    if not grant:
+        # An empty grant would otherwise be a prefix of everything.
+        return False
+    try:
+        return Path(wanted).is_relative_to(Path(grant))
+    except (OSError, ValueError):
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -406,7 +471,7 @@ def check_path(kind: Kind, target: Path, root: Path, purpose: str = "") -> Decis
     # decision than saving a report, and it should be a decision rather than a default —
     # but it has to say what it is, or you are approving a path instead of a capability.
     skills_dir = _skills_root()
-    if skills_dir and str(resolved).startswith(skills_dir) and kind in {"write", "delete"}:
+    if skills_dir and _under(resolved, (skills_dir,)) and kind in {"write", "delete"}:
         name = _skill_named(resolved, skills_dir)
         doing = "change" if kind == "write" else "remove"
         return _refuse(
@@ -461,7 +526,7 @@ def check_command(command: str, root: Path, purpose: str = "") -> Decision:
             if installed_skills:
                 skip = (*skip, installed_skills)
         for target in paths_named(command):
-            if str(target).startswith(skip):
+            if _under(target, skip):
                 continue
             decision = check_path(intent, target, root, purpose)
             if not decision.allowed:
@@ -488,10 +553,13 @@ def _refuse(kind: Kind, what: str, why: str, signature: str, purpose: str = "") 
     global _next_id
     with _state:
         _next_id += 1
-        request = Request(id=f"p{_next_id}", kind=kind, what=what, why=purpose or why)
+        request = Request(id=f"p{_next_id}", kind=kind, what=what, why=purpose or why, signature=signature)
         _pending[request.id] = request
         while len(_pending) > MAX_PENDING:
-            _pending.pop(next(iter(_pending)))
+            evicted = _pending.pop(next(iter(_pending)))
+            # The verdict goes with the question. `_answered` is keyed by request id and had
+            # nothing removing anything from it, so it grew for the life of the process.
+            _answered.pop(evicted.id, None)
     # Something is waiting on a person. Published outside the lock, and before the turn parks
     # itself in `_wait_for` — the interface had no way to learn this except by asking every 2.5
     # seconds whether a request had appeared.
@@ -608,7 +676,9 @@ def _wait_for(decision: Decision) -> None:
     if not request.settled.wait(timeout=_DEADLINE_SECONDS):
         raise Denied(decision)
     with _state:
-        answered = _answered.get(request.id)
+        # Read and dropped together: this is the only reader of its own verdict, and leaving it
+        # behind is what made `_answered` grow for the life of the process.
+        answered = _answered.pop(request.id, None)
     if not answered:
         raise Denied(decision)
 
@@ -674,7 +744,7 @@ def release_waiting() -> None:
     with _state:
         waiting = list(_pending.values())
         for request in waiting:
-            _answered[request.id] = False
+            _remember_verdict(request.id, False)
     # Woken outside the lock: each `set()` releases a thread that will immediately want it.
     for request in waiting:
         request.settled.set()
@@ -707,7 +777,7 @@ def approve(request_id: str, scope: str = "session") -> dict:
         if scope == "always":
             _remember_always(signature)
         _session_grants.add(signature)
-        _answered[request.id] = True
+        _remember_verdict(request.id, True)
     # Outside: waking the waiter hands it a thread that wants this lock immediately.
     request.settled.set()
     # And the card goes. Hearing when one opens but not when it closes leaves a dialog on screen
@@ -721,7 +791,7 @@ def deny(request_id: str) -> dict:
         request = _pending.pop(request_id, None)
         if request is None:
             raise KeyError(request_id)
-        _answered[request.id] = False
+        _remember_verdict(request.id, False)
     request.settled.set()
     changes.publish("permission")
     return request.public()
@@ -763,6 +833,13 @@ def revoke(signature: str) -> bool:
 
 
 def _signature(request: Request) -> str:
+    """What approving this request grants.
+
+    The check that raised it already worked this out — see `Request.signature`. The fallback is
+    for a request built without one, which only a test does.
+    """
+    if request.signature:
+        return request.signature
     return (
         f"path:{request.what}" if request.kind != "command" else f"cmd:{request.why.split('involves ')[-1]}"
     )

@@ -133,15 +133,38 @@ class Skill:
 # --------------------------------------------------------------------------- #
 
 
+_seeded = False
+
+
 def root() -> Path:
-    """The skills folder, created if it is not there.
+    """The skills folder, created if it is not there, with the bundled skills in it on first run.
 
     Where it *is* comes from `settings.skills_dir()`; making it exist is this function's half.
     The split is because `infra/permissions.py` needs the location and must not reach up here
     to get it, and because a permission check has no business creating a directory.
+
+    The seeding is the same bargain the persona strikes: what ships is a starting point, not a
+    managed set. It is copied when the folder is not there at all — so a first run gets whatever
+    `settings.BUNDLED_SKILLS_DIR` holds, and someone who then removes one has removed it. An
+    update never puts a skill back, because the folder exists by then.
     """
+    global _seeded
     place = settings.skills_dir()
+    first_run = not place.exists()
     place.mkdir(parents=True, exist_ok=True)
+    if first_run and not _seeded:
+        _seeded = True
+        bundled = settings.BUNDLED_SKILLS_DIR
+        if bundled.is_dir() and bundled.resolve() != place.resolve():
+            for skill in bundled.iterdir():
+                if not skill.is_dir():
+                    continue
+                try:
+                    shutil.copytree(skill, place / skill.name, copy_function=shutil.copy)
+                except (OSError, shutil.Error):
+                    # A skill that will not copy is a skill he does not have, which the Skills
+                    # screen shows plainly. It is not a reason to refuse to start.
+                    pass
     return place
 
 

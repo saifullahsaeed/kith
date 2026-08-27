@@ -4,6 +4,7 @@ import { AlertTriangle, FolderOpen, Loader2, Puzzle, ShieldAlert, X } from "luci
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { openOnHost } from "@/lib/files";
+import { estimateTokens } from "@/lib/tokens";
 import {
   fetchSkills,
   installSkill,
@@ -133,7 +134,7 @@ export function SkillsTab() {
             <span className="text-muted-foreground/60 text-xs">
               vs{" "}
               <span className="font-mono tabular-nums">
-                {Math.round(inlined / 3.7).toLocaleString()}
+                {estimateTokens(inlined).toLocaleString()}
               </span>{" "}
               if their instructions were loaded too
             </span>
@@ -171,7 +172,7 @@ export function SkillsTab() {
                       {skill.name}
                     </button>
                     <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
-                      {Math.round(skill.bodyChars / 3.7).toLocaleString()} tokens when read
+                      {estimateTokens(skill.bodyChars).toLocaleString()} tokens when read
                       {skill.resources.length > 0 ? ` · ${skill.resources.length} files` : ""}
                     </span>
                     {skill.license ? (

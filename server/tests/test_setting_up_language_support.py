@@ -168,7 +168,9 @@ class TestThePromptHeAsksWith:
             f"he wants to install the typescript language server ({install.download_size('typescript')}) "
             f"from npm, into {install.prefix()} — delete that folder to undo it"
         )
-        decision = permissions.check_command(install.command_for("typescript"), project, purpose=why)
+        wanted = install.command_for("typescript")
+        assert wanted is not None
+        decision = permissions.check_command(wanted, project, purpose=why)
         assert not decision.allowed, "writing outside his folder should be gated"
         assert "language server" in decision.request.why
         assert "MB" in decision.request.why, "how big, because that is half the question"

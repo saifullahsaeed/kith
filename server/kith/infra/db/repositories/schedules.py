@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 
 from kith.domain.enums import SCHEDULE_STATUSES
-from kith.infra.db.engine import as_dict, session
+from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Schedule
 from kith.infra.db.support import notifies, utc_now_iso
 
@@ -80,4 +80,4 @@ def set_schedule_status(path: Path, schedule_id: int, status: str) -> dict | Non
 @notifies("schedule")
 def delete_schedule(path: Path, schedule_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(Schedule).where(Schedule.id == schedule_id)).rowcount > 0
+        return changed(db.execute(delete(Schedule).where(Schedule.id == schedule_id))) > 0

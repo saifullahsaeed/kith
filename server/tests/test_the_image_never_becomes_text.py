@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from kith.services.agent_loop import _image_from, without_image
+from kith.services.agent_loop import _images_from, without_image
 from kith.services.turn.history import _carries_image
 
 
@@ -35,7 +35,7 @@ class TestWhatTheModelReceives:
     def test_the_picture_arrives_as_a_picture(self):
         """Not as text. This is the whole point — his model takes images, and he spent hours
         redesigning a UI he could not see because `read_file` decodes as text."""
-        image = _image_from(an_image_result())
+        image = _images_from(an_image_result())[0]["image"]
         message = {
             "role": "user",
             "content": [

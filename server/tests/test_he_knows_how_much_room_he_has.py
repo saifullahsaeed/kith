@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import pytest
 
@@ -131,6 +131,37 @@ class TestItSurvivesTheRequestPath:
         """num_ctx is not sent to a cloud endpoint, so it says nothing about the window."""
         merged = merge_overrides(self.base(base_url="https://x", context_window=200_000), {"numCtx": 8_192})
         assert merged.context_window == 200_000
+
+    def test_the_session_id_is_not_dropped(self):
+        """The other field that is carried rather than derived. It pins a conversation's rounds
+        to one warm OpenRouter cache, so losing it here would cost money silently."""
+        merged = merge_overrides(self.base(session_id="kith-abc123"), {"effort": "high"})
+        assert merged.session_id == "kith-abc123"
+
+    def test_every_field_is_accounted_for(self):
+        """The guard for the whole class: a field added to Config and forgotten in
+        `merge_overrides` silently resets to its default on every chat request.
+
+        Every field is set away from its default first. Comparing a default-valued base against
+        the rebuild proves nothing — a dropped field would match the default it reset to.
+        """
+        distinct = {
+            "model": "guard/model",
+            "num_ctx": 12_345,
+            "num_predict": 4_321,
+            "system": "guard-system",
+            "think": False,
+            "effort": "xhigh",
+            "session_id": "kith-guard",
+            "base_url": "https://guard.example/v1",
+            "api_key": "guard-key",
+            "context_window": 199_999,
+        }
+        assert set(distinct) == {f.name for f in fields(Config)}, "a Config field has no guard value"
+        base = self.base(**distinct)
+        merged = merge_overrides(base, {})
+        dropped = [f.name for f in fields(Config) if getattr(merged, f.name) != getattr(base, f.name)]
+        assert not dropped, f"merge_overrides drops {dropped}"
 
 
 class TestTheBackfill:

@@ -49,7 +49,7 @@ class TestTheBindingSticks:
         )
 
         with session_context.working_in("c-1"):
-            registry.get("update_task").run(db, {"id": int(stray["id"]), "priority": "high"})
+            registry.require("update_task").run(db, {"id": int(stray["id"]), "priority": "high"})
 
         assert bound_to(db) == two_projects["hired"]
 
@@ -58,7 +58,7 @@ class TestTheBindingSticks:
 
         db = two_projects["db"]
         with session_context.working_in("c-1"):
-            registry.get("add_task").run(
+            registry.require("add_task").run(
                 db,
                 {
                     "goal": "A thing for the other project",
@@ -74,7 +74,7 @@ class TestTheBindingSticks:
 
         db = two_projects["db"]
         with session_context.working_in("c-1"):
-            registry.get("add_milestone").run(
+            registry.require("add_milestone").run(
                 db, {"project_id": two_projects["other"], "title": "Their first step"}
             )
 
@@ -85,7 +85,7 @@ class TestTheBindingSticks:
 
         db = two_projects["db"]
         with session_context.working_in("c-1"):
-            registry.get("add_milestone").run(
+            registry.require("add_milestone").run(
                 db, {"project_id": two_projects["hired"], "title": "Our next step"}
             )
 
@@ -103,7 +103,7 @@ class TestTheBindingSticks:
         db = two_projects["db"]
         before = {p["name"] for p in repo.projects.list_projects(db)}
         with session_context.working_in("c-1"):
-            out = registry.get("create_project").run(db, {"name": "Something New"})
+            out = registry.require("create_project").run(db, {"name": "Something New"})
 
         assert bound_to(db) == two_projects["hired"]
         assert "blocked" in out, out
@@ -124,7 +124,7 @@ class TestWhatBindsAnUnboundSession:
 
         repo.conversations.create(db, "c-2", "fresh", "kith-2")
         with session_context.working_in("c-2"):
-            made = registry.get("create_project").run(db, {"name": "Something New"})
+            made = registry.require("create_project").run(db, {"name": "Something New"})
 
         assert repo.conversations.project_of(db, "c-2") == int(made["id"])
         assert "note" not in made  # nothing to warn about when the bind actually took
@@ -138,7 +138,7 @@ class TestWhatBindsAnUnboundSession:
         project = repo.projects.add_project(db, "First", "a project")
 
         with session_context.working_in("c-2"):
-            registry.get("add_milestone").run(db, {"project_id": int(project["id"]), "title": "Step"})
+            registry.require("add_milestone").run(db, {"project_id": int(project["id"]), "title": "Step"})
 
         assert repo.conversations.project_of(db, "c-2") == int(project["id"])
 

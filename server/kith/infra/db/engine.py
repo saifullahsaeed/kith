@@ -18,8 +18,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import CursorResult, Engine, create_engine, event
+from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session, sessionmaker
 
 _engines: dict[str, Engine] = {}
@@ -71,3 +73,15 @@ def as_dict(row: object, *, drop: tuple[str, ...] = ()) -> dict:
     if mapper is None:
         raise TypeError(f"not a mapped instance: {type(row)!r}")
     return {column.key: getattr(row, column.key) for column in mapper.column_attrs if column.key not in drop}
+
+
+def changed(result: Result[Any]) -> int:
+    """How many rows an INSERT/UPDATE/DELETE actually touched.
+
+    `Session.execute` is typed as returning `Result`, which has no `rowcount` — that lives on
+    `CursorResult`, which is what a DML statement returns at runtime. Thirteen repositories were
+    reading `.rowcount` straight off the result and every one of them was a type error. One
+    named helper says what the number means and puts the narrowing in a single place.
+    """
+    assert isinstance(result, CursorResult), "changed() expects the result of a DML statement"
+    return result.rowcount

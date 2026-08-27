@@ -127,7 +127,7 @@ class TestTheAdviceMatchesTheTools:
         existed. He was following instructions."""
         from kith.tools import registry
 
-        described = registry.get("shell").description
+        described = registry.require("shell").description
         assert "start_process" in described
         assert "nohup … &`, which returns" not in described
 

@@ -208,6 +208,8 @@ def install_language_support(path: Path, args: dict):
         }
 
     command = install.command_for(confirm)
+    if command is None:
+        return {"error": f"There is no installer for {confirm}."}
     # The gate sees the exact string that will run, so the thing approved and the thing
     # executed cannot drift apart — and it is told what the command is *for*, because
     # otherwise the dialog is a path under ~/.kith and a sentence about writing outside the

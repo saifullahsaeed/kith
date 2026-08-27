@@ -209,7 +209,7 @@ class TestTheNudgeLeavesATrace:
     def test_it_is_announced_on_the_stream(self, db: Path, monkeypatch):
         def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
             yield dict(_empty() if not getattr(fake, "seen", False) else _spoke(), type="turn")
-            fake.seen = True
+            fake.seen = True  # type: ignore[attr-defined]  # a flag on the stub itself
 
         events = _run(fake, monkeypatch, db)
 

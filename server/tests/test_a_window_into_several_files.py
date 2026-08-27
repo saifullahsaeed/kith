@@ -94,7 +94,7 @@ class TestTheDescriptionMatchesTheBehaviour:
         which a reader takes as harmless — and the call was rejected."""
         from kith.tools import registry
 
-        described = registry.get("read_file").description
+        described = registry.require("read_file").description
         assert "only apply when you ask for one" not in described
         assert "window every file you asked for" in described
         assert "`symbol` is the exception" in described

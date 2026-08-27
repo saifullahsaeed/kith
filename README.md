@@ -41,7 +41,7 @@ why. Read the top of [`run`](run) — it documents what reloads and what does no
 Before shipping anything:
 
 ```sh
-./check        # ruff, ruff format, pytest, tsc, vite build
+./check        # ruff, ruff format, pyright, pytest, tsc, vite build
 ```
 
 ## The model

@@ -196,13 +196,13 @@ class TestWithNoLanguageServer:
             ("definition", {"path": "a.py", "symbol": "f"}),
             ("rename_symbol", {"path": "a.py", "symbol": "f", "new_name": "g"}),
         ]:
-            result = registry.get(name).run(tmp_path / "agent.db", args)
+            result = registry.require(name).run(tmp_path / "agent.db", args)
             assert "unavailable" in result, f"{name} did not degrade gracefully: {result}"
             assert "outline" in result["unavailable"] or "install" in result["unavailable"].lower()
 
     def test_the_file_is_not_touched_by_a_rename_that_cannot_happen(self, workspace_root, tmp_path):
         (workspace_root / "a.py").write_text("def f():\n    pass\n")
-        registry.get("rename_symbol").run(
+        registry.require("rename_symbol").run(
             tmp_path / "agent.db", {"path": "a.py", "symbol": "f", "new_name": "g"}
         )
         assert (workspace_root / "a.py").read_text() == "def f():\n    pass\n"
@@ -289,18 +289,18 @@ class TestAgainstRealPyright:
         return tmp_path
 
     def test_diagnostics_find_the_type_error(self, project, fresh_manager, tmp_path):
-        result = registry.get("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        result = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
 
         assert result.get("errors", 0) >= 1, result
         assert any(one["line"] == 5 for one in result["problems"])
 
     def test_a_clean_file_says_so(self, project, fresh_manager, tmp_path):
-        result = registry.get("diagnostics").run(tmp_path / "agent.db", {"path": "helpers.py"})
+        result = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "helpers.py"})
         assert result.get("errors") == 0, result
 
     def test_references_skip_the_comment_and_the_string(self, project, fresh_manager, tmp_path):
         """`greet` appears five times in app.py. Three are uses. grep cannot tell."""
-        result = registry.get("references").run(
+        result = registry.require("references").run(
             tmp_path / "agent.db", {"path": "helpers.py", "symbol": "greet"}
         )
 
@@ -308,7 +308,7 @@ class TestAgainstRealPyright:
         assert lines == [1, 4, 5], f"expected the import and two calls, got {result}"
 
     def test_definition_crosses_a_file(self, project, fresh_manager, tmp_path):
-        result = registry.get("definition").run(
+        result = registry.require("definition").run(
             tmp_path / "agent.db", {"path": "app.py", "symbol": "greet", "near_line": 4}
         )
         assert result["found"] is True
@@ -316,7 +316,7 @@ class TestAgainstRealPyright:
         assert result["definitions"][0]["line"] == 1
 
     def test_a_symbol_that_is_not_in_the_file_says_which_file_to_try(self, project, fresh_manager, tmp_path):
-        result = registry.get("references").run(
+        result = registry.require("references").run(
             tmp_path / "agent.db", {"path": "helpers.py", "symbol": "nonexistent"}
         )
         assert "unavailable" in result
@@ -324,7 +324,7 @@ class TestAgainstRealPyright:
 
     def test_rename_changes_the_uses_and_leaves_the_prose_alone(self, project, fresh_manager, tmp_path):
         """The whole argument for this over a search and replace, in one assertion."""
-        result = registry.get("rename_symbol").run(
+        result = registry.require("rename_symbol").run(
             tmp_path / "agent.db",
             {"path": "helpers.py", "symbol": "greet", "new_name": "welcome"},
         )
@@ -339,7 +339,7 @@ class TestAgainstRealPyright:
 
     def test_renaming_to_the_same_name_does_nothing(self, project, fresh_manager, tmp_path):
         before = (project / "helpers.py").read_text()
-        result = registry.get("rename_symbol").run(
+        result = registry.require("rename_symbol").run(
             tmp_path / "agent.db", {"path": "helpers.py", "symbol": "greet", "new_name": "greet"}
         )
         assert result["renamed"] == 0
@@ -348,18 +348,18 @@ class TestAgainstRealPyright:
     def test_the_server_is_reused_rather_than_restarted(self, project, fresh_manager, tmp_path):
         """Starting pyright costs seconds. Paying that per tool call would make the whole
         layer slower than the grep it replaces."""
-        registry.get("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
         running = fresh_manager.running()
-        registry.get("diagnostics").run(tmp_path / "agent.db", {"path": "helpers.py"})
+        registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "helpers.py"})
 
         assert len(fresh_manager.running()) == len(running) == 1
 
     def test_an_edit_is_seen_by_the_next_question(self, project, fresh_manager, tmp_path):
         """The server holds its own copy. A stale one produces confidently wrong lines."""
-        first = registry.get("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        first = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
         assert first["errors"] >= 1
 
         (project / "app.py").write_text((project / "app.py").read_text().replace("greet(42)", "greet('42')"))
-        after = registry.get("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        after = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
 
         assert after["errors"] == 0, f"it answered from a stale copy: {after}"

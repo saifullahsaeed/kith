@@ -162,5 +162,5 @@ class TestTheClassifierIsSharedRatherThanCopied:
     def test_the_transport_asks_it_the_same_question(self):
         from kith.llm import openai_compat
 
-        assert openai_compat._refuses_reasoning(_Response(400, REFUSAL))
-        assert not openai_compat._refuses_reasoning(_Response(400, "Invalid model id"))
+        assert openai_compat._refuses_reasoning(_Response(400, REFUSAL))  # type: ignore[arg-type]
+        assert not openai_compat._refuses_reasoning(_Response(400, "Invalid model id"))  # type: ignore[arg-type]

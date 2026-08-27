@@ -28,7 +28,7 @@ import json
 import pytest
 
 from kith.services import tuning
-from kith.services.agent_loop import _image_from, without_image
+from kith.services.agent_loop import _images_from, without_image
 from kith.services.turn.history import _carries_image, _compact_images
 
 BIG = "data:image/jpeg;base64," + "A" * 228_000
@@ -55,7 +55,7 @@ def looked_at(path: str) -> dict:
 
 class TestTheBase64LeavesTheToolResult:
     def test_the_picture_is_still_found_inside_the_envelope(self):
-        assert _image_from(wrapped()) == BIG
+        assert [one["image"] for one in _images_from(wrapped())] == [BIG]
 
     def test_and_is_gone_from_the_result_that_goes_into_the_conversation(self):
         text = json.dumps(without_image(wrapped()))

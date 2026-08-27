@@ -66,7 +66,7 @@ class TestFilingWorkIntoAFinishedProject:
         from kith.tools import registry
 
         task = _approvable(db, finished_project, tmp_path)
-        registry.get("update_task").run(db, {"id": int(task["id"]), "status": "approved"})
+        registry.require("update_task").run(db, {"id": int(task["id"]), "status": "approved"})
 
         assert repo.projects.get_project(db, finished_project)["status"] == "active"
 
@@ -74,7 +74,7 @@ class TestFilingWorkIntoAFinishedProject:
         from kith.tools import registry
 
         task = _approvable(db, finished_project, tmp_path)
-        out = registry.get("update_task").run(db, {"id": int(task["id"]), "status": "approved"})
+        out = registry.require("update_task").run(db, {"id": int(task["id"]), "status": "approved"})
 
         assert "active" in (out.get("note") or "")
 
@@ -83,7 +83,7 @@ class TestFilingWorkIntoAFinishedProject:
         from kith.tools import registry
 
         task = _approvable(db, finished_project, tmp_path)
-        registry.get("update_task").run(db, {"id": int(task["id"]), "status": "approved"})
+        registry.require("update_task").run(db, {"id": int(task["id"]), "status": "approved"})
 
         assert [t["goal"] for t in repo.tasks.active_tasks(db)] == ["Build the dashboard shell"]
 
@@ -91,7 +91,7 @@ class TestFilingWorkIntoAFinishedProject:
         """Filing something for later is not saying the project is unfinished."""
         from kith.tools import registry
 
-        registry.get("add_task").run(
+        registry.require("add_task").run(
             db,
             {
                 "goal": "Someday",

@@ -44,6 +44,17 @@ class Kind:
     def supports(self, action: str) -> bool:
         return getattr(self, action, None) is not None
 
+    def operation(self, action: str) -> Callable:
+        """The callable for an action, which `require` has already proved is present.
+
+        `remove`/`add`/`edit` are each optional on a Kind, so reading one straight off the
+        dataclass is an Optional call even directly after `require(kind, action)` has
+        established it is not None. This carries that proof across."""
+        found = getattr(self, action, None)
+        if found is None:
+            raise ValueError(f"cannot {action} a {self.name}")
+        return found
+
 
 def _task_edit(path, task_id, data: dict):
     """Update a task, including where it sits on the roadmap.

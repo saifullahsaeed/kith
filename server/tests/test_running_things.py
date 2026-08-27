@@ -556,24 +556,24 @@ class TestTheTools:
         from kith.tools import registry
 
         (workspace_root / "readme.md").write_text("hi")
-        result = registry.get("run_tests").run(tmp_path / "agent.db", {})
+        result = registry.require("run_tests").run(tmp_path / "agent.db", {})
         assert "error" in result, "a project with no runner should explain, not raise"
 
     def test_the_process_tools_reach_the_registry(self, workspace_root, tmp_path):
         from kith.tools import registry
 
         db = tmp_path / "agent.db"
-        started = registry.get("start_process").run(db, {"command": "echo via-tool", "name": "t1"})
+        started = registry.require("start_process").run(db, {"command": "echo via-tool", "name": "t1"})
         assert "via-tool" in started["output"]
 
-        listed = registry.get("check_process").run(db, {})
+        listed = registry.require("check_process").run(db, {})
         assert any(one["name"] == "t1" for one in listed["running"])
 
-        stopped = registry.get("stop_process").run(db, {"name": "t1"})
+        stopped = registry.require("stop_process").run(db, {"name": "t1"})
         assert stopped["stopped"] == "t1"
 
     def test_stopping_something_that_does_not_exist_explains_itself(self, workspace_root, tmp_path):
         from kith.tools import registry
 
-        result = registry.get("stop_process").run(tmp_path / "agent.db", {"name": "ghost"})
+        result = registry.require("stop_process").run(tmp_path / "agent.db", {"name": "ghost"})
         assert "error" in result

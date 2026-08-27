@@ -33,7 +33,7 @@ def a_skill(tmp_path, monkeypatch):
 
 
 def read(name: str):
-    return registry.get("read_skill").run(__import__("pathlib").Path("x.db"), {"name": name})
+    return registry.require("read_skill").run(__import__("pathlib").Path("x.db"), {"name": name})
 
 
 class TestTheSecondReadInOneTurn:

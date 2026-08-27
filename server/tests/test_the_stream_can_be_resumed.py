@@ -42,9 +42,8 @@ class TestIdentity:
     def test_ids_do_not_restart_when_the_log_rolls_over(self, log):
         """The log is bounded; the numbering is not. An id that came round again would make a
         stale cursor look current, which is the one thing it must never look."""
-        for _ in range(12):
-            last = log.publish("changed", {"kind": "task"})
-        assert last.id == 12
+        published = [log.publish("changed", {"kind": "task"}) for _ in range(12)]
+        assert published[-1].id == 12
         assert len(log._log) == 5
 
     def test_the_type_is_on_the_event(self, log):

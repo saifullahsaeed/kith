@@ -7,12 +7,14 @@ message, no restart needed.
 
 ## Rules
 
-- **Order** — fragments merge in path order. Use numeric prefixes (`00-`, `10-`,
-  `20-`, …) to control the sequence. Subfolders are allowed for grouping.
+- **Order** — fragments merge in path order, with numbers compared as numbers, so
+  `9-` really does come before `10-`. Use numeric prefixes (`00-`, `10-`, `20-`, …)
+  to control the sequence. Subfolders are allowed for grouping.
 - **Disable** — prefix a file or folder with `_` or `.` to skip it
   (e.g. `10-tone.md` → `_10-tone.md`).
 - **Comments** — `<!-- ... -->` HTML comments are stripped, so you can annotate a
-  fragment without it leaking into the prompt.
+  fragment without it leaking into the prompt. A leading comment is shown as
+  "Your note" in Settings → Persona, in its own field above the text.
 - **README** files (like this one) are ignored.
 
 ## Adding an instruction

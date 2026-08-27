@@ -231,6 +231,8 @@ class TestClient:
         client = OpenRouterProvider._client(Connection.openrouter(api_key=key))
         try:
             security = client.sdk_configuration.security
+            # The SDK types this as a callable-or-model union; at runtime it is the model.
+            assert security is None or not callable(security)
             assert (security.api_key if security else None) == expected
         finally:
             client.__exit__(None, None, None)

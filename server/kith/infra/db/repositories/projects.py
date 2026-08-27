@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy import delete as sql_delete
 
 from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES, TASK_ACTIVE
-from kith.infra.db.engine import as_dict, session
+from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Conversation, Milestone, MilestoneDep, Project, Task
 from kith.infra.db.repositories.tasks import list_tasks
 from kith.infra.db.support import notifies, utc_now_iso
@@ -94,7 +94,7 @@ def delete_project(path: Path, project_id: int) -> bool:
         # for a name. See ui/components/chat/history-panel.tsx → groupByProject.
         db.execute(update(Conversation).where(Conversation.project_id == project_id).values(project_id=None))
         db.execute(delete(Milestone).where(Milestone.project_id == project_id))
-        return db.execute(delete(Project).where(Project.id == project_id)).rowcount > 0
+        return changed(db.execute(delete(Project).where(Project.id == project_id))) > 0
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +164,7 @@ def update_milestone(
 @notifies("project")
 def delete_milestone(path: Path, milestone_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(Milestone).where(Milestone.id == milestone_id)).rowcount > 0
+        return changed(db.execute(delete(Milestone).where(Milestone.id == milestone_id))) > 0
 
 
 def project_overview(path: Path) -> list[dict]:

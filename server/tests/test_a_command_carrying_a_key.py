@@ -21,6 +21,8 @@ key, nothing else.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from kith.domain import secrets
@@ -28,6 +30,11 @@ from kith.domain import secrets
 #: Shaped like the one this was written for — forty hex characters, no separators — but not a
 #: real credential.
 LIKE_THE_REAL_ONE = "9a3f8b2c7e1d4a6f0b9c8d7e5a4f3b2c1d0e9f8a"
+
+#: `computer.shell(path, args)` ignores `path` — every tool handler shares the same
+#: `(path, args)` shape whether or not it touches the database. A real Path rather than None so
+#: the call matches the signature it is actually testing.
+_UNUSED = Path()
 
 
 class TestWhatItCatches:
@@ -83,6 +90,12 @@ class TestWhatItLeavesAlone:
         """A commit is not a credential."""
         assert not secrets.carries_a_secret("git show '4d87fc9'")
 
+    def test_a_run_between_two_different_quotes_is_not_a_literal(self):
+        """The pattern used to accept any quote at each end, so a run opened with `'` and
+        closed with `"` counted as quoted. It is not a literal, and the text between two
+        unrelated quotes is not something anyone typed as one value."""
+        assert not secrets.carries_a_secret("cmd --a='" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" + '"')
+
 
 class TestThroughTheTool:
     @pytest.fixture(autouse=True)
@@ -100,7 +113,7 @@ class TestThroughTheTool:
             output = "done"
 
         monkeypatch.setattr(computer.sandbox, "run_command", lambda _c: Ran())
-        out = computer.shell(None, {"command": f"python3 -c \"k='{LIKE_THE_REAL_ONE}'\""})
+        out = computer.shell(_UNUSED, {"command": f"python3 -c \"k='{LIKE_THE_REAL_ONE}'\""})
         assert out["output"] == "done", "the command still ran and still reported"
         assert ".kith/scratch/" in out["note"], "and the note names the remedy"
 
@@ -112,7 +125,7 @@ class TestThroughTheTool:
             output = "ok"
 
         monkeypatch.setattr(computer.sandbox, "run_command", lambda _c: Ran())
-        assert "note" not in computer.shell(None, {"command": "ls -la"})
+        assert "note" not in computer.shell(_UNUSED, {"command": "ls -la"})
 
     def test_the_note_never_repeats_the_secret(self, monkeypatch):
         """It is a remark about the record. Putting the key in it would be the same mistake."""
@@ -123,7 +136,7 @@ class TestThroughTheTool:
             output = "done"
 
         monkeypatch.setattr(computer.sandbox, "run_command", lambda _c: Ran())
-        out = computer.shell(None, {"command": f"go('{LIKE_THE_REAL_ONE}')"})
+        out = computer.shell(_UNUSED, {"command": f"go('{LIKE_THE_REAL_ONE}')"})
         assert LIKE_THE_REAL_ONE not in out["note"]
 
     def test_a_failing_command_still_reports_its_failure(self, monkeypatch):
@@ -134,5 +147,5 @@ class TestThroughTheTool:
             output = "boom"
 
         monkeypatch.setattr(computer.sandbox, "run_command", lambda _c: Ran())
-        out = computer.shell(None, {"command": f"go('{LIKE_THE_REAL_ONE}')"})
+        out = computer.shell(_UNUSED, {"command": f"go('{LIKE_THE_REAL_ONE}')"})
         assert out["exitCode"] == 2 and out["output"] == "boom"

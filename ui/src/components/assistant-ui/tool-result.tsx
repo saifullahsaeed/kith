@@ -326,12 +326,20 @@ const Diff: FC<{ text: string }> = ({ text }) => (
  *  level up) and not code (that's `CodeBlock`). Deliberately plain rather than a port of the
  *  chat's full markdown component set: this lives inside an already-small card. */
 const proseComponents: Components = {
-  h1: ({ children }) => <p className="mt-2 text-sm font-semibold text-foreground first:mt-0">{children}</p>,
-  h2: ({ children }) => <p className="mt-2 text-sm font-semibold text-foreground first:mt-0">{children}</p>,
-  h3: ({ children }) => <p className="mt-2 text-xs font-semibold text-foreground first:mt-0">{children}</p>,
+  h1: ({ children }) => (
+    <p className="mt-2 text-sm font-semibold text-foreground first:mt-0">{children}</p>
+  ),
+  h2: ({ children }) => (
+    <p className="mt-2 text-sm font-semibold text-foreground first:mt-0">{children}</p>
+  ),
+  h3: ({ children }) => (
+    <p className="mt-2 text-xs font-semibold text-foreground first:mt-0">{children}</p>
+  ),
   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
   ul: ({ children }) => <ul className="mb-2 list-disc space-y-0.5 ps-4 last:mb-0">{children}</ul>,
-  ol: ({ children }) => <ol className="mb-2 list-decimal space-y-0.5 ps-4 last:mb-0">{children}</ol>,
+  ol: ({ children }) => (
+    <ol className="mb-2 list-decimal space-y-0.5 ps-4 last:mb-0">{children}</ol>
+  ),
   code: ({ children }) => (
     <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-[11px]">{children}</code>
   ),
@@ -640,10 +648,18 @@ const SearchHit: FC<{ value: Record<string, unknown> }> = ({ value }) => {
  *  overall summary ("`root` — 12 of 40 source files"); shown as a caption rather than folded
  *  into the listing. */
 function parseRepoMap(text: string): {
-  files: { header: string; rows: { line: string; depth: number; signature: string }[]; note: string }[];
+  files: {
+    header: string;
+    rows: { line: string; depth: number; signature: string }[];
+    note: string;
+  }[];
   footer: string;
 } {
-  const files: { header: string; rows: { line: string; depth: number; signature: string }[]; note: string }[] = [];
+  const files: {
+    header: string;
+    rows: { line: string; depth: number; signature: string }[];
+    note: string;
+  }[] = [];
   let footer = "";
   for (const raw of text.split("\n")) {
     if (!raw.trim()) continue;
@@ -886,7 +902,7 @@ function looksLikePicture(value: Record<string, unknown>): boolean {
   return typeof value.image === "string" && typeof value.path === "string";
 }
 
-const Picture: FC<{ value: Record<string, unknown> }> = ({ value }) => {
+const Picture: FC<{ value: Record<string, unknown>; compact?: boolean }> = ({ value, compact }) => {
   const path = String(value.path);
   const open = useFileViewer((state) => state.open);
   const { url, error, loading } = useMedia(path);
@@ -910,7 +926,15 @@ const Picture: FC<{ value: Record<string, unknown> }> = ({ value }) => {
             can't preview it here
           </span>
         ) : (
-          <img src={url} alt={name} className="max-h-64 max-w-full rounded object-contain" />
+          <img
+            src={url}
+            alt={name}
+            className={cn(
+              "max-w-full rounded object-contain",
+              // Smaller in a set, because the point of a set is seeing them together.
+              compact ? "max-h-40" : "max-h-64",
+            )}
+          />
         )}
       </button>
       <span className="text-muted-foreground/70 font-mono text-[11px]">
@@ -921,10 +945,111 @@ const Picture: FC<{ value: Record<string, unknown> }> = ({ value }) => {
   );
 };
 
+/**
+ * He looked at several pictures. Show them side by side.
+ *
+ * A batch read returns `{text, images}`, and the text half is one `===== path =====` heading per
+ * file followed by the same sentence every time — "Look at the image below and describe or judge
+ * what you actually see" — which is addressed to him, not to you, and was the *only* thing on
+ * screen. Three screenshots read in one call rendered as three copies of that line and no
+ * picture. So the pictures are the result, and the text is kept only for the files in the batch
+ * that were not images.
+ *
+ * Side by side because they were asked for together and are read against each other — seven
+ * screens of one app, in the case this came from. A column of full-width images would make
+ * comparing the first and the last a scroll.
+ */
+function looksLikeGallery(value: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(value.images) &&
+    value.images.length > 0 &&
+    value.images.every(
+      (one) =>
+        one && typeof one === "object" && typeof (one as { path?: unknown }).path === "string",
+    )
+  );
+}
+
+const Gallery: FC<{ value: Record<string, unknown> }> = ({ value }) => {
+  const images = value.images as Record<string, unknown>[];
+  // Whatever in the batch was not a picture. Its own blocks are still worth reading; the
+  // placeholder sentences belonging to the images are not, and they are the ones dropped.
+  const rest = typeof value.text === "string" ? withoutPictureBlocks(value.text, images) : "";
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        {images.map((one) => (
+          <Picture key={String(one.path)} value={one} compact />
+        ))}
+      </div>
+      {rest.trim() ? (
+        <pre className="bg-muted/30 ring-border/60 max-h-96 overflow-auto rounded-lg p-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap ring-1">
+          {rest.trim()}
+        </pre>
+      ) : null}
+    </div>
+  );
+};
+
+/** The `===== path =====` blocks for files shown as pictures above, removed. Exported to be tested:
+ *  it is a regex over text a tool produced, and getting it wrong silently eats a file's contents. */
+export function withoutPictureBlocks(text: string, images: Record<string, unknown>[]): string {
+  const shown = new Set(images.map((one) => String(one.path)));
+  return text
+    .split(/\n\n(?====== )/)
+    .filter((block) => {
+      const heading = /^===== (.*) =====/.exec(block);
+      return !heading || !shown.has(heading[1]);
+    })
+    .join("\n\n");
+}
+
+/**
+ * A list of plain values, as a list.
+ *
+ * `paths` came out as `JSON.stringify(raw, null, 2)` — four lines of brackets, quotes and commas
+ * around three filenames. This is the one argument you most often want to read in full, because
+ * the row above it truncates at three and says "+1 more": for a batch of four the panel is the
+ * only place the fourth one exists. So it had to stay, and printing it as a JSON literal was the
+ * thing actually worth fixing.
+ *
+ * Only for a flat list of scalars. Anything nested is still JSON, because a list of objects laid
+ * out as lines is a table with the headings taken off.
+ */
+function looksLikePlainList(raw: unknown): raw is (string | number)[] {
+  return (
+    Array.isArray(raw) &&
+    raw.length > 0 &&
+    raw.every((one) => typeof one === "string" || typeof one === "number")
+  );
+}
+
 /** Anything else: labelled rows rather than braces. */
 const Fields: FC<{ value: Record<string, unknown> }> = ({ value }) => (
   <div className="flex flex-col gap-1.5">
     {Object.entries(value).map(([key, raw]) => {
+      if (looksLikePlainList(raw)) {
+        return (
+          <div key={key} className="flex flex-col gap-1">
+            <Label>
+              {key.replace(/_/g, " ")}
+              <span className="text-muted-foreground/50 ms-1.5 tabular-nums">{raw.length}</span>
+            </Label>
+            <ul className="flex flex-col gap-0.5">
+              {raw.map((one, index) => (
+                <li
+                  key={`${index}-${one}`}
+                  className="text-foreground/90 truncate font-mono text-[11.5px]"
+                  title={String(one)}
+                >
+                  {String(one)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      }
       const text =
         typeof raw === "string"
           ? raw
@@ -1027,7 +1152,9 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
         ) : null}
       </div>
       {value.milestone_title ? (
-        <span className="text-[11px] text-muted-foreground/70">→ {String(value.milestone_title)}</span>
+        <span className="text-[11px] text-muted-foreground/70">
+          → {String(value.milestone_title)}
+        </span>
       ) : null}
       {description ? (
         <p className="text-xs leading-relaxed text-foreground/80">{description}</p>
@@ -1059,7 +1186,11 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
       ) : null}
       {comments > 0 || deliverables > 0 ? (
         <div className="flex flex-wrap gap-x-3 text-[11px] text-muted-foreground/70">
-          {comments > 0 ? <span>{comments} comment{comments === 1 ? "" : "s"}</span> : null}
+          {comments > 0 ? (
+            <span>
+              {comments} comment{comments === 1 ? "" : "s"}
+            </span>
+          ) : null}
           {deliverables > 0 ? (
             <span>
               {deliverables} deliverable{deliverables === 1 ? "" : "s"}
@@ -1112,7 +1243,9 @@ const Milestone: FC<{ value: Record<string, unknown> }> = ({ value }) => {
         {status ? <StatusBadge status={status} /> : null}
       </div>
       {value.target_at ? (
-        <span className="text-[11px] text-muted-foreground/70">target {String(value.target_at)}</span>
+        <span className="text-[11px] text-muted-foreground/70">
+          target {String(value.target_at)}
+        </span>
       ) : null}
     </div>
   );
@@ -1141,7 +1274,9 @@ const Project: FC<{ value: Record<string, unknown> }> = ({ value }) => {
         </span>
         {status ? <StatusBadge status={status} /> : null}
       </div>
-      {description ? <p className="text-xs leading-relaxed text-foreground/80">{description}</p> : null}
+      {description ? (
+        <p className="text-xs leading-relaxed text-foreground/80">{description}</p>
+      ) : null}
       {directory ? (
         <span className="truncate font-mono text-[11px] text-muted-foreground/70">{directory}</span>
       ) : null}
@@ -1321,6 +1456,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     const object = result as Record<string, unknown>;
     if (looksLikeAsked(object)) return <Asked args={args} value={object} />;
     if (looksLikePicture(object)) return <Picture value={object} />;
+    if (looksLikeGallery(object)) return <Gallery value={object} />;
     if (looksLikeTask(object)) return <Task value={object} />;
     if (looksLikeMilestone(object)) return <Milestone value={object} />;
     if (looksLikeProject(object)) return <Project value={object} />;

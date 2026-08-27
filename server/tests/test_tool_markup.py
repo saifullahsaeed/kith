@@ -116,6 +116,14 @@ class TestStreamingMechanics:
         # ...and released with the character that settled it, losing nothing.
         assert first + rest == "Compare a <b for size."
 
+    def test_a_filter_still_works_after_a_flush(self):
+        """`flush` cleared the held buffer but left `_suppressing` set, so a filter that ended
+        mid-block swallowed every later chunk — having already been told the stream was over."""
+        one = ToolMarkupFilter()
+        one.feed("hello <FUNCTION>web_search(")
+        assert one.flush() == ""
+        assert one.feed("a fresh answer") == "a fresh answer"
+
     def test_flush_is_idempotent(self):
         filter_ = ToolMarkupFilter()
         filter_.feed("Done.")

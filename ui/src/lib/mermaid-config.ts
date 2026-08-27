@@ -207,6 +207,55 @@ export function themeVariables(dark: boolean) {
     pieLegendTextColor: c.dim,
     pieStrokeColor: c.background,
     pieOuterStrokeColor: c.line,
+
+    // Charts with an axis, which had been left to mermaid's own taste — `xychart` falls back
+    // to a hardcoded `#3498db`, a stock blue belonging to no theme here, so a bar chart came
+    // out looking like it had been pasted in from another application. These are the same six
+    // colours the pie above uses, in the same order, so a set of numbers shown twice in one
+    // reply is the same colour both times.
+    xyChart: {
+      backgroundColor: "transparent",
+      titleColor: c.text,
+      dataLabelColor: c.text,
+      xAxisLabelColor: c.dim,
+      xAxisTitleColor: c.text,
+      xAxisTickColor: c.line,
+      xAxisLineColor: c.line,
+      yAxisLabelColor: c.dim,
+      yAxisTitleColor: c.text,
+      yAxisTickColor: c.line,
+      yAxisLineColor: c.line,
+      plotColorPalette: [c.accent, c.second, c.dim, c.accentSoft, c.secondSoft, c.muted].join(
+        ",",
+      ),
+    },
+
+    // Sankey and quadrant reach for their own palettes the same way.
+    quadrant1Fill: c.accentSoft,
+    quadrant2Fill: c.secondSoft,
+    quadrant3Fill: c.muted,
+    quadrant4Fill: c.background,
+    quadrantPointFill: c.accent,
+    quadrantPointTextFill: c.text,
+    quadrantTitleFill: c.text,
+    quadrantXAxisTextFill: c.dim,
+    quadrantYAxisTextFill: c.dim,
+    quadrantInternalBorderStrokeFill: c.line,
+    quadrantExternalBorderStrokeFill: c.line,
+
+    // Timeline and journey, which are `cScale0…N` underneath.
+    cScale0: c.accent,
+    cScale1: c.second,
+    cScale2: c.dim,
+    cScale3: c.accentSoft,
+    cScale4: c.secondSoft,
+    cScale5: c.muted,
+    cScaleLabel0: c.background,
+    cScaleLabel1: c.background,
+    cScaleLabel2: c.background,
+    cScaleLabel3: c.text,
+    cScaleLabel4: c.text,
+    cScaleLabel5: c.text,
   };
 }
 
@@ -234,6 +283,20 @@ export function mermaidConfig(dark: boolean): MermaidConfig {
     flowchart: { curve: "basis", padding: 14, useMaxWidth: true, htmlLabels: false },
     sequence: { useMaxWidth: true, actorMargin: 40 },
     gantt: { useMaxWidth: true },
+    // The rest of what he can draw, told to fit the column like the three above. Without it
+    // each renders at its own fixed pixel width and a chart wider than the thread is clipped
+    // rather than scaled — which reads as a broken diagram, not a narrow one.
+    xyChart: { useMaxWidth: true },
+    pie: { useMaxWidth: true },
+    quadrantChart: { useMaxWidth: true },
+    sankey: { useMaxWidth: true },
+    timeline: { useMaxWidth: true },
+    journey: { useMaxWidth: true },
+    mindmap: { useMaxWidth: true },
+    er: { useMaxWidth: true },
+    state: { useMaxWidth: true },
+    class: { useMaxWidth: true },
+    block: { useMaxWidth: true },
   };
 }
 

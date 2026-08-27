@@ -1,16 +1,30 @@
 """The vocabulary of Kith's world — the fixed sets a value may take.
 
-Kept out of the database layer on purpose: these are facts about the domain,
-not about how it happens to be stored, and both the API and the tool schemas
-need them without wanting a database import."""
+Kept out of the database layer on purpose: these are facts about the domain, not about how it
+happens to be stored, and both the API and the tool schemas need them without wanting a
+database import.
+"""
 
 from __future__ import annotations
+
+#: OpenRouter's full reasoning-effort scale, descending. Confirmed against their own SDK types
+#: (``ReasoningEffort``/``ChatRequestReasoningEffort``, both generated from their OpenAPI spec)
+#: rather than guessed — a value outside this set falls through to the plain enabled/disabled
+#: switch, silently overriding whatever was actually asked for.
+#:
+#: Here rather than beside the transport that sends it, because two other places have to agree
+#: with it: the ``landing_effort`` knob offers it as a dropdown, and ``Config.effort`` documents
+#: it. When it lived in ``llm/openai_compat.py`` the knob had its own hand-written copy, and the
+#: copy was missing ``minimal`` — so a legal value was unreachable from the interface and
+#: rejected outright from the environment.
+REASONING_EFFORTS: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal", "none")
 
 MEMORY_LEVELS = ("core", "recall")
 REMINDER_STATUSES = ("pending", "done", "cancelled")
 CURIOSITY_STATUSES = ("open", "exploring", "explored", "dropped")
 SCHEDULE_STATUSES = ("active", "paused")
-# The states a task can be in. Four, and a person sets none of them.
+# The five states a task can be in. A person sets none of them directly; the only decision
+# they make about a task is the planning -> approved gate below.
 #
 #   planning  a plan is being drafted
 #   approved  you said yes; he may work it
@@ -18,7 +32,7 @@ SCHEDULE_STATUSES = ("active", "paused")
 #   done
 #   dropped
 #
-# There were eight, and the board was not using them: counted the day this changed, 67 done,
+# There were eight, and the board was not using them. Counted the day this changed: 67 done,
 # 4 waiting, 3 planned, 3 dropped, 3 backlog, 1 working, and **nothing had ever been in
 # `review`**. Two were dead and two more were indistinguishable in practice, which is how a
 # status comes to be wrong often enough that removing it beats fixing it.

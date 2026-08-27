@@ -104,7 +104,7 @@ class TestTheJoinDoesNotDropAnything:
         assert next(watcher) == "a\n"
         assert len(turn.watchers) == 1
 
-        watcher.close()
+        watcher.close()  # type: ignore[attr-defined]  # a generator, so it has close(); Iterator[str] does not say so
         assert turn.watchers == set(), "a departed reader must not be published to"
         live_turns.finish(turn)
 

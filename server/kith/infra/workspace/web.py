@@ -10,14 +10,10 @@ import html
 import re
 import shlex
 
-from kith import settings
 from kith.infra import renderer
 
 from .base import WorkspaceError, _clip
 from .shell import _capture
-
-SEARCH_URL = settings.SEARCH_URL
-
 
 #: How much of a page to download before converting it to prose. A bound on bandwidth and
 #: parsing time, *not* on what reaches the model — the conversion throws away the

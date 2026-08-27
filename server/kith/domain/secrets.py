@@ -44,7 +44,10 @@ KNOWN = re.compile(
 
 #: A quoted literal that is one unbroken run of letters and digits. The absence of `_` and `-`
 #: is what separates a key from an identifier — see the note above about `l10n_sa_edi_…`.
-_LITERAL = re.compile(r"""['"]([A-Za-z0-9]{32,80})['"]""")
+#:
+#: The backreference matters: without it the two quotes need not be the same character, so a run
+#: opened with `'` and closed with `"` counted as a quoted literal when it is no such thing.
+_LITERAL = re.compile(r"""(['"])([A-Za-z0-9]{32,80})\1""")
 
 #: Shannon entropy below which a string is too regular to be a key. Measured against the real
 #: corpus: a forty-character hex key sits near 3.6, and the identifiers that were being caught
@@ -64,8 +67,6 @@ def looks_like_a_credential(literal: str) -> bool:
     All digits or all letters is a number or a word. Both, at length, with no separator and no
     structure, is the shape of something generated rather than written.
     """
-    if literal.isdigit() or literal.isalpha():
-        return False
     if not (re.search(r"\d", literal) and re.search(r"[a-zA-Z]", literal)):
         return False
     return _entropy(literal) >= MIN_ENTROPY
@@ -75,7 +76,7 @@ def carries_a_secret(command: str) -> bool:
     """Whether this command has a credential written into it."""
     if KNOWN.search(command):
         return True
-    return any(looks_like_a_credential(found.group(1)) for found in _LITERAL.finditer(command))
+    return any(looks_like_a_credential(found.group(2)) for found in _LITERAL.finditer(command))
 
 
 #: What to say. Names the remedy rather than only the problem — the point is not that a key is

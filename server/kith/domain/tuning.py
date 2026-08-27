@@ -25,6 +25,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from kith.domain.enums import REASONING_EFFORTS
+
+#: The effort dropdown, lowest first, with blank leading it. Derived from the scale the
+#: transport actually accepts rather than written out again — the hand-written copy this
+#: replaces was missing ``minimal``.
+_EFFORT_CHOICES: tuple[str, ...] = ("", *reversed(REASONING_EFFORTS))
+
 
 @dataclass(frozen=True)
 class Tunable:
@@ -74,10 +81,17 @@ class Tunable:
             if isinstance(raw, bool):
                 return raw
             return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+        # Narrowed before converting rather than catching `TypeError` after. `raw` arrives as
+        # `object` — it comes from JSON or from the environment — and `float(object)` is a type
+        # error the checker has always reported here. Same outcome for every input: what used to
+        # raise `TypeError` inside the `try` now fails the `isinstance` above it.
+        if not isinstance(raw, (int, float, str)):
+            raise ValueError(f"{self.label} must be a number.")
         try:
-            value = float(raw) if self.kind == "float" else int(float(raw))
-        except (TypeError, ValueError):
+            number = float(raw)
+        except ValueError:
             raise ValueError(f"{self.label} must be a number.") from None
+        value = number if self.kind == "float" else int(number)
         if self.minimum is not None:
             value = max(value, self.minimum)
         if self.maximum is not None:
@@ -170,7 +184,7 @@ TUNABLES: tuple[Tunable, ...] = (
         help="How many times he may stop and use tools before he must answer. Too low "
         "and he abandons real research half-finished; too high and a single message "
         "can run for many minutes and cost accordingly.",
-        default=40,
+        default=100,
         group="chat",
         minimum=2,
         maximum=200,
@@ -183,7 +197,7 @@ TUNABLES: tuple[Tunable, ...] = (
         help="Rounds held back at the end so he can write down what he found. Without "
         "a reserve, research expands to fill the whole budget and the turn produces "
         "nothing durable — this was a real bug, not a precaution.",
-        default=4,
+        default=20,
         group="context",
         minimum=0,
         maximum=20,
@@ -210,7 +224,7 @@ TUNABLES: tuple[Tunable, ...] = (
         "turn never has to read, and a scout that wanders for twenty rounds costs more than "
         "the answer is worth. If they keep coming back with nothing, the objectives are too "
         "broad, not the budget too small.",
-        default=6,
+        default=10,
         group="context",
         minimum=2,
         maximum=20,
@@ -229,7 +243,7 @@ TUNABLES: tuple[Tunable, ...] = (
         "or drop some. Keeps a breakdown shallow — one milestone's next handful of steps, not "
         "the whole roadmap at once — which is how nine overlapping tasks piled under one "
         "milestone in the run this fixes.",
-        default=6,
+        default=14,
         group="chat",
         minimum=2,
         maximum=20,
@@ -359,7 +373,7 @@ TUNABLES: tuple[Tunable, ...] = (
         "a summary. Too few and he forgets what he just read or ran; too many and the fold "
         "barely shrinks anything, since one message's worth of tool calls can be far "
         "bigger than a plain reply.",
-        default=4,
+        default=5,
         group="chat",
         minimum=1,
         maximum=20,
@@ -570,7 +584,7 @@ TUNABLES: tuple[Tunable, ...] = (
         default="low",
         group="connections",
         kind="text",
-        choices=("", "none", "low", "medium", "high", "xhigh", "max"),
+        choices=_EFFORT_CHOICES,
     ),
     Tunable(
         key="zero_data_retention",

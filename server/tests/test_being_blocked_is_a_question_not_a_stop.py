@@ -37,7 +37,7 @@ from kith.tools import registry
 
 
 def _ask_description() -> str:
-    entry = registry.get("ask")
+    entry = registry.require("ask")
     assert entry is not None, "the ask tool has gone missing"
     return entry.description
 

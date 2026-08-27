@@ -214,8 +214,10 @@ def test_every_kind_has_a_publisher_and_every_publisher_a_kind():
                 and isinstance(node.args[0], ast.Constant)
                 and isinstance(node.args[0].value, str)
             )
-            if is_publish or is_notifies:
-                published[node.args[0].value].append(f"{path.relative_to(source.parent)}:{node.lineno}")
+            if (is_publish or is_notifies) and isinstance(node, ast.Call):
+                first = node.args[0]
+                assert isinstance(first, ast.Constant)
+                published[str(first.value)].append(f"{path.relative_to(source.parent)}:{node.lineno}")
 
     undeclared = {kind: where for kind, where in published.items() if kind not in changes.KINDS}
     assert not undeclared, "published but not in KINDS — nothing is listening:\n" + "\n".join(

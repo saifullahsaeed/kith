@@ -21,17 +21,6 @@ from kith.tools import projects as project_tools
 from kith.tools import tasks as task_tools
 
 
-def working(db, conversation_id: str) -> None:
-    """Mark a session as working *without* starting the background loop.
-
-    `keep_working` calls `ensure_loop`, and the loop then races the explicit `_tick()` these
-    tests make — which showed up as every spy being called twice, an hour of "why is this
-    prompt built two times". The flag is the only part under test here; the thread is
-    tested where it belongs, in test_a_session_that_keeps_working.
-    """
-    repo.conversations.set_working(db, conversation_id, True)
-
-
 @pytest.fixture
 def session_id(db):
     return conversations.start(db, "a piece of work")["id"]

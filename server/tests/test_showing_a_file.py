@@ -16,6 +16,8 @@ and that nothing lands beside it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from kith.infra import workspace as ws
@@ -197,7 +199,7 @@ class TestWhatMayStillBeOpened:
         the operating system.
         """
         with pytest.raises(handoff.HandoffError) as caught:
-            handoff.open_with_default_app("/etc/passwd")
+            handoff.open_with_default_app(Path("/etc/passwd"))
         assert "can be opened from here" in str(caught.value)
 
     def test_a_traversal_is_resolved_before_it_is_checked(self, workspace_root):

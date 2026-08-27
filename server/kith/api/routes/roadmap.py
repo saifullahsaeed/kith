@@ -35,12 +35,11 @@ def get_roadmap(project_id: int):
 )
 def add_dependency(project_id: int):
     payload = request.get_json(silent=True) or {}
+    milestone_id, depends_on_id = payload.get("milestoneId"), payload.get("dependsOnId")
+    if milestone_id is None or depends_on_id is None:
+        return jsonify({"error": "milestoneId and dependsOnId are required"}), 400
     try:
-        repo.projects.add_dependency(
-            AGENT_DB_PATH,
-            int(payload.get("milestoneId")),
-            int(payload.get("dependsOnId")),
-        )
+        repo.projects.add_dependency(AGENT_DB_PATH, int(milestone_id), int(depends_on_id))
     except (TypeError, ValueError) as exc:
         return jsonify({"error": str(exc) or "milestoneId and dependsOnId are required"}), 400
     return jsonify(repo.projects.roadmap(AGENT_DB_PATH, project_id))

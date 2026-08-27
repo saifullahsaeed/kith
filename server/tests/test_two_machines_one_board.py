@@ -29,6 +29,13 @@ from kith.infra.db.migrations import _migrations
 from kith.services import board_sync
 
 
+def _detail(db: Path, task_id: int) -> dict:
+    """A task's full record, which these tests have just written and so cannot be missing."""
+    found = repo.tasks.task_detail(db, task_id)
+    assert found is not None, f"task {task_id} vanished"
+    return found
+
+
 def _git(*args: str, cwd: Path) -> str:
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     assert done.returncode == 0, f"git {' '.join(args)}: {done.stderr}"
@@ -78,7 +85,7 @@ def _files_a_task(db: Path, work: Path, goal: str) -> dict:
     """What `add_task` and its mirror do, which is what a tool call amounts to."""
     project = repo.projects.add_project(db, "Shared", "", str(work))
     task = repo.tasks.add_task(db, goal, project_id=int(project["id"]))
-    project_files.write_brief(work, repo.tasks.task_detail(db, int(task["id"])))
+    project_files.write_brief(work, _detail(db, int(task["id"])))
     return {"project": int(project["id"]), "task": task}
 
 
@@ -158,7 +165,7 @@ class TestBothOfThemChangeIt:
 
         # A finishes it and pushes; B still thinks it is open.
         repo.tasks.update_task(a_db, int(mine["task"]["id"]), status="done")
-        project_files.write_brief(a_work, repo.tasks.task_detail(a_db, int(mine["task"]["id"])))
+        project_files.write_brief(a_work, _detail(a_db, int(mine["task"]["id"])))
         _git("add", "-A", cwd=a_work)
         _git("commit", "-q", "-m", "done", cwd=a_work)
         _git("push", "-q", cwd=a_work)
@@ -204,14 +211,14 @@ class TestWhatGitLeavesBehind:
         # not a string edit that might match nothing.
         name = next((a_work / ".kith" / "tasks").glob("*.md")).name
         repo.tasks.update_task(a_db, int(mine["task"]["id"]), status="done")
-        project_files.write_brief(a_work, repo.tasks.task_detail(a_db, int(mine["task"]["id"])))
+        project_files.write_brief(a_work, _detail(a_db, int(mine["task"]["id"])))
         _git("add", "-A", cwd=a_work)
         _git("commit", "-q", "-m", "a says done", cwd=a_work)
         _git("push", "-q", cwd=a_work)
 
         theirs_task = repo.tasks.list_tasks(b_db)[0]
         repo.tasks.update_task(b_db, int(theirs_task["id"]), status="dropped")
-        project_files.write_brief(b_work, repo.tasks.task_detail(b_db, int(theirs_task["id"])))
+        project_files.write_brief(b_work, _detail(b_db, int(theirs_task["id"])))
         theirs_brief = b_work / ".kith" / "tasks" / name
         _git("add", "-A", cwd=b_work)
         _git("commit", "-q", "-m", "b says dropped", cwd=b_work)
@@ -256,14 +263,14 @@ class TestWhatGitLeavesBehind:
 
         name = next((a_work / ".kith" / "tasks").glob("*.md")).name
         repo.tasks.update_task(a_db, int(mine["task"]["id"]), status="done")
-        project_files.write_brief(a_work, repo.tasks.task_detail(a_db, int(mine["task"]["id"])))
+        project_files.write_brief(a_work, _detail(a_db, int(mine["task"]["id"])))
         _git("add", "-A", cwd=a_work)
         _git("commit", "-q", "-m", "a says done", cwd=a_work)
         _git("push", "-q", cwd=a_work)
 
         theirs_task = repo.tasks.list_tasks(b_db)[0]
         repo.tasks.update_task(b_db, int(theirs_task["id"]), status="dropped")
-        project_files.write_brief(b_work, repo.tasks.task_detail(b_db, int(theirs_task["id"])))
+        project_files.write_brief(b_work, _detail(b_db, int(theirs_task["id"])))
         _git("add", "-A", cwd=b_work)
         _git("commit", "-q", "-m", "b says dropped", cwd=b_work)
         subprocess.run(["git", "pull", "--no-rebase", "-q"], cwd=b_work, capture_output=True)

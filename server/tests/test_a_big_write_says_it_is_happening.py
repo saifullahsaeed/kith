@@ -56,7 +56,9 @@ class TestNamingTheFile:
     def test_a_path_that_has_not_arrived_yet_is_simply_absent(self):
         """Degrades to the tool's own name rather than guessing at a filename."""
         slot = _slot('{"content": "' + "x" * _WRITING_EVERY)
-        assert "path" not in _writing(slot)
+        written = _writing(slot)
+        assert written is not None
+        assert "path" not in written
 
     def test_other_spellings_of_the_argument_are_found_too(self):
         for key in ("path", "file", "target"):

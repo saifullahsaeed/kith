@@ -20,6 +20,7 @@ import { groupAlerts, readAlert, type Alert, type AlertThread } from "@/lib/aler
 import { groupByDay, time } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { useMessages } from "@/hooks/use-messages";
+import { Layer, useLayer } from "@/hooks/use-layer";
 
 type Messages = ReturnType<typeof useMessages>;
 
@@ -82,6 +83,7 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
   const { messages, unread, counts, markAllRead, dismiss, clear } = inbox;
   const feedRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const layer = useLayer(Layer.Panel);
   const [onlyWanting, setOnlyWanting] = useState(false);
   const [opened, setOpened] = useState<Set<string>>(() => new Set());
 
@@ -107,7 +109,7 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (document.querySelector("[role=dialog],[role=alertdialog]")) return;
+      if (!layer.frontmost()) return;
       onClose();
     };
     document.addEventListener("keydown", onKey);
