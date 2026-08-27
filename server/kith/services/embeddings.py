@@ -32,9 +32,12 @@ def remember(
     tags: list[str] | None = None,
     importance: int = 0,
     level: str = "recall",
+    project_id: int | None = None,
 ) -> dict:
     """Store a memory together with its embedding (best effort)."""
-    return repo.memories.add_memory(path, content, tags, importance, level, embedding=embed(content))
+    return repo.memories.add_memory(
+        path, content, tags, importance, level, embedding=embed(content), project_id=project_id
+    )
 
 
 def recall(path: Path, query: str, limit: int = 20) -> list[dict]:

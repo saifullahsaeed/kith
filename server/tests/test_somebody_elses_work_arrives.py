@@ -276,7 +276,7 @@ class TestWhereItIsSaid:
         project_files.write_brief(
             folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
         )
-        assert "pull from git first" in board_sync.waiting_here(db)
+        assert "check_remote" in board_sync.waiting_here(db)
 
     def test_it_still_only_says(self, shared, monkeypatch):
         """`pull` is called by nobody. This is the sentence that lets a person decide."""
@@ -301,3 +301,41 @@ class TestWhereItIsSaid:
         monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
         monkeypatch.setattr(board_sync, "preview", lambda *a, **k: 1 / 0)
         assert board_sync.waiting_here(db) == ""
+
+
+class TestWhatIsNotWorthSaying:
+    """A brief older than the row it describes is not an inbox.
+
+    This sentence moved out of `list_tasks` and into the system prompt, where it is read on
+    every turn of a project rather than when somebody asks. `kept` — the cases where the board
+    is newer — is mirroring lag: nothing to take in, nothing to decide, and permanent. On one
+    real project there are seven, so every turn opened with "somebody else's work is in `.kith/`
+    and has not been taken in" followed by a list of things that must not be taken in.
+    """
+
+    def test_a_stale_brief_alone_says_nothing(self, shared, monkeypatch):
+        db, project_id, folder, task = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        # The brief as it was, and then the row moves on. The file is now the older of the two.
+        project_files.write_brief(
+            folder, {**task, "status": "planning", "updated_at": "2020-01-01T00:00:00+00:00"}
+        )
+        repo.tasks.update_task(db, int(task["id"]), status="working")
+
+        assert board_sync.waiting_here(db) == ""
+
+    def test_it_is_still_mentioned_when_something_is_genuinely_waiting(self, shared, monkeypatch):
+        db, project_id, folder, task = shared
+        monkeypatch.setattr(board_sync.session_context, "current_project", lambda: project_id)
+        project_files.write_brief(
+            folder, {**task, "status": "planning", "updated_at": "2020-01-01T00:00:00+00:00"}
+        )
+        repo.tasks.update_task(db, int(task["id"]), status="working")
+        project_files.write_brief(
+            folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
+        )
+
+        said = board_sync.waiting_here(db)
+
+        assert "Theirs" in said
+        assert "would be left alone" in said

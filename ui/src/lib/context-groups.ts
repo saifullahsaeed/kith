@@ -33,7 +33,7 @@ export const GROUPS: readonly ContextGroup[] = [
   {
     key: "talk",
     label: "Conversation",
-    hint: "what was said — folding summarises the older turns",
+    hint: "what was said, plus the summary the older turns were folded into",
     swatch: "bg-[#2a78d6] dark:bg-[#3987e5]",
   },
   {
@@ -57,14 +57,27 @@ export const GROUPS: readonly ContextGroup[] = [
   {
     key: "self",
     label: "Who he is",
-    hint: "persona and system prompt — identical every turn, so nearly free",
+    hint: "your persona and standing directive — identical every turn, so nearly free",
     swatch: "bg-[#e87ba4] dark:bg-[#d55181]",
   },
 ] as const;
 
-/** Which group each of the ledger's eleven categories belongs to. */
+/**
+ * Which group each of the ledger's categories belongs to.
+ *
+ * A key missing from this map is silently dropped by `byGroup` — it belongs to no group, so it
+ * is counted in none of the five and the bar quietly stops summing to the total it is drawn
+ * against. `directives` was in exactly that state: the ledger has given turn directives their
+ * own line since they stopped arriving as fake user messages, and nothing here ever claimed
+ * them, so a turn the harness nudged four times drew a bar that was short by four nudges.
+ */
 export const GROUP_OF: Record<string, string> = {
   messages: "talk",
+  // The folded brief — older turns compressed into a summary. It rides as a `system` message on
+  // the wire, but it is the conversation, so it is counted with the conversation and not under
+  // "Who he is". See `repositories`/`ledger`: a summary of the chat filed under the persona was
+  // the bug this fixes.
+  summary: "talk",
   tool_results: "read",
   code: "read",
   skills: "read",
@@ -72,7 +85,11 @@ export const GROUP_OF: Record<string, string> = {
   built_in_tools: "tools",
   mcp_tools: "tools",
   custom_tools: "tools",
+  // "Where he is" in the widest sense: everything rewritten on every turn, which is what the
+  // group's own hint says. The project region and the harness's mid-turn nudges are both that.
   live: "place",
+  project: "place",
+  directives: "place",
   persona: "self",
   system: "self",
 };

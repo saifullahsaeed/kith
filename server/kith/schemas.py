@@ -1,5 +1,8 @@
-"""Marshmallow schemas — these define the request/response shapes and, via
-APIFlask, are what the generated OpenAPI spec is built from.
+"""Marshmallow schemas: the request/response shapes, and — via APIFlask — what the generated
+OpenAPI spec at ``/openapi.json`` is built from.
+
+Every docstring here becomes a description in that spec, so they are written for someone reading
+the API docs rather than for someone reading this file.
 """
 
 from __future__ import annotations
@@ -8,17 +11,27 @@ from apiflask import Schema
 from apiflask.fields import Boolean, Dict, Integer, List, Nested, String
 from marshmallow import EXCLUDE
 
+from kith.infra.db.config_store import DEFAULT_SETTINGS
+
+# The spec's examples are the real built-in defaults rather than a second copy of them, so the
+# published docs cannot drift from what an unconfigured Kith actually starts with.
+_EG_MODEL = DEFAULT_SETTINGS["model"]
+_EG_NUM_CTX = DEFAULT_SETTINGS["num_ctx"]
+_EG_NUM_PREDICT = DEFAULT_SETTINGS["num_predict"]
+
 
 class ConfigSchema(Schema):
-    """Chat parameters. Used as the /config response and as optional per-request
-    overrides on /chat (all fields optional there)."""
+    """Chat parameters: the ``/config`` response, and optional per-request overrides on
+    ``/chat`` where every field is optional. Anything omitted keeps the server's current value."""
 
     class Meta:
         unknown = EXCLUDE
 
-    model = String(metadata={"description": "Model tag (Ollama) or model id (cloud)", "example": "qwen3:4b"})
-    numCtx = Integer(metadata={"description": "Context window in tokens", "example": 40960})
-    numPredict = Integer(metadata={"description": "Max output tokens (-1 = unlimited)", "example": 8192})
+    model = String(metadata={"description": "Model tag (Ollama) or model id (cloud)", "example": _EG_MODEL})
+    numCtx = Integer(metadata={"description": "Context window in tokens", "example": _EG_NUM_CTX})
+    numPredict = Integer(
+        metadata={"description": "Max output tokens (-1 = unlimited)", "example": _EG_NUM_PREDICT}
+    )
     system = String(metadata={"description": "System prompt / persona"})
     think = Boolean(metadata={"description": "Whether the model reasons before answering"})
     effort = String(
@@ -43,6 +56,8 @@ class ConfigSchema(Schema):
 
 
 class ChatMessageSchema(Schema):
+    """One turn of the conversation, as the caller sends it."""
+
     class Meta:
         unknown = EXCLUDE
 
@@ -69,6 +84,9 @@ class ChatMessageSchema(Schema):
 
 
 class ChatRequestSchema(Schema):
+    """A chat turn. The response is an NDJSON stream, not JSON — reasoning and answer arrive as
+    separate frames, so this shape describes only what goes up."""
+
     class Meta:
         unknown = EXCLUDE
 
@@ -89,9 +107,22 @@ class ChatRequestSchema(Schema):
             "the stream's first frame reports the id that was created.",
         },
     )
+    projectId = Integer(
+        required=False,
+        allow_none=True,
+        metadata={
+            "description": "The project this conversation is in. Sent with the *first* turn of "
+            "a chat started inside a project, because there is no conversation id to bind "
+            "against until this request creates one — and the turn that most needs to know "
+            "which project it is in is that first one. Ignored once the conversation is bound: "
+            "a conversation keeps the project it picked.",
+        },
+    )
 
 
 class HealthSchema(Schema):
+    """Whether the backend is up, and whether the model it is configured for answered."""
+
     ok = Boolean(metadata={"description": "The backend is up"})
     ollamaReachable = Boolean(metadata={"description": "Ollama answered a probe"})
 

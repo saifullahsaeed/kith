@@ -34,9 +34,17 @@ class TestNothingReturnsWithoutABound:
     #: `publish` is here for the reason this class already warns about twice: it is matched on
     #: prose. Its delegates are `git.pull` and `git.push`, whose docstrings say "until somebody
     #: fetches" — and both return a single sentence built from `_last_line`, which is the bound.
-    SELF_LIMITING: ClassVar[set[str]] = {"create_project", "publish"}
+    #: `check_remote` is the same shape and matches for the same reason — it delegates to
+    #: `git.fetch`, whose whole return value is one sentence from `standing` or `_last_line`.
+    SELF_LIMITING: ClassVar[set[str]] = {"create_project", "publish", "check_remote"}
 
-    BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|glob|grep|requests\.")
+    # `glob` is word-bounded because it is a common English substring — it sits inside "global",
+    # and a tool's *docstring* is scanned along with its code (they arrive as one string), so a
+    # comment that said "leaves it global" read as a call to `glob` and flagged a memory tool that
+    # reads nothing in bulk. `\bglob\b` still matches the call `sandbox.glob(` and no longer
+    # matches the prose. The rest are left bare on purpose: `fetch` has to keep matching
+    # `fetch_url`, so a boundary there would blind the guard to a real bulk reader.
+    BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|\bglob\b|grep|requests\.")
     # `MAX_` rather than `_MAX_`: a bound is a bound whether the constant naming it is private
     # to its module or exported. `outline.MAX_BYTES` and `repomap.MAX_BUDGET_TOKENS` are as
     # real as `sandbox.files._MAX_WRITE`, and only the underscore told them apart.

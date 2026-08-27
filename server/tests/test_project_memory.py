@@ -50,30 +50,33 @@ class TestTheFileItself:
         assert "it watches" in pm.read(project)
 
 
-class TestWhenItGrowsTooLong:
-    def test_the_recent_end_is_kept(self, project):
+class TestItIsNotCapped:
+    """Memory is carried whole, whatever its size.
+
+    It used to be cut to the newest 6,000 characters — right when memory was global and its
+    size invisible, wrong once it became scoped to its own project and a line of its own in the
+    context meter. The cap threw away the older two-thirds of a real 26k file and kept the end,
+    when the start (what the project is, how it runs) is what a cold read needs. The person
+    watching the meter is the limit now, not a constant.
+    """
+
+    def test_a_large_memory_comes_back_whole(self, project):
         pm.ensure(project)
         body = "\n".join(f"fact {n}" for n in range(4000))
         pm.path_for(project).write_text(body)
         out = pm.read(project)
 
-        assert len(out) < len(body)
-        # The newest part, because memory is appended to as it is learned — the same reasoning
-        # as the tick handoff, which was being cut from the wrong end for exactly this reason.
+        # Both ends — the beginning is what was being dropped, and it is the orienting half.
+        assert "fact 0" in out
         assert "fact 3999" in out
-        assert "fact 0\n" not in out
 
-    def test_it_says_how_much_was_left_out_and_where(self, project):
+    def test_nothing_is_elided(self, project):
         pm.ensure(project)
-        pm.path_for(project).write_text("x" * (pm.MAX_CHARS + 5_000))
+        pm.path_for(project).write_text("x" * 30_000)
         out = pm.read(project)
-        assert "earlier characters are still in" in out
-        assert ".kith/memory.md" in out
 
-    def test_it_stays_small_enough_to_send_every_time(self):
-        # It is prepended to every request touching the project, so it is paid for on every
-        # round. A hundred lines of everything-he-noticed is worse than ten of what mattered.
-        assert pm.MAX_CHARS <= 8_000
+        assert "earlier characters are still in" not in out
+        assert len(out) == 30_000
 
 
 class TestTheBlockThatReachesThePrompt:

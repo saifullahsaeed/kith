@@ -94,7 +94,7 @@ def test_the_note_survives_the_walk_to_the_provider(monkeypatch):
     message, and nothing failed. A test that calls the helper directly cannot see that. This one
     asks the question the model asks: what actually arrived.
     """
-    monkeypatch.setattr(prompt, "_present_state", lambda conversation_id="": "")
+    monkeypatch.setattr(prompt, "_present_state", lambda *_a, **_k: "")
     out = prompt._assemble(
         [],
         [
@@ -115,7 +115,7 @@ def test_a_canvas_and_an_attachment_both_arrive(monkeypatch):
 
     Whichever runs last has to leave the other one's work in place.
     """
-    monkeypatch.setattr(prompt, "_present_state", lambda conversation_id="": "")
+    monkeypatch.setattr(prompt, "_present_state", lambda *_a, **_k: "")
     monkeypatch.setattr(prompt, "_save_attachment", lambda attachment: "inbox/notes.txt")
     monkeypatch.setattr(prompt, "model_capabilities", lambda: {"images": False})
     out = prompt._assemble(

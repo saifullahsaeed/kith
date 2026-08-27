@@ -8,8 +8,8 @@ from pathlib import Path
 from sqlalchemy import delete, func, select, update
 
 from kith.infra import notify
-from kith.infra.db.engine import as_dict, session
-from kith.infra.db.models import Message, TurnLog
+from kith.infra.db.engine import as_dict, changed, session
+from kith.infra.db.models import Conversation, Message, Task, TurnLog
 from kith.infra.db.support import notifies, utc_now_iso
 
 # How many turns the summary looks back over. Enough to see a trend, bounded so the
@@ -21,6 +21,40 @@ _TOP_TOOLS = 10
 # --------------------------------------------------------------------------- #
 # Messages (a two-way channel between Kith and his person)
 # --------------------------------------------------------------------------- #
+
+
+def _project_from_link(db, link: str | None) -> int | None:
+    """The project a message is about, read off its link, or None for a general one.
+
+    `/chat/<id>` and `/tasks/<id>` are the two links the channel ever carries that name a
+    project; `/messages` and a bare note carry none. Resolved through the same session so this
+    adds no round trip, and defensively — a link whose target has since been deleted resolves to
+    None (global) rather than raising, because a channel write must never fail on a dangling
+    reference.
+    """
+    if not link:
+        return None
+    try:
+        if link.startswith("/chat/"):
+            row = db.get(Conversation, link[len("/chat/") :])
+            return int(row.project_id) if row is not None and row.project_id else None
+        if link.startswith("/tasks/"):
+            tid = link[len("/tasks/") :]
+            if tid.isdigit():
+                row = db.get(Task, int(tid))
+                return int(row.project_id) if row is not None and row.project_id else None
+    except Exception:
+        return None
+    return None
+
+
+def _scope(project_id: int | None):
+    """The WHERE that keeps a chat's channel to its own messages plus the global ones — the same
+    line `repositories.memories._scope` draws, for the same reason. The inbox UI shows every
+    message regardless; this only decides what is injected into the prompt."""
+    if project_id is None:
+        return Message.project_id.is_(None)
+    return (Message.project_id.is_(None)) | (Message.project_id == int(project_id))
 
 
 @notifies("message")
@@ -49,6 +83,11 @@ def add_message(
             sender=sender,
             kind=kind if sender != "user" else "user",
             link=link,
+            # Which project this is about, read off the link it already carries. Stamped here
+            # rather than passed down from six call sites: every one of them already sets a
+            # link that names the thing (`/tasks/12`, `/chat/<id>`), so the project is derivable
+            # without threading it through. A note with no link, or a user message, stays global.
+            project_id=_project_from_link(db, link),
             created_at=utc_now_iso(),
         )
         db.add(row)
@@ -59,10 +98,25 @@ def add_message(
     return saved
 
 
-def list_messages(path: Path, limit: int = 100, unread_only: bool = False) -> list[dict]:
+def list_messages(
+    path: Path,
+    limit: int = 100,
+    unread_only: bool = False,
+    project_id: int | None = None,
+    scoped: bool = False,
+) -> list[dict]:
+    """Recent channel messages, newest first.
+
+    `scoped` narrows to the conversation's project the way memory is narrowed: the project's own
+    messages plus the global ones, and none of another project's. It is opt-in because the inbox
+    wants the whole channel and only the prompt wants it scoped — the same split memory draws.
+    Off by default so every existing caller (the inbox, the API) is unchanged.
+    """
     query = select(Message).order_by(Message.id.desc()).limit(limit)
     if unread_only:
         query = query.where(Message.read == 0)
+    if scoped:
+        query = query.where(_scope(project_id))
     with session(path) as db:
         return [as_dict(row) for row in db.scalars(query).all()]
 
@@ -115,7 +169,7 @@ def delete_messages(path: Path, kinds: list[str] | None = None) -> int:
         newest = db.scalar(select(func.max(Message.id)).where(*criteria))
         if newest is None:
             return 0
-        removed = db.execute(delete(Message).where(*criteria)).rowcount
+        removed = changed(db.execute(delete(Message).where(*criteria)))
         db.execute(delete(Message).where(Message.sender == "user", Message.id < newest))
         return int(removed)
 
@@ -139,13 +193,13 @@ def mark_message_read(path: Path, message_id: int) -> dict | None:
 @notifies("message")
 def mark_all_messages_read(path: Path) -> int:
     with session(path) as db:
-        return db.execute(update(Message).where(Message.read == 0).values(read=1)).rowcount
+        return changed(db.execute(update(Message).where(Message.read == 0).values(read=1)))
 
 
 @notifies("message")
 def delete_message(path: Path, message_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(Message).where(Message.id == message_id)).rowcount > 0
+        return changed(db.execute(delete(Message).where(Message.id == message_id))) > 0
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +257,7 @@ def list_turn_log(path: Path, limit: int = 100) -> list[dict]:
 def _tools(raw: object) -> list[str]:
     """Tool names are stored as a JSON string; a malformed row is not worth a crash."""
     try:
-        parsed = json.loads(raw or "[]")
+        parsed = json.loads(raw if isinstance(raw, str | bytes) else "[]")
     except (ValueError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []

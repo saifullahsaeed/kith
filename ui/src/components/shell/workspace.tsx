@@ -165,6 +165,11 @@ export function Workspace({
       createBackendAdapter({
         get: () => conversationRef.current,
         set: (id) => setConversationId((was) => was || id),
+        // Read through the ref rather than closed over, like `get`: the adapter is built once
+        // and the choice is made later. This is what carries "start a chat in this project"
+        // into the turn that creates the conversation, so its prompt is assembled with the
+        // project already known — see `pendingProject`.
+        project: () => pendingProject.current,
       }),
     [],
   );
@@ -471,9 +476,15 @@ export function Workspace({
    *
    * "Start a chat in this project" is asked from the history panel, where the project is in
    * front of you — but a fresh chat has no id until the first turn comes back from the stream,
-   * and the binding is written against an id. So the choice is held here and written the moment
-   * there is something to write it against. Shown immediately in the session bar meanwhile,
-   * which is true: it is what the next turn will be bound to. */
+   * and the binding is written against an id. So the choice is held here and shown immediately
+   * in the session bar, which is true: it is what the next turn will be bound to.
+   *
+   * It now rides *with* that turn as well, through the adapter above. Writing it afterwards was
+   * a turn too late: the first message of a chat is the one that says what the work is, and it
+   * was the one turn assembled with no project bound — so he got the full cross-project listing
+   * and none of this project's memory, plan or tasks, on the exact turn that decided what to do
+   * next. The write below is now a confirmation rather than the mechanism, and it stays because
+   * it is also the path for picking a project in the session bar part-way through a chat. */
   const pendingProject = useRef<number | null>(null);
 
   const newConversation = useCallback((project: number | null = null) => {
@@ -800,7 +811,14 @@ export function Workspace({
                 <SessionBar
                   conversationId={conversationId}
                   projectId={projectId}
-                  onProject={setProjectId}
+                  onProject={(next) => {
+                    setProjectId(next);
+                    // Picked before the conversation exists — the bar shows on an empty chat now,
+                    // and there is no id to write the binding against until the first turn comes
+                    // back. Held in the same place "New chat here" holds it, and written by the
+                    // same effect.
+                    if (!conversationRef.current) pendingProject.current = next;
+                  }}
                 />
                 {/* The thread gets its own box with a definite height rather than sitting
                     straight in the column. Without one, the thread root's `h-full` resolved

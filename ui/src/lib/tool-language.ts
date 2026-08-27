@@ -92,6 +92,7 @@ export const GROUP: Record<string, WorkKind> = {
  */
 export const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROUP }> = {
   publish: { verb: "shared the work", group: "files" },
+  check_remote: { verb: "checked the remote", group: "files" },
   take_in_shared_tasks: { verb: "took in shared tasks", group: "tasks" },
   // memory and notes
   recall: { verb: "searched his memory for", of: "query", group: "memory" },

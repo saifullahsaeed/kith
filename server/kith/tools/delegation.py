@@ -109,6 +109,10 @@ WITHHELD = frozenset(
         # read them; committing, publishing or remembering them makes them permanent first.
         "commit",
         "publish",
+        # Reaches the network and rewrites this repository's remote refs. Read-ish in intent —
+        # it fetches and never merges — but a scout has no reason to change what the main agent
+        # will see when it next looks at how far behind the folder is.
+        "check_remote",
         "remember",
         "forget",
         "journal",

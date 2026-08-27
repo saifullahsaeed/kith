@@ -159,7 +159,7 @@ _CHARS_PER_TOKEN = 3.7
 _FLAT_FOLD_INPUT_CHARS = 200_000
 
 
-def _fold_input_ceiling(window: int) -> float:
+def _fold_input_ceiling(window: int) -> int:
     """How much new territory one summarisation call may read, scaled to the model's window.
 
     Half the window, in characters — the same margin `_budget_chars` reserves against the
@@ -169,10 +169,10 @@ def _fold_input_ceiling(window: int) -> float:
     """
     if window <= 0:
         return _FLAT_FOLD_INPUT_CHARS
-    return window * _CHARS_PER_TOKEN * 0.5
+    return int(window * _CHARS_PER_TOKEN * 0.5)
 
 
-def _budget_chars(config, tool_chars: int = 0) -> float:
+def _budget_chars(config, tool_chars: int = 0) -> int:
     """How many characters of conversation prose may accumulate before folding.
 
     Scaled to the model's real window when one is known. The persona and the tool schemas
@@ -195,10 +195,11 @@ def _budget_chars(config, tool_chars: int = 0) -> float:
     if window <= 0:
         from kith.services import tuning
 
-        return float(tuning.value("history_max_chars"))
+        return int(tuning.value("history_max_chars"))
 
     return max(
-        0.0, window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE - len((config.system or "").strip()) - tool_chars
+        0,
+        int(window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE) - len((config.system or "").strip()) - tool_chars,
     )
 
 
@@ -464,7 +465,12 @@ def _what_they_asked(history: list[dict[str, Any]], upto: int) -> list[dict[str,
 
 
 def _summary_message(brief: str) -> dict[str, Any]:
-    return {"role": "system", "content": f"{_SUMMARY_HEADER}\n{brief}"}
+    # `_summary` marks this as folded *conversation*, not system instruction. It rides as a
+    # `system` message because that is what a summary of the past is to the model — but for the
+    # ledger it is the conversation, compressed, and counting it under "Who he is" (which is
+    # where every unmarked system message lands) filed a summary of the chat under the persona.
+    # Stripped before the wire like every other internal key; see `openai_compat._to_openai`.
+    return {"role": "system", "content": f"{_SUMMARY_HEADER}\n{brief}", "_summary": True}
 
 
 def _turn_starts(history: list[dict[str, Any]]) -> list[int]:

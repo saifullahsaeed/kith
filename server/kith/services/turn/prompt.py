@@ -32,8 +32,7 @@ from pathlib import Path
 
 from kith.config import model_capabilities, ollama_host
 from kith.infra import workspace as sandbox
-from kith.infra.db import repositories as repo
-from kith.services import conversations, history, memory_context, project_memory, touched
+from kith.services import conversations, history, memory_context, project_context, touched
 from kith.settings import AGENT_DB_PATH
 
 #: What a conversation is for.
@@ -194,8 +193,17 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
     for message in folded:
         role = message.get("role")
         if role == "system":
-            # The folded brief. Passed straight through — it carries no attachments.
-            out.append({"role": "system", "content": str(message.get("content") or "")})
+            # The folded brief. Passed straight through — it carries no attachments. `_summary`
+            # is carried with it (and nothing else): it is how the ledger tells folded
+            # conversation apart from system instruction, and without it here the marker set at
+            # the source is lost on the way to the prompt the ledger actually measures.
+            out.append(
+                {
+                    "role": "system",
+                    "content": str(message.get("content") or ""),
+                    **({"_summary": True} if message.get("_summary") else {}),
+                }
+            )
             continue
         if role == "assistant" and message.get("tool_calls"):
             # A replayed tool call from an earlier turn (see `conversations.full_messages`).
@@ -234,7 +242,8 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # feature: the readings were dropped on every message and the unit test never noticed,
         # because it called `_with_canvas` directly.
         out.append(_with_attachments(_with_canvas(_with_diagrams(message))))
-    now = _present_state(conversation_id)
+    sizes: dict[str, int] = {}
+    now = _present_state(conversation_id, sizes)
     if now:
         # `_live` is for the ledger, not the provider — `openai_compat._to_openai` rebuilds
         # every message from role and content alone, so nothing internal can reach a host.
@@ -242,7 +251,16 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # and therefore the one place where new context is nearly free to add: everything
         # ahead of it stays cached. Counted inside "System prompt", a block that has grown
         # to ten thousand tokens is indistinguishable from a large persona.
-        out.append({"role": "system", "content": now, "_live": True})
+        out.append(
+            {
+                "role": "system",
+                "content": now,
+                "_live": True,
+                # For the ledger, like `_live` itself — `openai_compat._to_openai` rebuilds every
+                # message from role and content alone, so nothing internal reaches a host.
+                "_project_chars": sizes.get("project", 0),
+            }
+        )
     return out
 
 
@@ -484,57 +502,59 @@ def _save_attachment(attachment: dict) -> str:
     return f"{ATTACHMENT_DIR}/{target.name}"
 
 
-def _present_state(conversation_id: str = "") -> str:
-    """Everything about him that is true only at this moment."""
+def _present_state(conversation_id: str = "", _sizes: dict | None = None) -> str:
+    """Everything about him that is true only at this moment, and everything about the project
+    he is in.
+
+    Two regions, and the split is the whole of the fix for a conversation that wandered. The
+    first is about *him* — the clock, his memories, his channel, what he last did — and is the
+    same whatever he is working on. The second is about **one project**, and until it existed
+    there was no such region at all: every active project and every active task across all of
+    them arrived on every turn with no project named on any row, and the one thing that would
+    have grounded him — the project's own memory — was skipped whenever more than one project
+    was open, because the fallback that found it declined to guess.
+
+    So the project is resolved *once*, here, and everything downstream is told the answer rather
+    than working it out again. `project_context.block` carries the project; `memory_context`
+    carries the board only when there is no project to carry instead. Never both: two blocks
+    describing the same tasks in different words is worse than either one alone.
+    """
+    project = project_context.resolve(AGENT_DB_PATH, conversation_id)
     blocks = [
         memory_context.presence_block(AGENT_DB_PATH),
-        memory_context.messages_block(AGENT_DB_PATH),
-        memory_context.projects_block(AGENT_DB_PATH),
-        memory_context.work_block(AGENT_DB_PATH),
+        memory_context.messages_block(AGENT_DB_PATH, int(project["id"]) if project else None),
     ]
-    present = memory_context.context_block(AGENT_DB_PATH)
+    if project:
+        # Named, not described. See `project_context.others` — he has to be able to recognise
+        # that something belongs elsewhere, and nothing more than that.
+        blocks.append(project_context.others(AGENT_DB_PATH, int(project["id"])))
+    else:
+        # Nothing has been chosen, so the menu is the right answer.
+        blocks.append(memory_context.projects_block(AGENT_DB_PATH))
+        blocks.append(memory_context.work_block(AGENT_DB_PATH))
+    # Scoped to the project in hand, like the region below it. His memories were global — the
+    # same core set and eight most-recent on every turn — so a chat in one project carried
+    # another's detail and none of its own. `recall` still reaches anything; this is only what
+    # arrives without asking.
+    present = memory_context.context_block(AGENT_DB_PATH, project_id=int(project["id"]) if project else None)
     if present:
         blocks.append(f"[Your memory right now]\n{present}")
     # What he knows about the project he is in. Injected rather than fetched, deliberately:
     # a file he has to remember to open is a file he will not open, which is the shape of
-    # nearly every failure this codebase has a comment about.
-    blocks.append(_project_memory_block(conversation_id))
-    # Last, so it is the closest thing to what was just asked. Everything above is about him;
-    # this is the only part that is about the conversation, and it is the part that stops him
-    # opening a file he has already read — measured at 54% of every read he makes.
+    # nearly every failure this codebase has a comment about. That reasoning now covers the
+    # whole project — its plan, its columns, its folder's standing against the remote — and not
+    # just `memory.md`, for exactly the same reason.
+    about_project = project_context.block(AGENT_DB_PATH, project)
+    blocks.append(about_project)
+    # Reported out rather than measured by the caller, because only this function knows which
+    # of the blocks it joined was the project one. The ledger reads it: inside "Where he is
+    # right now" the project region is indistinguishable from the clock, and it is now the
+    # largest thing in there by an order of magnitude. Same reasoning that gave the live block
+    # its own line rather than leaving it inside "System prompt".
+    if _sizes is not None:
+        _sizes["project"] = len(about_project)
+    # Last, so it is the closest thing to what was just asked. Everything above is about him or
+    # about the project; this is the only part that is about the conversation, and it is the part
+    # that stops him opening a file he has already read — measured at 54% of every read he makes.
     blocks.append(touched.manifest(AGENT_DB_PATH, conversation_id))
     return "\n\n".join(block for block in blocks if block).strip()
-
-
-def _project_memory_block(conversation_id: str = "") -> str:
-    """`.kith/memory.md` for whatever this session is working on.
-
-    Asked of the session, not of the board. The first version looked for "the only active
-    project with a folder", which is a guess that gives the right answer exactly until there
-    are two — and two at once is the point of sessions, so it was a guess with a deadline.
-
-    Falls back to the single-active-project case for a conversation that has not adopted a
-    project yet, because a session usually acquires one part-way through rather than at the
-    start, and until it does the one open project is very probably the one being discussed.
-    """
-
-    try:
-        project = None
-        if conversation_id:
-            bound = repo.conversations.project_of(AGENT_DB_PATH, conversation_id)
-            if bound:
-                project = repo.projects.get_project(AGENT_DB_PATH, bound)
-        if project is None:
-            active = [
-                row
-                for row in repo.projects.list_projects(AGENT_DB_PATH)
-                if row.get("status") == "active" and row.get("directory")
-            ]
-            if len(active) != 1:
-                return ""
-            project = active[0]
-    except Exception:
-        return ""
-    if not project or not project.get("directory"):
-        return ""
-    return project_memory.block(project["directory"], project.get("name") or "")

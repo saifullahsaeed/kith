@@ -32,6 +32,10 @@ class Memory(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     level: Mapped[str] = mapped_column(Text, nullable=False, default="recall")
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    #: Which project this belongs to, or NULL for a fact that holds whatever the work is.
+    #: A project's memories surface in that project's chats; a global one surfaces everywhere;
+    #: anything else is reachable by `recall` rather than injected. See `v42_memory_project`.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class JournalEntry(Base):
@@ -172,6 +176,9 @@ class Message(Base):
     kind: Mapped[str] = mapped_column(Text, nullable=False, default="note")
     sender: Mapped[str] = mapped_column(Text, nullable=False, default="kith")
     link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Which project this message is about (resolved from its link), or NULL for a general
+    #: note that belongs everywhere. See `v43_message_project`.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Source(Base):

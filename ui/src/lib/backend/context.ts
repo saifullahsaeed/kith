@@ -199,3 +199,21 @@ export async function fetchContextDetail(conversationId: string): Promise<Contex
   const body = (await response.json().catch(() => null)) as Partial<ContextDetail> | null;
   return body ? { ...NOTHING, ...body } : NOTHING;
 }
+
+/** The literal text behind one breakdown line — the persona, the schemas, the block rewritten
+ *  each turn. Its own request, fetched only when a category is opened: "messages" alone is the
+ *  whole conversation, so shipping every category's text with the breakdown would make it
+ *  megabytes for a screen open a few seconds a month. `truncated` says the text was cut at the
+ *  cap, so a shortened block is never mistaken for a whole one. */
+export async function fetchCategoryText(
+  conversationId: string,
+  key: string,
+): Promise<{ text: string; truncated: boolean; chars: number }> {
+  const empty = { text: "", truncated: false, chars: 0 };
+  if (!conversationId) return empty;
+  const response = await fetch(
+    `/api/chat/${conversationId}/context/category/${encodeURIComponent(key)}`,
+  ).catch(() => null);
+  if (!response || !response.ok) return empty;
+  return (await response.json().catch(() => empty)) ?? empty;
+}

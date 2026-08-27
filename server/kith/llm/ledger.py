@@ -156,7 +156,7 @@ def take(
     mcp = frozenset(mcp_names)
     custom = frozenset(custom_names)
 
-    system_chars = persona_chars = live_chars = directive_chars = 0
+    system_chars = persona_chars = live_chars = directive_chars = project_chars = summary_chars = 0
     said_chars = tool_chars = skill_chars = code_chars = image_chars = 0
 
     for message in convo:
@@ -169,7 +169,23 @@ def take(
             # where anything new will go. Inside "System prompt" a block that has grown to ten
             # thousand tokens is indistinguishable from a large persona, and the number a
             # person checks would not be able to show it.
-            live_chars += size
+            #
+            # The same argument, one level down. Most of that block is now the region about the
+            # project in hand — its plan, its columns, its `.kith/memory.md` — which on a real
+            # project is 1,400 to 2,100 tokens against a few hundred for the clock and the
+            # reminders. Left together, "Where he is right now: 5,112" cannot tell you whether
+            # to prune a memory file or stop carrying a task list, which are the only two things
+            # a person can do about that number.
+            mine = min(int(message.get("_project_chars") or 0), size)
+            project_chars += mine
+            live_chars += size - mine
+        elif role == "system" and message.get("_summary"):
+            # The folded brief — a summary of the older turns. A `system` message on the wire, but
+            # the conversation compressed, so it is counted with the conversation rather than under
+            # "Who he is", where every other system message lands. Filed there, a summary of the
+            # chat read as part of the persona and inflated the one line that is supposed to be
+            # the cheap, unchanging head.
+            summary_chars += size
         elif role == "system" and message.get("_directive"):
             # What the harness told the turn to do, mid-turn — the landing nudge, a dead round,
             # an empty one, the budget running out. Its own line for the same reason `live` has
@@ -217,13 +233,15 @@ def take(
 
     lines = (
         Line("persona", "Persona", _tokens(persona_chars, ratio)),
-        Line("system", "System prompt", _tokens(system_chars, ratio)),
+        Line("system", "How you work", _tokens(system_chars, ratio)),
         Line("built_in_tools", "System tools", _tokens(built_in_chars, ratio)),
         Line("mcp_tools", "MCP tools", _tokens(mcp_chars, ratio)),
         Line("custom_tools", "His own tools", _tokens(custom_chars, ratio)),
+        Line("project", "The project he is in", _tokens(project_chars, ratio)),
         Line("live", "Where he is right now", _tokens(live_chars, ratio)),
         Line("directives", "Turn directives", _tokens(directive_chars, ratio)),
         Line("messages", "Messages", _tokens(said_chars, ratio)),
+        Line("summary", "Summary of older turns", _tokens(summary_chars, ratio)),
         Line("code", "Code he has read", _tokens(code_chars, ratio)),
         Line("tool_results", "Other tool results", _tokens(tool_chars, ratio)),
         Line("skills", "Skills", _tokens(skill_chars, ratio)),
@@ -251,8 +269,8 @@ def _has_image(message: dict[str, Any]) -> bool:
 _SUBJECT_KEYS = ("path", "pattern", "command", "query", "name", "id")
 
 #: The `Line.key`s that `itemise` can break down, in the order a screen should show them. Every
-#: other line — persona, system prompt, live block, the three kinds of tool schema — comes from
-#: config rather than from the conversation, and `messages` and `images` have no call to name. A
+#: other line — persona, system prompt, live block, project region, the three kinds of tool
+#: schema — comes from config rather than from the conversation, and `messages` and `images` have no call to name. A
 #: caller uses this to know which categories open into something and which are just a number.
 ITEMISED_KEYS = ("code", "tool_results", "skills")
 

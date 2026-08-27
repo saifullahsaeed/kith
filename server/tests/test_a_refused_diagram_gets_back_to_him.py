@@ -73,7 +73,7 @@ def test_the_note_survives_the_walk_to_the_provider(monkeypatch):
     message from role and content alone, so it was stripped before it ever ran — on every
     message, with nothing failing. This asks the question the model asks: what arrived.
     """
-    monkeypatch.setattr(prompt, "_present_state", lambda conversation_id="": "")
+    monkeypatch.setattr(prompt, "_present_state", lambda *_a, **_k: "")
     out = prompt._assemble(
         [], [{"role": "user", "content": "and the second one?", "diagrams": [NO_EDGE]}], ""
     )
@@ -84,7 +84,7 @@ def test_the_note_survives_the_walk_to_the_provider(monkeypatch):
 
 def test_a_refusal_and_a_canvas_reading_both_arrive(monkeypatch):
     """Two notes, written by two steps, one of which narrows the message."""
-    monkeypatch.setattr(prompt, "_present_state", lambda conversation_id="": "")
+    monkeypatch.setattr(prompt, "_present_state", lambda *_a, **_k: "")
     out = prompt._assemble(
         [],
         [

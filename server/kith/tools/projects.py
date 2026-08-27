@@ -40,7 +40,10 @@ def create_project(path: Path, args: dict):
 
     A folder is the difference between a project and a list of intentions. It is also where
     the project's own memory lives — `.kith/memory.md`, read to you every time you work here
-    — so a code project without one has nowhere to keep what it learns about itself.
+    — so a code project without one has nowhere to keep what it learns about itself. Beside it,
+    `.kith/references.md` holds what the project points *at*: the brief, the spec, the standard
+    you are held to. Both are read to you every turn you spend on this project; neither exists
+    unless something writes to it.
 
     Not every project has code, though, and one that does not should not be handed a pretend
     directory: a shortlist or a piece of research is a project with rows and no folder.
@@ -97,7 +100,11 @@ def create_project(path: Path, args: dict):
         project_files.ensure(resolved)
         made = repo.projects.add_project(path, args["name"], args.get("description") or "", str(resolved))
         project_binding.adopt(path, made.get("id"), deliberate=True)
-        out = {**made, "memory": f"{directory}/.kith/memory.md"}
+        out = {
+            **made,
+            "memory": f"{directory}/.kith/memory.md",
+            "references": f"{directory}/.kith/references.md",
+        }
         # Said at the one moment it can still be acted on cheaply. `.kith/.gitignore` decides
         # what of his work is safe to commit, and a root-level `.kith/` rule means git never
         # reads it — see `project_files.neutered_by`. Reported, never repaired: their ignore
@@ -410,6 +417,7 @@ def link_folder(path: Path, args: dict):
     return {
         **updated,
         "memory": str(project_memory.path_for(resolved)),
+        "references": str(project_memory.references_path_for(resolved)),
         "note": (
             "Linked to an existing folder. Read what is there before changing it."
             if existed

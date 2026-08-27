@@ -3,15 +3,29 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from sqlalchemy import delete, select
 
 from kith.domain.enums import MEMORY_LEVELS
-from kith.infra.db.engine import as_dict, session
+from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Memory
 from kith.infra.db.support import keyword_search, utc_now_iso
 from kith.infra.db.vectors import cosine, pack_vector, unpack_vector
+
+
+def _scope(project_id: int | None):
+    """The WHERE that keeps a project's chat to its own memories plus the global ones.
+
+    A memory with no project is global and shows everywhere. One with a project shows only when
+    the conversation is in that project. `recall` never uses this — fetching should reach any
+    memory, which is the whole point of the split: the injected set is small and on-topic, and
+    everything else is a search away rather than a tax on every turn.
+    """
+    if project_id is None:
+        return Memory.project_id.is_(None)
+    return (Memory.project_id.is_(None)) | (Memory.project_id == int(project_id))
 
 
 def add_memory(
@@ -21,6 +35,7 @@ def add_memory(
     importance: int = 0,
     level: str = "recall",
     embedding: list[float] | None = None,
+    project_id: int | None = None,
 ) -> dict:
     if level not in MEMORY_LEVELS:
         level = "recall"
@@ -32,6 +47,7 @@ def add_memory(
             level=level,
             created_at=utc_now_iso(),
             embedding=pack_vector(embedding),
+            project_id=int(project_id) if project_id else None,
         )
         db.add(row)
         db.flush()
@@ -87,20 +103,38 @@ def list_memories(path: Path, limit: int = 50) -> list[dict]:
         return [_public(row) for row in rows]
 
 
-def memories_by_level(path: Path, level: str, limit: int = 50) -> list[dict]:
-    query = (
-        select(Memory)
-        .where(Memory.level == level)
-        .order_by(Memory.importance.desc(), Memory.id.desc())
-        .limit(limit)
-    )
+def memories_by_level(path: Path, level: str, limit: int = 50, project_id: int | None = None) -> list[dict]:
+    """Memories at one level, scoped to what the conversation is about.
+
+    `project_id` is the project the conversation is in, or None for a chat that is in none.
+    Global memories (``project_id IS NULL``) come back in both cases — they are the facts that
+    hold whatever the work is. A project's own memories join them only when the chat is in that
+    project; another project's are left for `recall`, which is unscoped, to reach. This is the
+    same line the project region draws for the board: what you are on, plus what is universal,
+    and nothing from the project next door.
+    """
+    query = select(Memory).where(Memory.level == level)
+    query = query.where(_scope(project_id))
+    query = query.order_by(Memory.importance.desc(), Memory.id.desc()).limit(limit)
     with session(path) as db:
         return [_public(row) for row in db.scalars(query).all()]
 
 
-def recent_memories(path: Path, limit: int = 8) -> list[dict]:
-    """The latest non-core memories — the 'back of your mind' that surfaces on its own."""
-    query = select(Memory).where(Memory.level != "core").order_by(Memory.id.desc()).limit(limit)
+def recent_memories(path: Path, limit: int = 8, project_id: int | None = None) -> list[dict]:
+    """The latest non-core memories — the 'back of your mind' that surfaces on its own.
+
+    Scoped like :func:`memories_by_level`. This is where the bleed actually showed: "recent"
+    was the eight most recent non-core memories on the whole machine, so whichever project was
+    touched last coloured every other project's chats. Now the recent memories of *this* project
+    surface, alongside any global ones, and another project's stay in `recall`.
+    """
+    query = (
+        select(Memory)
+        .where(Memory.level != "core")
+        .where(_scope(project_id))
+        .order_by(Memory.id.desc())
+        .limit(limit)
+    )
     with session(path) as db:
         return [_public(row) for row in db.scalars(query).all()]
 
@@ -134,7 +168,7 @@ def update_memory(
 
 def delete_memory(path: Path, memory_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(Memory).where(Memory.id == memory_id)).rowcount > 0
+        return changed(db.execute(delete(Memory).where(Memory.id == memory_id))) > 0
 
 
 def _public(row: Memory) -> dict:
@@ -148,7 +182,7 @@ def _public(row: Memory) -> dict:
     return data
 
 
-def _public_row(row: object) -> dict:
+def _public_row(row: sqlite3.Row) -> dict:
     """Same shape, for a raw sqlite3.Row coming back from the keyword ranker."""
     data = {key: row[key] for key in row.keys() if key != "embedding"}  # noqa: SIM118 - sqlite3.Row has no __iter__ over keys
     data["tags"] = _tags(data.get("tags"))
@@ -157,7 +191,7 @@ def _public_row(row: object) -> dict:
 
 def _tags(raw: object) -> list[str]:
     try:
-        parsed = json.loads(raw or "[]")
+        parsed = json.loads(raw if isinstance(raw, str | bytes) else "[]")
     except (ValueError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []

@@ -30,8 +30,9 @@ from collections import Counter
 from kith.config import default_config
 from kith.llm import ledger
 from kith.llm.budget import SEED_CHARS_PER_TOKEN, message_chars
-from kith.services import conversations
+from kith.services import conversations, project_context
 from kith.services.turn.prompt import as_sent as prompt_as_sent
+from kith.settings import AGENT_DB_PATH
 
 
 def reading_after_fold(conversation_id: str, was: ledger.Ledger, now: ledger.Ledger) -> dict | None:
@@ -441,6 +442,123 @@ def detail(conversation_id: str, tool_chars: int) -> dict:
         # `message_chars` over a ratio; these came back from the provider.
         "lastRound": _last_round(conversation_id),
     }
+
+
+#: How much of a category's text the drill-down carries. Generous — this is fetched only when
+#: someone opens a category to read it, not on every turn — but bounded, because "messages" on a
+#: long conversation is the whole transcript and a browser asked to lay out two million characters
+#: in one <pre> simply hangs.
+_CATEGORY_TEXT_CAP = 200_000
+
+
+def _content_text(message: dict) -> str:
+    """A message's text, whether it is a plain string or the parts list a vision model gets."""
+    content = message.get("content")
+    if isinstance(content, list):
+        return "\n\n".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    if not str(content or "").strip() and message.get("tool_calls"):
+        return json.dumps(message["tool_calls"], indent=2)
+    return str(content or "")
+
+
+def category_text(
+    conversation_id: str,
+    key: str,
+    tool_chars: int,
+    schemas: list[dict] | None = None,
+    mcp_names: tuple[str, ...] = (),
+) -> dict:
+    """The literal text behind one line of the breakdown — the persona, the schemas, the block
+    rewritten each turn — gathered the way the ledger counted it, so what you read is what the
+    number above it is made of.
+
+    Fetched only when a category is opened, never streamed: "messages" is the whole conversation,
+    and carrying every category's full text on the breakdown request would make it several
+    megabytes for a screen open a few seconds a month. Mirrors `ledger.take`'s own per-message
+    bucketing rather than inventing a second rule for what belongs where — the one place the two
+    could disagree is the one place this must not.
+
+    The tool schemas are the current declarations, not a stored copy: a schema is stable text a
+    person opens to see what a tool *is*, and re-deriving it costs nothing, where storing it on
+    every persisted reading would grow the transcript forever. The message-based categories come
+    from the same rebuilt prompt the reading measured, so they match to the character.
+    """
+    persona = (default_config().system or "").strip()
+
+    if key in ("built_in_tools", "mcp_tools", "custom_tools"):
+        # Custom tools are lumped into built-ins in the live turn — it passes only `mcp_names` to
+        # the ledger — so the split here is the same two-way one, and `custom_tools` comes back
+        # empty rather than pretending to a distinction the count never made.
+        mcp = set(mcp_names)
+        parts: list[str] = []
+        for schema in schemas or []:
+            name = str(((schema.get("function") or {}).get("name")) or "")
+            kind = "mcp_tools" if name in mcp else "built_in_tools"
+            if kind == key:
+                parts.append(f"// {name}\n{json.dumps(schema, indent=2)}")
+        return _capped("\n\n".join(parts))
+
+    messages, _ = _sent(conversation_id, tool_chars)
+
+    # The block rewritten each turn is one message that carries two lines — the project region and
+    # everything else about now. Split by removing the region (recomputed from the same state the
+    # prompt was built from, so it is the same text) rather than by the stored char count, which
+    # says how big the region is but not where in the block it sits.
+    region = ""
+    if key in ("live", "project"):
+        found = project_context.resolve(AGENT_DB_PATH, conversation_id)
+        region = project_context.block(AGENT_DB_PATH, found) if found else ""
+
+    chunks: list[str] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        text = _content_text(message)
+        if role == "system" and message.get("_live"):
+            if key == "project":
+                if region:
+                    chunks.append(region)
+            elif key == "live":
+                chunks.append(text.replace(region, "").strip() if region else text)
+        elif role == "system" and message.get("_summary"):
+            if key == "summary":
+                chunks.append(text)
+        elif role == "system" and message.get("_directive"):
+            if key == "directives":
+                chunks.append(text)
+        elif role == "system":
+            head = persona if persona and text.startswith(persona) else ""
+            if key == "persona" and head:
+                chunks.append(head)
+            elif key == "system":
+                rest = text[len(head) :].strip()
+                if rest:
+                    chunks.append(rest)
+        elif role == "tool":
+            name = str(message.get("tool_name") or message.get("name") or "")
+            bucket = (
+                "skills"
+                if name in ledger._SKILL_TOOLS
+                else "code"
+                if name in ledger._CODE_TOOLS
+                else "tool_results"
+            )
+            if bucket == key:
+                chunks.append(f"[{name}]\n{text}")
+        elif ledger._has_image(message):
+            if key == "images":
+                chunks.append(f"[{role} — image]")
+        elif key == "messages":
+            chunks.append(f"{role}: {text}")
+
+    return _capped("\n\n".join(chunk for chunk in chunks if chunk.strip()))
+
+
+def _capped(text: str) -> dict:
+    """Text with an honest note when it had to be cut — a silently shortened block is worse than
+    a short one, because you read it believing it is whole."""
+    if len(text) <= _CATEGORY_TEXT_CAP:
+        return {"text": text, "truncated": False, "chars": len(text)}
+    return {"text": text[:_CATEGORY_TEXT_CAP], "truncated": True, "chars": len(text)}
 
 
 def one_message(conversation_id: str, index: int, tool_chars: int) -> dict:

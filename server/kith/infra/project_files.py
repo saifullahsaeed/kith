@@ -18,6 +18,7 @@ there — which is the whole point, and is why `.kith/` is *not* in the gitignor
 
     .kith/
       memory.md          what he knows about this project        (committed)
+      references.md      what this project points at             (committed)
       README.md          what this folder is, for a human        (committed)
       tasks/07-name.md   a readable brief per task               (committed)
       work/notes.md      working files, findings, drafts         (committed)
@@ -57,6 +58,9 @@ else's Kith) can pick up where this one left off instead of starting from nothin
 
 - **memory.md** — what has been learned about this project. Read every time he works here,
   so it is deliberately short. Anything under "Working here" is a standing instruction.
+- **references.md** — what this project points at: the brief, the spec, the standard, the
+  staging URL. What he was *given*, as opposed to what he worked out. Also read every time,
+  so it is a line each and not a copy of the thing.
 - **tasks/** — a readable brief per task: the goal, how you would know it is done, the
   checklist, the notes. A record, not the live board — status and ordering live in Kith's
   own database on whichever machine is driving.

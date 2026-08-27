@@ -208,6 +208,28 @@ def context_detail(conversation_id: str):
     return jsonify(report.detail(conversation_id, _tool_block_chars()))
 
 
+@api.get("/chat/<conversation_id>/context/category/<key>")
+@api.doc(
+    summary="The literal text behind one line of the breakdown",
+    description="The persona, the tool schemas, the block rewritten each turn — the text a "
+    "category is made of, gathered the way the ledger counted it. Fetched when a category is "
+    "opened, never streamed.",
+)
+def context_category(conversation_id: str, key: str):
+    # The schemas and their provenance are the adapter's to know — the same reason `_tool_block_chars`
+    # lives here and not in the report. Taken once so the two agree about which tools exist.
+    host = tools.host(AGENT_DB_PATH)
+    return jsonify(
+        report.category_text(
+            conversation_id,
+            key,
+            _tool_block_chars(),
+            schemas=host.schemas(),
+            mcp_names=tuple(host.mcp_names),
+        )
+    )
+
+
 @api.get("/chat/<conversation_id>/context/message/<int:index>")
 @api.doc(
     summary="One message of the prompt, whole",
@@ -928,6 +950,7 @@ def chat(payload):
     resumed = bool(conversation_id)
     if not conversation_id:
         conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
+    _bind_to_project(conversation_id, payload.get("projectId"))
     conversations.record(AGENT_DB_PATH, conversation_id, "user", latest)
 
     # What this turn is being asked, resolved on the turn's own thread rather than here — see
@@ -955,6 +978,34 @@ def chat(payload):
         yield from live_turns.watch(live)
 
     return _ndjson(generate())
+
+
+def _bind_to_project(conversation_id: str, project_id: int | str | None) -> None:
+    """Point a brand-new conversation at the project it was started in, before its prompt is built.
+
+    The binding used to be written by the client, over a second request, once the stream had
+    reported the id — which meant the *first* turn of every chat ran unbound. That is the turn
+    where somebody says what they want, and it was the one turn assembled with no project: no
+    `.kith/memory.md`, no plan, no columns, and — because the fallback declines to guess between
+    two open projects — the full cross-project listing in their place. He was shown three
+    projects and told nothing about the one he was in, so he went and read the others. Fifty-four
+    of sixty-six conversations on this machine never acquired a binding at all.
+
+    So it is written here, on the request that creates the conversation and before
+    `_build_messages` asks which project this is. The client still sends its own request for the
+    case this cannot cover — picking a project part-way through a chat that already exists.
+
+    Silent on refusal, and that is `repo.conversations.set_project`'s existing rule rather than a
+    new one: a conversation is stuck with the first project it picks. A resumed conversation
+    carrying a stale `projectId` therefore cannot move its own binding, which is the whole
+    protection. Silent on failure too — a turn must not die because bookkeeping did.
+    """
+    if project_id in (None, "", 0, "0"):
+        return
+    try:
+        conversations.set_project(AGENT_DB_PATH, conversation_id, int(project_id))
+    except Exception:
+        pass
 
 
 def _turn(

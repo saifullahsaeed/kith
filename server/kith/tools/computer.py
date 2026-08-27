@@ -154,6 +154,7 @@ def _read_several(wanted: list[str], args: dict):
             )
         }
     blocks = []
+    pictures = []
     for one in wanted:
         try:
             body = read_file(
@@ -163,11 +164,33 @@ def _read_several(wanted: list[str], args: dict):
         except Exception as exc:  # a bad path in a batch must not lose the good ones
             body = f"{type(exc).__name__}: {exc}"
         if isinstance(body, dict):
-            # An image, or a per-file refusal. Named rather than inlined, so a batch that
-            # happens to contain a screenshot says so instead of printing a dict at him.
-            body = str(body.get("note") or body.get("error") or body)
+            # An image, or a per-file refusal.
+            #
+            # The image used to be flattened to its `note` here — "Look at the image below and
+            # describe what you actually see" — and the data URI thrown away with the dict. So
+            # the note was the only thing that survived, there was no image below it, and three
+            # screenshots read in one call arrived as three copies of that sentence. He said so
+            # himself, in the middle of a UI review: "the screenshots are saved but I need to
+            # actually view them as images".
+            #
+            # It is the same bug `agent_loop._image_from` was written to fix for a single file,
+            # reintroduced by the batch path — and `35-how-you-spend-a-round.md` tells him to
+            # batch, so the persona routes him straight into it. Pictures come out here and
+            # travel as real image parts; the text keeps a line saying one was in the batch.
+            if _is_data_uri(body.get("image")):
+                pictures.append({"path": one, "bytes": body.get("bytes"), "image": body["image"]})
+                body = str(body.get("note") or "(an image, shown to you as a picture)")
+            else:
+                body = str(body.get("note") or body.get("error") or body)
         blocks.append(f"===== {one} =====\n{body}")
-    return "\n\n".join(blocks)
+    text = "\n\n".join(blocks)
+    # A plain string when there is nothing to look at, so every batch that reads code is shaped
+    # exactly as it was before this.
+    return {"text": text, "images": pictures} if pictures else text
+
+
+def _is_data_uri(value) -> bool:
+    return isinstance(value, str) and value.startswith("data:image/")
 
 
 def _read_symbol(wanted: str, symbol: str, offset=None, limit=None) -> str:
@@ -245,6 +268,7 @@ def _reporting_lost_definitions(wanted: str, write):
     """
     from kith.engine.code import verify
 
+    target: Path | None = None
     try:
         target = Path(sandbox.resolve(wanted))
         was = verify.readable(target)
@@ -253,7 +277,7 @@ def _reporting_lost_definitions(wanted: str, write):
 
     result = write()
 
-    if was is None:
+    if was is None or target is None:
         return result
     try:
         now = verify.readable(target)
@@ -429,6 +453,30 @@ def publish(path: Path, args: dict):
     if which in ("out", "both"):
         said["out"] = sandbox.push()
     return said
+
+
+@tool(
+    "check_remote",
+    "Ask this project's remote what it has, without changing anything here. Safe to run "
+    "mid-job: it fetches, it does not merge, so nothing in your working tree moves and "
+    "uncommitted changes do not block it. Use it when what you are told about the folder — how "
+    "far behind it is, what is sitting in `.kith/` — matters and nobody has fetched recently. "
+    "`publish` with direction 'in' is what actually brings the commits down afterwards.",
+    {},
+    required=(),
+)
+def check_remote(path: Path, args: dict):
+    """Reading the remote is separate from taking it in, and that is the whole point.
+
+    What the system prompt tells him about a project's folder is read locally — the commit count
+    comes from refs the last fetch left on disk, so a repository nobody has fetched in a week
+    reports "level with the remote" and is nothing of the kind. `workspace.standing` says how
+    long it has been precisely because of that, and this is the operation that sentence is asking
+    for. `pull` cannot serve here: it refuses outright when the tree is dirty, which is the state
+    somebody mid-job is always in, so "has anything arrived" would mean putting the work down
+    first.
+    """
+    return {"remote": sandbox.fetch()}
 
 
 @tool(

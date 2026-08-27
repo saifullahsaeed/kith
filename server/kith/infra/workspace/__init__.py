@@ -65,7 +65,7 @@ from .files import (
     trash_path,
     write_file,
 )
-from .git import commit_all, diff, ensure_repo, has_git, log, pull, push
+from .git import commit_all, diff, ensure_repo, fetch, has_git, log, pull, push, standing
 from .paths import (
     DEFAULT_ROOT,
     INTERNAL_DIR,
@@ -99,6 +99,7 @@ __all__ = [
     "edit_file",
     "edit_files",
     "ensure_repo",
+    "fetch",
     "fetch_url",
     "glob",
     "grep",
@@ -123,6 +124,7 @@ __all__ = [
     "root",
     "run_command",
     "set_root",
+    "standing",
     "status",
     "trash_path",
     "write_file",

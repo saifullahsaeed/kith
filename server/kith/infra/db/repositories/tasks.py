@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from kith.domain import keys
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra import identity, project_files
-from kith.infra.db.engine import as_dict, session
+from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task
 from kith.infra.db.support import notifies, utc_now_iso
 from kith.kernel import session_context
@@ -156,7 +156,7 @@ def list_tasks(path: Path, status: str | None = None) -> list[dict]:
         query = query.where(Task.status == status)
     with session(path) as db:
         tasks = [as_dict(row) for row in db.scalars(query).all()]
-    tasks.sort(key=lambda task: (_PRIORITY_RANK.get(task.get("priority"), 1), _newest_first(task)))
+    tasks.sort(key=lambda task: (_PRIORITY_RANK.get(str(task.get("priority") or ""), 1), _newest_first(task)))
     return tasks
 
 
@@ -330,7 +330,7 @@ def delete_task(path: Path, task_id: int) -> bool:
     with session(path) as db:
         row = db.get(Task, int(task_id))
         directory = _project_dir(db, getattr(row, "project_id", None)) if row else ""
-        deleted = db.execute(delete(Task).where(Task.id == task_id)).rowcount > 0
+        deleted = changed(db.execute(delete(Task).where(Task.id == task_id))) > 0
     if deleted and directory:
         # Silent, like the write it undoes: the task is gone either way, and a brief that could
         # not be removed is worth less than a deletion that failed because of it.
@@ -373,6 +373,28 @@ def list_checklist(path: Path, task_id: int) -> list[dict]:
         return [as_dict(row) for row in db.scalars(query).all()]
 
 
+def checklist_progress(path: Path, task_ids: list[int]) -> dict[int, tuple[int, int]]:
+    """How far through its checklist each of these tasks is, as {task_id: (done, total)}.
+
+    One query for the whole set rather than `list_checklist` per task. The caller is the system
+    prompt, which asks about every task in flight on a project on every turn — a query each is
+    the shape that is fine with three tasks and quietly is not with thirty.
+
+    Tasks with no checklist are absent from the mapping rather than present as ``(0, 0)``: "no
+    checklist" and "a checklist nothing is ticked on" mean different things, and the second is
+    the one worth a line.
+    """
+    if not task_ids:
+        return {}
+    query = select(ChecklistItem.task_id, ChecklistItem.done).where(ChecklistItem.task_id.in_(task_ids))
+    out: dict[int, tuple[int, int]] = {}
+    with session(path) as db:
+        for task_id, done in db.execute(query).all():
+            was = out.get(int(task_id), (0, 0))
+            out[int(task_id)] = (was[0] + (1 if done else 0), was[1] + 1)
+    return out
+
+
 @notifies("task")
 def set_checklist_item(
     path: Path, item_id: int, done: bool | None = None, text: str | None = None
@@ -394,7 +416,7 @@ def set_checklist_item(
 @notifies("task")
 def delete_checklist_item(path: Path, item_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(ChecklistItem).where(ChecklistItem.id == item_id)).rowcount > 0
+        return changed(db.execute(delete(ChecklistItem).where(ChecklistItem.id == item_id))) > 0
 
 
 @notifies("task")
@@ -417,7 +439,7 @@ def list_deliverables(path: Path, task_id: int) -> list[dict]:
 @notifies("task")
 def delete_deliverable(path: Path, deliverable_id: int) -> bool:
     with session(path) as db:
-        return db.execute(delete(Deliverable).where(Deliverable.id == deliverable_id)).rowcount > 0
+        return changed(db.execute(delete(Deliverable).where(Deliverable.id == deliverable_id))) > 0
 
 
 def task_detail(path: Path, task_id: int) -> dict | None:

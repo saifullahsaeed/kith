@@ -150,6 +150,87 @@ class TestTheLiveBlockIsCostedOnItsOwn:
         assert book.of("system") > 0
 
 
+class TestTheFoldedSummaryIsConversationNotPersona:
+    """A summary of the older turns rides as a `system` message, but it is the conversation
+    compressed — so it is counted with the conversation, not under "Who he is".
+
+    Filed under `system` it did real harm: it inflated the one line that is meant to be the cheap,
+    unchanging head, and it put a summary of the chat next to the persona, where a person opening
+    the screen read it and asked what a conversation summary was doing in the system prompt.
+    """
+
+    def _with_summary(self) -> list[dict]:
+        return [
+            *_turn(),
+            {
+                "role": "system",
+                "content": "[Summary of the earlier part]\nThey asked for X.",
+                "_summary": True,
+            },
+        ]
+
+    def test_it_is_counted_as_summary(self):
+        book = ledger.take(self._with_summary(), persona=PERSONA, window=1_000_000)
+        assert book.of("summary") > 0
+
+    def test_it_does_not_land_in_the_system_line(self):
+        plain = ledger.take(_turn(), persona=PERSONA, window=1_000_000)
+        with_summary = ledger.take(self._with_summary(), persona=PERSONA, window=1_000_000)
+        # The system line is unchanged by adding a summary — the summary went somewhere else.
+        assert with_summary.of("system") == plain.of("system")
+
+    def test_an_unmarked_system_message_is_still_the_system_line(self):
+        # The marker is what moves it. A plain system message is still "how you work".
+        unmarked = [*_turn(), {"role": "system", "content": "z" * 2_000}]
+        book = ledger.take(unmarked, persona=PERSONA, window=1_000_000)
+        assert book.of("summary") == 0
+        assert book.of("system") > 0
+
+
+class TestTheProjectRegionIsCostedOnItsOwn:
+    """One level further down the same argument.
+
+    Most of the live block is now the region about the project in hand — its plan, its columns,
+    its `.kith/memory.md`. Measured on a real conversation: 7,589 characters of project against
+    12,206 for everything else in that block. Left together, "Where he is right now: 5,112" tells
+    you nothing you can act on, and the two actions are different ones — prune a memory file, or
+    stop carrying a task list.
+    """
+
+    def _live(self, body: str, project: int = 0) -> list[dict]:
+        return [*_turn(), {"role": "system", "content": body, "_live": True, "_project_chars": project}]
+
+    def test_it_comes_out_of_the_live_line_rather_than_adding_to_the_total(self):
+        body = "x" * 4_000
+        split = ledger.take(self._live(body, project=3_000), persona=PERSONA, window=1_000_000)
+        whole = ledger.take(self._live(body), persona=PERSONA, window=1_000_000)
+
+        assert split.of("project") > 0
+        assert split.of("project") + split.of("live") == whole.of("live")
+        assert split.used == whole.used
+
+    def test_a_live_block_with_no_project_in_it_costs_nothing_here(self):
+        book = ledger.take(self._live("x" * 4_000), persona=PERSONA, window=1_000_000)
+
+        assert book.of("project") == 0
+        assert book.of("live") > 0
+
+    def test_a_count_larger_than_the_block_cannot_eat_into_another_line(self):
+        # Defensive: the size is reported by the one function that knows it, and a wrong number
+        # there must cost the ledger its accuracy on one line rather than send `live` negative.
+        book = ledger.take(self._live("x" * 100, project=9_999), persona=PERSONA, window=1_000_000)
+
+        assert book.of("live") == 0
+        assert book.of("project") > 0
+
+    def test_it_is_not_claimed_by_an_unmarked_message(self):
+        unmarked = [*_turn(), {"role": "system", "content": "y" * 4_000, "_project_chars": 4_000}]
+        book = ledger.take(unmarked, persona=PERSONA, window=1_000_000)
+
+        assert book.of("project") == 0
+        assert book.of("system") > 0
+
+
 class TestTheArithmetic:
     def test_it_costs_with_the_calibrated_ratio(self):
         """`ContextBudget` learns the real chars-per-token from what the provider charged. A

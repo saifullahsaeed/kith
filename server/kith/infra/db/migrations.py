@@ -669,6 +669,61 @@ def _migrations():
             conn.execute("UPDATE tasks SET key = ? WHERE id = ?", (_key_for(created, task_id), task_id))
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS tasks_key ON tasks(key)")
 
+    def v43_message_project(conn):
+        """Which project a channel message belongs to, so a fresh chat is not handed another's.
+
+        The same bleed as `v42_memory_project`, on the notification channel. `messages_block`
+        injected the last eight messages on every turn regardless of subject, so a brand-new
+        chat about anything opened with eight verbatim reach-outs from a security engagement —
+        "I need an answer: the June test accounts are dead", "Finished Wave 3C". None of it the
+        new chat's business, and all of it still there in the inbox where it belongs.
+
+        A message already knows where it came from: its `link` is `/chat/<id>` or `/tasks/<id>`,
+        which resolve to a project. `add_message` stamps that at write time now; this backfills
+        what is already on disk by the same rule, so the column is true from the first turn after
+        the upgrade rather than only for messages written afterwards. NULL stays global — a note
+        with no link, or one whose target is gone, belongs everywhere, which is the old
+        behaviour and the safe default.
+        """
+        conn.execute("ALTER TABLE messages ADD COLUMN project_id INTEGER")
+        for mid, link in conn.execute("SELECT id, link FROM messages WHERE link IS NOT NULL").fetchall():
+            pid = None
+            if link.startswith("/chat/"):
+                row = conn.execute(
+                    "SELECT project_id FROM conversations WHERE id = ?", (link[len("/chat/") :],)
+                ).fetchone()
+                pid = row[0] if row else None
+            elif link.startswith("/tasks/"):
+                tid = link[len("/tasks/") :]
+                if tid.isdigit():
+                    row = conn.execute("SELECT project_id FROM tasks WHERE id = ?", (int(tid),)).fetchone()
+                    pid = row[0] if row else None
+            if pid is not None:
+                conn.execute("UPDATE messages SET project_id = ? WHERE id = ?", (pid, mid))
+
+    def v42_memory_project(conn):
+        """Which project a memory belongs to, so a project's chat is not handed another's.
+
+        Memories were global: `context_block` injected the `core` set and the eight most recent
+        on every turn regardless of what the conversation was about. Measured on the live
+        database in a Capital Call security chat, the entire "back of your mind" was four
+        paragraphs of Odoo JSON-2 plumbing from a different project — 1,378 tokens of memory,
+        none of it about the work in hand. It is the same bleed the project region fixed for the
+        board, one layer over.
+
+        NULL means global — a fact that holds whatever you are working on ("the user has two
+        GitHub accounts"), injected everywhere. A memory with a project belongs to that
+        project's chats and is reachable from any other by `recall`, not dumped into it.
+
+        Not backfilled here, and for the same reason `v39_task_account` was not: the column's
+        honest default is "global", which is exactly the old behaviour, so nothing regresses.
+        Deciding that a specific memory is really about project #6 is a claim about its content,
+        which a schema migration has no way to make and no business guessing. That classification
+        is done once, by evidence, against this machine's own memories — see the remap script,
+        not this migration.
+        """
+        conn.execute("ALTER TABLE memories ADD COLUMN project_id INTEGER")
+
     def v41_unbind_deleted_projects(conn):
         """Cut conversations loose from projects that no longer exist.
 
@@ -728,6 +783,8 @@ def _migrations():
         v39_task_account,
         v40_task_key,
         v41_unbind_deleted_projects,
+        v42_memory_project,
+        v43_message_project,
     ]
 
 

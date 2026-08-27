@@ -6,7 +6,7 @@ from pathlib import Path
 
 from kith.domain.enums import MEMORY_LEVELS
 from kith.infra.db import repositories as repo
-from kith.services import embeddings, remembering
+from kith.services import embeddings, project_binding, remembering
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
@@ -40,7 +40,16 @@ def remember(path: Path, args: dict):
     refusal = remembering.refuse(path, args["content"], level)
     if refusal is not None:
         return refusal
-    return embeddings.remember(path, args["content"], args.get("tags"), args.get("importance") or 0, level)
+    # Stamped with the project this conversation is in, so a fact learned while working on one
+    # thing surfaces in that thing's chats rather than in every chat. Derived from the session,
+    # not asked of him — a flag he has to set is a flag he will not set, which is the failure
+    # mode written up all over this codebase; `adopt` binds the same way, off what he does. An
+    # unbound chat leaves it global (NULL), which is the old behaviour and the safe default: a
+    # fact with nowhere obvious to belong belongs everywhere, and `recall` reaches it regardless.
+    project_id = project_binding.bound_project(path)
+    return embeddings.remember(
+        path, args["content"], args.get("tags"), args.get("importance") or 0, level, project_id=project_id
+    )
 
 
 @tool(

@@ -96,6 +96,22 @@ export function createBackendAdapter(conversation?: {
   get: () => string;
   /** The server reports the id it opened on the first turn; keep it for the next one. */
   set: (id: string) => void;
+  /**
+   * The project this chat was started in, when it was started in one.
+   *
+   * Sent with the turn rather than written afterwards, and that ordering is the fix. "Start a
+   * chat in this project" is asked from the history panel, where the project is in front of
+   * you — but a fresh chat has no id until the stream reports one, so the binding used to be a
+   * second request made *after* the first turn had already been assembled and sent. That first
+   * turn is where somebody says what they want, and it was the one turn built with no project
+   * at all: no project memory, no plan, no columns, and the whole cross-project listing in
+   * their place.
+   *
+   * Read fresh for the same reason as `get`, and it returns null once the conversation exists
+   * and is bound — the server ignores it then anyway, since a conversation keeps the project it
+   * picked.
+   */
+  project?: () => number | null;
 }): ChatModelAdapter {
   // The composer's keystroke needs to know which conversation it is in, and cannot reach it
   // through the runtime. Registered here because this is where the getter already exists.
@@ -145,10 +161,14 @@ export function createBackendAdapter(conversation?: {
        * the composer stopped setting that flag when it started calling `holdUntilIdle` itself, so
        * this branch had been asking a question whose answer could no longer be yes.
        */
+      const startingIn = conversation?.project?.() ?? null;
       const body = JSON.stringify({
         messages: toWireMessages(messages),
         // Omitted on the first turn; the server opens one and tells us which.
         ...(conversation?.get() ? { conversationId: conversation.get() } : {}),
+        // Sent on that same first turn, so the conversation it creates is bound before its
+        // prompt is built. Harmless afterwards: the server refuses to move a binding.
+        ...(startingIn ? { projectId: startingIn } : {}),
       });
 
       /* Stopping is said, and it is not said from here.

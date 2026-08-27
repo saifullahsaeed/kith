@@ -275,7 +275,7 @@ def _tool_heavy_turn(n_calls: int, size: int = 500) -> list[dict]:
     """One turn shaped like a real one that did work: one user message, then N call/result
     pairs — the shape `conversations.full_messages` actually produces, not `_turns`'s
     uniform user/assistant alternation."""
-    out = [{"role": "user", "content": "go"}]
+    out: list[dict] = [{"role": "user", "content": "go"}]
     for i in range(n_calls):
         out.append(
             {
@@ -377,6 +377,10 @@ class TestAStaleCursorIsDistrustedRatherThanReplayedBlind:
         assert messages[0] == {
             "role": "system",
             "content": "[Summary of the earlier part of this conversation]\nFRESH",
+            # Marks folded conversation as conversation, not system instruction, so the ledger
+            # counts the brief with the chat rather than under the persona. Stripped before the
+            # wire; see `prompt._assemble` / `openai_compat._to_openai`.
+            "_summary": True,
         }
 
     def test_a_cursor_that_still_lands_on_a_real_boundary_is_kept(self):

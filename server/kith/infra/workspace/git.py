@@ -8,6 +8,7 @@ change — and the other is about the net underneath him.
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 from kith.infra import executables, permissions
@@ -324,3 +325,161 @@ def pull() -> str:
             "conflict markers in files I would then refuse to read."
         )
     return f"Couldn't pull: {_last_line(done.output)}"
+
+
+def fetch(project_dir: str | Path | None = None) -> str:
+    """Ask the remote what it has, without touching the working tree. A sentence.
+
+    The other half of :func:`standing`, and the half that costs a network round trip. Split from
+    `pull` on purpose: a fetch cannot conflict, cannot half-merge and cannot lose an edit, so it
+    is safe to run in order to *find out* — whereas `pull --ff-only` refuses outright when there
+    are uncommitted changes, which is exactly the state somebody mid-job is in. Asking "has
+    anything arrived" should not require putting your work down first.
+
+    After this, `standing` is telling the truth rather than reporting the last time somebody
+    looked, which is the whole reason it exists as its own operation.
+    """
+    root = _repo_root(Path(project_dir)) if project_dir else _repo_root(base_dir())
+    if root is None:
+        return "This folder is not in a git repository, so there is nothing to check."
+    if _git("remote", cwd=root).output.strip() == "":
+        return "This repository has no remote, so there is nowhere to check."
+    done = _git("fetch", "--all", "--quiet", cwd=root, timeout=60)
+    if done.exit_code != 0:
+        return f"Couldn't reach the remote: {_last_line(done.output)}"
+    said = standing(root)
+    return said or "Fetched. Nothing new — you are level with the remote."
+
+
+#: How long a `standing` reading is reused before the files are stat'd again.
+#:
+#: The prompt's present-state block is rebuilt once per turn, and a turn can be one message or
+#: forty tool calls — so this is not "per round", but it is often enough that four `git` processes
+#: per reading is worth not paying twice in the same minute. Short enough that a fetch he just ran
+#: shows up in the next thing he is told.
+_STANDING_TTL = 45.0
+
+#: Keyed by repository root. Small and unbounded, because the number of projects on one machine is
+#: a handful — this is not a cache that needs eviction, it is one that needs a clock.
+_standing_cache: dict[str, tuple[float, str]] = {}
+
+
+def standing(project_dir: str | Path) -> str:
+    """How this checkout sits against its remote, read locally. "" when there is nothing to say.
+
+    **No network.** Everything here is a stat or a rev-walk over refs that are already on disk,
+    so it can sit in the system prompt and be paid for every turn. That is also its honest
+    limit: `HEAD..@{u}` counts what the last *fetch* brought down, not what the remote has now.
+    A repository nobody has fetched in a week reads as "level with the remote" and is nothing of
+    the kind.
+
+    Which is why the age of the last fetch is said out loud beside the count. Those two numbers
+    mean opposite things on their own — "0 behind" is agreement if somebody looked this morning
+    and is no information at all if nobody has looked since Tuesday — and `board_sync.waiting_here`
+    has the same hole one layer up, where it reads a folder that nothing ever refreshes. Local
+    mtimes cannot close it: a checkout rewrites them, so a file that arrived from somebody else
+    last week looks like it was written just now.
+
+    Silent when there is nothing worth a line — no repository, no remote, no upstream branch. A
+    solo project on a laptop has no remote and should not be told about one every turn.
+    """
+    root = _repo_root(Path(project_dir))
+    if root is None or not has_git():
+        return ""
+    key = str(root)
+    hit = _standing_cache.get(key)
+    if hit and (time.time() - hit[0]) < _STANDING_TTL:
+        return hit[1]
+    said = _standing(root)
+    _standing_cache[key] = (time.time(), said)
+    return said
+
+
+def _standing(root: Path) -> str:
+    """The uncached reading. Split so the cache above is the only thing holding a clock."""
+    upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=root, timeout=15)
+    if upstream.exit_code != 0:
+        # No upstream: either a branch nobody has pushed, or a repository with no remote at all.
+        # The first is worth a word — work that exists on one machine only — and the second is
+        # not, because there is nothing anyone could do about it.
+        if _git("remote", cwd=root, timeout=15).output.strip() == "":
+            return ""
+        branch = (
+            _git("rev-parse", "--abbrev-ref", "HEAD", cwd=root, timeout=15).output.strip() or "this branch"
+        )
+        return f"`{branch}` does not track a remote branch, so nothing here has been shared yet."
+
+    counts = _git("rev-list", "--left-right", "--count", "@{u}...HEAD", cwd=root, timeout=15)
+    behind, ahead = 0, 0
+    parts = counts.output.split()
+    if counts.exit_code == 0 and len(parts) == 2:
+        try:
+            behind, ahead = int(parts[0]), int(parts[1])
+        except ValueError:
+            behind = ahead = 0
+
+    said: list[str] = []
+    if behind:
+        said.append(
+            f"**{behind} commit{'s' if behind != 1 else ''} are waiting in {upstream.output.strip()} "
+            f"that this folder has not taken in** — `publish` with direction 'in' before you trust "
+            f"what is here, including `.kith/`"
+        )
+    if ahead:
+        said.append(f"{ahead} commit{'s' if ahead != 1 else ''} here have not been pushed")
+
+    quiet = _fetched_ago(root)
+    if not said:
+        # Level and recently checked is silence — this line is paid for on every turn of every
+        # project, and "all is well" is not worth that. Level and *not* recently checked is a
+        # different thing entirely, and it cannot borrow the phrasing below: there is no count
+        # printed for "that count may be out of date" to refer to.
+        return "" if not quiet else f"Git: nothing has arrived, but {quiet.split(', so')[0]}."
+    if quiet:
+        said.append(quiet)
+    return "Git: " + "; ".join(said) + "."
+
+
+#: Past this, "nobody has fetched" stops being a detail and starts being the reason the numbers
+#: above are wrong. Six hours rather than a day: somebody else's morning of work is already
+#: invisible by lunchtime.
+_STALE_FETCH_SECONDS = 6 * 3600
+
+
+def _fetched_ago(root: Path) -> str:
+    """How long since anything was fetched here, said only when it is long enough to matter.
+
+    `FETCH_HEAD`'s mtime, which git rewrites on every fetch and on every pull. It is missing
+    entirely in a repository that has only ever been cloned and never fetched since — which is
+    the longest-stale case there is, and the one a naive "no file, no problem" would report as
+    fine.
+    """
+    since_clone = False
+    marker = root / ".git" / "FETCH_HEAD"
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except OSError:
+        # No `FETCH_HEAD` at all: nothing has been fetched since this was cloned. The longest-
+        # stale case there is, and the one a naive "no file, no problem" reports as fine. Dated
+        # from `.git/HEAD`, which the clone wrote.
+        since_clone = True
+        try:
+            age = time.time() - (root / ".git" / "HEAD").stat().st_mtime
+        except OSError:
+            return ""
+    if age < _STALE_FETCH_SECONDS:
+        # Freshly cloned counts as freshly fetched, because it is. The line is about a reading
+        # having gone stale, and a clone from ten minutes ago has not.
+        return ""
+    if since_clone:
+        return f"nothing has been fetched here since the clone {_ago(age)} ago"
+    return f"nobody has fetched this repository in {_ago(age)}, so that count may be out of date"
+
+
+def _ago(seconds: float) -> str:
+    """Rounded, and never precise: the difference that matters is hours against days."""
+    if seconds < 5400:
+        return f"{max(1, int(seconds // 60))} minutes"
+    if seconds < 172800:
+        return f"{int(seconds // 3600)} hours"
+    return f"{int(seconds // 86400)} days"

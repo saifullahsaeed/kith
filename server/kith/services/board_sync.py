@@ -190,13 +190,32 @@ def waiting_here(path: Path) -> str:
     except Exception:
         return ""
 
+    return _said(found)
+
+
+def _said(found: dict[str, Any]) -> str:
+    """One traversal's result as a sentence. "" when there is nothing worth saying.
+
+    Split from `waiting_here` so that the prompt's cached path and the tool's live one produce
+    the same words. Two of these would drift and the drift would be invisible: the same folder
+    would be described one way in `list_tasks` and another in the system prompt, with nothing
+    to say which was current.
+    """
     if found.get("blocked"):
         return (
             f"This project's `.kith/` cannot be read right now — {found['blocked']}. "
             "Nothing has been taken from it. Sort that out before trusting the board here."
         )
     added, updated, kept = found["added"], found["updated"], found["kept"]
-    if not (added or updated or kept):
+    # `kept` alone is not an inbox, and saying it was is how this became noise the moment it
+    # moved into the system prompt. Those are briefs *older* than the rows they describe —
+    # mirroring lag, nothing to take in and nothing to decide — and on a real project there are
+    # seven of them permanently, so every turn opened with "somebody else's work is in `.kith/`
+    # and has not been taken in" followed by a list of things that must not be taken in.
+    #
+    # It is still worth a clause when something genuinely is waiting, because then the
+    # disagreement is part of the picture. On its own it is silence.
+    if not (added or updated):
         return ""
 
     said = []
@@ -205,14 +224,46 @@ def waiting_here(path: Path) -> str:
     if updated:
         said.append(f"{len(updated)} where the folder is newer: {', '.join(updated[:4])}")
     if kept:
-        said.append(f"{len(kept)} where this board is newer: {', '.join(kept[:4])}")
+        said.append(f"{len(kept)} where this board is newer and would be left alone: {', '.join(kept[:4])}")
     quiet = _how_long(found.get("changed_ago") or 0.0)
     return (
         "Somebody else's work is in `.kith/` and has not been taken in. "
         + "; ".join(said)
-        + f". The folder last changed {quiet}. Say the word and I will pull it in — "
-        "and pull from git first if nobody has today, because nothing arrives on its own."
+        + f". The folder last changed {quiet}. Say the word and I will take it in with "
+        "`take_in_shared_tasks` — and `check_remote` first if nobody has fetched today, because "
+        "nothing arrives on its own."
     )
+
+
+#: How long a folder reading is reused. `waiting_here` walks every brief in `.kith/tasks/` and
+#: parses each one — affordable a few times a turn from a tool the model chose to call, and not
+#: affordable on a path that runs whether or not anybody asked.
+_NOTE_TTL = 60.0
+
+#: Keyed by (project, folder). One entry per project on the machine, so it needs a clock rather
+#: than an eviction policy — the same reasoning as `workspace.git._standing_cache`.
+_note_cache: dict[tuple[int, str], tuple[float, str]] = {}
+
+
+def note_for(path: Path, project_id: int, directory: str) -> str:
+    """`waiting_here` for a known project, cached — the form the system prompt uses.
+
+    Takes its project rather than finding one, because the prompt has already resolved which
+    project the conversation is in and a second resolution could disagree with the first. Same
+    sentence, same traversal; the only difference is a clock.
+    """
+    if not directory:
+        return ""
+    key = (int(project_id), str(directory))
+    hit = _note_cache.get(key)
+    if hit and (time.time() - hit[0]) < _NOTE_TTL:
+        return hit[1]
+    try:
+        said = _said(preview(path, int(project_id), directory))
+    except Exception:
+        said = ""
+    _note_cache[key] = (time.time(), said)
+    return said
 
 
 def _how_long(seconds: float) -> str:
