@@ -60,6 +60,25 @@ export const PRELOAD = path.join(__dirname, "preload.js");
 export const TRAY_ICON = path.join(RESOURCES, "trayTemplate.png");
 
 /**
+ * The three states the menu bar has to tell apart at a glance: resting, working, waiting on you.
+ *
+ * A single character beside a static icon was the first attempt and it was not readable — a `·`
+ * is indistinguishable from a speck on the screen, and nobody learns that a dot means "mid-turn".
+ * Shape and motion carry it instead.
+ *
+ * Working is `TRAY_ICON` rotated, not a new symbol: the mark is already an open ring with a gap,
+ * so turning it reads as a spinner using the drawing that is already there. Waiting is a filled
+ * disc — solid against open is the strongest contrast available at sixteen pixels — and it is the
+ * one icon that is *not* a template, because a request he is blocked on should pull the eye
+ * rather than politely match whatever the menu bar is doing.
+ */
+export const TRAY_WORKING = Array.from({ length: 8 }, (_unused, frame) =>
+  path.join(RESOURCES, `trayWorking${frame}Template.png`),
+);
+
+export const TRAY_WAITING = path.join(RESOURCES, "trayWaiting.png");
+
+/**
  * The app's real icon — dock, notifications, anywhere the running app needs to say who it
  * is with a picture rather than a name. A packaged build already gets this from the .app
  * bundle itself; it is unpackaged (`npm run dev`) that has nothing, because that is
