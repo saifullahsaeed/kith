@@ -26,3 +26,16 @@ pytest>=9.1,<10
 # failed about one run in three, and what it was catching was real: a turn thread that
 # outlives `monkeypatch` reads the shipped database rather than the test's.
 pytest-randomly>=4.0,<5
+
+# Type checking, which `./check server` has run since the `types` step was added — and which CI
+# has failed on ever since, with "No module named pyright" on every run.
+#
+# The same hole this file was created to close, repeated: `requirements.txt` says pyright is
+# "deliberately not listed as a dependency" because it is 34MB and fetches its own copy of node,
+# which is a fair thing to keep away from someone who only wanted the app to open. That reasoning
+# is about *installing Kith*. It was then never written down anywhere else, so the check passed
+# on the machine where it had been pip-installed by hand and failed everywhere else.
+#
+# Here is where it belongs: this file is what `./check` needs, is installed by `make venv` and by
+# CI, and is kept out of requirements.txt precisely so none of it reaches the shipped binary.
+pyright>=1.1.411,<2
