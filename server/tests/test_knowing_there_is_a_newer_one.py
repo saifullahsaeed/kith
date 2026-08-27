@@ -68,17 +68,39 @@ class TestWhichIsNewer:
 
 
 class TestRunningFromACheckout:
-    def test_it_says_there_is_nothing_to_check(self, monkeypatch):
-        """Which is a different answer from "you are up to date", and has to read differently.
+    def test_it_knows_the_version_but_offers_no_download(self, monkeypatch):
+        """Two separate questions, and they were one.
 
-        Offering someone running from source a dmg would be worse than saying nothing.
+        `packaged` decides whether a dmg is offered — handing one to someone running from source
+        would answer a question they did not ask. Knowing *which* version is a different matter,
+        and a checkout does know: `desktop/package.json` is the file the release workflow tags.
+        Reporting no version at all left the settings footer saying only "running from source",
+        which is the wrong half — the number is the first thing anyone is asked for in a bug
+        report.
         """
         monkeypatch.delenv("KITH_APP_VERSION", raising=False)
         state = updates.check()
-        assert state["packaged"] is False
-        assert state["current"] == ""
+        assert state["packaged"] is False, "no dmg for a working tree"
+        assert state["current"], "but it still knows which version it is"
         assert state["newer"] is False
         assert state["error"] == ""
+
+    def test_the_version_it_reports_is_the_one_the_release_workflow_tags(self, monkeypatch):
+        """Read from the same file CI reads, so the two cannot disagree about what is running."""
+        import json
+
+        from kith import settings
+
+        monkeypatch.delenv("KITH_APP_VERSION", raising=False)
+        manifest = settings.SERVER_ROOT.parent / "desktop" / "package.json"
+        expected = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+        assert updates.current_version() == expected
+
+    def test_the_shell_still_wins_when_it_says_so(self, monkeypatch):
+        """An installed copy is told its version; the file beside it, if any, is not the truth."""
+        monkeypatch.setenv("KITH_APP_VERSION", "v9.9.9")
+        assert updates.current_version() == "9.9.9"  # the tag's `v` is not part of the version
+        assert updates.is_packaged() is True
 
 
 class TestAnInstalledCopy:

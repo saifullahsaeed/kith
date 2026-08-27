@@ -124,13 +124,18 @@ export function UpdateFooter() {
  *  without mounting anything. */
 export function version(data: UpdateState | undefined): string {
   if (!data) return "";
-  // A checkout has no installed version, and saying "up to date" about one would be a claim
-  // about something that does not exist.
-  if (!data.packaged) return "running from source";
-  if (data.newer) return `Kith ${data.current}`;
+  if (!data.current) return data.packaged ? "" : "running from source";
+  // Which version, and then what is known about it. This said only "running from source" for a
+  // checkout, which is the wrong half: where a copy came from is rarely the question, and the
+  // number is the first thing anyone is asked for when they report something.
+  const running = `Kith ${data.current}`;
+  // No claim about being current for a checkout — a working tree is not a thing that gets
+  // updated, and telling a developer they are behind their own source is noise.
+  if (!data.packaged) return `${running} · from source`;
+  if (data.newer) return running;
   // "latest" is a claim, and a look that failed with nothing remembered has not earned it. The
   // footer says the check failed underneath; the version line must not contradict it.
-  if (!data.latest) return `Kith ${data.current}`;
-  return `Kith ${data.current} · latest`;
+  if (!data.latest) return running;
+  return `${running} · latest`;
 }
 

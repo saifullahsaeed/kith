@@ -24,6 +24,7 @@ breaks a screen is worse than no update notice.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -31,6 +32,8 @@ import time
 from datetime import UTC, datetime
 
 import requests
+
+from kith import settings
 
 #: The public repo the releases live in. Public, so this needs no token and no rate-limit
 #: budget: unauthenticated GitHub allows 60 an hour per address and this asks for one a day.
@@ -50,8 +53,36 @@ _checked_at = 0.0
 
 
 def current_version() -> str:
-    """What is running, as the shell reported it. Empty from a checkout."""
-    return (os.environ.get("KITH_APP_VERSION") or "").strip().lstrip("v")
+    """What is running.
+
+    The shell sets `KITH_APP_VERSION` when it spawns the server, which is the only version that
+    means anything for an installed copy. From a checkout nothing sets it — `./run` starts the
+    server itself — so this falls back to reading `desktop/package.json`, which is the file the
+    release workflow tags and the one the shell would have reported anyway.
+
+    Knowing the version is a separate question from being installed: see `is_packaged`. A
+    checkout has a version and should say so — "running from source" told you where it came from
+    and not which one it was, which is the wrong half when someone is writing a bug report.
+    """
+    named = (os.environ.get("KITH_APP_VERSION") or "").strip().lstrip("v")
+    if named:
+        return named
+    try:
+        manifest = settings.SERVER_ROOT.parent / "desktop" / "package.json"
+        return str(json.loads(manifest.read_text(encoding="utf-8")).get("version") or "")
+    except (OSError, ValueError):
+        # A frozen bundle has no `desktop/` beside it, and there the environment variable is
+        # always set — so this is only ever reached by a checkout someone has rearranged.
+        return ""
+
+
+def is_packaged() -> bool:
+    """Whether this is an installed Kith rather than a checkout.
+
+    What decides if a download is offered. A developer running from source has a version and
+    should be told it; handing them a dmg would be answering a question they did not ask.
+    """
+    return bool((os.environ.get("KITH_APP_VERSION") or "").strip())
 
 
 def _parts(version: str) -> tuple:
@@ -114,11 +145,11 @@ def check(force: bool = False) -> dict:
             return dict(_cached or {})
 
         current = current_version()
-        if not current:
+        if not is_packaged():
             # A checkout. Saying "up to date" would be a claim about something that has no
             # version at all, and offering a dmg to someone running from source is worse.
             _cached = {
-                "current": "",
+                "current": current,
                 "latest": "",
                 "newer": False,
                 "packaged": False,

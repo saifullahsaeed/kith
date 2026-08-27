@@ -34,7 +34,14 @@ describe("what the footer says about this copy", () => {
     expect(version(state({ newer: true, latest: "0.6.0" }))).toBe("Kith 0.5.0");
   });
 
-  it("says where it is running from rather than claiming to be up to date", () => {
+  it("names the version from a checkout too, without claiming it is current", () => {
+    // The version is the first thing anyone is asked for in a bug report, and this used to say
+    // only where the copy came from. A checkout is not something that gets updated, so it says
+    // so — but it says which one it is first.
+    expect(version(state({ packaged: false, current: "0.5.1" }))).toBe("Kith 0.5.1 · from source");
+  });
+
+  it("falls back to naming the source when even the version is unknown", () => {
     expect(version(state({ packaged: false, current: "" }))).toBe("running from source");
   });
 
