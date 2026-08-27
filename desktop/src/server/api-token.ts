@@ -17,13 +17,34 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-/** Where the server keeps it. `KITH_DATA_DIR` wins, matching the server's own resolution. */
+/**
+ * Where the server keeps it. `KITH_DATA_DIR` wins, matching the server's own resolution.
+ *
+ * The checkout case walks up looking for the folder rather than counting `..` to it, because
+ * counting was wrong and wrong in the worst possible way. This file is `src/server/api-token.ts`
+ * and compiles to `out/server/api-token.js`, so `../../server/data` — written as "beside the
+ * desktop folder" — resolved to `desktop/server/data`, one level short of the repo root. That
+ * path does not exist, so it fell through to `~/.kith/api.token`, which on any machine that has
+ * ever run a packaged build *does* exist and belongs to a different server with a different
+ * token. Every authenticated call the shell made came back 401, silently, and the only reason
+ * nothing looked broken is that the one thing it does constantly — the event stream — is on an
+ * open path and never needed the token at all.
+ *
+ * Walking up is also the only version that survives someone changing `outDir`.
+ */
 function candidates(): string[] {
   const found: string[] = [];
   if (process.env.KITH_DATA_DIR) found.push(path.join(process.env.KITH_DATA_DIR, "api.token"));
-  // Running from a checkout: server/data beside the desktop folder.
-  found.push(path.resolve(__dirname, "../../server/data/api.token"));
-  // A packaged install, where the server keeps its data under the user's home.
+  // Running from a checkout: the repo's `server/data`, wherever this file ended up compiled to.
+  for (let dir = __dirname, up = 0; up < 6; up += 1) {
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+    found.push(path.join(dir, "server", "data", "api.token"));
+  }
+  // A packaged install, where the server keeps its data under the user's home. Last, because a
+  // checkout on a machine that has also run a packaged build has both, and the one being
+  // developed against is the one that should win.
   found.push(path.join(os.homedir(), ".kith", "api.token"));
   return found;
 }
