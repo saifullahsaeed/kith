@@ -654,7 +654,7 @@ def _tool_block_chars() -> int:
     number, not the registry, and taking a database path in order to go and total the schemas
     itself is what made `services/history.py` import the adapter layer.
     """
-    return sum(len(json.dumps(schema)) for schema in tools.tool_schemas(AGENT_DB_PATH))
+    return sum(len(json.dumps(schema)) for schema in tools.tool_schemas())
 
 
 class _Recorder:

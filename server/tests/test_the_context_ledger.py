@@ -77,19 +77,15 @@ class TestTheCategoriesAreRight:
         assert abs(with_persona.used - without.used) <= 1
         assert without.of("persona") == 0
 
-    def test_the_three_kinds_of_tool_schema_are_separated(self):
-        schemas = [_schema("read_file"), _schema("slack_post"), _schema("my_own_thing")]
-        book = ledger.take(
-            _turn(),
-            schemas,
-            persona=PERSONA,
-            window=1_000_000,
-            mcp_names=("slack_post",),
-            custom_names=("my_own_thing",),
-        )
+    def test_the_two_kinds_of_tool_schema_are_separated(self):
+        """A tool is his own or it came from an MCP server. There was a third category for tools
+        he had built for himself; the feature is gone, the table was dropped in `v36`, and
+        nothing in the request path ever populated it."""
+        schemas = [_schema("read_file"), _schema("slack_post")]
+        book = ledger.take(_turn(), schemas, persona=PERSONA, window=1_000_000, mcp_names=("slack_post",))
         assert book.of("built_in_tools") > 0
         assert book.of("mcp_tools") > 0
-        assert book.of("custom_tools") > 0
+        assert book.of("custom_tools") == 0
 
     def test_the_tool_block_is_counted_at_all(self):
         """The old hand-rolled sum added up `content` lengths and missed 11,000 tokens of

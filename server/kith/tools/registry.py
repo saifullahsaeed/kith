@@ -14,8 +14,14 @@ Here a tool IS its schema plus its behaviour, registered once:
         return embeddings.remember(path, args["content"])
 
 Which means they cannot drift, the function stays directly importable and testable,
-and `run` is the single chokepoint every call passes through — the natural home for
-the permission layer this will eventually need.
+and `run` is the single chokepoint every call passes through.
+
+**The permission layer is not all here, and that is worth knowing before adding a tool.**
+`run_tool` catches `permissions.Denied`, but the checks themselves live in the handlers —
+`permissions.require_path` in `outline`, `repo_map`, `find_symbol`, `run_tests` and the
+semantic tools, `require_command` in `shell` and `start_process`. Nothing forces a new handler
+to make that call: `glob`, `grep` and `list_files` reach the disk through `sandbox`, which
+gates them, but a handler that touches a path directly would be gated by nothing at all.
 """
 
 from __future__ import annotations

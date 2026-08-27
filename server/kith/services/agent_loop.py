@@ -680,7 +680,7 @@ def _run_turn(
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
     # The tool list as the last round actually saw it, kept for the forced final answer.
-    # That request used to build its own with `tool_schemas(agent_db_path)` and no `only`,
+    # That request used to build its own with `tool_schemas()` and no `only`,
     # so a narrowed round offering six tools ended by sending all fifty-nine — a different
     # tools block from every other round in the turn, which on the providers that need an
     # explicit breakpoint sits ahead of the system prompt and rewrites the whole cached

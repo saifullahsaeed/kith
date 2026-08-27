@@ -77,12 +77,12 @@ def test_registering_a_duplicate_is_refused() -> None:
 def test_scoping_returns_only_what_was_asked_for() -> None:
     """Mode scoping is a token saving on every round, so it has to actually scope."""
     wanted = {"journal", "list_tasks"}
-    scoped = tools.tool_schemas(None, only=wanted)
+    scoped = tools.tool_schemas(only=wanted)
     assert {s["function"]["name"] for s in scoped} == wanted
 
 
 def test_scoping_ignores_names_that_do_not_exist() -> None:
-    scoped = tools.tool_schemas(None, only={"journal", "nonexistent_tool"})
+    scoped = tools.tool_schemas(only={"journal", "nonexistent_tool"})
     assert {s["function"]["name"] for s in scoped} == {"journal"}
 
 
@@ -120,3 +120,48 @@ def test_a_failing_tool_is_reported_not_raised(db: Path) -> None:
     result = tools.run_tool("view_task", {"id": 10**9}, db)
     assert isinstance(result, dict)
     assert "ok" in result
+
+
+class TestADescriptionMatchesTheCode:
+    """Every one of these was a real contradiction between what a tool said and what it did.
+
+    A tool description is not documentation — it is the only thing the model reads before
+    choosing, and it is re-sent on every round. A wrong one produces a wrong call that looks
+    like a right one.
+    """
+
+    def test_no_tool_claims_to_default_to_the_home_directory(self):
+        """`list_files` and `grep` said "your home"; every handler is `args.get("path") or "."`,
+        which resolves against the workspace. The model could omit `path` expecting a machine-wide
+        search and silently get workspace-scoped results."""
+        import kith.tools  # noqa: F401 - registers every tool
+        from kith.tools import registry
+
+        claiming = [
+            name
+            for name in registry.names()
+            if "home" in (registry.require(name).description or "").lower()
+            or any(
+                "home" in str(p.get("description", "")).lower()
+                for p in registry.require(name).properties.values()
+            )
+        ]
+        assert not claiming, f"these describe a home-directory default the handlers do not have: {claiming}"
+
+    def test_the_paging_schema_does_not_state_a_default_it_cannot_keep(self):
+        """`page` takes a per-tool default — `list_projects` uses 5, `read_journal` uses 10 —
+        while `LIMIT` rides on ten tools. A number in that shared text is wrong for whichever
+        tool does not use it."""
+        from kith.tools import paging
+
+        assert str(paging.DEFAULT_LIMIT) not in paging.LIMIT["description"]
+        assert str(paging.MAX_LIMIT) in paging.LIMIT["description"]
+
+    def test_the_two_ways_to_find_a_definition_point_at_each_other(self):
+        """`definition` needs a language server and `find_symbol` does not. A model that reaches
+        for the wrong one first eats an error the schema-hiding was built to prevent."""
+        import kith.tools  # noqa: F401
+        from kith.tools import registry
+
+        assert "find_symbol" in registry.require("definition").description
+        assert "definition" in registry.require("find_symbol").description

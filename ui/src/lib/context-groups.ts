@@ -84,7 +84,6 @@ export const GROUP_OF: Record<string, string> = {
   images: "read",
   built_in_tools: "tools",
   mcp_tools: "tools",
-  custom_tools: "tools",
   // "Where he is" in the widest sense: everything rewritten on every turn, which is what the
   // group's own hint says. The project region and the harness's mid-turn nudges are both that.
   live: "place",

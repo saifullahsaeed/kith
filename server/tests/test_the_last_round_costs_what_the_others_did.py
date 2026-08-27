@@ -24,7 +24,7 @@ class TestTheForcedFinalAnswer:
 
     `_final_answer` is handed schemas deliberately — with `tool_choice="none"`, because a
     model told to stop by prose alone narrates calls as text instead. But the call site built
-    its own with `tool_schemas(agent_db_path)` and no `only`, so a breakout tick that had
+    its own with `tool_schemas()` and no `only`, so a breakout tick that had
     been offering six tools all turn ended by sending fifty-nine.
 
     Beyond the tokens, it is a cache fault: on the providers that need an explicit
@@ -42,7 +42,7 @@ class TestTheForcedFinalAnswer:
         # Code only. The comment above the fix quotes the old call on purpose, and matching
         # a comment would make this assertion pass or fail on prose.
         code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
-        assert "tool_schemas(agent_db_path)" not in code, "an unscoped tool_schemas call is back in the loop"
+        assert "tool_schemas()" not in code, "an unscoped tool_schemas call is back in the loop"
 
     def test_the_list_is_defined_even_if_no_round_ran(self):
         """`schemas` is the last round's; a turn that somehow reaches the end without one

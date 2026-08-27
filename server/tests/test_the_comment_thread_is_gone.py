@@ -42,7 +42,7 @@ class TestTheToolsAreGone:
         """A tool named in a prompt but missing from the registry is a round spent on a refusal."""
         from kith.tools import tool_schemas
 
-        offered = {s["function"]["name"] for s in tool_schemas(db)}
+        offered = {s["function"]["name"] for s in tool_schemas()}
         assert "comment_on_task" not in offered
         assert "ask_on_task" not in offered
         assert "ask" in offered

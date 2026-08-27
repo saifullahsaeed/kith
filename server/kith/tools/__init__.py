@@ -44,16 +44,13 @@ __all__ = ["all_tools", "get", "host", "names", "run_tool", "tool_schemas"]
 
 
 def tool_schemas(
-    agent_db_path: Path | None = None,
     only: set[str] | None = None,
     mcp: list[dict] | None = None,
     language_server: bool | None = None,
 ) -> list[dict]:
-    """The tool declarations to hand the model — built-ins plus, if a DB path is
-    given, the tools Kith has built for himself, plus any MCP tools passed in.
+    """The tool declarations to hand the model — the built-ins, plus any MCP tools passed in.
 
-    ``only`` scopes the set to a mode's relevant tools (fewer tokens, sharper
-    focus). Custom tools are included only in the full set (when ``only`` is None).
+    ``only`` scopes the set to a mode's relevant tools (fewer tokens, sharper focus).
 
     ``mcp`` is *passed in* rather than fetched, and that is deliberate. This function runs on
     every round, and asking the manager here would mean the block changing under a turn — a
@@ -78,10 +75,7 @@ def tool_schemas(
         hide |= set(OFFERED_WITHOUT_A_LANGUAGE_SERVER)
     wanted = None if only is None else set(only) - hide
     builtins = [one for one in schemas(wanted) if one.get("function", {}).get("name") not in hide]
-    extra = list(mcp or [])
-    if agent_db_path is None or only is not None:
-        return builtins + extra
-    return builtins + extra
+    return builtins + list(mcp or [])
 
 
 def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | None = None) -> dict:
@@ -194,7 +188,7 @@ def host(
       result rather than the whole prefix.
     * `language_server` — whether the four semantic tools are worth their schema. `None` asks,
       which is a handful of `stat` calls; pass a bool to skip even that.
-    * `agent_db_path` — bound, so the tools he built for himself are read once.
+    * `agent_db_path` — bound, so `run` has the database without every caller carrying it.
 
     The provenance sets come back on the host for the same reason: the turn used to rebuild
     them from a snapshot it was also holding, so two objects had an opinion about which tools
@@ -206,7 +200,7 @@ def host(
         mcp = mcp_manager.snapshot()
     available = language_server if language_server is not None else _language_server_available()
     return ToolHost(
-        schemas=lambda only=None: tool_schemas(agent_db_path, only=only, mcp=mcp, language_server=available),
+        schemas=lambda only=None: tool_schemas(only=only, mcp=mcp, language_server=available),
         run=lambda name, arguments, allow=None: run_tool(name, arguments, agent_db_path, allow=allow),
         mcp_names=frozenset(str(((one.get("function") or {}).get("name")) or "") for one in mcp),
     )

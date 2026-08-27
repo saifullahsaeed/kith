@@ -516,7 +516,7 @@ def history(path: Path, args: dict):
 
 @tool(
     "list_files",
-    "List a directory on your computer (defaults to your home).",
+    "List a directory on your computer (default: your whole folder).",
     {"path": STR},
     required=(),
 )
@@ -545,7 +545,7 @@ def list_files(path: Path, args: dict):
                 "look for, put all three here rather than grepping three times."
             ),
         },
-        "path": {**STR, "description": "File or directory to search (default: home)."},
+        "path": {**STR, "description": "File or directory to search (default: your whole folder)."},
         "glob": {**STR, "description": "Optional filename filter, e.g. '*.md'."},
     },
     required=("patterns",),

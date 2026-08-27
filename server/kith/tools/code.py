@@ -150,7 +150,8 @@ def repo_map(path: Path, args: dict):
     "method name: grep also returns the word in comments, in strings, inside longer names, and "
     "in every unrelated local variable that happens to share it. This returns definitions and "
     "call sites, separately, and tells you how many files it read. Needs nothing installed and "
-    "works in 19 languages.",
+    "works in 19 languages — where a language server is running, `definition` and `references` "
+    "are surer still.",
     {
         "name": {**STR, "description": "The exact function, class or method name."},
         "path": {**STR, "description": "The folder to search (default: your whole folder)."},

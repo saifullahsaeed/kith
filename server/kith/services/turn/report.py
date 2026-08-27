@@ -485,10 +485,7 @@ def category_text(
     """
     persona = (default_config().system or "").strip()
 
-    if key in ("built_in_tools", "mcp_tools", "custom_tools"):
-        # Custom tools are lumped into built-ins in the live turn — it passes only `mcp_names` to
-        # the ledger — so the split here is the same two-way one, and `custom_tools` comes back
-        # empty rather than pretending to a distinction the count never made.
+    if key in ("built_in_tools", "mcp_tools"):
         mcp = set(mcp_names)
         parts: list[str] = []
         for schema in schemas or []:

@@ -21,7 +21,7 @@ from kith.tools import registry, tool_schemas
 def test_the_schema_does_not_offer_done_at_all(db: Path) -> None:
     """Checked first because it is the cheaper guard — a model that never sees "done" as an
     option cannot ask for it by picking from the enum, only by typing outside it."""
-    [schema] = [s for s in tool_schemas(db) if s["function"]["name"] == "update_project"]
+    [schema] = [s for s in tool_schemas() if s["function"]["name"] == "update_project"]
     enum = schema["function"]["parameters"]["properties"]["status"]["enum"]
     assert "done" not in enum
     assert set(enum) == {"active", "paused", "archived"}

@@ -91,7 +91,7 @@ def references(path: Path, args: dict):
 
 @tool(
     "definition",
-    "Where a name comes from — the file and line it is defined on. Faster and surer than "
+    "Where a name comes from — the file and line it is defined on. Needs a language server; if none is installed use `find_symbol`, which works anywhere. Faster and surer than "
     "guessing at a filename and grepping for it, and it follows imports across the project.",
     {"path": STR, "symbol": _SYMBOL, "near_line": _NEAR},
     required=("path", "symbol"),

@@ -62,10 +62,9 @@ class TestTheMessageListGrowsFromTheEnd:
 
 class TestTheToolListIsStableWithinATurn:
     def test_the_same_scope_gives_the_same_tools_in_the_same_order(self):
-        from kith.settings import AGENT_DB_PATH
 
-        first = [t["function"]["name"] for t in tool_schemas(AGENT_DB_PATH)]
-        again = [t["function"]["name"] for t in tool_schemas(AGENT_DB_PATH)]
+        first = [t["function"]["name"] for t in tool_schemas()]
+        again = [t["function"]["name"] for t in tool_schemas()]
         # Tools are part of the cached prefix, so a reordering between rounds would throw
         # the cache away as surely as an edit would.
         assert first == again

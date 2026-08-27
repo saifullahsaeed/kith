@@ -53,7 +53,10 @@ MIN_ITEMS = 1
 #: these three ride on ten tools, and the schemas are re-sent on every single round, so a
 #: sentence of explanation here costs more over a turn than the paging saves. Measured at
 #: 601 tokens per round when they were written out in full.
-LIMIT: dict = {**INT, "description": f"How many (default {DEFAULT_LIMIT}, max {MAX_LIMIT})."}
+#: No default in the text. `page` takes one per tool — `list_projects` asks for 5 and
+#: `read_journal` for 10 — so a number written here was wrong for whichever tool did not use it,
+#: on a schema that rides on ten of them and is re-sent every round.
+LIMIT: dict = {**INT, "description": f"How many (max {MAX_LIMIT})."}
 OFFSET: dict = {**INT, "description": "Skip this many; see next_offset."}
 CONTAINS: dict = {**STR, "description": "Only rows containing this text."}
 

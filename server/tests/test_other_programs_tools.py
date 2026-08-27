@@ -177,9 +177,9 @@ class TestTheToolBlockIsFrozenForATurn:
         """`tool_schemas` runs every round. If it asked the manager itself, a server dying
         would shrink the block mid-turn — which is exactly what the snapshot prevents."""
         snapshot = manager.snapshot()
-        assert len(tool_schemas(db, mcp=snapshot)) == len(tool_schemas(db)) + len(snapshot)
+        assert len(tool_schemas(mcp=snapshot)) == len(tool_schemas()) + len(snapshot)
         # Without being handed one, it contributes nothing, whatever is connected.
-        assert len(tool_schemas(db)) == len(tool_schemas(db, mcp=None))
+        assert len(tool_schemas()) == len(tool_schemas(mcp=None))
 
 
 class TestTheSchemasHandedToTheModel:

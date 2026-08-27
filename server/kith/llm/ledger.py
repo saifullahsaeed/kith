@@ -140,7 +140,6 @@ def take(
     window: int = 0,
     chars_per_token: float = SEED_CHARS_PER_TOKEN,
     mcp_names: frozenset[str] | tuple[str, ...] = (),
-    custom_names: frozenset[str] | tuple[str, ...] = (),
 ) -> Ledger:
     """Account for everything a request will carry.
 
@@ -148,13 +147,12 @@ def take(
     every request Kith ever makes, and therefore the only one cached *across* turns. Split out
     because "system prompt: 6k" hides the useful fact, which is that most of it is free.
 
-    ``mcp_names`` and ``custom_names`` separate the three kinds of tool schema. They are passed
-    in rather than looked up, for the same reason `tool_schemas` takes `mcp` as an argument:
-    this runs inside the request path and must not touch a database or a subprocess.
+    ``mcp_names`` separates the two kinds of tool schema. It is passed in rather than looked up,
+    for the same reason `tool_schemas` takes `mcp` as an argument: this runs inside the request
+    path and must not touch a database or a subprocess.
     """
     ratio = chars_per_token if chars_per_token > 0 else SEED_CHARS_PER_TOKEN
     mcp = frozenset(mcp_names)
-    custom = frozenset(custom_names)
 
     system_chars = persona_chars = live_chars = directive_chars = project_chars = summary_chars = 0
     said_chars = tool_chars = skill_chars = code_chars = image_chars = 0
@@ -220,14 +218,12 @@ def take(
             else:
                 said_chars += size
 
-    built_in_chars = mcp_chars = custom_chars = 0
+    built_in_chars = mcp_chars = 0
     for schema in schemas or []:
         name = str(((schema.get("function") or {}).get("name")) or "")
         size = len(json.dumps(schema))
         if name in mcp:
             mcp_chars += size
-        elif name in custom:
-            custom_chars += size
         else:
             built_in_chars += size
 
@@ -236,7 +232,6 @@ def take(
         Line("system", "How you work", _tokens(system_chars, ratio)),
         Line("built_in_tools", "System tools", _tokens(built_in_chars, ratio)),
         Line("mcp_tools", "MCP tools", _tokens(mcp_chars, ratio)),
-        Line("custom_tools", "His own tools", _tokens(custom_chars, ratio)),
         Line("project", "The project he is in", _tokens(project_chars, ratio)),
         Line("live", "Where he is right now", _tokens(live_chars, ratio)),
         Line("directives", "Turn directives", _tokens(directive_chars, ratio)),
