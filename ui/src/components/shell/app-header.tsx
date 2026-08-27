@@ -6,6 +6,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { HeaderControls } from "@/components/shell/header-controls";
 import { PresenceOrb } from "@/components/shell/presence";
 import { cn } from "@/lib/utils";
+import { UpdatePill } from "@/components/shell/update-notice";
 
 /** The presence bar: Kith as a living thing (orb + what he's doing right
  * now), then his inbox, work, panel, and settings. */
@@ -164,6 +165,12 @@ export function AppHeader({
       </div>
 
       <span className="bg-border/60 mx-1 hidden h-4 w-px sm:block" aria-hidden />
+
+      {/* A release you do not have. First of the right-hand controls because it is the one
+          thing in here you would otherwise never learn — nothing else in a running Kith
+          mentions that versions exist — and it takes a corner of a bar that is already on
+          screen rather than a banner over what you were reading. Absent unless there is one. */}
+      <UpdatePill onOpen={onOpenSettings} />
 
       {/* Where to go. Labels for the two rooms you move between; the bell keeps its icon
           because the count is the only part that ever mattered and a word next to it was

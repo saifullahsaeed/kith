@@ -56,6 +56,7 @@ export const keys = {
   conversation: (id: string) => ["conversation", id] as const,
   /** Standing jobs only. The Work panel is open the whole time and needs nothing else. */
   schedules: () => ["schedules"] as const,
+  update: () => ["update"] as const,
   /** Which conversations have a turn running right now. */
   liveTurns: () => ["turns", "live"] as const,
   /** The task this conversation is working through. */

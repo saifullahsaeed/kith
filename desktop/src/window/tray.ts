@@ -89,6 +89,8 @@ export interface State {
   costUsd: number;
   /** The next standing job to fire, if there is one. */
   nextWake: { note: string; at: string } | null;
+  /** A newer Kith than this one, when there is one. */
+  update: { latest: string; page: string; download: string } | null;
 }
 
 const IDLE: State = {
@@ -98,6 +100,7 @@ const IDLE: State = {
   recent: [],
   costUsd: 0,
   nextWake: null,
+  update: null,
 };
 let state: State = IDLE;
 
@@ -116,14 +119,16 @@ async function read(path: string): Promise<Record<string, unknown>> {
  */
 async function readState(): Promise<State> {
   try {
-    const [conversations, permissions, messages, usage, schedules, activity] = await Promise.all([
-      read("/api/conversations?limit=40"),
-      read("/api/permissions"),
-      read("/api/messages"),
-      read("/api/usage"),
-      read("/api/schedules"),
-      read("/api/activity?limit=6"),
-    ]);
+    const [conversations, permissions, messages, usage, schedules, activity, update] =
+      await Promise.all([
+        read("/api/conversations?limit=40"),
+        read("/api/permissions"),
+        read("/api/messages"),
+        read("/api/usage"),
+        read("/api/schedules"),
+        read("/api/activity?limit=6"),
+        read("/api/update"),
+      ]);
 
     const rows = (conversations.conversations ?? []) as Record<string, unknown>[];
     const pending = (permissions.pending ?? []) as Record<string, unknown>[];
@@ -156,6 +161,13 @@ async function readState(): Promise<State> {
       recent: turns((activity.ticks ?? []) as Record<string, unknown>[]),
       costUsd: Number(usage.costUsd ?? 0),
       nextWake: soonest((schedules.schedules ?? []) as Record<string, unknown>[]),
+      update: update.newer
+        ? {
+            latest: String(update.latest ?? ""),
+            page: String(update.page ?? ""),
+            download: String(update.download ?? ""),
+          }
+        : null,
     };
   } catch {
     return IDLE;
@@ -344,6 +356,20 @@ function render(onQuit: () => void): void {
 
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      // First, above his status. It is the one thing in this menu you would otherwise never
+      // find out at all — there is no other surface in a running Kith that mentions a release —
+      // and it is a different kind of thing from the rest, which is why it sits apart rather
+      // than in the "waiting on you" list. He is not blocked on it; you are just behind.
+      ...(current.update
+        ? ([
+            {
+              label: `Update to ${current.update.latest}`,
+              click: () =>
+                void shell.openExternal(current.update!.download || current.update!.page),
+            },
+            { type: "separator" },
+          ] as const)
+        : []),
       { label: summary(current), enabled: false },
 
       ...(current.waiting.length

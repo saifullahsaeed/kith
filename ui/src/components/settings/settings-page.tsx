@@ -22,6 +22,7 @@ import { SkillsTab } from "@/components/settings/skills-tab";
 import type { SettingsTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Layer, useLayer } from "@/hooks/use-layer";
+import { UpdateFooter } from "@/components/shell/update-notice";
 
 /**
  * The tabs, and how much of the pane each one wants.
@@ -199,6 +200,12 @@ export function SettingsPage({
               </button>
             ))}
           </div>
+
+          {/* Under the nav, so it is on every tab. What is running, and whether there is
+              something newer — the version being visible whenever settings are open is the
+              thing you want when writing a bug report, and an update notice needs somewhere
+              that is not a seventh tab holding one paragraph. */}
+          <UpdateFooter />
         </nav>
 
         <div

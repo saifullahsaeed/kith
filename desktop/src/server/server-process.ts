@@ -93,7 +93,12 @@ export async function ensureServer(): Promise<"already-running" | "started" | "n
 
   child = spawn(binary, [], {
     cwd: path.dirname(binary),
-    env: { ...process.env, KITH_DATA_DIR: directory },
+    // `KITH_APP_VERSION` is how the server knows what to compare against when it asks GitHub
+    // whether there is a newer Kith. `desktop/package.json` is the only version that means
+    // anything — it is what the release workflow tags and what names the dmg — and the server
+    // has no copy of it. Absent when run from a checkout, which is what tells `services.updates`
+    // there is no installed version to check, rather than that you are up to date.
+    env: { ...process.env, KITH_DATA_DIR: directory, KITH_APP_VERSION: app.getVersion() },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout?.pipe(logStream);

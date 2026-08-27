@@ -9,6 +9,7 @@ const idle: State = {
   recent: [],
   costUsd: 0,
   nextWake: null,
+  update: null,
 };
 
 /**
