@@ -77,6 +77,32 @@ class TestFoldersThatWouldDefeatTheBoundary:
         with pytest.raises(workspace.WorkspaceError):
             workspace.set_root(str(home / "Documents" / ".."))
 
+    def test_a_symlink_does_not_slip_home_past_the_check(self, isolated, tmp_path):
+        """`normpath` collapses `..` and nothing else, so a symlink pointing at home walked
+        straight past this list.
+
+        It is not a cosmetic miss: `permissions._inside` resolves the root before comparing,
+        so a workspace that *settles* to your home folder is one where nothing is ever
+        outside — every file you own becomes a place he needs no permission for, which is
+        exactly what this list exists to refuse."""
+        import os
+        from pathlib import Path
+
+        link = tmp_path / "looks-like-a-project"
+        os.symlink(Path.home(), link)
+        with pytest.raises(workspace.WorkspaceError):
+            workspace.set_root(str(link))
+
+    def test_a_symlink_to_an_ordinary_folder_is_still_fine(self, isolated, tmp_path):
+        """The check settles the path; it does not refuse symlinks."""
+        import os
+
+        real = tmp_path / "real-work"
+        real.mkdir()
+        link = tmp_path / "shortcut"
+        os.symlink(real, link)
+        assert workspace.set_root(str(link)) == link
+
 
 class TestOrdinaryRefusals:
     def test_empty(self, isolated):

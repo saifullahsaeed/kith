@@ -542,6 +542,10 @@ export function HistoryPanel({
                           <ItemMenu
                             title={item.title}
                             copy={item.title}
+                            // The id is the name of its transcript file, what the API addresses
+                            // it by, and the only way to point him at one particular afternoon.
+                            // Reaching it meant opening the folder and reading a filename.
+                            copyId={item.id}
                             actions={[
                               // The rows are what you right-click, not the heading above them —
                               // so the same offer is here, named after the project it lands in.

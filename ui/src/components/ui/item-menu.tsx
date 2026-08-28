@@ -1,4 +1,4 @@
-import { Copy, Trash2 } from "lucide-react";
+import { Copy, Hash, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
@@ -35,6 +35,7 @@ export interface ItemAction {
 export function ItemMenu({
   title,
   copy,
+  copyId,
   actions = [],
   onDelete,
   deleteLabel = "Delete",
@@ -45,6 +46,16 @@ export function ItemMenu({
   title?: string;
   /** Text to put on the clipboard. Omit to leave Copy out. */
   copy?: string;
+  /**
+   * The thing's own identifier, when it has one worth taking away.
+   *
+   * Beside "Copy text" rather than among the actions above, because the two are the same
+   * gesture on different halves of the row and separating them would mean looking in two
+   * places for "copy". A conversation's id is the name of its transcript file, what the API
+   * addresses it by, and the only way to point Kith at one particular afternoon — none of
+   * which was reachable without opening the folder and reading a filename.
+   */
+  copyId?: string;
   actions?: ItemAction[];
   /** Omit for anything that can't be deleted from here. */
   onDelete?: () => void;
@@ -52,7 +63,7 @@ export function ItemMenu({
   children: ReactNode;
   className?: string;
 }) {
-  const hasBody = Boolean(copy) || actions.length > 0 || Boolean(onDelete);
+  const hasBody = Boolean(copy) || Boolean(copyId) || actions.length > 0 || Boolean(onDelete);
   // Nothing to offer means no menu at all — an empty panel on right-click is worse
   // than the browser's own.
   if (!hasBody) return <>{children}</>;
@@ -77,15 +88,28 @@ export function ItemMenu({
           </ContextMenuItem>
         ))}
 
-        {copy ? (
+        {copy || copyId ? (
           <>
             {actions.length > 0 ? <ContextMenuSeparator /> : null}
-            <ContextMenuItem
-              icon={<Copy className="size-3.5" />}
-              onSelect={() => void copyText(copy)}
-            >
-              Copy text
-            </ContextMenuItem>
+            {copy ? (
+              <ContextMenuItem
+                icon={<Copy className="size-3.5" />}
+                onSelect={() => void copyText(copy)}
+              >
+                Copy text
+              </ContextMenuItem>
+            ) : null}
+            {copyId ? (
+              <ContextMenuItem
+                icon={<Hash className="size-3.5" />}
+                // The id itself as the hint, because it is short enough to read and seeing it
+                // is often the whole reason for reaching for this.
+                hint={copyId}
+                onSelect={() => void copyText(copyId)}
+              >
+                Copy id
+              </ContextMenuItem>
+            ) : null}
           </>
         ) : null}
 

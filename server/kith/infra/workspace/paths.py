@@ -39,12 +39,27 @@ ROOT_KEY = "workspace_dir"
 #: warning you can click past is not a boundary.
 def _forbidden_roots() -> set[Path]:
     home = Path.home()
-    return {
+    named = {
         Path("/"),
         home,
         home.parent,
         *(home / name for name in ("Desktop", "Documents", "Downloads", "Library")),
     }
+    # Settled as well as named, because the comparison is against a settled path — and because
+    # home itself can be a symlink on a machine with a relocated user directory.
+    return named | {_settled(one) for one in named}
+
+
+def _settled(path: Path) -> Path:
+    """A path with symlinks and ``..`` resolved, or the best that could be done.
+
+    Never raises: refusing to answer here would take down the folder picker, and a path that
+    cannot be resolved is compared as written, which is what the check did before.
+    """
+    try:
+        return path.resolve()
+    except OSError:
+        return Path(os.path.normpath(path.expanduser()))
 
 
 def configured_root() -> Path:
@@ -141,9 +156,15 @@ def set_root(raw: str) -> Path:
     if not chosen.is_absolute():
         raise WorkspaceError("That needs to be a full path.")
     chosen = Path(os.path.normpath(chosen))
-    if chosen in _forbidden_roots():
+    # Compared settled, not as typed. `normpath` collapses `..` and nothing else, so a symlink
+    # pointing at one of these walked straight past the list — and the permission check resolves
+    # the root before comparing (`permissions._inside`), so a workspace that settles to your home
+    # folder is a workspace where nothing is ever outside. That is precisely what this refuses.
+    settled = _settled(chosen)
+    if chosen in _forbidden_roots() or settled in _forbidden_roots():
+        where = f"{chosen} (which is {settled})" if settled != chosen else str(chosen)
         raise WorkspaceError(
-            f"{chosen} is too broad to be his folder — he works without asking inside it, "
+            f"{where} is too broad to be his folder — he works without asking inside it, "
             "so this would hand him everything under it. Give him a folder of his own."
         )
     if chosen.exists() and not chosen.is_dir():
