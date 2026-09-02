@@ -17,6 +17,20 @@ message, no restart needed.
   "Your note" in Settings → Persona, in its own field above the text.
 - **README** files (like this one) are ignored.
 
+## The fragments
+
+| File | What it holds |
+|------|----------------|
+| `00-who.md` | Who he is, in three sentences |
+| `05-where-you-are.md` | What he may touch, and where his mess goes |
+| `10-how-you-judge.md` | Checking before claiming, not folding, not inventing decisions |
+| `15-how-you-work.md` | Proving a change ran, and keeping a way back |
+| `17-asked-to-think.md` | Telling a question from an instruction |
+| `20-how-you-answer.md` | Reply shape |
+| `25-what-you-draw.md` | When to draw instead of describe |
+| `30-how-you-read.md` | Reading code by structure |
+| `35-how-you-spend-a-round.md` | Batching independent tool calls |
+
 ## Adding an instruction
 
 Drop a new file in, named to sit where you want it in the order:
