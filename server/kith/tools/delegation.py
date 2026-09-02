@@ -61,7 +61,6 @@ GIVEN = frozenset(
         # Finding code without reading it.
         "grep",
         "glob",
-        "list_files",
         "outline",
         "repo_map",
         "find_symbol",
@@ -71,13 +70,12 @@ GIVEN = frozenset(
         "read_file",
         "diagnostics",
         "check_code",
-        # What the repository has been doing.
+        # What the repository has been doing — uncommitted, and the recorded history with
+        # `commits`.
         "changes",
-        "history",
         # The open web. Read-only, and the reason one tool covers "find where this lives" and
         # "find out how this library works" instead of two.
         "web_search",
-        "fetch_url",
         "browse_page",
         # What Kith already knows, which is often where the answer is and is always cheaper
         # than going and looking again.
@@ -101,18 +99,18 @@ WITHHELD = frozenset(
     {
         # Changes files. The whole boundary.
         "write_file",
-        "edit_file",
         "edit_files",
         "delete_file",
         "rename_symbol",
         # Changes the record. A worker's findings are provisional until the main agent has
         # read them; committing, publishing or remembering them makes them permanent first.
+        #
+        # `publish` also covers what `check_remote` used to be its own name for: fetching is
+        # read-ish in intent — it never merges — but it rewrites this repository's remote refs,
+        # and a scout has no reason to change what the main agent will see when it next looks
+        # at how far behind the folder is.
         "commit",
         "publish",
-        # Reaches the network and rewrites this repository's remote refs. Read-ish in intent —
-        # it fetches and never merges — but a scout has no reason to change what the main agent
-        # will see when it next looks at how far behind the folder is.
-        "check_remote",
         "remember",
         "forget",
         "journal",

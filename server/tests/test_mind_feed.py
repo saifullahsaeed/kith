@@ -55,9 +55,15 @@ def test_every_tool_reads_as_english() -> None:
 
 def test_the_table_has_no_entries_for_tools_that_do_not_exist() -> None:
     registered = {schema["function"]["name"] for schema in registry.schemas()}
+    # A retired tool keeps its phrase on purpose. Transcripts outlive tools: every
+    # conversation that called `edit_file` before it was merged into `edit_files` still has
+    # those rows, and they are still read. Dropping the phrase would not tidy anything — it
+    # would turn a year of history into `edit_file(path=…)` printed raw.
+    from kith.tools.aliases import RETIRED
+
     # A stale entry is harmless at runtime but it is a lie about what he can do, and it hides
     # a rename: the old name keeps its phrase while the new one silently has none.
-    stale = sorted(phrased_tools() - registered)
+    stale = sorted(phrased_tools() - registered - set(RETIRED))
     assert not stale, f"tool-language.ts describes tools that no longer exist: {stale}"
 
 

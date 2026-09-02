@@ -51,7 +51,6 @@ from kith.services.turn.meter import _record, measured
 _PARALLEL_SAFE = frozenset(
     {
         "web_search",
-        "fetch_url",
         "browse_page",
         "search_sources",
         # A sub-agent clears the same bar, and it is the one tool where clearing it is the
@@ -237,7 +236,6 @@ def _is_repeat(name: str, seen: int) -> bool:
 _GATHERING_TOOLS = frozenset(
     {
         "web_search",
-        "fetch_url",
         "browse_page",
         "search_sources",
         # Sending someone else to look is still looking, and it is the most expensive kind: an

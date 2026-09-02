@@ -141,7 +141,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   read_file: { verb: "read", of: "paths", group: "files" },
   write_file: { verb: "wrote", of: "path", group: "files" },
   edit_file: { verb: "edited", of: "path", group: "files" },
-  edit_files: { verb: "edited several files at once", group: "files" },
+  edit_files: { verb: "edited", group: "files" },
   changes: { verb: "checked what he had changed", group: "files" },
   commit: { verb: "saved a point in history", of: "message", group: "files" },
   check_code: { verb: "checked the code", of: "path", group: "shell" },

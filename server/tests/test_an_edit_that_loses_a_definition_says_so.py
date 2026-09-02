@@ -82,21 +82,39 @@ class TestWhatCountsAsLost:
 
 
 class TestThroughTheWriteTools:
+    """`edit_files` is the only edit tool now, so the note has to survive the batch shape.
+
+    It did not, before the merge: `edit_file` ran this check and `edit_files` ran none, so the
+    tool that could change eight files at once was the one that would not tell you it had
+    eaten a function. Asserting it here through the single-edit shorthand — which is exactly
+    what a call to the retired `edit_file` arrives as — keeps both paths honest.
+    """
+
     def test_an_edit_that_deletes_a_function_says_which(self, workspace_root):
         (workspace_root / "m.py").write_text(MODULE)
-        out = computer.edit_file(
+        out = computer.edit_files(
             workspace_root, {"path": "m.py", "old": "def doomed():\n    pass\n", "new": ""}
         )
-        assert "removed 1 definition" in out
-        assert "doomed" in out
+        assert "removed 1 definition" in out["note"]
+        assert "doomed" in out["note"]
+
+    def test_it_still_says_which_when_the_edit_came_in_a_batch(self, workspace_root):
+        """The shape that had no check at all."""
+        (workspace_root / "m.py").write_text(MODULE)
+        out = computer.edit_files(
+            workspace_root,
+            {"edits": [{"path": "m.py", "old": "def doomed():\n    pass\n", "new": ""}]},
+        )
+        assert "removed 1 definition" in out["note"]
+        assert "doomed" in out["note"]
 
     def test_an_edit_that_only_changes_a_body_says_nothing(self, workspace_root):
         (workspace_root / "m.py").write_text(MODULE)
-        out = computer.edit_file(
+        out = computer.edit_files(
             workspace_root,
             {"path": "m.py", "old": "def keep():\n    pass", "new": "def keep():\n    return 1"},
         )
-        assert "removed" not in out
+        assert "removed" not in out.get("note", "")
 
     def test_overwriting_a_file_with_less_than_it_had_says_so(self, workspace_root):
         """`write_file` is the tool the truncation incident actually went through."""
@@ -117,10 +135,11 @@ class TestThroughTheWriteTools:
         """The note is an addition to the result, never a replacement for it — he still needs
         the diff to see what changed."""
         (workspace_root / "m.py").write_text(MODULE)
-        out = computer.edit_file(
+        out = computer.edit_files(
             workspace_root, {"path": "m.py", "old": "def doomed():\n    pass\n", "new": ""}
         )
-        assert "1 replacement in m.py" in out, "the ordinary result survives"
+        assert out["replacements"] == 1, "the ordinary result survives"
+        assert "m.py" in out["diff"], "and so does the diff"
         assert "doomed" not in (workspace_root / "m.py").read_text(), "and the edit landed"
 
     def test_a_parser_failure_cannot_fail_the_write(self, workspace_root, monkeypatch):
@@ -132,8 +151,8 @@ class TestThroughTheWriteTools:
             raise RuntimeError("parser fell over")
 
         monkeypatch.setattr(verify, "lost", explode)
-        out = computer.edit_file(
+        out = computer.edit_files(
             workspace_root, {"path": "m.py", "old": "def doomed():\n    pass\n", "new": ""}
         )
-        assert "1 replacement in m.py" in out
+        assert out["replacements"] == 1
         assert "doomed" not in (workspace_root / "m.py").read_text()

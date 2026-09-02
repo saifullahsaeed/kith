@@ -35,6 +35,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     time,
     web,
 )
+from kith.tools import aliases
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas
 from kith.tools.semantics import NEEDS_A_LANGUAGE_SERVER, OFFERED_WITHOUT_A_LANGUAGE_SERVER
@@ -100,6 +101,30 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
     ``None`` means no restriction, which is the ordinary case and what every caller that
     does not scope its tools passes.
     """
+    # Before the allow-list, because a retired name is not a different tool — it is this tool
+    # under the name it used to have, and whether the *surviving* name is permitted here is the
+    # question that matters. Checking first would refuse `edit_file` in a phase that allows
+    # `edit_files`, which is the merge inventing a restriction nobody chose.
+    # `get(name) is None` is the guard that matters: a retired name only redirects while it is
+    # actually gone. Without it an entry written before its merge landed would hijack a tool
+    # that still exists and still works — which is exactly what happened, and it took out a
+    # fifth of the suite in one commit.
+    gone = aliases.retired(name)
+    if gone is not None and get(name) is None and get(gone.now) is not None:
+        answer = run_tool(gone.now, aliases.translate(gone, arguments or {}), agent_db_path, allow)
+        # Said in the result rather than kept quiet. The call worked, so this is not an error —
+        # but a model that never hears the new name goes on paying a translation for ever, and
+        # the note is what lets it stop.
+        note = f"`{name}` is now `{gone.now}` — same job, so this ran as that."
+        if isinstance(answer.get("result"), dict):
+            existing = answer["result"].get("note")
+            answer["result"] = {**answer["result"], "note": " ".join(filter(None, (existing, note)))}
+        elif isinstance(answer.get("result"), str):
+            answer["result"] = f"{answer['result']}\n\n[{note}]"
+        elif not answer.get("ok"):
+            answer["error"] = f"{answer.get('error', '')} ({note})".strip()
+        return answer
+
     if allow is not None and name not in allow:
         # Named rather than vague: he can act on "not in this mode" and cannot act on
         # "something went wrong". The list itself is not spelled out — on a 55-tool set that

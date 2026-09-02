@@ -5,12 +5,12 @@ and end with nothing written down. What it may use *was* an allowlist of ninetee
 maintained by hand beside a paragraph of English that tells him what to do with them — and it
 was caught out of step three times, each in production, each fixed by adding one more name:
 
-* `write_file` was on the list and `edit_file` was not, so a turn that reached those rounds
+* `write_file` was on the list and the surgical edit tool was not, so a turn that reached those
   mid-implementation was left holding only the wholesale rewrite, on existing source it had not
   fully read. He noticed and parked the task on a question: "the available file tool exposes
   read/write only, not an edit/patch operation, and rewriting these existing files wholesale
   would risk unrelated code loss. Please provide/enable an edit-capable tool" — which is
-  `edit_file`'s own docstring read back to us, correctly, by something we had quietly disarmed.
+  `edit_files`'s own docstring read back to us, correctly, by something we had quietly disarmed.
 * `commit` was missing, from the one phase whose entire job is to land the work.
 * `ask` was missing while `_LANDING_DIRECTIVE` names it outright.
 
@@ -20,7 +20,7 @@ reserve now names the small set it *takes away* — `_GATHERING_TOOLS` (going ou
 `_STARTING_TOOLS` (opening a new front) — and everything else is kept.
 
 **These tests are written against a real landing round, not against the constants.** Asserting
-`"edit_file" not in _NOT_WHILE_LANDING` would pass for any word at all, including a misspelling;
+`"edit_files" not in _NOT_WHILE_LANDING` would pass for any word at all, including a misspelling;
 what matters is the toolset that actually goes out on the wire once the reserve takes over.
 """
 
@@ -74,12 +74,14 @@ def offered_while_landing(db: Path, monkeypatch) -> set[str]:
 
 class TestItCanChangeAFileSafely:
     def test_the_surgical_edit_is_available(self, offered_while_landing):
-        assert {"edit_file", "edit_files"} <= offered_while_landing
+        assert "edit_files" in offered_while_landing
 
     def test_it_is_not_left_with_only_the_lossy_one(self, offered_while_landing):
         """`write_file` alone is the trap: he regenerates from what he remembers reading, so
         anything he did not re-emit is gone."""
-        assert not ("write_file" in offered_while_landing and "edit_file" not in offered_while_landing)
+        assert not (
+            "write_file" in offered_while_landing and "edit_files" not in offered_while_landing
+        )
 
     def test_write_file_stays_for_genuinely_new_files(self, offered_while_landing):
         """A handoff note is a new file, and that is what it is for."""
@@ -156,7 +158,7 @@ class TestHeCanStillPutAQuestion:
     def test_the_directive_does_not_name_a_tool_it_takes_away(self, offered_while_landing):
         """The general form of the bug, so the next one is caught here and not in use.
 
-        Three have shipped: `edit_file`, `add_task`, and `ask`. Each was a directive commanding
+        Three have shipped: `edit_files`, `add_task`, and `ask`. Each was a directive commanding
         what the toolset beside it forbade — worse than either mistake alone, because he can
         neither comply nor explain why without guessing.
 

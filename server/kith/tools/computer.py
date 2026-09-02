@@ -237,7 +237,7 @@ def _read_symbol(wanted: str, symbol: str, offset=None, limit=None) -> str:
 @tool(
     "write_file",
     "Write (or overwrite) a file on your computer, creating parent folders as needed. For a "
-    "file that already exists, use edit_file instead: rewriting a whole file to alter one "
+    "file that already exists, use edit_files instead: rewriting a whole file to alter one "
     "line costs you the file again in output, silently loses anything you did not retype, "
     "and flattens its formatting a little more each time.",
     {"path": STR, "content": STR},
@@ -249,7 +249,7 @@ def write_file(path: Path, args: dict):
     )
 
 
-def _reporting_lost_definitions(wanted: str, write):
+def _reporting_lost_definitions(wanted: str | list[str], write):
     """Run a write, and say so if it removed definitions that were there before.
 
     Wired here rather than in `infra/workspace/files.py` because it cannot be wired there:
@@ -265,98 +265,79 @@ def _reporting_lost_definitions(wanted: str, write):
     on a 1,200-line Python file — one extra read and two parses — and nothing at all for a file
     that is not source, which `readable` rejects before parsing anything. Against a tool call
     inside a network round trip, that is not a number worth optimising.
+
+    **Takes several paths because a batch is now the only way to edit.** When `edit_file` was
+    its own tool this watched one file and `edit_files` watched none, so the check that catches
+    "your `old` swallowed the three functions below it" was the one thing you lost by editing
+    two files instead of one. The plural is the same walk, once per distinct path, and a dict
+    result carries the remark in `note` rather than glued onto a string.
     """
     from kith.engine.code import verify
 
-    target: Path | None = None
-    try:
-        target = Path(sandbox.resolve(wanted))
-        was = verify.readable(target)
-    except Exception:
-        was = None
+    paths = [wanted] if isinstance(wanted, str) else list(dict.fromkeys(wanted))
+    before: dict[Path, tuple] = {}
+    for one in paths:
+        try:
+            target = Path(sandbox.resolve(one))
+            was = verify.readable(target)
+        except Exception:
+            continue
+        if was is not None:
+            before[target] = was
 
     result = write()
 
-    if was is None or target is None:
-        return result
-    try:
-        now = verify.readable(target)
-        if now is None:
-            return result
-        gone = verify.lost(was[0], now[0], was[1])
-    except Exception:
-        return result
+    gone: list[str] = []
+    for target, was in before.items():
+        try:
+            now = verify.readable(target)
+            if now is None:
+                continue
+            gone.extend(verify.lost(was[0], now[0], was[1]))
+        except Exception:
+            continue
     if not gone:
         return result
 
     shown = ", ".join(gone[:8]) + (f", … and {len(gone) - 8} more" if len(gone) > 8 else "")
-    note = f"\n\n[this removed {len(gone)} definition(s): {shown} — intended?]"
-    return result + note if isinstance(result, str) else result
+    remark = f"[this removed {len(gone)} definition(s): {shown} — intended?]"
+    if isinstance(result, str):
+        return f"{result}\n\n{remark}"
+    if isinstance(result, dict):
+        return {**result, "note": " ".join(filter(None, (result.get("note"), remark)))}
+    return result
 
 
-@tool(
-    "edit_file",
-    "Change part of a file by replacing an exact piece of text. Use this instead of "
-    "write_file for any change to a file that already exists — write_file replaces the whole "
-    "thing, which costs you the entire file in output and loses anything you did not retype. "
-    "`old` must appear EXACTLY once, whitespace and indentation included: copy it verbatim "
-    "from a read. If it appears more than once you will be told how many times, and you "
-    "should either include more surrounding lines to pin down the one you mean or pass "
-    "replace_all. You get back a diff of what changed — read it, that is how you check you "
-    "changed what you intended. "
-    "Copy `old` from the read you did THIS turn, not from what you remember of the file. "
-    "Both ways this fails are that: text that is not there, and text that is there three "
-    "times. `read_file` with `symbol` gets you one definition exactly as it is on disk, which "
-    "is the cheapest way to be sure the text you are pasting still exists.",
-    {
-        "path": STR,
-        "old": {**STR, "description": "The exact text to replace, copied verbatim."},
-        "new": {**STR, "description": "What to put in its place."},
-        "replace_all": {
-            "type": "boolean",
-            "description": "Replace every occurrence instead of failing on ambiguity.",
-        },
+#: The fields one edit is made of, shared by the batch's items and by the single-edit
+#: shorthand beside it so the two cannot describe different rules.
+_EDIT = {
+    "path": STR,
+    "old": {**STR, "description": "The exact text to replace, copied verbatim."},
+    "new": {**STR, "description": "What to put in its place."},
+    "replace_all": {
+        "type": "boolean",
+        "description": "Replace every occurrence in that file instead of failing on ambiguity.",
     },
-    required=("path", "old", "new"),
-)
-def edit_file(path: Path, args: dict):
-    return _reporting_lost_definitions(
-        args["path"],
-        lambda: sandbox.edit_file(
-            args["path"],
-            args.get("old") or "",
-            args.get("new") or "",
-            replace_all=bool(args.get("replace_all")),
-        ),
-    )
+}
 
 
 @tool(
     "edit_files",
-    "Make several edits at once, as one all-or-nothing change. Use this the moment a change "
-    "touches more than one place — renaming something used in eight files, updating every "
-    "call site, applying the same fix across a folder. One edit per call costs you a whole "
-    "round each time, and you only get so many before a job has to stop; this costs one. "
-    "Each edit is {path, old, new} with the same rules as edit_file: `old` copied verbatim, "
-    "unique in its file unless you pass replace_all. Either every edit applies or none does, "
-    "so a batch that fails leaves the files untouched and tells you which edit was wrong. "
-    "Edits to the same file are applied in the order you give them, so a later one can build "
-    "on an earlier one. You get back one combined diff — read it.",
+    "Change files by replacing exact pieces of text — one edit or twenty, in one call. `old` "
+    "must appear EXACTLY once in its file, whitespace and indentation included: copy it "
+    "verbatim from a read you did THIS turn, not from memory. If it appears more than once you "
+    "are told how many, and you either include surrounding lines to pin down the one you mean "
+    "or pass replace_all. All or nothing — a batch that fails leaves every file untouched and "
+    "names the edit that was wrong. Edits to the same file apply in the order given, so a later "
+    "one can build on an earlier one. You get back a combined diff: read it, that is how you "
+    "check you changed what you intended.",
     {
         "edits": {
             "type": "array",
             "description": "The edits to apply, in order.",
             "items": {
                 "type": "object",
-                "properties": {
-                    "path": STR,
-                    "old": {**STR, "description": "The exact text to replace, copied verbatim."},
-                    "new": {**STR, "description": "What to put in its place."},
-                    "replace_all": {
-                        "type": "boolean",
-                        "description": "Replace every occurrence in that file instead of failing on ambiguity.",
-                    },
-                },
+                "properties": dict(_EDIT),
                 "required": ["path", "old", "new"],
             },
         }
@@ -364,10 +345,33 @@ def edit_file(path: Path, args: dict):
     required=("edits",),
 )
 def edit_files(path: Path, args: dict):
+    """One tool for one edit and for twenty, and it accepts either shape.
+
+    There were two tools here, `edit_file` and `edit_files`, and the second was the first with
+    a list around it. That is a parameter, not a capability: the model paid two schemas for it,
+    had to choose between them every time it changed a file, and the choice carried a real
+    trap — `edit_file` reported definitions its edit had swallowed and `edit_files` did not, so
+    the safer tool was the one that could only do the smaller job.
+
+    **The single-edit shape is accepted but not advertised, and that split is deliberate.**
+    `path`/`old`/`new` at the top level is what a call to the retired `edit_file` arrives as
+    once `aliases.RETIRED` has translated it, so the handler has to understand it. Declaring it
+    in the schema as well would mean carrying the four fields twice — once inside `edits.items`
+    and once beside it — to describe a shape nothing is ever shown. That duplication was the
+    whole of the merge's token saving, spent on a second way to say the same thing.
+    """
     raw = args.get("edits")
+    if raw is None and args.get("path"):
+        raw = [{key: args[key] for key in _EDIT if key in args}]
     if not isinstance(raw, list):
-        return {"error": "edits must be a list of {path, old, new}"}
-    return sandbox.edit_files([one for one in raw if isinstance(one, dict)])
+        return {"error": "pass `edits` as a list of {path, old, new}, or path/old/new for one"}
+    edits = [one for one in raw if isinstance(one, dict)]
+    if not edits:
+        return {"error": "no edits given — pass at least one {path, old, new}"}
+    return _reporting_lost_definitions(
+        [str(one.get("path") or "") for one in edits],
+        lambda: sandbox.edit_files(edits),
+    )
 
 
 @tool(
@@ -402,81 +406,102 @@ def check_code(path: Path, args: dict):
 
 @tool(
     "glob",
-    "Find files by name pattern, newest first — 'where are the tests', 'which components exist'. "
-    "Use `**/*.tsx` style patterns. grep searches inside files; this searches their names.",
+    "Find files by name, newest first — 'where are the tests', 'which components exist'. Use "
+    "`**/*.tsx` style patterns, or omit the pattern to just list a folder. grep searches inside "
+    "files; this searches their names.",
     {
-        "pattern": {**STR, "description": "A glob like '**/*.py' or 'test_*.py'."},
+        "pattern": {
+            **STR,
+            "description": "A glob like '**/*.py' or 'test_*.py'. Omit to list the folder.",
+        },
         "path": {**STR, "description": "Folder to search under (default: your whole folder)."},
     },
-    required=("pattern",),
+    required=(),
 )
 def glob(path: Path, args: dict):
-    return sandbox.glob(args["pattern"], args.get("path") or ".")
+    """Listing a directory is a glob with no pattern, so it is not a second tool.
+
+    `list_files` was that second tool, and the pair cost a schema and a decision to answer one
+    question — "what is in here" — in two ways that differ only in whether you already know
+    what you are looking for. A model that wants the listing now omits the pattern; one that
+    still sends `*` or `.` gets the listing too, because those are the same request typed by
+    someone expecting the old tool.
+    """
+    pattern = str(args.get("pattern") or "").strip()
+    where = args.get("path") or "."
+    # `**` and `**/*` are deliberately NOT here. They ask for everything underneath, and
+    # answering them with a one-level listing would drop the recursion silently — the failure
+    # this whole merge is meant not to introduce.
+    if pattern in ("", "*", ".", "./"):
+        return sandbox.list_files(where)
+    return sandbox.glob(pattern, where)
 
 
 @tool(
     "changes",
-    "See what you have changed and not yet committed, as a diff. Use it before you claim "
-    "something is done: it is the only way to check that what you changed is what you meant "
-    "to change, and it catches the edit you made and forgot. Pass a path to narrow it to one "
-    "file or folder. This shows everything since your last `commit`, so if it is longer than "
-    "you expected you have work you have not recorded yet.",
-    {"path": {**STR, "description": "Optional file or folder to limit the diff to."}},
+    "What has changed in your folder. By default the diff of everything since your last "
+    "`commit` — check it before you claim something is done: it catches the edit you made and "
+    "forgot, and if it is longer than you expected you have work you have not recorded. Pass a "
+    "path to narrow it, or `commits` for the last N recorded points instead, which is how you "
+    "pick up where you left off.",
+    {
+        "path": {**STR, "description": "Optional file or folder to limit the diff to."},
+        "commits": {
+            **INT,
+            "description": "Show the last N recorded commits instead of the uncommitted diff.",
+        },
+    },
     required=(),
 )
 def changes(path: Path, args: dict):
+    """Uncommitted and committed are one question — "what changed here" — asked over two
+    windows, so they are one tool with an argument rather than `changes` and `history`."""
+    commits = args.get("commits")
+    if commits:
+        return sandbox.log(int(commits))
     return sandbox.diff(args.get("path") or None)
 
 
 @tool(
     "publish",
-    "Send your committed work to where the project came from, and bring in what other people "
-    "have pushed. `direction` is 'out' to send, 'in' to fetch, or 'both'. Do this after a "
-    "commit that somebody else needs, and before picking work up in a project other people "
-    "touch — nothing arrives on its own, so a board that looks quiet may only be unfetched.",
+    "Send your committed work to where the project came from, and bring down what other people "
+    "have pushed. Do this after a commit somebody else needs, and before picking up work in a "
+    "project other people touch — nothing arrives on its own, so a board that looks quiet may "
+    "only be unfetched. 'check' only asks the remote what it has: it fetches without merging, "
+    "so it is the one that is safe mid-job and the one that works with a dirty tree.",
     {
         "direction": {
             **STR,
-            "enum": ["out", "in", "both"],
-            "description": "'out' pushes, 'in' pulls, 'both' pulls then pushes.",
+            "enum": ["out", "in", "both", "check"],
+            "description": "'out' pushes, 'in' pulls, 'both' pulls then pushes, "
+            "'check' only fetches.",
         }
     },
     required=(),
 )
 def publish(path: Path, args: dict):
     """Pulling before pushing, when both are asked for: a push from behind is rejected, and
-    being told to pull afterwards is a round spent learning what the order already knew."""
+    being told to pull afterwards is a round spent learning what the order already knew.
+
+    **'check' is here because reading the remote is separate from taking it in.** What the
+    system prompt tells him about a project's folder is read locally — the commit count comes
+    from refs the last fetch left on disk, so a repository nobody has fetched in a week reports
+    "level with the remote" and is nothing of the kind. `workspace.standing` says how long it
+    has been precisely because of that. `pull` cannot serve here: it refuses outright when the
+    tree is dirty, which is the state somebody mid-job is always in, so "has anything arrived"
+    would mean putting the work down first. It was its own tool, `check_remote`, and a fourth
+    direction on the tool that already owns talking to the remote is the same thing without a
+    second schema or a second decision.
+    """
     which = str(args.get("direction") or "both").strip().lower()
+    if which == "check":
+        return {"remote": sandbox.fetch()}
     said = {}
     if which in ("in", "both"):
         said["in"] = sandbox.pull()
     if which in ("out", "both"):
         said["out"] = sandbox.push()
     return said
-
-
-@tool(
-    "check_remote",
-    "Ask this project's remote what it has, without changing anything here. Safe to run "
-    "mid-job: it fetches, it does not merge, so nothing in your working tree moves and "
-    "uncommitted changes do not block it. Use it when what you are told about the folder — how "
-    "far behind it is, what is sitting in `.kith/` — matters and nobody has fetched recently. "
-    "`publish` with direction 'in' is what actually brings the commits down afterwards.",
-    {},
-    required=(),
-)
-def check_remote(path: Path, args: dict):
-    """Reading the remote is separate from taking it in, and that is the whole point.
-
-    What the system prompt tells him about a project's folder is read locally — the commit count
-    comes from refs the last fetch left on disk, so a repository nobody has fetched in a week
-    reports "level with the remote" and is nothing of the kind. `workspace.standing` says how
-    long it has been precisely because of that, and this is the operation that sentence is asking
-    for. `pull` cannot serve here: it refuses outright when the tree is dirty, which is the state
-    somebody mid-job is always in, so "has anything arrived" would mean putting the work down
-    first.
-    """
-    return {"remote": sandbox.fetch()}
 
 
 @tool(
@@ -501,27 +526,6 @@ def commit(path: Path, args: dict):
     if not summary:
         return {"committed": False, "note": "Nothing had changed, so there was nothing to record."}
     return {"committed": True, "changed": summary}
-
-
-@tool(
-    "history",
-    "The recent history of your folder — what changed, and when. Useful for picking up where "
-    "you left off, or checking whether you already did something.",
-    {"limit": {**INT, "description": "How many entries (default 20)."}},
-    required=(),
-)
-def history(path: Path, args: dict):
-    return sandbox.log(int(args.get("limit") or 20))
-
-
-@tool(
-    "list_files",
-    "List a directory on your computer (default: your whole folder).",
-    {"path": STR},
-    required=(),
-)
-def list_files(path: Path, args: dict):
-    return sandbox.list_files(args.get("path") or ".")
 
 
 @tool(
