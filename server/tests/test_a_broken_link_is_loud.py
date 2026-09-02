@@ -48,7 +48,7 @@ class TestAFolderThatIsNotThere:
         one gets buried."""
         message = project_memory.block(tmp_path / "gone", "My App")
         assert "Do not start" in message or "do not start" in message
-        assert "link_folder" in message
+        assert "update_project" in message
 
     def test_an_existing_folder_with_no_memory_still_invites_one(self, tmp_path):
         folder = tmp_path / "real"
@@ -81,7 +81,7 @@ class TestLinkingToSomethingThatDoesNotExist:
         project = repo.projects.add_project(db, "The App", "an app")
 
         with pytest.raises(ValueError) as caught:
-            registry.require("link_folder").run(db, {"id": int(project["id"]), "folder": "job/the-app"})
+            registry.require("update_project").run(db, {"id": int(project["id"]), "directory": "job/the-app"})
 
         assert "relative" in str(caught.value)
         assert not (workspace_root / "job" / "the-app").exists(), "it created the folder anyway"
@@ -94,7 +94,7 @@ class TestLinkingToSomethingThatDoesNotExist:
         project = repo.projects.add_project(db, "The App", "an app")
         wanted = tmp_path / "brand-new"
 
-        result = registry.require("link_folder").run(db, {"id": int(project["id"]), "folder": str(wanted)})
+        result = registry.require("update_project").run(db, {"id": int(project["id"]), "directory": str(wanted)})
 
         assert wanted.is_dir()
         assert result["directory"] == str(wanted)
@@ -107,7 +107,7 @@ class TestLinkingToSomethingThatDoesNotExist:
         (workspace_root / "already-here").mkdir()
         project = repo.projects.add_project(db, "The App", "an app")
 
-        result = registry.require("link_folder").run(db, {"id": int(project["id"]), "folder": "already-here"})
+        result = registry.require("update_project").run(db, {"id": int(project["id"]), "directory": "already-here"})
 
         assert result["directory"] == str(workspace_root / "already-here")
 
@@ -120,7 +120,7 @@ class TestLinkingToSomethingThatDoesNotExist:
         (codebase / "main.py").write_text("print('hi')\n")
         project = repo.projects.add_project(db, "The App", "an app")
 
-        result = registry.require("link_folder").run(db, {"id": int(project["id"]), "folder": str(codebase)})
+        result = registry.require("update_project").run(db, {"id": int(project["id"]), "directory": str(codebase)})
 
         assert result["directory"] == str(codebase)
         assert project_memory.path_for(codebase).is_file(), "it should seed the memory file"

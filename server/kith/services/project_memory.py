@@ -150,7 +150,7 @@ def block(project_dir: str | Path, name: str = "") -> str:
             "Anything you write with a relative path will land in your own folder instead, "
             "and whatever the project already knew about itself cannot be read. Do not start "
             "a new memory file — find where the work actually lives and re-link it with "
-            "`link_folder`, or tell your person the link is broken."
+            "`update_project` with the right `directory`, or tell your person the link is broken."
         )
 
     body = read(project_dir)

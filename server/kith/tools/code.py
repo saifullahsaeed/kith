@@ -22,26 +22,8 @@ from kith.tools.params import INT, LIST_STR, STR
 from kith.tools.registry import tool
 
 
-@tool(
-    "outline",
-    "The shape of source files — every class, function and method in them, with the line each "
-    "one starts on — without reading the files. Do this BEFORE read_file on anything you do "
-    "not already know: a 2,000-line module costs you the whole module for the rest of the "
-    "turn, and its outline costs about a paragraph. `paths` is a LIST, so getting your "
-    "bearings in a subsystem is one call for all of it rather than one per file. Read the "
-    "outlines, find the thing you want, then read_file that part with offset and limit. Works "
-    "on most languages and needs nothing installed. "
-    "Outlining a whole subsystem to get your bearings is an errand: delegate_subtask gets its "
-    "bearings and tells you the shape, and the outlines stay out of your window.",
-    {
-        "paths": {
-            **LIST_STR,
-            "description": "The source files to outline. Ask for the whole set you care about.",
-        }
-    },
-    required=("paths",),
-)
-def outline(path: Path, args: dict):
+def _outlines(args: dict):
+    """The shape of named files. Reached through `repo_map(paths=…)`, which owns the schema."""
     wanted = many(args, "paths", "path")
     if not wanted:
         return {"error": "Nothing to outline — `paths` is a list of source files."}
@@ -83,15 +65,27 @@ def _outline_one(wanted: str) -> dict:
 
 @tool(
     "repo_map",
-    "What a codebase contains — its files and the definitions in each — in one read. Use this "
-    "when you land in a project you do not know, instead of listing directories and guessing "
-    "at greps: it is the orientation you would want on your first day, and it costs about as "
-    "much as opening two files. Pass `focus` with a word from what you are looking for "
-    "('auth', 'invoice') to rank the relevant files first — on a big repository that matters "
-    "more than the budget does. It tells you how many files it left out; believe that number "
-    "rather than assuming what you got is everything.",
+    "The shape of code, without reading it. With no arguments: what a whole codebase contains, "
+    "its files and the definitions in each — the orientation you would want on your first day, "
+    "for about the cost of opening two files, so use it when you land in a project you do not "
+    "know instead of listing directories and guessing at greps. Pass `focus` with a word from "
+    "what you are after ('auth', 'invoice') to rank the relevant files first, and believe the "
+    "count of what it left out rather than assuming you got everything. "
+    "Pass `paths` instead for the shape of particular files — every class, function and method "
+    "with the line it starts on. Do that BEFORE read_file on anything you do not know: a "
+    "2,000-line module costs you the whole module for the rest of the turn, and its shape "
+    "costs a paragraph. Then read_file the part you want with offset and limit. "
+    "Needs nothing installed either way. "
+    "Mapping a codebase you do not know, or outlining a whole subsystem to get your bearings, "
+    "is an errand: delegate_subtask gets its bearings and tells you the shape, and none of it "
+    "lands in your window.",
     {
         "path": {**STR, "description": "The project folder (default: your whole folder)."},
+        "paths": {
+            **LIST_STR,
+            "description": "Particular source files to outline instead of mapping a folder. "
+            "A LIST — ask for the whole set you care about in one call.",
+        },
         "focus": {
             **STR,
             "description": "Optional word to rank files by — matched against the file path.",
@@ -112,8 +106,23 @@ def _outline_one(wanted: str) -> dict:
     required=(),
 )
 def repo_map(path: Path, args: dict):
+    """A folder's map and a file's outline are the same question at two scales.
+
+    They were two tools, `repo_map` and `outline`, and the model had to decide which scale it
+    wanted before it had seen anything — which is the decision it is least equipped to make on
+    arrival. Worse, the two answers were nearly the same shape, so a turn that picked wrong
+    spent a round finding out and a second one asking again.
+
+    The engines stay separate underneath: `repomap` ranks and budgets across a tree,
+    `outline` parses named files exactly. `paths` is the switch, and it is a switch rather
+    than a merge because "these four files" and "everything under here, ranked, to a token
+    budget" genuinely are different work.
+    """
     from kith.infra import permissions
     from kith.infra import workspace as sandbox
+
+    if args.get("paths"):
+        return _outlines(args)
 
     target = Path(sandbox.resolve(args.get("path") or "."))
     permissions.require_path("read", target, sandbox.root())

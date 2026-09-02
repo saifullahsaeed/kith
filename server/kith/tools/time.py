@@ -1,4 +1,17 @@
-"""His sense of when: reminders and standing schedules."""
+"""His sense of when: things set to come back to him, once or on a cadence.
+
+There were six tools here and there are three, because a one-off and a repeating job were
+never two capabilities — they are one capability with two ways of saying when. `set_reminder`
+and `schedule` took the same `note` and differed only in whether the time argument named an
+instant or an interval; `list_reminders` and `list_schedules` were the same query twice; and
+`cancel_reminder` and `cancel_schedule` were the same delete. Three schemas of the six existed
+to make the model classify its own intent before it could act on it, which is a choice it can
+get wrong and a round it can lose.
+
+The two tables stay separate — a fired reminder is finished and a fired schedule rolls forward,
+and that is a real difference in what they *are*. It is just not a difference the caller has to
+resolve before it can speak.
+"""
 
 from __future__ import annotations
 
@@ -12,87 +25,114 @@ from kith.tools.paging import PAGE_PARAMS
 from kith.tools.params import INT, STR
 from kith.tools.registry import tool
 
+#: What `kind` says, and what each one means when it fires. Named rather than inferred from
+#: which table a row came out of, because the row is what the model sees and "once" is the
+#: thing it needs to know before deciding whether cancelling matters.
+ONCE = "once"
+REPEATING = "repeating"
 
-def _list_reminders(path: Path) -> list[dict]:
+
+def _pending(path: Path) -> list[dict]:
     return [
-        {**r, "fires": clock.humanize_until(r["fire_at"])}
+        {**r, "kind": ONCE, "fires": clock.humanize_until(r["fire_at"])}
         for r in repo.reminders.list_reminders(path, status="pending")
     ]
 
 
-@tool(
-    "set_reminder",
-    "Leave a reminder for your future self, tied to a moment. Give either "
-    "'in_minutes' (from now) or 'at' (a time). When it comes due, it surfaces "
-    "to you on your own so you can act on it. Use it to pace yourself, follow "
-    "up on something later, or not lose a thread. "
-    "**Not for waiting on a background task.** A test run, a build, a CI check — those come back "
-    "to you by themselves when they end, so a reminder to go and look is a round spent on an "
-    "answer that was already coming. Reminders are for things nothing else will tell you about.",
-    {
-        "note": {**STR, "description": "What to remind yourself of."},
-        "in_minutes": {"type": "number", "description": "Fire this many minutes from now."},
-        "at": {**STR, "description": "Or an absolute time, ISO 8601 (your local zone if no offset)."},
-    },
-    required=("note",),
-)
-def set_reminder(path: Path, args: dict):
-    return reminder_service.set_reminder(path, args)
-
-
-@tool(
-    "list_reminders",
-    "See the reminders you've set that haven't fired yet.",
-    {**PAGE_PARAMS},
-    required=(),
-)
-def list_reminders(path: Path, args: dict):
-    return paging.page(_list_reminders(path), args)
-
-
-@tool(
-    "cancel_reminder",
-    "Cancel a reminder you no longer need, by its id.",
-    {"id": INT},
-    required=("id",),
-)
-def cancel_reminder(path: Path, args: dict):
-    return {"cancelled": repo.reminders.delete_reminder(path, args["id"])}
+def _standing(path: Path) -> list[dict]:
+    return [
+        {**s, "kind": REPEATING, "fires": clock.humanize_until(s["next_fire"])}
+        for s in repo.schedules.list_schedules(path)
+    ]
 
 
 @tool(
     "schedule",
-    "Set a STANDING job that repeats on a cadence (unlike a one-off reminder) — "
-    "e.g. a daily briefing, or a recurring check. Give either 'every_minutes' "
-    "(repeat that often) or 'daily_at' (a local 'HH:MM', once a day). When it "
-    "comes due it surfaces to you to carry out, then rolls to next time.",
+    "Set something to come back to you at a time. `in_minutes` or `at` for a one-off; "
+    "`every_minutes` or `daily_at` ('HH:MM' local) for a standing job that repeats. When it "
+    "comes due it surfaces to you so you can act on it, and a standing one then rolls to next "
+    "time. Use it to pace yourself, follow something up later, or not lose a thread. "
+    "**Not for waiting on a background task.** A test run, a build, a CI check come back to "
+    "you by themselves when they end, so a reminder to go and look is a round spent on an "
+    "answer that was already coming — this is for things nothing else will tell you about.",
     {
-        "note": {**STR, "description": "What to do each time it fires."},
-        "every_minutes": {**INT, "description": "Repeat every this many minutes."},
-        "daily_at": {**STR, "description": "Or once a day at this local time, 'HH:MM'."},
+        "note": {**STR, "description": "What to remind yourself of, or to do each time."},
+        "in_minutes": {"type": "number", "description": "Once, this many minutes from now."},
+        "at": {**STR, "description": "Once, at an absolute ISO 8601 time (local zone if no offset)."},
+        "every_minutes": {**INT, "description": "Repeating, every this many minutes."},
+        "daily_at": {**STR, "description": "Repeating, once a day at this local 'HH:MM'."},
     },
     required=("note",),
 )
 def schedule(path: Path, args: dict):
-    return reminder_service.schedule(path, args)
+    """The cadence arguments decide which it is, so the caller never has to name the kind.
+
+    Reading the arguments rather than a `kind` flag is what makes the merge free: there is no
+    third state to get wrong, and a call that gives both a cadence and an instant is answered
+    as a cadence rather than refused — `every_minutes` is the more specific request, and
+    refusing would cost a round to learn something we can simply decide.
+    """
+    if args.get("every_minutes") or args.get("daily_at"):
+        return {**reminder_service.schedule(path, args), "kind": REPEATING}
+    return {**reminder_service.set_reminder(path, args), "kind": ONCE}
 
 
 @tool(
     "list_schedules",
-    "See your standing jobs and when each fires next.",
+    "Everything you have set to come back to you — one-off reminders that haven't fired and "
+    "standing jobs, with when each one is next. Each row says its `kind`: 'once' or "
+    "'repeating'.",
     {**PAGE_PARAMS},
     required=(),
 )
 def list_schedules(path: Path, args: dict):
-    rows = [{**s, "fires": clock.humanize_until(s["next_fire"])} for s in repo.schedules.list_schedules(path)]
-    return paging.page(rows, args)
+    """One list, because "what have I got waiting" is one question.
+
+    Two lists meant it was asked twice or, more often, asked once and answered half — a turn
+    that checked `list_reminders`, found nothing, and concluded nothing was pending while a
+    daily job sat in the other table.
+    """
+    return paging.page(_pending(path) + _standing(path), args)
 
 
 @tool(
     "cancel_schedule",
-    "Remove a standing job by its id.",
-    {"id": INT},
+    "Cancel something you set, by its id — a one-off reminder or a standing job. Pass `kind` "
+    "('once' or 'repeating', as `list_schedules` reports it) if you have it.",
+    {
+        "id": INT,
+        "kind": {**STR, "enum": [ONCE, REPEATING], "description": "Which one, if you know."},
+    },
     required=("id",),
 )
 def cancel_schedule(path: Path, args: dict):
-    return {"cancelled": repo.schedules.delete_schedule(path, args["id"])}
+    """Ids are per-table, so the same number can name two different things.
+
+    Which is why this looks before it deletes rather than trying both: reminder 3 and schedule
+    3 can both exist, and a cancel that guessed would sometimes cancel the daily briefing
+    because the model meant a reminder it set an hour ago. When `kind` is given it is obeyed;
+    when it is not and the id is unambiguous the answer is obvious and taken; and when it is
+    ambiguous the only honest reply is to say so and ask for the kind, which costs a round
+    exactly in the case where a wrong guess would cost something that cannot be got back.
+    """
+    wanted = int(args["id"])
+    kind = str(args.get("kind") or "").strip().lower()
+
+    if kind == ONCE:
+        return {"cancelled": repo.reminders.delete_reminder(path, wanted), "kind": ONCE}
+    if kind == REPEATING:
+        return {"cancelled": repo.schedules.delete_schedule(path, wanted), "kind": REPEATING}
+
+    here = {row["id"] for row in _pending(path)}
+    there = {row["id"] for row in _standing(path)}
+    if wanted in here and wanted in there:
+        return {
+            "cancelled": False,
+            "error": (
+                f"id {wanted} is both a one-off reminder and a standing job. Pass `kind` — "
+                "'once' or 'repeating' — to say which."
+            ),
+        }
+    if wanted in there:
+        return {"cancelled": repo.schedules.delete_schedule(path, wanted), "kind": REPEATING}
+    return {"cancelled": repo.reminders.delete_reminder(path, wanted), "kind": ONCE}

@@ -277,7 +277,7 @@ class TestTheNoteEscalatesOnceItIsGenuinelySlow:
         second = testing.run(".", wait=0.3)
 
         assert second.get("status") == "running"
-        assert "set_reminder" in second["note"]
+        assert "schedule" in second["note"]
         assert "genuinely slow" in second["note"]
 
         testing.run(".", wait=5)

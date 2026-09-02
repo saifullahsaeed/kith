@@ -144,7 +144,7 @@ class TestOneCallOutlinesSeveralFiles:
     def test_the_combined_shape_is_the_single_shape(self, workspace: Path):
         """Same reasoning as `read_file`: the panel renders a listing of definitions off
         `outline`, and `path` is a label on it rather than a lookup key."""
-        out = code.outline(Path(), {"paths": ["one.py", "two.py"]})
+        out = code.repo_map(Path(), {"paths": ["one.py", "two.py"]})
 
         assert set(out) >= {"path", "language", "definitions", "outline"}
         assert out["path"] == "2 files"
@@ -152,7 +152,7 @@ class TestOneCallOutlinesSeveralFiles:
         assert "===== one.py =====" in out["outline"]
 
     def test_one_file_keeps_its_own_name(self, workspace: Path):
-        out = code.outline(Path(), {"paths": ["one.py"]})
+        out = code.repo_map(Path(), {"paths": ["one.py"]})
 
         assert out["path"] == "one.py"
 
@@ -160,7 +160,7 @@ class TestOneCallOutlinesSeveralFiles:
         """In a batch, "not a language I can parse" with no file attached is a sentence you
         cannot act on."""
         (workspace / "notes.zzz").write_text("hello")
-        out = code.outline(Path(), {"paths": ["one.py", "notes.zzz"]})
+        out = code.repo_map(Path(), {"paths": ["one.py", "notes.zzz"]})
 
         assert "notes.zzz" in out["outline"]
 

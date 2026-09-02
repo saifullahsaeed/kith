@@ -95,6 +95,13 @@ RETIRED: dict[str, Retired] = {
     "history": Retired("changes", rename={"limit": "commits"}, add={"commits": 20}),
     "check_remote": Retired("publish", add={"direction": "check"}),
     "fetch_url": Retired("browse_page"),
+    "set_reminder": Retired("schedule"),
+    "cancel_reminder": Retired("cancel_schedule", add={"kind": "once"}),
+    "list_reminders": Retired("list_schedules"),
+    "outline": Retired("repo_map"),
+    "link_folder": Retired("update_project", rename={"folder": "directory"}),
+    "order_milestones": Retired("update_milestone"),
+    "unlink_milestones": Retired("update_milestone", rename={"milestone_id": "id"}),
 }
 
 

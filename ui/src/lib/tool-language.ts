@@ -121,9 +121,9 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   set_reminder: { verb: "set a reminder", of: "note", group: "time" },
   list_reminders: { verb: "checked his reminders", group: "time" },
   cancel_reminder: { verb: "cleared a reminder", group: "time" },
-  schedule: { verb: "set a standing job", of: "note", group: "time" },
-  list_schedules: { verb: "checked his schedules", group: "time" },
-  cancel_schedule: { verb: "cleared a schedule", group: "time" },
+  schedule: { verb: "set something to come back to him", of: "note", group: "time" },
+  list_schedules: { verb: "checked what he had waiting", group: "time" },
+  cancel_schedule: { verb: "cleared something he had set", group: "time" },
   // reaching out
   reach_out: { verb: "reached out to you", group: "outreach" },
   // Present tense, alone in this table, and deliberately: every other phrase describes

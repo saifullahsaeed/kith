@@ -81,7 +81,7 @@ class TestAdoptingAProject:
     def test_linking_a_folder_claims_the_project(self, db, session_id, tmp_path):
         project = repo.projects.add_project(db, "Existing codebase", "")
         with session_context.working_in(session_id):
-            project_tools.link_folder(db, {"id": project["id"], "folder": str(tmp_path / "repo")})
+            project_tools.update_project(db, {"id": project["id"], "directory": str(tmp_path / "repo")})
         assert repo.conversations.project_of(db, session_id) == project["id"]
 
     def test_finishing_a_project_does_not_claim_it(self, db, session_id):

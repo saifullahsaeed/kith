@@ -296,10 +296,12 @@ class TestTheTools:
         return tmp_path
 
     def test_outline_runs_through_the_registry(self, workspace_root, tmp_path):
+        """`repo_map(paths=…)` is where an outline lives now — `outline` was the same question
+        at a smaller scale and cost a schema and a choice to say so."""
         from kith.tools import registry
 
         (workspace_root / "m.py").write_text(PY_SOURCE)
-        result = registry.require("outline").run(tmp_path / "agent.db", {"path": "m.py"})
+        result = registry.require("repo_map").run(tmp_path / "agent.db", {"paths": ["m.py"]})
 
         assert result["definitions"] == 5
         assert "class Thing" in result["outline"]
@@ -318,7 +320,7 @@ class TestTheTools:
         from kith.tools import registry
 
         (workspace_root / "notes.xyz").write_text("hello")
-        result = registry.require("outline").run(tmp_path / "agent.db", {"path": "notes.xyz"})
+        result = registry.require("repo_map").run(tmp_path / "agent.db", {"paths": ["notes.xyz"]})
 
         assert "error" in result
 

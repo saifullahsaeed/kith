@@ -116,7 +116,7 @@ class TestTheBlockThatReachesThePrompt:
         block = pm.block(project, "Gym Tracker")
 
         assert "not there" in block
-        assert "link_folder" in block
+        assert "update_project" in block
 
     def test_a_missing_folder_does_not_raise(self, tmp_path):
         # He may be pointed at a directory that has been moved or deleted. A prompt builder

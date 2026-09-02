@@ -321,7 +321,7 @@ def run(path: str = ".", filter_: str = "", wait: float | None = None) -> dict[s
                 "Still running, and this is not the first check — it is genuinely slow, not "
                 "just slower than instant. Sitting in this turn polling it further is the "
                 "wrong move now: tell them it's running, set a reminder for a few minutes out "
-                "to check back (`set_reminder`), and end this turn. Calling run_tests again "
+                "to check back (`schedule`), and end this turn. Calling run_tests again "
                 "later — this turn or a fresh one, it makes no difference — re-attaches to the "
                 "same run and gets the real result whenever it finishes."
             )

@@ -61,7 +61,6 @@ GIVEN = frozenset(
         # Finding code without reading it.
         "grep",
         "glob",
-        "outline",
         "repo_map",
         "find_symbol",
         "definition",
@@ -115,7 +114,6 @@ WITHHELD = frozenset(
         "forget",
         "journal",
         "set_memory_level",
-        "link_folder",
         # The board, written. A sub-agent that files tasks is a sub-agent making plans, and
         # the plan is the one thing that must stay in the conversation a person can see.
         "add_task",
@@ -124,8 +122,6 @@ WITHHELD = frozenset(
         "add_deliverable",
         "check_item",
         "create_project",
-        "order_milestones",
-        "unlink_milestones",
         "update_milestone",
         "update_project",
         "update_task",
@@ -134,9 +130,6 @@ WITHHELD = frozenset(
         "schedule",
         "cancel_schedule",
         "list_schedules",
-        "set_reminder",
-        "cancel_reminder",
-        "list_reminders",
         # Runs things. Withheld for two reasons at once: they have side effects, and side
         # effects are exactly what would stop several of these sharing a round. `run_tests`
         # is the one that will keep being asked for — see the module docstring.

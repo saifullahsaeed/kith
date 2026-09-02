@@ -14,7 +14,7 @@ the tool was arguing against a world that no longer existed. What survives is co
 files read here sit in the window for the rest of the turn and are re-sent every round; twelve
 files an errand reads cost its summary. That is the argument now, and it is the stronger one.
 
-**An order beats an offer.** `outline` says "Do this BEFORE read_file on anything you do not
+**An order beats an offer.** `repo_map` says "Do this BEFORE read_file on anything you do not
 already know" — an imperative firing at exactly the moment an errand would apply — while
 `delegate_subtask` said "use it whenever". So the pointer moved to where the choice is actually
 made, which is the pattern this codebase already uses for `grep` → `find_symbol`: the schemas
@@ -40,7 +40,7 @@ def described(name: str) -> str:
 
 
 class TestTheLookingToolsPointAtTheErrand:
-    @pytest.mark.parametrize("name", ["read_file", "grep", "outline"])
+    @pytest.mark.parametrize("name", ["read_file", "grep", "repo_map"])
     def test_each_one_names_it(self, name: str):
         """At the point of use, in the block that is re-sent every round — not in the persona,
         which sits at the top of a cached prefix and is 300k tokens behind the decision by the
@@ -51,9 +51,9 @@ class TestTheLookingToolsPointAtTheErrand:
             "zero spontaneous delegations in 4,667 looking calls."
         )
 
-    @pytest.mark.parametrize("name", ["read_file", "grep", "outline"])
+    @pytest.mark.parametrize("name", ["read_file", "grep", "repo_map"])
     def test_each_one_says_when(self, name: str):
-        """A pointer with no trigger is an offer, and offers lose to `outline`'s imperative.
+        """A pointer with no trigger is an offer, and offers lose to `repo_map`'s imperative.
         Each names the situation: files you have not read, a codebase you do not know, a
         subsystem you are getting your bearings in."""
         text = described(name).lower()
@@ -62,7 +62,7 @@ class TestTheLookingToolsPointAtTheErrand:
 
 class TestThePitchArguesContextRatherThanRounds:
     def test_it_does_not_sell_rounds_any_more(self):
-        """`read_file`/`outline` take a list of paths and `grep` a list of patterns, so "a dozen
+        """`read_file`/`repo_map` take a list of paths and `grep` a list of patterns, so "a dozen
         reads costs a dozen rounds" is simply false now. An argument the model can check and
         find false is worse than no argument."""
         text = described("delegate_subtask")
@@ -75,7 +75,7 @@ class TestThePitchArguesContextRatherThanRounds:
         assert "window" in text and "re-sent" in text
 
     def test_it_states_a_trigger_a_model_can_evaluate(self):
-        """Compare `outline`'s "a 2,000-line module costs you the whole module" — concrete, and
+        """Compare `repo_map`'s "a 2,000-line module costs you the whole module" — concrete, and
         obeyed. "Whenever it would cost you a lot of looking" is a judgement with no
         measurement behind it, and it was not obeyed once."""
         text = described("delegate_subtask")

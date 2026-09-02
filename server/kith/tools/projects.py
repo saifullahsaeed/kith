@@ -151,20 +151,43 @@ def list_projects(path: Path, args: dict):
     "Update a project — change its name/description, 'paused' to set it aside, "
     "'archived' to file it away. Marking one 'done' is not yours to do, even once "
     "every task under it is finished — that is a judgement about the whole project, "
-    "and it stays your person's call. Tell them it looks finished and let them close it.",
+    "and it stays your person's call. Tell them it looks finished and let them close it. "
+    "`directory` points the project at a folder on your person's machine — an existing "
+    "codebase they want you working in, or one you are about to fill. While the project is "
+    "active that folder is yours to work in freely, the same as your own, and its "
+    "`.kith/memory.md` is read to you every time. Use the exact path they gave you; pass an "
+    "empty string to unlink.",
     {
         "id": INT,
         "status": {**STR, "enum": [s for s in PROJECT_STATUSES if s != "done"]},
         "name": STR,
         "description": STR,
+        "directory": {
+            **STR,
+            "description": "The folder this project's work lives in — absolute, or relative "
+            "to your own folder. An empty string unlinks it.",
+        },
     },
     required=("id",),
 )
 def update_project(path: Path, args: dict):
+    """A project's folder is a field on the project, so setting it is an update.
 
+    It was `link_folder`, a whole schema for one column, and `create_project` had taken a
+    `directory` from the beginning — so the same fact was a parameter on the way in and a tool
+    of its own thereafter. The grant that comes with it is unchanged; see `_link_folder`, which
+    is where all of that still lives.
+
+    `directory` is handled before anything else and returns, because it is not an ordinary
+    column write: it creates folders, seeds `.kith/`, invalidates the permission cache and
+    claims the conversation. Falling through to `repo.projects.update_project` afterwards would
+    write the row a second time with the same values.
+    """
     foreign = _out_of_scope(path, args.get("id"))
     if foreign is not None:
         return foreign
+    if "directory" in args:
+        return _link_folder(path, args)
     status = args.get("status")
     if status == "done":
         # The schema already leaves "done" off the enum; this is the backstop for a
@@ -265,22 +288,7 @@ def add_milestone(path: Path, args: dict):
     return out
 
 
-@tool(
-    "order_milestones",
-    "Put a project's milestones in order, so each waits for the one before it. Pass the ids "
-    "in the order they should happen. This is what makes a roadmap real: you will only be "
-    "offered work from milestones whose predecessors are finished, so you build in the order "
-    "you laid out instead of picking whatever looks urgent.",
-    {
-        "ids": {
-            "type": "array",
-            "items": INT,
-            "description": "Milestone ids, earliest first.",
-        }
-    },
-    required=("ids",),
-)
-def order_milestones(path: Path, args: dict):
+def _order_milestones(path: Path, args: dict):
     """One call for the common case, which is a straight line.
 
     Chaining a five-step roadmap by hand is four separate calls and four chances to get a
@@ -303,14 +311,8 @@ def order_milestones(path: Path, args: dict):
     }
 
 
-@tool(
-    "unlink_milestones",
-    "Stop one milestone waiting for another, when the order you set turns out to be wrong.",
-    {"milestone_id": INT, "no_longer_waits_for": INT},
-    required=("milestone_id", "no_longer_waits_for"),
-)
-def unlink_milestones(path: Path, args: dict):
-    repo.projects.remove_dependency(path, args["milestone_id"], args["no_longer_waits_for"])
+def _unlink_milestones(path: Path, args: dict):
+    repo.projects.remove_dependency(path, args["id"], args["no_longer_waits_for"])
     return {"ok": True}
 
 
@@ -323,16 +325,50 @@ def _project_of(path: Path, milestone_id: int) -> int:
 
 @tool(
     "update_milestone",
-    "Update a milestone — mark it 'done' when reached, or change its title/target.",
+    "Change a milestone, or change the order of them. Mark one 'done' when reached, or edit "
+    "its title/target. Pass `ids` — every milestone id, earliest first — to lay out the order "
+    "they happen in, which is what makes a roadmap real: you are only offered work from "
+    "milestones whose predecessors are finished, so you build in the order you laid out "
+    "instead of picking whatever looks urgent. Pass `no_longer_waits_for` to undo one of "
+    "those links when the order turns out to be wrong.",
     {
         "id": INT,
         "status": {**STR, "enum": list(MILESTONE_STATUSES)},
         "title": STR,
         "target_at": STR,
+        "ids": {
+            "type": "array",
+            "items": INT,
+            "description": "Every milestone id in the order they should happen, earliest "
+            "first — chains each to wait for the one before it.",
+        },
+        "no_longer_waits_for": {
+            **INT,
+            "description": "With `id`: stop that milestone waiting for this one.",
+        },
     },
-    required=("id",),
+    required=(),
 )
 def update_milestone(path: Path, args: dict):
+    """Editing a milestone and ordering the roadmap are the same object under one name.
+
+    They were three tools — `update_milestone`, `order_milestones`, `unlink_milestones` — and
+    the last two were a schema each for one edge of a graph. What decides which of the three
+    things this does is which argument arrived, and that was already true: `add_milestone` has
+    taken an `after` since it was written, so "the order is a field on a milestone" is the
+    shape this codebase already had.
+
+    Ordering keeps `order_milestones`' exact behaviour, scope check included — which is to say
+    without one. A chain is checked per edge by `add_dependency` and reported as a warning
+    rather than refused, and adding a project-scope gate here would be a new restriction
+    smuggled in under a merge.
+    """
+    if args.get("ids"):
+        return _order_milestones(path, args)
+    if not args.get("id"):
+        return {"error": "pass `id` for one milestone, or `ids` to order a roadmap"}
+    if args.get("no_longer_waits_for"):
+        return _unlink_milestones(path, args)
     # The milestone's project, not an argument — a milestone id alone says nothing about scope.
     milestone = repo.projects.get_milestone(path, int(args["id"])) or {}
     foreign = _out_of_scope(path, milestone.get("project_id"))
@@ -343,23 +379,7 @@ def update_milestone(path: Path, args: dict):
     )
 
 
-@tool(
-    "link_folder",
-    "Point a project at a folder on your person's machine — an existing codebase they want "
-    "you working in, or a folder you are about to fill. While the project is active that "
-    "folder is yours to work in freely, the same as your own, and its `.kith/memory.md` is "
-    "read to you every time. Use the exact path they gave you. Pass no folder to unlink.",
-    {
-        "id": INT,
-        "folder": {
-            **STR,
-            "description": "Absolute path, or relative to your own folder. Leave it out to "
-            "unlink the project from its folder.",
-        },
-    },
-    required=("id",),
-)
-def link_folder(path: Path, args: dict):
+def _link_folder(path: Path, args: dict):
     """Attach a folder to a project, and treat it as his for as long as that project runs.
 
     The link is the grant. Working in a folder outside his own otherwise prompts on every
@@ -374,7 +394,7 @@ def link_folder(path: Path, args: dict):
     from kith.infra import permissions, project_files
     from kith.services import project_memory
 
-    folder = str(args.get("folder") or "").strip()
+    folder = str(args.get("directory") or "").strip()
     if not folder:
         updated = repo.projects.set_directory(path, args["id"], None)
         permissions.forget_linked_projects()
