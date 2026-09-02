@@ -86,6 +86,27 @@ class TestWhatFinishingReports:
         _finished("bad", command="exit 3")
         assert "3" in process_service.finished_since_last_look()["c-1"][0]
 
+    def test_a_short_output_comes_back_whole_and_says_nothing_about_a_log(self):
+        # Under the preview cap there is nothing left behind, so the "the rest is at …" line would
+        # be a pointer to nothing new. It is only earned when output was actually cut.
+        _finished("greet", command="echo hello from the task")
+        note = process_service.finished_since_last_look()["c-1"][0]
+        assert "hello from the task" in note
+        assert "whole output is at" not in note
+
+    def test_a_long_output_is_not_dropped_from_the_front_silently(self):
+        # The bug this fixes: a `claude -p` review's summary and first findings sit at the top, and
+        # a tail-only slice cut exactly those off with no way back. Now the front being cut is said
+        # out loud and the whole log is named.
+        _finished(
+            "review",
+            command='for i in $(seq 1 4000); do echo "finding line $i of the review"; done',
+        )
+        note = process_service.finished_since_last_look()["c-1"][0]
+        assert "whole output is at" in note, "truncation must be stated, not silent"
+        assert ".log" in note, "and the log path given so the rest is one read away"
+        assert "characters of" in note, "how much is shown of how much there is"
+
     def test_it_only_reports_once(self):
         """The watcher runs every thirty seconds. A process that finished stays finished, and
         reporting it on every pass would wake the conversation for ever."""

@@ -40,6 +40,13 @@ MAX_RUNNING = 6
 #: wanted is the last thing it said, not all of it.
 MAX_CHUNK = 4_000
 
+#: How much of a finished task's output rides in the note that reports it done. Larger than it
+#: was — a `claude -p` review or a generated document is the *point* of the task, and 2,000
+#: characters cut its front off — but still bounded, because a test suite can print megabytes and
+#: the note lands in the prompt. When the output is longer than this the note says so and gives
+#: the log path, so the whole thing is one read away rather than silently gone.
+FINISHED_PREVIEW_CHARS = 6_000
+
 #: How long to wait for a process to die politely before killing it.
 STOP_GRACE = 3.0
 
@@ -507,6 +514,42 @@ def _current_conversation() -> str:
         return ""
 
 
+def _finished_output(background) -> str:
+    """The output a finished task reports back, and — when there is more — where the rest is.
+
+    A finished task is reported once, so what it hands back is all its person will hear unless
+    they go and ask. For a *server* the tail is right: the crash is at the end. For a task that
+    *produces* something — a `claude -p` review, a generated file — the output is the deliverable,
+    and cutting its front off (the summary, the verdict, findings one through three) is cutting the
+    part that was the point. Measured on a real review: a `[-2000:]` slice began mid-way through
+    finding four, and the whole ranked list above it was gone.
+
+    So the preview is larger, and the front-is-lost case is no longer silent: when the log runs
+    past the preview the note says how much is shown of how much there is, and names the log so the
+    whole thing is one `read_file`/`cat` away. Nothing produced in the background is dropped without
+    a way back to it.
+    """
+    try:
+        total = background.log.stat().st_size
+    except OSError:
+        total = 0
+    # `start` is where the preview begins in the log, so `start > 0` is the exact "the front was
+    # cut" signal — and the only honest one. Comparing the log's byte size against the stripped
+    # text was not: `strip()` removes the trailing newline, so a 20-byte `echo` came back 19 and
+    # "there is more" fired on the whitespace, promising a fuller log than existed.
+    tail, start = background.tail(limit=FINISHED_PREVIEW_CHARS)
+    body = tail.strip()
+    if not body:
+        return ""
+    note = f" Its last output:\n\n```\n{body}\n```"
+    if start > 0:
+        note += (
+            f"\n\nThat is the last {len(tail):,} characters of {total:,}. The whole output is at "
+            f"`{background.log}` — read it if you need the part above this."
+        )
+    return note
+
+
 def finished_since_last_look() -> dict[str, list[str]]:
     """Every background process that has finished, grouped by the chat that started it.
 
@@ -540,11 +583,9 @@ def finished_since_last_look() -> dict[str, list[str]]:
         if not background.conversation_id:
             continue  # nowhere to report to
         code = background.exit_code
-        tail, _ = background.tail()
         how = "finished" if code == 0 else f"failed with exit code {code}"
         note = f"The background task `{background.name}` ({background.command}) {how}."
-        if tail.strip():
-            note += f" Its last output:\n\n```\n{tail.strip()[-2000:]}\n```"
+        note += _finished_output(background)
         by_chat.setdefault(background.conversation_id, []).append(note)
 
     if by_chat:
