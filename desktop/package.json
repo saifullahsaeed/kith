@@ -1,7 +1,7 @@
 {
   "name": "kith-desktop",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Desktop shell for Kith — owns the window, the tray, and the app lifecycle.",
   "//": "Deliberately NOT \"type\": \"module\". Electron's main process and any sandboxed preload must be CommonJS; declaring ESM here silently breaks a sandboxed preload if one is ever added.",
   "main": "out/main.js",
