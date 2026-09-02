@@ -67,8 +67,9 @@ APP_URL = "https://github.com/saifullahsaeed/kith"
 APP_NAME = "Kith"
 
 #: Which marketplace categories this app belongs to, from OpenRouter's own fixed vocabulary —
-#: fifteen slugs across coding, creative, productivity and entertainment. Kith is a peer with a
-#: memory that also writes and runs code, so: `personal-agent` first, `programming-app` second.
+#: fifteen slugs across coding, creative, productivity and entertainment. Kith is a general
+#: personal agent with a memory that also writes and runs code, so: `personal-agent` first,
+#: `programming-app` second.
 #:
 #: An unrecognised slug is dropped silently rather than refused, so a typo here would never
 #: show up as an error — only as an app that quietly belongs to nothing.
