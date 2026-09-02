@@ -60,6 +60,7 @@ def _with_tokens(source: str) -> str:
             return source[:cut] + style + source[cut:]
     return style + source
 
+
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover - the message is the whole point
@@ -76,8 +77,12 @@ def check(path: Path) -> int:
 
         # Offline, because the canvas will be. A page that only works with the network is a page
         # that will be blank in the reply, and finding that out here costs nothing.
-        page.context.route("**/*", lambda route: route.abort()
-                           if route.request.url.startswith(("http://", "https://")) else route.continue_())
+        page.context.route(
+            "**/*",
+            lambda route: (
+                route.abort() if route.request.url.startswith(("http://", "https://")) else route.continue_()
+            ),
+        )
         staged = Path(tempfile.mkdtemp()) / path.name
         staged.write_text(_with_tokens(path.read_text(encoding="utf-8", errors="replace")))
         page.goto(staged.resolve().as_uri())

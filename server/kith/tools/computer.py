@@ -393,15 +393,48 @@ def delete_file(path: Path, args: dict):
 
 @tool(
     "check_code",
-    "Run whatever this project is checked with — TypeScript, ruff, or its build — and get back "
-    "only what is wrong. Do this before you say something is done. It works out what to run "
-    "from what is in the folder, so you do not have to know. If you changed something "
-    'visual, look at a screenshot of it too — you can see images, and "the build passed" is not the same as "it looks right".',
-    {"path": {**STR, "description": "The project folder (default: your whole folder)."}},
+    "What is wrong with the code, right now. Give a FILE and you get the language server's "
+    "answer in milliseconds — type errors, undefined names, unused imports — which is what to "
+    "do straight after editing something, while you still remember making the mistake. Give a "
+    "folder (or nothing) and it runs whatever the project is actually checked with: "
+    "TypeScript, ruff, its build. It works out what to run from what is in the folder, so you "
+    "do not have to know. The project check is the one to run before you say a job is done. "
+    'If you changed something visual, look at a screenshot too — "the build passed" is not the '
+    'same as "it looks right".',
+    {
+        "path": {
+            **STR,
+            "description": "A file for the immediate per-file check, or a project folder for "
+            "the full one (default: your whole folder).",
+        }
+    },
     required=(),
 )
 def check_code(path: Path, args: dict):
-    return sandbox.check_code(args.get("path") or ".")
+    """Per-file and whole-project are the same question over two scopes.
+
+    They were `diagnostics` and `check_code`, and the split cost more than a schema. It cost
+    the fast one its availability: `diagnostics` was hidden entirely when no language server
+    could serve the folder, so on those projects the only way to ask "did I just break this"
+    was the full build. And it left the choice of scope to be made *before* the answer, when
+    the thing that decides it is simply whether you are mid-edit or finishing.
+
+    Whether `path` is a file decides which, and a file with no server behind it falls through
+    to the project checker rather than reporting nothing — the point is that the question is
+    always answerable, not that it is always answered the same way.
+    """
+    from kith.tools import semantics
+
+    wanted = args.get("path") or "."
+    target = Path(sandbox.resolve(wanted))
+    if target.is_file() and semantics.available(target.parent):
+        from kith.infra import permissions
+
+        permissions.require_path("read", target, sandbox.root())
+        found = semantics.diagnostics(target)
+        if isinstance(found, dict) and not found.get("unavailable"):
+            return {"path": str(wanted), "engine": "language server", **found}
+    return sandbox.check_code(str(wanted))
 
 
 @tool(
@@ -473,8 +506,7 @@ def changes(path: Path, args: dict):
         "direction": {
             **STR,
             "enum": ["out", "in", "both", "check"],
-            "description": "'out' pushes, 'in' pulls, 'both' pulls then pushes, "
-            "'check' only fetches.",
+            "description": "'out' pushes, 'in' pulls, 'both' pulls then pushes, 'check' only fetches.",
         }
     },
     required=(),

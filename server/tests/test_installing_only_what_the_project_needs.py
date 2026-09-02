@@ -134,13 +134,13 @@ class TestTheToolIsOfferedOnlyWhenItCouldHelp:
 
         names = {one["function"]["name"] for one in tool_schemas(language_server=True)}
         assert "install_language_support" not in names
-        assert "references" in names
+        assert "rename_symbol" in names
 
     def test_nobody_having_an_opinion_hides_neither(self):
         from kith.tools import tool_schemas
 
         names = {one["function"]["name"] for one in tool_schemas(language_server=None)}
-        assert {"install_language_support", "references"} <= names
+        assert {"install_language_support", "rename_symbol"} <= names
 
 
 class TestThroughTheTool:

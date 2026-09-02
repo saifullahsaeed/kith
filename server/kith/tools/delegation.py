@@ -63,11 +63,8 @@ GIVEN = frozenset(
         "glob",
         "repo_map",
         "find_symbol",
-        "definition",
-        "references",
         # Reading it.
         "read_file",
-        "diagnostics",
         "check_code",
         # What the repository has been doing — uncommitted, and the recorded history with
         # `commits`.

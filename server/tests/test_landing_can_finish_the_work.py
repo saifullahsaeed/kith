@@ -79,9 +79,7 @@ class TestItCanChangeAFileSafely:
     def test_it_is_not_left_with_only_the_lossy_one(self, offered_while_landing):
         """`write_file` alone is the trap: he regenerates from what he remembers reading, so
         anything he did not re-emit is gone."""
-        assert not (
-            "write_file" in offered_while_landing and "edit_files" not in offered_while_landing
-        )
+        assert not ("write_file" in offered_while_landing and "edit_files" not in offered_while_landing)
 
     def test_write_file_stays_for_genuinely_new_files(self, offered_while_landing):
         """A handoff note is a new file, and that is what it is for."""

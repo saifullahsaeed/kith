@@ -102,6 +102,9 @@ RETIRED: dict[str, Retired] = {
     "link_folder": Retired("update_project", rename={"folder": "directory"}),
     "order_milestones": Retired("update_milestone"),
     "unlink_milestones": Retired("update_milestone", rename={"milestone_id": "id"}),
+    "diagnostics": Retired("check_code"),
+    "definition": Retired("find_symbol", rename={"symbol": "name"}),
+    "references": Retired("find_symbol", rename={"symbol": "name"}),
 }
 
 
@@ -122,7 +125,8 @@ def translate(gone: Retired, arguments: dict) -> dict:
     `add` is applied first so an explicit argument always wins: `history(limit=5)` must fetch
     five, not the twenty that stands in when nothing was said.
     """
-    out = dict(gone.add)
-    for key, value in (arguments or {}).items():
+    out: dict = dict(gone.add)
+    for raw, value in (arguments or {}).items():
+        key = str(raw)
         out[gone.rename.get(key, key)] = value
     return out

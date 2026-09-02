@@ -20,7 +20,13 @@ from kith.tools.registry import tool
 #: entirely when no language server can serve the folder being worked in — a schema costs
 #: tokens on every round, and advertising a capability that will always answer "not
 #: installed" is exactly the waste the toolset lists exist to prevent.
-NEEDS_A_LANGUAGE_SERVER = frozenset({"diagnostics", "references", "definition", "rename_symbol"})
+#: `rename_symbol` alone now. `diagnostics`, `references` and `definition` were all merged
+#: into tools that work without a server and reach for one when it is there — `check_code` and
+#: `find_symbol` — so hiding them is no longer the question; those two are always offered and
+#: say which engine answered. A rename is different: there is no honest parser-only version of
+#: "change this everywhere it is used and nowhere it merely appears", so the tool that promises
+#: it must disappear when nothing can keep the promise.
+NEEDS_A_LANGUAGE_SERVER = frozenset({"rename_symbol"})
 
 #: The mirror image, and it has to be one or the pair is incoherent. `install_language_support`
 #: is worth its schema exactly when the four above are hidden — offering "install a language
@@ -59,46 +65,44 @@ def _guarded(call, *args, **kwargs):
         return {"error": str(exc)}
 
 
-@tool(
-    "diagnostics",
-    "What is wrong with one file, right now — type errors, undefined names, unused imports — "
-    "answered by the language server in milliseconds. Use this after editing a file, rather "
-    "than waiting to run check_code over the whole project at the end: it is per-file and "
-    "immediate, so a mistake is caught while you still remember making it. check_code is "
-    "still the thing to run before you call a job done.",
-    {"path": {**STR, "description": "The file to check."}},
-    required=("path",),
-)
-def diagnostics(path: Path, args: dict):
-    target = _resolved(args["path"])
+def diagnostics(target: Path):
+    """What the language server says is wrong with one file. Reached through `check_code`."""
     return _guarded(service.diagnostics, target)
 
 
-@tool(
-    "references",
-    "Every place a name is actually used — exactly, from the language server, not from a text "
-    "search. Use it before you change or delete anything shared: grep matches the word in "
-    "comments and strings and misses re-exports and aliased imports, so 'no matches' from "
-    "grep is not evidence that nothing calls it. Give the file the name appears in and the "
-    "name; add `near_line` if it appears several times in that file.",
-    {"path": STR, "symbol": _SYMBOL, "near_line": _NEAR},
-    required=("path", "symbol"),
-)
-def references(path: Path, args: dict):
-    target = _resolved(args["path"])
-    return _guarded(service.references, target, str(args["symbol"]), int(args.get("near_line") or 0))
+def definition_and_references(target: Path, symbol: str, near_line: int = 0) -> dict:
+    """Where a name is defined and everywhere it is used, from the language server.
 
+    Both, in one answer, because that is the shape `find_symbol` already had and the shape
+    that made it the tool worth reaching for. Asking them separately was two schemas and a
+    choice — and the choice was usually wrong in the same direction: `definition` alone, then
+    a second round for the callers, on the way to a change that needed both.
 
-@tool(
-    "definition",
-    "Where a name comes from — the file and line it is defined on. Needs a language server; if none is installed use `find_symbol`, which works anywhere. Faster and surer than "
-    "guessing at a filename and grepping for it, and it follows imports across the project.",
-    {"path": STR, "symbol": _SYMBOL, "near_line": _NEAR},
-    required=("path", "symbol"),
-)
-def definition(path: Path, args: dict):
-    target = _resolved(args["path"])
-    return _guarded(service.definition, target, str(args["symbol"]), int(args.get("near_line") or 0))
+    `_guarded` is applied per call rather than around the pair, so a server that answers one
+    and fails the other reports the half it has instead of nothing.
+
+    **Flattened to the same keys the parser path uses**, deliberately. Nesting the two results
+    would mean `definitions` holding a list from one engine and a dict from the other under
+    one tool name, which is the kind of shape that reads fine to whoever wrote it and is
+    unusable to anything consuming the tool.
+    """
+    where = _guarded(service.definition, target, symbol, near_line)
+    uses = _guarded(service.references, target, symbol, near_line)
+    out: dict = {"definitions": [], "references": []}
+    for half in (where, uses):
+        if not isinstance(half, dict):
+            continue
+        # `unavailable` is the useful one to surface: it names what to try instead — grep,
+        # or installing a server — where `error` only says the server broke.
+        if half.get("unavailable"):
+            out["unavailable"] = half["unavailable"]
+        elif half.get("error"):
+            out.setdefault("error", half["error"])
+    if isinstance(where, dict):
+        out["definitions"] = where.get("definitions") or []
+    if isinstance(uses, dict):
+        out["references"] = uses.get("references") or []
+    return out
 
 
 @tool(

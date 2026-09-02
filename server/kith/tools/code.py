@@ -154,35 +154,74 @@ def repo_map(path: Path, args: dict):
 
 @tool(
     "find_symbol",
-    "Where a name is defined and where it is called, across a project — by what the code "
-    "means, not by matching characters. Use this instead of grep for any function, class or "
-    "method name: grep also returns the word in comments, in strings, inside longer names, and "
-    "in every unrelated local variable that happens to share it. This returns definitions and "
-    "call sites, separately, and tells you how many files it read. Needs nothing installed and "
-    "works in 19 languages — where a language server is running, `definition` and `references` "
-    "are surer still.",
+    "Where a name is defined and where it is used — by what the code means, not by matching "
+    "characters. Use this instead of grep for any function, class or method name: grep also "
+    "returns the word in comments, in strings, inside longer names, and in every unrelated "
+    "local variable that happens to share it, so 'no matches' from grep is not evidence that "
+    "nothing calls something. Use it before you change or delete anything shared. "
+    "Give `path` as the FILE the name appears in when you know it — that gets the language "
+    "server's answer, which follows imports, re-exports and aliases exactly — or as a folder "
+    "to search when you do not. Either way it says which engine answered; the parser works "
+    "in 19 languages and needs nothing installed.",
     {
         "name": {**STR, "description": "The exact function, class or method name."},
-        "path": {**STR, "description": "The folder to search (default: your whole folder)."},
+        "path": {
+            **STR,
+            "description": "The file the name appears in, or a folder to search "
+            "(default: your whole folder).",
+        },
+        "near_line": {
+            **INT,
+            "description": "With a file: the line to disambiguate by, if the name appears "
+            "more than once in it (optional).",
+        },
     },
     required=("name",),
 )
 def find_symbol(path: Path, args: dict):
+    """One question, two engines, and the caller does not have to know which it is getting.
+
+    `definition` and `references` were separate tools that answered this exactly, from a
+    language server, and were hidden entirely when none was installed. So the model saw either
+    three tools for two questions or one tool that quietly gave the weaker answer, and choosing
+    between them meant knowing whether a server was running for this project's language —
+    which is not something it can see.
+
+    Now the file/folder shape of `path` says what is possible and the answer says what
+    happened. A file with a server behind it gets the exact answer; anything else gets the
+    parser, which is the honest fallback rather than a silent downgrade, because `engine` is
+    in the result either way.
+    """
     from kith.infra import permissions
     from kith.infra import workspace as sandbox
+    from kith.tools import semantics
 
-    target = Path(sandbox.resolve(args.get("path") or "."))
+    wanted = str(args.get("name") or "")
+    asked = Path(sandbox.resolve(args.get("path") or "."))
+    if asked.is_file() and semantics.available(asked.parent):
+        permissions.require_path("read", asked, sandbox.root())
+        found = semantics.definition_and_references(asked, wanted, int(args.get("near_line") or 0))
+        return {"name": wanted, "engine": "language server", **found}
+
+    # A file with no server behind it searches the folder it is in, not the file. The name was
+    # given with a file to *locate* it, and answering "where else is this used" by looking only
+    # in the one file it was named from would be the emptiest true answer available.
+    target = asked.parent if asked.is_file() else asked
     permissions.require_path("read", target, sandbox.root())
     try:
-        found = search_service.find(target, str(args.get("name") or ""))
+        found = search_service.find(target, wanted)
     except search_service.SearchError as exc:
         return {"error": str(exc)}
+    # The same keys the language-server path returns, so a caller reads one shape whichever
+    # engine answered. `calls` was this tool's word for the same thing the server calls
+    # references; one tool cannot have two words for it.
     return {
         "name": found["name"],
-        "definitions": len(found["definitions"]),
-        "calls": len(found["calls"]),
+        "engine": "parser",
+        "definitions": found["definitions"],
+        "references": found["calls"],
         "filesSearched": found["files_searched"],
-        "found": search_service.render(found),
+        "shown": search_service.render(found),
     }
 
 

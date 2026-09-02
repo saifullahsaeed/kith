@@ -190,15 +190,24 @@ class TestWithNoLanguageServer:
         ends the round; a sentence lets it try grep instead."""
         (workspace_root / "a.py").write_text("def f():\n    pass\n")
 
-        for name, args in [
-            ("diagnostics", {"path": "a.py"}),
-            ("references", {"path": "a.py", "symbol": "f"}),
-            ("definition", {"path": "a.py", "symbol": "f"}),
-            ("rename_symbol", {"path": "a.py", "symbol": "f", "new_name": "g"}),
-        ]:
-            result = registry.require(name).run(tmp_path / "agent.db", args)
-            assert "unavailable" in result, f"{name} did not degrade gracefully: {result}"
-            assert "outline" in result["unavailable"] or "install" in result["unavailable"].lower()
+        result = registry.require("rename_symbol").run(
+            tmp_path / "agent.db", {"path": "a.py", "symbol": "f", "new_name": "g"}
+        )
+        assert "unavailable" in result, f"rename_symbol did not degrade gracefully: {result}"
+        assert "outline" in result["unavailable"] or "install" in result["unavailable"].lower()
+
+    def test_the_two_that_merged_fall_back_instead_of_refusing(self, workspace_root, tmp_path):
+        """`diagnostics` and `definition`/`references` were hidden entirely with no server, so
+        on an unserved project the question had no cheap answer at all. Their replacements
+        always answer, and say which engine did."""
+        (workspace_root / "a.py").write_text("def f():\n    pass\n")
+
+        found = registry.require("find_symbol").run(tmp_path / "agent.db", {"name": "f", "path": "a.py"})
+        assert found["engine"] == "parser", found
+        assert "unavailable" not in found
+
+        checked = registry.require("check_code").run(tmp_path / "agent.db", {"path": "a.py"})
+        assert "unavailable" not in str(checked)
 
     def test_the_file_is_not_touched_by_a_rename_that_cannot_happen(self, workspace_root, tmp_path):
         (workspace_root / "a.py").write_text("def f():\n    pass\n")
@@ -289,35 +298,36 @@ class TestAgainstRealPyright:
         return tmp_path
 
     def test_diagnostics_find_the_type_error(self, project, fresh_manager, tmp_path):
-        result = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        result = registry.require("check_code").run(tmp_path / "agent.db", {"path": "app.py"})
 
         assert result.get("errors", 0) >= 1, result
         assert any(one["line"] == 5 for one in result["problems"])
 
     def test_a_clean_file_says_so(self, project, fresh_manager, tmp_path):
-        result = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "helpers.py"})
+        result = registry.require("check_code").run(tmp_path / "agent.db", {"path": "helpers.py"})
         assert result.get("errors") == 0, result
 
     def test_references_skip_the_comment_and_the_string(self, project, fresh_manager, tmp_path):
         """`greet` appears five times in app.py. Three are uses. grep cannot tell."""
-        result = registry.require("references").run(
-            tmp_path / "agent.db", {"path": "helpers.py", "symbol": "greet"}
+        result = registry.require("find_symbol").run(
+            tmp_path / "agent.db", {"path": "helpers.py", "name": "greet"}
         )
 
+        assert result["engine"] == "language server", result
         lines = sorted(one["line"] for one in result["references"])
         assert lines == [1, 4, 5], f"expected the import and two calls, got {result}"
 
     def test_definition_crosses_a_file(self, project, fresh_manager, tmp_path):
-        result = registry.require("definition").run(
-            tmp_path / "agent.db", {"path": "app.py", "symbol": "greet", "near_line": 4}
+        result = registry.require("find_symbol").run(
+            tmp_path / "agent.db", {"path": "app.py", "name": "greet", "near_line": 4}
         )
-        assert result["found"] is True
+        assert result["definitions"], result
         assert result["definitions"][0]["path"].endswith("helpers.py")
         assert result["definitions"][0]["line"] == 1
 
     def test_a_symbol_that_is_not_in_the_file_says_which_file_to_try(self, project, fresh_manager, tmp_path):
-        result = registry.require("references").run(
-            tmp_path / "agent.db", {"path": "helpers.py", "symbol": "nonexistent"}
+        result = registry.require("find_symbol").run(
+            tmp_path / "agent.db", {"path": "helpers.py", "name": "nonexistent"}
         )
         assert "unavailable" in result
         assert "grep" in result["unavailable"]
@@ -348,18 +358,18 @@ class TestAgainstRealPyright:
     def test_the_server_is_reused_rather_than_restarted(self, project, fresh_manager, tmp_path):
         """Starting pyright costs seconds. Paying that per tool call would make the whole
         layer slower than the grep it replaces."""
-        registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        registry.require("check_code").run(tmp_path / "agent.db", {"path": "app.py"})
         running = fresh_manager.running()
-        registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "helpers.py"})
+        registry.require("check_code").run(tmp_path / "agent.db", {"path": "helpers.py"})
 
         assert len(fresh_manager.running()) == len(running) == 1
 
     def test_an_edit_is_seen_by_the_next_question(self, project, fresh_manager, tmp_path):
         """The server holds its own copy. A stale one produces confidently wrong lines."""
-        first = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        first = registry.require("check_code").run(tmp_path / "agent.db", {"path": "app.py"})
         assert first["errors"] >= 1
 
         (project / "app.py").write_text((project / "app.py").read_text().replace("greet(42)", "greet('42')"))
-        after = registry.require("diagnostics").run(tmp_path / "agent.db", {"path": "app.py"})
+        after = registry.require("check_code").run(tmp_path / "agent.db", {"path": "app.py"})
 
         assert after["errors"] == 0, f"it answered from a stale copy: {after}"

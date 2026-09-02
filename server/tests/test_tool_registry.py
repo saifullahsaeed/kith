@@ -157,11 +157,15 @@ class TestADescriptionMatchesTheCode:
         assert str(paging.DEFAULT_LIMIT) not in paging.LIMIT["description"]
         assert str(paging.MAX_LIMIT) in paging.LIMIT["description"]
 
-    def test_the_two_ways_to_find_a_definition_point_at_each_other(self):
-        """`definition` needs a language server and `find_symbol` does not. A model that reaches
-        for the wrong one first eats an error the schema-hiding was built to prevent."""
+    def test_finding_a_name_says_both_engines_exist(self):
+        """There used to be two tools for this — `definition`/`references` from a language
+        server, `find_symbol` from a parser — and each had to name the other, because a model
+        reaching for the wrong one first ate an error. There is one now, so what it owes the
+        caller instead is which engine answered: the parser's answer is honest but weaker, and
+        a caller told nothing cannot know which it got."""
         import kith.tools  # noqa: F401
         from kith.tools import registry
 
-        assert "find_symbol" in registry.require("definition").description
-        assert "definition" in registry.require("find_symbol").description
+        described = registry.require("find_symbol").description
+        assert "language server" in described
+        assert "engine" in described

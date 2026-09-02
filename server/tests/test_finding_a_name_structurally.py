@@ -231,9 +231,10 @@ class TestThroughTheTool:
 
         (workspace_root / "a.py").write_text(PY_SOURCE)
         out = code.find_symbol(workspace_root, {"name": "target"})
-        assert out["definitions"] == 1
-        assert out["calls"] == 3
-        assert "defined" in out["found"] and "called" in out["found"]
+        assert out["engine"] == "parser"
+        assert len(out["definitions"]) == 1
+        assert len(out["references"]) == 3, "`calls` was this tool's word for references"
+        assert "defined" in out["shown"] and "called" in out["shown"]
 
     def test_an_empty_name_comes_back_as_an_error_not_a_crash(self, workspace_root):
         from kith.tools import code

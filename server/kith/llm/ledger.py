@@ -35,14 +35,21 @@ _SKILL_TOOLS = ("read_skill",)
 
 #: Tool results that are a *view of the codebase*. The bulk category on any coding turn, and
 #: the one where duplicates collect — the same file read fifteen times in one session.
+#: Retired names are kept alongside the ones that took their jobs. A conversation folded
+#: today can still hold results from before the merge, and a result whose tool this does not
+#: recognise is counted as something else — the meter would say the window is full of
+#: transcript when it is full of code.
 _CODE_TOOLS = (
     "read_file",
-    "outline",
     "repo_map",
     "grep",
     "glob",
-    "list_files",
     "changes",
+    "check_code",
+    "find_symbol",
+    # Merged away; still in older transcripts.
+    "outline",
+    "list_files",
     "diagnostics",
     "references",
     "definition",

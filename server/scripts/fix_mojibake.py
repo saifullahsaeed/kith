@@ -82,7 +82,7 @@ def fix_db(apply: bool) -> int:
         for row in rows:
             rowid, values = row[0], row[1:]
             changes = {}
-            for col, value in zip(cols, values):
+            for col, value in zip(cols, values, strict=False):
                 if not isinstance(value, str):
                     continue
                 fixed = repair(value)

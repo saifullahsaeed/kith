@@ -20,6 +20,7 @@ from kith.domain.tooling import ToolHost
 from kith.infra import permissions
 from kith.services import touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
+    aliases,
     asking,
     code,
     computer,
@@ -35,7 +36,6 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     time,
     web,
 )
-from kith.tools import aliases
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas
 from kith.tools.semantics import NEEDS_A_LANGUAGE_SERVER, OFFERED_WITHOUT_A_LANGUAGE_SERVER
@@ -59,15 +59,17 @@ def tool_schemas(
     the cached prefix and discards the whole prompt cache on the next round. The caller takes
     one snapshot per turn and hands the same list down. See `services/mcp/manager.snapshot`.
 
-    ``language_server`` says whether the four semantic tools are worth their schema. They are
-    the one group here that can be *categorically* unusable: on a machine with nothing
-    installed every call answers "not installed", and about 700 characters of schema is
-    carried on every round of every turn to make that possible. Resolved once per turn by the
-    caller for the same cache reason as ``mcp`` — `None` means "do not filter", which is what
-    every caller that has no opinion passes.
+    ``language_server`` says whether `rename_symbol` is worth its schema. It is the one tool
+    left here that can be *categorically* unusable: with nothing installed every call answers
+    "not installed", and its schema is carried on every round of every turn to make that
+    possible. It used to be four — `diagnostics`, `references` and `definition` were merged
+    into `check_code` and `find_symbol`, which work either way and say which engine answered,
+    so there is nothing to hide. Resolved once per turn by the caller for the same cache reason
+    as ``mcp`` — `None` means "do not filter", which is what every caller that has no opinion
+    passes.
     """
-    # Two sets, moving in opposite directions on the same fact. With no server the semantic
-    # tools are hidden and the one that installs one is offered; with a server, the reverse.
+    # Two sets, moving in opposite directions on the same fact. With no server the tool that
+    # needs one is hidden and the one that installs it is offered; with a server, the reverse.
     # `None` means nobody has an opinion, and nothing is hidden.
     hide: set[str] = set()
     if language_server is False:
@@ -127,7 +129,7 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
 
     if allow is not None and name not in allow:
         # Named rather than vague: he can act on "not in this mode" and cannot act on
-        # "something went wrong". The list itself is not spelled out — on a 55-tool set that
+        # "something went wrong". The list itself is not spelled out — on a 49-tool set that
         # is most of a round's budget spent telling him what he already had schemas for.
         return {
             "ok": False,
