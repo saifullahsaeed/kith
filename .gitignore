@@ -38,3 +38,9 @@ server/server.log
 
 # ── Review ledger (local) ─────────────────────────────────────────────────────
 .claude-issues/
+
+# ── His scratch (local) ────────────────────────────────────────────────────────
+# `.kith/` is the workspace's own folder — transcripts and whatever he wrote while working.
+# It appears at the repository root whenever the checkout is also the workspace, and none of
+# it is source.
+.kith/
