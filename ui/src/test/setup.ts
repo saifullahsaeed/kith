@@ -67,6 +67,25 @@ class FakeEventSource {
 // stubbed global — so the first test in a file had an EventSource and every one after it did not.
 (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
 
+/**
+ * jsdom has no `ResizeObserver`, and the layout is built on a library that constructs one per
+ * group on mount — so without this every test that renders a pane dies on `n is not a
+ * constructor`, which names neither the observer nor the library.
+ *
+ * A stub that observes nothing, deliberately. jsdom lays nothing out: every element measures
+ * 0x0, so a faithful observer would only ever report zero and any test asserting a size would be
+ * asserting jsdom's, not the layout's. Sizing belongs to the browser, and to the Playwright
+ * pass; what these tests are for is the tree, the tabs and the drops.
+ */
+class StubResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
+  (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = StubResizeObserver;
+}
+
 // Unmount between tests. Without it a component from one test keeps listening through the next,
 // which is the kind of failure that looks like flakiness.
 afterEach(() => {
