@@ -36,8 +36,20 @@ export interface ConversationSummary {
 export interface ConversationDetail extends Omit<ConversationSummary, "messages"> {
   /** How many messages it holds — the number the listing calls `messages`. */
   messageCount: number;
-  /** The turn's actual shape — reasoning, prose, calls with results — for rendering back. */
+  /** The turn's actual shape — reasoning, prose, calls with results — for rendering back.
+   *
+   *  **A page of it, not all of it.** This used to be the whole conversation: 22.83 MB on the
+   *  largest real one, downloaded and parsed so that the last 40 turns — 1.06 MB — could be
+   *  sliced out here and the rest held in state for a "load earlier" button. The window is the
+   *  same 40 turns; it happens before the wire now. */
   timeline: StoredTurn[];
+  /** Turns in the whole conversation, of which `timeline` is a page. */
+  turnCount: number;
+  /** Where this page starts in the whole — and what to pass as `before` for the page before
+   *  it. Handed back rather than computed here, so the boundary has one definition. */
+  windowStart: number;
+  /** Whether anything precedes this page. */
+  hasMore: boolean;
 }
 
 export async function fetchConversations(limit = 50): Promise<{
@@ -77,8 +89,20 @@ export interface StoredTurn {
   at?: string;
 }
 
-export async function fetchConversation(id: string): Promise<ConversationDetail> {
-  const response = await fetch(`/api/conversations/${id}`);
+/** One page of a conversation, newest last.
+ *
+ * `before` is the `windowStart` of a page you already hold, so paging reads as "what comes
+ * before this" rather than an offset computed on both sides of the wire. Omit `turns` for the
+ * server's page size, which is the same 40 the thread renders. */
+export async function fetchConversation(
+  id: string,
+  page?: { turns?: number; before?: number },
+): Promise<ConversationDetail> {
+  const query = new URLSearchParams();
+  if (page?.turns !== undefined) query.set("turns", String(page.turns));
+  if (page?.before !== undefined) query.set("before", String(page.before));
+  const suffix = query.size ? `?${query}` : "";
+  const response = await fetch(`/api/conversations/${id}${suffix}`);
   if (!response.ok) throw new Error(`could not open that conversation (${response.status})`);
   return await response.json();
 }

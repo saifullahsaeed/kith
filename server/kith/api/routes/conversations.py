@@ -64,6 +64,18 @@ def read_conversation(conversation_id: str):
         meta = conversations.get(AGENT_DB_PATH, conversation_id)
     except KeyError:
         return jsonify({"error": f"no conversation {conversation_id}"}), 404
+    # Bad numbers fall back rather than 400. There is one caller and a mistyped query string
+    # should show you the conversation, not an error page in place of it.
+    try:
+        turns = int(request.args.get("turns", conversations.PAGE))
+    except (TypeError, ValueError):
+        turns = conversations.PAGE
+    try:
+        raw = request.args.get("before")
+        before = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        before = None
+    window = conversations.timeline_window(conversation_id, turns=turns, before=before)
     return jsonify(
         {
             **meta,
@@ -75,7 +87,23 @@ def read_conversation(conversation_id: str):
             # says what it is.
             "messageCount": meta.get("messages", 0),
             # What the interface renders: the turn's actual shape, not a paragraph of it.
-            "timeline": conversations.timeline(conversation_id),
+            #
+            # **A page of it, and the default is a page.** This shipped the whole timeline —
+            # 22.83 MB on the largest real conversation, of which the interface rendered the
+            # last 1.06 MB and held the rest in React state to slice locally. The window is the
+            # same forty turns it always was; it just happens before the wire now.
+            #
+            # The default is deliberately not "everything, unless you ask": there is one caller,
+            # and an endpoint whose default ships a conversation grows this back the first time
+            # somebody writes a second one without reading the query string. `?turns=0` is how
+            # anything that genuinely needs all of it says so.
+            "timeline": window["turns"],
+            "turnCount": window["total"],
+            # Where this page starts in the whole, which is also what to pass as `before` to get
+            # the page before it. An offset the client computes is an off-by-one waiting to
+            # happen at exactly the boundary nobody looks at.
+            "windowStart": window["start"],
+            "hasMore": window["hasMore"],
             # `messages` and `entries` used to ride along here and both are gone.
             #
             # They were the same conversation a second and third time — `messages` the flattened

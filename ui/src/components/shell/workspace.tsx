@@ -18,6 +18,7 @@ import { ContextDetailScreen } from "@/components/chat/context-detail";
 import { InboxPanel } from "@/components/chat/inbox-panel";
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
+import { ThreadSkeleton } from "@/components/chat/thread-skeleton";
 import { SessionBar } from "@/components/chat/session-bar";
 import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
@@ -115,21 +116,34 @@ export function Workspace({
    * it means a conversation switch no longer destroys and rebuilds the whole thread — which is
    * what made switching feel like a page load, dropped the composer draft, and reset the scroll. */
   const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
-  /* The whole conversation as fetched, and how much of its tail is actually mounted.
+  /* What is loaded — a page of the conversation, not the conversation.
    *
-   * Held apart because the two are different questions. A 473-turn conversation was handed to
-   * the runtime entire, and `content-visibility: auto` does not save you from that: it skips
-   * layout and paint for off-screen messages, but React still mounts every one and
-   * `MarkdownText` still parses every character — ~547 KB of prose before anything appears. So
-   * the fix has to be to not mount them, not to style them cheaply.
+   * Two problems met here, and only one of them used to be solved. Mounting was: a 473-turn
+   * conversation handed to the runtime entire mounts every message and parses every character
+   * of markdown before anything appears, and `content-visibility: auto` does not save you —
+   * it skips layout and paint for off-screen messages, not React and not the parser. So a
+   * forty-turn tail was mounted and the rest held in state. That also fixed where the scroll
+   * lands: until a message is laid out the browser assumes the 200px of
+   * `contain-intrinsic-size`, so 473 of them made the initial `scrollHeight` a ~95,000px guess
+   * against a much larger real height, and "scroll to bottom" went to the bottom of that
+   * fiction, which is near the top. Mount forty and the height is honest.
    *
-   * It also fixes where the scroll lands. Until a message is laid out the browser assumes the
-   * 200px of `contain-intrinsic-size`, so 473 of them made the initial `scrollHeight` a
-   * ~95,000px guess against a much larger real height — "scroll to bottom" went to the bottom of
-   * that fiction, which is near the top. Mount forty and the height is honest.
-   */
+   * What was not solved is that all 492 turns still had to *arrive* — 22.83 MB on the largest
+   * real transcript, downloaded, parsed and kept in state so that "load earlier" could slice
+   * the tail locally. The window is the same forty turns; it happens on the server now, and
+   * `shown` is gone with it: everything loaded is everything rendered, and loading earlier
+   * fetches the page before this one. */
   const [timeline, setTimeline] = useState<StoredTurn[]>([]);
-  const [shown, setShown] = useState(WINDOW);
+  /** Where `timeline[0]` sits in the whole conversation. Zero once you have reached the top,
+   *  and the `before` for the next page until then. */
+  const [windowStart, setWindowStart] = useState(0);
+  /* A conversation is being fetched and there is nothing to show for it yet.
+   *
+   * The gap this fills was the whole of what "opening a chat hangs" meant: `openConversation`
+   * awaited the payload before it changed any state at all, so a click on a row left the
+   * previous conversation on screen, unchanged, for as long as the fetch took. Nothing was
+   * frozen and nothing was slow to draw — there was simply nothing saying it had begun. */
+  const [opening, setOpening] = useState(false);
   /* Whether you are near the top of what is loaded — the only place "load earlier" means
    * anything. It used to be on screen permanently, including at the bottom of the conversation,
    * offering to fetch history in the one position where you have just arrived and are reading
@@ -324,7 +338,7 @@ export function Workspace({
   useServerEvent("turn", rejoin, conversationId);
 
   /** Counts opens, so a slow one cannot land on top of a later fast one. */
-  const opening = useRef(0);
+  const openSeq = useRef(0);
 
   const openConversation = useCallback(
     async (id: string) => {
@@ -339,36 +353,67 @@ export function Workspace({
       /* Which click this was. Two rows clicked quickly are two fetches in flight, and without a
        * sequence they land in whichever order the network settles them — so the conversation you
        * end up in is the one that answered fastest, not the one you asked for last. */
-      const mine = ++opening.current;
+      const mine = ++openSeq.current;
+
+      /* Switch first, fetch second, and that order is the fix.
+       *
+       * Everything below the await used to be above nothing: the conversation id, the project,
+       * the thread contents all changed only once the payload had landed, so the click had no
+       * effect you could see until it was already over. Moving the id and an empty thread ahead
+       * of the await means the app is *in* the conversation immediately, showing that it is
+       * loading it — which is what "do not hang" actually asks for. */
+      pendingProject.current = null;
+      setConversationId(id);
+      setTimeline([]);
+      setResumed([]);
+      setWindowStart(0);
+      setOpening(true);
+      remember(id);
+
       const detail = await cache
         .fetchQuery({ queryKey: keys.conversation(id), queryFn: () => fetchConversation(id) })
         .catch(() => null);
-      if (!detail || opening.current !== mine) return;
-    // Whatever project was picked for a chat that never got typed into, let it go. Without this,
-    // "New chat here" followed by opening an existing conversation re-files *that* conversation
-    // under the project — the effect below cannot tell the id it is handed apart from the one a
-    // first turn would have produced, so the only place that knows is here.
-    pendingProject.current = null;
-    setConversationId(id);
-    setProjectId(detail.projectId ?? null);
-    setTimeline(detail.timeline);
-    setShown(WINDOW);
-      setResumed(toThreadMessages(detail.timeline.slice(-WINDOW)));
-      remember(id);
+      // A later open has already claimed the screen; this one's payload is not wanted, and
+      // `setOpening(false)` is not ours to call either — the newer open owns that flag now.
+      if (openSeq.current !== mine) return;
+      setOpening(false);
+      if (!detail) return;
+
+      setProjectId(detail.projectId ?? null);
+      setTimeline(detail.timeline);
+      setWindowStart(detail.windowStart ?? 0);
+      // Already a page — the server windowed it. Slicing again here is what this used to do to
+      // 492 turns it had just finished parsing.
+      setResumed(toThreadMessages(detail.timeline));
     },
     [cache],
   );
 
+  /** A page is being fetched onto the front of what you are reading. */
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+
   /* Widen the window by another page.
    *
    * `reset` with the longer list rather than a prepend, because a local runtime has no prepend —
-   * see the note on `resumed`. No refetch: the whole timeline is already in hand.
+   * see the note on `resumed`.
+   *
+   * It fetches now. It used to slice, because the whole conversation was already in state —
+   * which is exactly what made opening one cost 22.83 MB: the button's convenience was paid
+   * for on every open, by everyone, including the openings where nobody ever scrolled up.
    */
-  const loadEarlier = useCallback(() => {
-    const next = Math.min(shown + WINDOW, timeline.length);
-    if (next === shown) return;
+  const loadEarlier = useCallback(async () => {
+    if (loadingEarlier || windowStart <= 0 || !conversationId) return;
+    setLoadingEarlier(true);
+    const older = await fetchConversation(conversationId, {
+      turns: WINDOW,
+      before: windowStart,
+    }).catch(() => null);
+    setLoadingEarlier(false);
+    if (!older || !older.timeline.length) return;
+
+    const widened = [...older.timeline, ...timeline];
     // Remember which message you were reading before the thread is torn down; see `anchor`.
-    const grown = toThreadMessages(timeline.slice(-next));
+    const grown = toThreadMessages(widened);
     const viewport = document.querySelector<HTMLElement>(
       '[data-slot="aui_thread-viewport"]',
     );
@@ -391,9 +436,10 @@ export function Workspace({
         };
       }
     }
-    setShown(next);
+    setTimeline(widened);
+    setWindowStart(older.windowStart ?? 0);
     setResumed(grown);
-  }, [shown, timeline]);
+  }, [conversationId, loadingEarlier, timeline, windowStart]);
 
   /* Watch the thread's own scroll box: whether you are near the top, and putting you back where
    * you were after "load earlier" tore the thread down and built a longer one.
@@ -492,7 +538,8 @@ export function Workspace({
     setConversationId("");
     setProjectId(project);
     setTimeline([]);
-    setShown(WINDOW);
+    setWindowStart(0);
+    setOpening(false);
     setResumed([]);
     remember("");
   }, []);
@@ -851,7 +898,9 @@ export function Workspace({
                       // action aiming at the wrong commit is the worst thing windowing could have
                       // broken, so the offset travels with the checkpoints rather than being
                       // recomputed anywhere that compares them.
-                      turnOffset={Math.max(0, timeline.length - shown)}
+                      // Now read straight off the page the server handed back, rather than
+                      // inferred from two client-side lengths. Same number, one definition.
+                      turnOffset={windowStart}
                     >
                       {/* Floating, not stacked.
                           This was a full-width flex row in the flow, which made it a band across
@@ -862,20 +911,22 @@ export function Workspace({
                           "jump to latest" chip does at the other end.
                           `pointer-events-none` on the strip so the full-width row cannot
                           intercept anything; only the pill itself is clickable. */}
-                      {timeline.length > shown && nearTop ? (
+                      {windowStart > 0 && nearTop ? (
                         <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
                           <button
                             type="button"
-                            onClick={loadEarlier}
-                            className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors"
+                            onClick={() => void loadEarlier()}
+                            disabled={loadingEarlier}
+                            className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors disabled:opacity-60"
                           >
-                            Load {Math.min(WINDOW, timeline.length - shown)}{" "}
-                            earlier · {timeline.length - shown} above
+                            {loadingEarlier
+                              ? "Loading earlier…"
+                              : `Load ${Math.min(WINDOW, windowStart)} earlier · ${windowStart} above`}
                           </button>
                         </div>
                       ) : null}
                       <div className="relative min-h-0 flex-1">
-                        <Thread conversationId={conversationId} />
+                        {opening ? <ThreadSkeleton /> : <Thread conversationId={conversationId} />}
                       </div>
                     </CheckpointsProvider>
                   </ErrorBoundary>
