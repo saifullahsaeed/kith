@@ -21,6 +21,7 @@ import {
   hasTab,
   openTab,
   pane,
+  renameTab,
   panes,
   resizeSplit,
   split,
@@ -229,6 +230,42 @@ describe("docking", () => {
   it("does nothing for a tab that is not there", () => {
     const tree = pane([work]);
     expect(dockTab(tree, "board", tree.id, "left")).toBe(tree);
+  });
+});
+
+describe("renaming a tab in place", () => {
+  it("gives a draft chat its conversation without moving it", () => {
+    const tree = pane([chat(""), work], 0);
+
+    const after = renameTab(tree, "chat:", chat("c-9"));
+
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["chat:c-9", "work"]);
+    expect(panes(after)[0].active, "and without stealing focus").toBe(0);
+    isSound(after);
+  });
+
+  it("keeps it in the pane it was in", () => {
+    const left = pane([chat("")]);
+    const tree = split("row", [left, pane([work])]);
+
+    const after = renameTab(tree, "chat:", chat("c-9"));
+
+    expect(findTab(after, "chat:c-9")!.pane.id).toBe(left.id);
+    isSound(after);
+  });
+
+  it("refuses a rename onto a conversation already open", () => {
+    /* Two tabs claiming one conversation is two runtimes on one stream. The caller finding out
+     * its rename did nothing and closing the draft is the better end. */
+    const tree = pane([chat(""), chat("c-9")], 0);
+
+    expect(renameTab(tree, "chat:", chat("c-9"))).toBe(tree);
+  });
+
+  it("does nothing for a tab that is not there, or a name that has not changed", () => {
+    const tree = pane([chat("c-1")]);
+    expect(renameTab(tree, "chat:nope", chat("c-2"))).toBe(tree);
+    expect(renameTab(tree, "chat:c-1", chat("c-1"))).toBe(tree);
   });
 });
 

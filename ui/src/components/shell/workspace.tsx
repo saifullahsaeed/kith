@@ -1,35 +1,26 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  AssistantRuntimeProvider,
-  useLocalRuntime,
-  type ThreadMessageLike,
-} from "@assistant-ui/react";
 
-import { Thread } from "@/components/assistant-ui/thread";
-import { CheckpointsProvider } from "@/components/assistant-ui/checkpoints-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/shell/app-header";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 
+import { ChatPane } from "@/components/chat/chat-pane";
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
-import { ThreadSkeleton } from "@/components/chat/thread-skeleton";
 import { LayoutView } from "@/components/shell/layout/layout-view";
 import { useLayout } from "@/components/shell/layout/store";
 import {
   hasTab as treeHasTab,
+  panes as panesOf,
   tabKey as tabKeyOf,
   type TabRef,
 } from "@/components/shell/layout/tree";
-import { SessionBar } from "@/components/chat/session-bar";
 import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
-import { useServerEvent } from "@/hooks/use-live";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
-import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { keys } from "@/lib/query-keys";
 import {
   parseLocation,
@@ -39,14 +30,8 @@ import {
   pathForTask,
 } from "@/lib/router";
 import {
-  createBackendAdapter,
-  resumeTurn,
   fetchConversation,
   fetchLiveTurns,
-  setConversationProject,
-  USAGE_PART,
-  type ContextLedger,
-  type StoredTurn,
   patchServerConfig,
   type ServerConfig,
 } from "@/lib/backend";
@@ -82,20 +67,7 @@ const InboxPanel = lazy(() =>
  * reloaded, which is the one thing a window is supposed to be good at. */
 const LAST_CONVERSATION = "kith-conversation";
 
-/** Turns mounted when a conversation opens, and added by each "load earlier".
- *
- * Forty rather than a round hundred: it is comfortably more than fits on a screen, so the thread
- * still reads as continuous history rather than a stub, while staying far below the point where
- * mounting and markdown-parsing the tail is what you are waiting for. */
-const WINDOW = 40;
 
-/** How long to hold the restored position against the thread settling after a remount. Long,
- *  because the settling is: on an 80-turn conversation `scrollHeight` went 25,070 → 48,106 and
- *  was still climbing at 900ms, which is where the first attempt gave up and left you near the
- *  top of a thread you had been reading the middle of. Any input from you ends it early. */
-const RESTORE_MS = 2500;
-/** How long to wait before reading the scroll position on a freshly opened thread. */
-const SETTLE_MS = 600;
 
 /** The ready-state app: chat runtime, header, and the activity ("Work") panel.
  * Split out so its hooks only run once the backend is reachable. */
@@ -109,510 +81,6 @@ export function Workspace({
   /** Called after the provider/model is saved, so the header stops showing the old one. */
   onConnectionSaved: () => void;
 }) {
-  // Which conversation the chat is in. Held in a ref as well as state: the adapter reads
-  // it fresh on every run, and a resumed conversation must not rebuild the runtime while a
-  // stream is open.
-  const cache = useQueryClient();
-  const [conversationId, setConversationId] = useState("");
-  const conversationRef = useRef("");
-  conversationRef.current = conversationId;
-  /* Messages to seed the thread with when resuming.
-   *
-   * This used to be paired with a `threadKey` bump on the `AssistantRuntimeProvider`, on the
-   * stated grounds that remounting was "the only way to replace a local runtime's messages
-   * wholesale". Half of that was true: `useLocalRuntime` does `useState(() => new
-   * LocalRuntimeCore(opt, initialMessages))`, so `initialMessages` is read once at construction
-   * and never again. But the runtime exposes `thread.reset(messages)` for exactly this, and using
-   * it means a conversation switch no longer destroys and rebuilds the whole thread — which is
-   * what made switching feel like a page load, dropped the composer draft, and reset the scroll. */
-  const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
-  /* What is loaded — a page of the conversation, not the conversation.
-   *
-   * Two problems met here, and only one of them used to be solved. Mounting was: a 473-turn
-   * conversation handed to the runtime entire mounts every message and parses every character
-   * of markdown before anything appears, and `content-visibility: auto` does not save you —
-   * it skips layout and paint for off-screen messages, not React and not the parser. So a
-   * forty-turn tail was mounted and the rest held in state. That also fixed where the scroll
-   * lands: until a message is laid out the browser assumes the 200px of
-   * `contain-intrinsic-size`, so 473 of them made the initial `scrollHeight` a ~95,000px guess
-   * against a much larger real height, and "scroll to bottom" went to the bottom of that
-   * fiction, which is near the top. Mount forty and the height is honest.
-   *
-   * What was not solved is that all 492 turns still had to *arrive* — 22.83 MB on the largest
-   * real transcript, downloaded, parsed and kept in state so that "load earlier" could slice
-   * the tail locally. The window is the same forty turns; it happens on the server now, and
-   * `shown` is gone with it: everything loaded is everything rendered, and loading earlier
-   * fetches the page before this one. */
-  const [timeline, setTimeline] = useState<StoredTurn[]>([]);
-  /** Where `timeline[0]` sits in the whole conversation. Zero once you have reached the top,
-   *  and the `before` for the next page until then. */
-  const [windowStart, setWindowStart] = useState(0);
-  /* A conversation is being fetched and there is nothing to show for it yet.
-   *
-   * The gap this fills was the whole of what "opening a chat hangs" meant: `openConversation`
-   * awaited the payload before it changed any state at all, so a click on a row left the
-   * previous conversation on screen, unchanged, for as long as the fetch took. Nothing was
-   * frozen and nothing was slow to draw — there was simply nothing saying it had begun. */
-  const [opening, setOpening] = useState(false);
-  /* Whether you are near the top of what is loaded — the only place "load earlier" means
-   * anything. It used to be on screen permanently, including at the bottom of the conversation,
-   * offering to fetch history in the one position where you have just arrived and are reading
-   * forwards. */
-  const [nearTop, setNearTop] = useState(false);
-  /* Which message you were looking at, across the remount that "load earlier" performs.
-   *
-   * Not a scroll offset. Distance-from-the-bottom was the first attempt and it drifts by
-   * thousands of pixels, because `content-visibility` placeholders are still measuring their
-   * real height long after the frame budget any restore loop can reasonably hold — measured,
-   * `scrollHeight` was still climbing past 2.5s. Nor a `data-message-id`: assistant-ui mints
-   * fresh ones on mount, and none of the ids visible before a load exist after it.
-   *
-   * What does survive is *ordinal*. Loading earlier prepends a known number of messages, so the
-   * message you were reading is the same message `shift` places further down the list. Pinning
-   * an element is immune to anything settling above it, because its position is recomputed each
-   * time rather than assumed. */
-  const anchor = useRef<{
-    index: number;
-    shift: number;
-    offset: number;
-  } | null>(null);
-  // What this session is working on. Held here rather than fetched inside the bar because
-  // it changes from two directions — you set it, and so does he, by starting a project or
-  // filing a task mid-turn.
-  const [projectId, setProjectId] = useState<number | null>(null);
-
-  // No config passed: the server reads its own settings, so there is nothing here that
-  // can go stale. Memoised so the runtime is never recreated mid-stream.
-  const adapter = useMemo(
-    () =>
-      createBackendAdapter({
-        get: () => conversationRef.current,
-        set: (id) => setConversationId((was) => was || id),
-        // Read through the ref rather than closed over, like `get`: the adapter is built once
-        // and the choice is made later. This is what carries "start a chat in this project"
-        // into the turn that creates the conversation, so its prompt is assembled with the
-        // project already known — see `pendingProject`.
-        project: () => pendingProject.current,
-      }),
-    [],
-  );
-  // Always offered, and it takes anything. It used to appear only for models reporting
-  // vision, and then only accept `image/*` — so a spreadsheet could not be attached at all,
-  // and on a model without vision the paperclip simply vanished. Both were the wrong call:
-  // he has a whole computer, so a file he cannot *see* is still a file he can open, and
-  // whether to inline a picture or hand him a path is a decision the server makes next to
-  // the model config rather than one the composer makes by hiding a button.
-  const attachments = useMemo(() => new AnyFileAttachmentAdapter(), []);
-  const runtime = useLocalRuntime(adapter, {
-    initialMessages: resumed,
-    ...(attachments ? { adapters: { attachments } } : {}),
-  });
-
-  /**
-   * Ask him — here, in the thread — to check work he handed over.
-   *
-   * A chat message rather than a task comment, and that is the whole design of the `review` column: a tick
-   * verifying its own output is marking its own homework, since it wrote the brief, chose the
-   * requirements and supplied the evidence. Chat has the conversation the work came out of, forty
-   * rounds, and a person in it.
-   *
-   * Appending to the thread rather than posting on the task, because the point is that you see the
-   * answer and can argue with it. A comment on a task is somewhere you have to go and look.
-   */
-  /* Rejoin the turn already running in the conversation you just opened.
-
-     The screen is a window onto a turn, not the thing running it. The turn lives on the server,
-     on its own thread, and carries on whether or not anybody is watching — but until now the
-     watching could only ever start at the beginning, so switching away mid-answer and coming
-     back showed a message frozen where you left it, and the finished reply only appeared after
-     a reload. Everything the turn said in between was reachable (`live_turns` kept it) and
-     nothing asked for it.
-
-     It matters more than a cosmetic catch-up now that he can block on a question and on a
-     permission: a card you cannot see is a turn that looks hung, and the answer it is waiting
-     for is one you have no way to give.
-
-     Guarded on `isRunning`, because the thread is already streaming when *this* window started
-     the turn — resuming then would put a second reader on the same events and render them
-     twice. */
-  const rejoin = useCallback(() => {
-    if (!conversationId) return;
-    const wanted = conversationId;
-    void resumeTurn(wanted).then((attached) => {
-      if (!attached) return;
-      /* Two reasons to walk away, and both have to close the stream rather than drop it.
-       *
-       * The conversation moved while the fetch was in flight — a switch takes one round trip and
-       * this took another, so by now the thread may hold someone else's messages, and resuming
-       * into it would pour that conversation's turn into this one. Checked against the ref rather
-       * than the captured value, because the ref is what the adapter reads too.
-       *
-       * Or the thread is already streaming, which is the ordinary case: this window started the
-       * turn, `live_turns.begin` published `turn`, and the event came back to us. Reading it twice
-       * would render every token twice.
-       *
-       * Either way `discard()`, not `return`. See `resumeTurn`: the generator has not started, so
-       * letting it go leaves the response body open and a server thread writing into it. */
-      if (conversationRef.current !== wanted) return attached.discard();
-      const state = runtime.thread.getState();
-      if (state.isRunning) return attached.discard();
-      runtime.thread.resumeRun({
-        parentId: state.messages.at(-1)?.id ?? null,
-        stream: () => attached.stream,
-      });
-    });
-  }, [conversationId, runtime]);
-
-  /* Push the messages into the thread that is already mounted.
-   *
-   * The whole of what `threadKey` used to do, without the teardown. The runtime is shared across
-   * conversations, so a stream still being read when the messages are swapped would append the
-   * conversation you *left* into the one you just opened. Cancelling stops this window reading; it
-   * does not stop the turn — see the note in `lib/backend/adapter.ts` — which is the point: the
-   * work carries on and `rejoin` picks it up again when you come back.
-   *
-   * **And the reset waits for the cancel to land, which the first version of this did not.**
-   * `cancelRun` aborts the controller and returns; the run is still unwinding, and its own
-   * `finally` then calls `updateMessage({status: cancelled})` against a message id that `reset`
-   * has already cleared out of the repository. Switching away from a running chat therefore
-   * dropped the old turn's dying write into the conversation you had just opened — the thread
-   * would sit there looking stuck, and when the abandoned turn finally ended the state settled and
-   * the switch appeared to happen by itself, a minute after it was asked for. Both halves of
-   * "I can't switch while one is running, and then it switches on its own" are that one race.
-   *
-   * So: cancel, wait for the thread to actually stop running, then replace the messages. Bounded,
-   * because a run that never settles must not leave you looking at the wrong conversation for
-   * ever — after two seconds the swap happens regardless, which is the old behaviour and no worse.
-   */
-  useEffect(() => {
-    const thread = runtime.thread;
-    if (!thread.getState().isRunning) {
-      thread.reset(resumed);
-      return;
-    }
-
-    let settled = false;
-    let unsubscribe: (() => void) | undefined;
-    let timer: number | undefined;
-
-    const swap = () => {
-      if (settled) return;
-      settled = true;
-      unsubscribe?.();
-      if (timer !== undefined) window.clearTimeout(timer);
-      thread.reset(resumed);
-    };
-
-    thread.cancelRun();
-    // Subscribed before the check below, so a run that settles between the two is not missed.
-    unsubscribe = thread.subscribe(() => {
-      if (!thread.getState().isRunning) swap();
-    });
-    timer = window.setTimeout(swap, 2_000);
-    if (!thread.getState().isRunning) swap();
-
-    return () => {
-      settled = true;
-      unsubscribe?.();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [runtime, resumed]);
-
-  /* And the composer goes with the conversation.
-   *
-   * Not smoothness — correctness. The remount used to clear the draft as a side effect of
-   * destroying everything; without it, half a sentence typed in one chat follows you into the next
-   * one and looks like something you wrote there. Per-conversation drafts would be better than
-   * either, and are a feature rather than a fix: this is the behaviour that was already intended.
-   *
-   * Keyed on the conversation and not on `resumed`, so widening the window with "load earlier"
-   * leaves what you were typing alone. */
-  useEffect(() => {
-    runtime.thread.composer.setText("");
-  }, [runtime, conversationId]);
-
-  useEffect(rejoin, [rejoin]);
-
-  /* And again whenever a turn *starts* in this conversation, which is the half that was missing.
-     The effect above only fires when you open a conversation, so a turn the server began on its own
-     — a reminder firing, a background task finishing — streamed to nobody: the transcript grew on
-     disk and the window found out when you reloaded it. That was the second Cmd-R.
-
-     `resumeTurn` is already idempotent about this (it returns nothing when no turn is live, and the
-     `isRunning` guard drops the case where this window started the turn itself), so an extra call is
-     free and a missed event is the only thing that costs anything. */
-  // `useServerEvent` rather than a query, because this is not data: there is nothing to refetch,
-  // there is a stream to attach to. See hooks/use-live.ts — it is the one shape in the app that
-  // stayed imperative, and deliberately so.
-  useServerEvent("turn", rejoin, conversationId);
-
-  /** Counts opens, so a slow one cannot land on top of a later fast one. */
-  const openSeq = useRef(0);
-
-  const openConversation = useCallback(
-    async (id: string) => {
-      /* Through the cache, so going back to a conversation you were just in is instant.
-       *
-       * This awaited a fresh `fetchConversation` every time, which meant a click on a row did
-       * nothing at all until the round trip came back — and switching back and forth between two
-       * chats paid for the same transcript over and over. `fetchQuery` hands back what is already
-       * held when it is still fresh and fetches when it is not; a `turn` event invalidates
-       * `["conversation"]`, so one whose turn finished while you were away is refetched rather
-       * than restored without its reply. */
-      /* Which click this was. Two rows clicked quickly are two fetches in flight, and without a
-       * sequence they land in whichever order the network settles them — so the conversation you
-       * end up in is the one that answered fastest, not the one you asked for last. */
-      const mine = ++openSeq.current;
-
-      /* Switch first, fetch second, and that order is the fix.
-       *
-       * Everything below the await used to be above nothing: the conversation id, the project,
-       * the thread contents all changed only once the payload had landed, so the click had no
-       * effect you could see until it was already over. Moving the id and an empty thread ahead
-       * of the await means the app is *in* the conversation immediately, showing that it is
-       * loading it — which is what "do not hang" actually asks for. */
-      pendingProject.current = null;
-      setConversationId(id);
-      setTimeline([]);
-      setResumed([]);
-      setWindowStart(0);
-      setOpening(true);
-      remember(id);
-
-      const detail = await cache
-        .fetchQuery({ queryKey: keys.conversation(id), queryFn: () => fetchConversation(id) })
-        .catch(() => null);
-      // A later open has already claimed the screen; this one's payload is not wanted, and
-      // `setOpening(false)` is not ours to call either — the newer open owns that flag now.
-      if (openSeq.current !== mine) return;
-      setOpening(false);
-      if (!detail) return;
-
-      setProjectId(detail.projectId ?? null);
-      setTimeline(detail.timeline);
-      setWindowStart(detail.windowStart ?? 0);
-      // Already a page — the server windowed it. Slicing again here is what this used to do to
-      // 492 turns it had just finished parsing.
-      setResumed(toThreadMessages(detail.timeline));
-    },
-    [cache],
-  );
-
-  /** A page is being fetched onto the front of what you are reading. */
-  const [loadingEarlier, setLoadingEarlier] = useState(false);
-
-  /* Widen the window by another page.
-   *
-   * `reset` with the longer list rather than a prepend, because a local runtime has no prepend —
-   * see the note on `resumed`.
-   *
-   * It fetches now. It used to slice, because the whole conversation was already in state —
-   * which is exactly what made opening one cost 22.83 MB: the button's convenience was paid
-   * for on every open, by everyone, including the openings where nobody ever scrolled up.
-   */
-  const loadEarlier = useCallback(async () => {
-    if (loadingEarlier || windowStart <= 0 || !conversationId) return;
-    setLoadingEarlier(true);
-    const older = await fetchConversation(conversationId, {
-      turns: WINDOW,
-      before: windowStart,
-    }).catch(() => null);
-    setLoadingEarlier(false);
-    if (!older || !older.timeline.length) return;
-
-    const widened = [...older.timeline, ...timeline];
-    // Remember which message you were reading before the thread is torn down; see `anchor`.
-    const grown = toThreadMessages(widened);
-    const viewport = document.querySelector<HTMLElement>(
-      '[data-slot="aui_thread-viewport"]',
-    );
-    anchor.current = null;
-    if (viewport) {
-      const top = viewport.getBoundingClientRect().top;
-      const messages = [
-        ...viewport.querySelectorAll<HTMLElement>("[data-message-id]"),
-      ];
-      // The first message still on screen — the one you are actually reading, rather than the
-      // one scrolled off above it.
-      const index = messages.findIndex(
-        (m) => m.getBoundingClientRect().bottom > top,
-      );
-      if (index >= 0) {
-        anchor.current = {
-          index,
-          shift: grown.length - messages.length,
-          offset: messages[index].getBoundingClientRect().top - top,
-        };
-      }
-    }
-    setTimeline(widened);
-    setWindowStart(older.windowStart ?? 0);
-    setResumed(grown);
-  }, [conversationId, loadingEarlier, timeline, windowStart]);
-
-  /* Watch the thread's own scroll box: whether you are near the top, and putting you back where
-   * you were after "load earlier" tore the thread down and built a longer one.
-   *
-   * Both live here rather than in `Thread` because the button and the windowing state are here,
-   * and the viewport is reachable by its slot.
-   *
-   * "Near the top" is a screenful rather than a pixel count. A fixed threshold does not survive
-   * this thread: `content-visibility` placeholders measure their real height as you arrive, and
-   * asking for `scrollTop = 0` settled at 531 once they had — under any tight constant, the
-   * offer of older messages was hidden at the exact moment you had scrolled up to look for it.
-   *
-   * The restore holds a *message* at the place on screen it already occupied, on a frame loop,
-   * because it is competing with the library's scroll-to-bottom and with that same settling.
-   * Pinning an element rather than an offset is what makes it exact: everything above it can
-   * change height and the answer is still recomputed from where the element actually is.
-   */
-  useEffect(() => {
-    const viewport = document.querySelector<HTMLElement>(
-      '[data-slot="aui_thread-viewport"]',
-    );
-    if (!viewport) return;
-
-    const look = () => setNearTop(viewport.scrollTop < viewport.clientHeight);
-    viewport.addEventListener("scroll", look, { passive: true });
-
-    const held = anchor.current;
-    anchor.current = null;
-    let frame = 0;
-    let timer = 0;
-    let done = false;
-    const stop = () => {
-      if (done) return;
-      done = true;
-      cancelAnimationFrame(frame);
-      look();
-    };
-
-    if (!held) {
-      // A fresh conversation opens at the bottom; only read the position once the library's own
-      // scroll has run, or the pill flashes on open.
-      timer = window.setTimeout(look, SETTLE_MS);
-    } else {
-      const until = performance.now() + RESTORE_MS;
-      const pin = () => {
-        if (done) return;
-        const messages =
-          viewport.querySelectorAll<HTMLElement>("[data-message-id]");
-        const mine = messages[held.index + held.shift];
-        if (mine) {
-          const drift =
-            mine.getBoundingClientRect().top -
-            viewport.getBoundingClientRect().top -
-            held.offset;
-          if (Math.abs(drift) > 1) viewport.scrollTop += drift;
-        }
-        if (performance.now() < until) frame = requestAnimationFrame(pin);
-        else stop();
-      };
-      frame = requestAnimationFrame(pin);
-      // Any input from you ends it: a loop that keeps re-seizing the scroll is worse than the
-      // jump it was fixing.
-      for (const event of ["wheel", "touchstart", "keydown"] as const) {
-        window.addEventListener(event, stop, { passive: true, once: true });
-      }
-    }
-
-    return () => {
-      viewport.removeEventListener("scroll", look);
-      cancelAnimationFrame(frame);
-      clearTimeout(timer);
-      done = true;
-      for (const event of ["wheel", "touchstart", "keydown"] as const) {
-        window.removeEventListener(event, stop);
-      }
-    };
-  }, [conversationId, resumed]);
-
-  /* A project chosen for a conversation that does not exist yet.
-   *
-   * "Start a chat in this project" is asked from the history panel, where the project is in
-   * front of you — but a fresh chat has no id until the first turn comes back from the stream,
-   * and the binding is written against an id. So the choice is held here and shown immediately
-   * in the session bar, which is true: it is what the next turn will be bound to.
-   *
-   * It now rides *with* that turn as well, through the adapter above. Writing it afterwards was
-   * a turn too late: the first message of a chat is the one that says what the work is, and it
-   * was the one turn assembled with no project bound — so he got the full cross-project listing
-   * and none of this project's memory, plan or tasks, on the exact turn that decided what to do
-   * next. The write below is now a confirmation rather than the mechanism, and it stays because
-   * it is also the path for picking a project in the session bar part-way through a chat. */
-  const pendingProject = useRef<number | null>(null);
-
-  const newConversation = useCallback((project: number | null = null) => {
-    pendingProject.current = project;
-    setConversationId("");
-    setProjectId(project);
-    setTimeline([]);
-    setWindowStart(0);
-    setOpening(false);
-    setResumed([]);
-    remember("");
-  }, []);
-
-  // Reopen where you were. A reload used to land on an empty chat with the history panel
-  // closed, so the conversation you were mid-way through was two clicks away and looked
-  // gone. Runs once: if the stored conversation has since been deleted, `openConversation`
-  // finds nothing and this quietly stays a fresh chat.
-  useEffect(() => {
-    // Not when the URL already names one. A notification opens `/chat/<id>`, and restoring the
-    // last conversation alongside it is two opens racing for the same screen — the effect below
-    // asks for the one you were sent to, this one asks for the one you left, and whichever
-    // answers second wins. The route is the more specific instruction, so it takes precedence.
-    if (route.conversationId) return;
-    let stored = "";
-    try {
-      stored = localStorage.getItem(LAST_CONVERSATION) || "";
-    } catch {
-      /* private mode, or no storage — a fresh chat is a fine answer */
-    }
-    if (stored) void openConversation(stored);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openConversation]);
-
-  // The session's own state, re-read whenever the conversation changes underneath us — a
-  // chat started from an empty composer gets its id from the stream, not from us.
-  const refreshSession = useCallback(() => {
-    if (!conversationId) return;
-    /* Through the cache, like `openConversation`.
-     *
-     * This is called on every completed step of a turn — `useEffect(refreshSession, [finished])`
-     * below — and it was an uncached `fetchConversation`, so a turn that ran forty tool calls
-     * refetched and re-parsed the whole transcript forty times. Six megabytes of JSONL on the
-     * conversation this was found in, to read one nullable `projectId` off the top of it.
-     *
-     * `fetchQuery` serves it from the cache inside the 60s `staleTime` and dedupes with whatever
-     * `openConversation` already fetched; a `turn` event invalidates the key, so the reading is
-     * still current when it matters. */
-    void cache
-      .fetchQuery({
-        queryKey: keys.conversation(conversationId),
-        queryFn: () => fetchConversation(conversationId),
-      })
-      .then((detail) => setProjectId(detail.projectId ?? null))
-      .catch(() => {});
-  }, [cache, conversationId]);
-
-  useEffect(() => {
-    remember(conversationId);
-    // Write the pending project before re-reading, not after: `refreshSession` would otherwise
-    // fetch the server's null and clear the project you picked a second before the id existed.
-    const wanted = pendingProject.current;
-    if (conversationId && wanted !== null) {
-      pendingProject.current = null;
-      void setConversationProject(conversationId, wanted)
-        .then(() => setProjectId(wanted))
-        .catch(refreshSession);
-      return;
-    }
-    refreshSession();
-  }, [conversationId, refreshSession]);
-
-  const activity = useActivity();
-  const inbox = useMessages();
   // The Control Panel (and which tab/task is open) lives in the URL, so deep
   // links, refresh, and back/forward all work.
   const location = useLocation();
@@ -632,16 +100,8 @@ export function Workspace({
   /** Whether a surface is on screen anywhere, for the header's pressed states. Read from the
    *  tree rather than from a flag beside it, so the button cannot disagree with the layout. */
   const hasTab = useCallback((key: string) => treeHasTab(layoutTree, key), [layoutTree]);
-  /* The chat tab, while there is only one of it.
-   *
-   * The tree keys a chat by its conversation, which is what will let two of them coexist. Until
-   * then there is one chat tab carrying an empty id, meaning "whichever conversation this
-   * session has open" — and `Workspace` still owns that, as `conversationId`. Writing the real
-   * id into the ref here would be half of per-tab sessions: the tab would rename itself on every
-   * open while one runtime and one timeline window still sat behind it, so two tabs would show
-   * the same conversation under two names. The ref becomes authoritative when the session behind
-   * it does. */
-  const chatKey = tabKeyOf({ surface: "chat", conversationId: "" });
+  const focusedPane = useLayout((state) => state.focused);
+
   /** The header's buttons are toggles: pressing one twice puts the surface away again. */
   const toggleSurface = useCallback(
     (surface: "conversations" | "work" | "board" | "settings") => {
@@ -651,6 +111,87 @@ export function Workspace({
     [closeTab, layoutTree, openSurface],
   );
 
+
+
+  /* Everything about *a* conversation moved into `ChatPane`, one instance per chat tab.
+   *
+   * What used to be here was a single session: one runtime, one `resumed` array, one timeline
+   * window, one scroll anchor, one `openConversation` that swapped all of it under a thread
+   * that might still be streaming. That swap is gone rather than made safe — a runtime that
+   * only ever holds one conversation has nothing to swap — and with it the cancel-then-wait
+   * dance, the composer clearing, and the open-sequence counter that stopped a slow click
+   * landing on top of a fast one. None of the three has anything to guard any more.
+   *
+   * What is left here is the part that was never about one conversation: which chat is in
+   * front of you, and how a chat gets opened at all.
+   */
+  const cache = useQueryClient();
+
+  /** A project picked for a chat that does not exist yet — "New chat here" from the sidebar.
+   *  Read once by the pane that mounts next; the pane owns it from then on. */
+  const draftProject = useRef<number | null>(null);
+
+  /** Open a conversation: a tab, focused if it is already somewhere. */
+  const openConversation = useCallback(
+    (id: string) => {
+      draftProject.current = null;
+      openSurface({ surface: "chat", conversationId: id });
+      remember(id);
+    },
+    [openSurface],
+  );
+
+  /** A fresh chat. Its tab is keyed on nothing until the first turn names it, which is why
+   *  there can only be one draft open at a time — a second would collide with the first. */
+  const newConversation = useCallback(
+    (project: number | null = null) => {
+      draftProject.current = project;
+      openSurface({ surface: "chat", conversationId: "" });
+      remember("");
+    },
+    [openSurface],
+  );
+
+  /** Which chat you are looking at, for the surfaces that are *about* a conversation without
+   *  being one: Work, the context breakdown, and the header's "he is working" light.
+   *
+   *  The focused pane's active tab when that is a chat, and otherwise the first chat anywhere
+   *  in the layout — so closing the focused pane does not leave Work pointed at nothing. */
+  const conversationId = useMemo(() => {
+    const all = panesOf(layoutTree);
+    const here = all.find((one) => one.id === focusedPane)?.tabs[
+      all.find((one) => one.id === focusedPane)?.active ?? 0
+    ];
+    if (here?.surface === "chat") return here.conversationId ?? "";
+    const anywhere = all.flatMap((one) => one.tabs).find((tab) => tab.surface === "chat");
+    return anywhere?.surface === "chat" ? (anywhere.conversationId ?? "") : "";
+  }, [focusedPane, layoutTree]);
+
+  // Reopen where you were. A reload used to land on an empty chat with the conversation you
+  // were mid-way through two clicks away, looking gone.
+  useEffect(() => {
+    if (route.conversationId) return;
+    let stored = "";
+    try {
+      stored = localStorage.getItem(LAST_CONVERSATION) || "";
+    } catch {
+      /* private mode, or no storage — a fresh chat is a fine answer */
+    }
+    if (stored) openConversation(stored);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* A notification that lands you in the chat it is about. `/chat/<id>` is the one route that
+     could not be expressed before: a question he is waiting on lives in exactly one
+     conversation, and an alert that drops you into whichever chat you last had open has not
+     finished its job. */
+  useEffect(() => {
+    if (route.conversationId) openConversation(route.conversationId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.conversationId]);
+
+  const activity = useActivity();
+  const inbox = useMessages();
 
   /* A route names what you are looking at; the layout decides where it goes.
    *
@@ -739,13 +280,6 @@ export function Workspace({
   });
   const working = conversationId !== "" && live.includes(conversationId);
   const elsewhere = live.filter((id) => id !== conversationId);
-  // He adopts a project by working on one, so what the session is bound to can change
-  // part-way through a turn. One re-read per completed step or turn, which is the cheapest
-  // signal that anything could have changed at all.
-  const finished = activity.activity.filter(
-    (item) => item.kind === "done",
-  ).length;
-  useEffect(refreshSession, [finished, refreshSession]);
   // The room glows green while he is working, and is otherwise his own amber.
   const wash = working ? "var(--roam)" : "var(--kith)";
 
@@ -774,85 +308,19 @@ export function Workspace({
           );
 
         case "chat":
+          /* Keyed on the conversation, which is what makes the tabs real.
+           *
+           * A pane's conversation never changes, so React tearing one down and building
+           * another is exactly right when the key changes — and there is no key change in the
+           * ordinary life of a tab, because a draft chat learning its id renames its *tab*
+           * rather than being replaced. */
           return (
-            <div className="relative flex h-full min-h-0 flex-col">
-          <SessionBar
-            conversationId={conversationId}
-            projectId={projectId}
-            onProject={(next) => {
-              setProjectId(next);
-              // Picked before the conversation exists — the bar shows on an empty chat now,
-              // and there is no id to write the binding against until the first turn comes
-              // back. Held in the same place "New chat here" holds it, and written by the
-              // same effect.
-              if (!conversationRef.current) pendingProject.current = next;
-            }}
-          />
-          {/* The thread gets its own box with a definite height rather than sitting
-              straight in the column. Without one, the thread root's `h-full` resolved
-              against the whole column — session bar included — so the moment a
-              conversation existed the composer's bottom edge sat 37px past the window
-              and the send button was clipped clean off it. An empty chat looked fine
-              because the session bar draws nothing, which is what made it read as
-              random rather than as a layout bug.
-
-              A flex column, not a block, and that is the same bug a second time. `Thread`
-              is `h-full`, so in block layout it takes the whole box *and* the "Load
-              earlier" button above it takes its own height on top — the thread's bottom
-              ends up past the box by exactly the height of that button. It only shows on
-              a conversation long enough to be windowed, because that is the only time the
-              button is rendered, so it reads as "big chats are broken" rather than as a
-              layout bug. The bottom-most thing in the thread falls off first, which is
-              the context meter under the composer.
-
-              Anything added beside `Thread` in here has to go in the flow, not on top of
-              it. */}
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <ErrorBoundary where="The conversation">
-              <CheckpointsProvider
-                conversationId={conversationId}
-                // How many turns were dropped off the front by the window. Checkpoints are
-                // tagged with their absolute turn index and matched against the *rendered*
-                // message index, so without this the offer silently walks backwards through
-                // the conversation as you window — "restore to here" on the first visible
-                // message would target whatever happened 433 turns earlier. A destructive
-                // action aiming at the wrong commit is the worst thing windowing could have
-                // broken, so the offset travels with the checkpoints rather than being
-                // recomputed anywhere that compares them.
-                // Now read straight off the page the server handed back, rather than
-                // inferred from two client-side lengths. Same number, one definition.
-                turnOffset={windowStart}
-              >
-                {/* Floating, not stacked.
-                    This was a full-width flex row in the flow, which made it a band across
-                    the top of the conversation: it claimed its own height from the thread,
-                    and the first message ran up underneath the thread's top fade to meet
-                    it. Absolute takes it out of the flow entirely — the thread gets the
-                    whole box back, and the pill hovers over the top of it the way a
-                    "jump to latest" chip does at the other end.
-                    `pointer-events-none` on the strip so the full-width row cannot
-                    intercept anything; only the pill itself is clickable. */}
-                {windowStart > 0 && nearTop ? (
-                  <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
-                    <button
-                      type="button"
-                      onClick={() => void loadEarlier()}
-                      disabled={loadingEarlier}
-                      className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors disabled:opacity-60"
-                    >
-                      {loadingEarlier
-                        ? "Loading earlier…"
-                        : `Load ${Math.min(WINDOW, windowStart)} earlier · ${windowStart} above`}
-                    </button>
-                  </div>
-                ) : null}
-                <div className="relative min-h-0 flex-1">
-                  {opening ? <ThreadSkeleton /> : <Thread conversationId={conversationId} />}
-                </div>
-              </CheckpointsProvider>
-            </ErrorBoundary>
-          </div>
-            </div>
+            <ChatPane
+              key={ref.conversationId || "draft"}
+              conversationId={ref.conversationId ?? ""}
+              initialProject={draftProject.current}
+              active={(ref.conversationId ?? "") === conversationId}
+            />
           );
 
         case "work":
@@ -924,18 +392,31 @@ export function Workspace({
       config,
       conversationId,
       inbox,
-      loadingEarlier,
-      nearTop,
       newConversation,
-      opening,
       openConversation,
-      projectId,
       route.settingsTab,
       route.tab,
       route.taskId,
-      windowStart,
     ],
   );
+
+  /** The project the focused chat is bound to.
+   *
+   * The file viewer needs it: the paths it is handed are mostly relative ones out of his prose
+   * and his tool results, and a relative path written during a project turn is relative *to
+   * that project*. Without it the viewer asks the global workspace root and reports a file
+   * missing that was never missing.
+   *
+   * Read from the cache the focused pane's own fetch already filled, rather than tracked
+   * alongside it — one fact, one owner. `useQuery` on the same key rather than a bare
+   * `getQueryData`, so this re-renders when that fetch lands instead of showing null until
+   * something else happens to move. */
+  const { data: focusedDetail } = useQuery({
+    queryKey: keys.conversation(conversationId),
+    queryFn: () => fetchConversation(conversationId),
+    enabled: !!conversationId,
+  });
+  const projectId = focusedDetail?.projectId ?? null;
 
   /** A chat tab is named by its conversation; everything else by the surface registry. */
   const titleForTab = useCallback(
@@ -952,10 +433,9 @@ export function Workspace({
 
   return (
     <TooltipProvider>
-      {/* No `key` any more. It was bumped on every conversation switch to force a remount, which
-          is what made switching feel like a page load; the messages are replaced with
-          `thread.reset` instead — see the note on `resumed`. */}
-      <AssistantRuntimeProvider runtime={runtime}>
+      {/* No runtime provider here any more. There is one per chat pane, inside `ChatPane`,
+          which is what lets two conversations stream at once. */}
+      <>
         <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
           {/* Ambient wash — leans green while he works, amber while he's here. */}
           <div
@@ -1012,7 +492,7 @@ export function Workspace({
             question is the one it was always really asking — is there a composer for this file
             to land on. A drop with the chat tab closed would attach to something nobody can
             see, which is a file that has vanished. */}
-        <DropZone enabled={hasTab(chatKey)} />
+        <DropZone enabled={hasTab(tabKeyOf({ surface: "chat", conversationId }))} />
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. Given this session's project, because the paths it is
             handed are mostly relative ones out of his prose and his tool results, and a
@@ -1020,7 +500,7 @@ export function Workspace({
             it the viewer asked the global workspace root and got "there's no
             .kith/work/task-76.md" for a file that was never missing. */}
         <WorkspaceFileViewer projectId={projectId} />
-      </AssistantRuntimeProvider>
+      </>
     </TooltipProvider>
   );
 }
@@ -1045,114 +525,4 @@ function remember(conversationId: string): void {
   } catch {
     /* ignore */
   }
-}
-
-/**
- * A stored conversation, rebuilt as the thread saw it.
- *
- * Not just the words: the reasoning blocks he opened, the prose between tool rounds, and
- * each call with the result it got. Reopening a conversation should show you the one you
- * had — a paragraph where six rounds of work used to be is a summary, and no amount of
- * cleverness reconstructs the shape once it is gone.
- */
-function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
-  const out: unknown[] = [];
-  // A running count of tool calls seen so far in this conversation, not the backend's own
-  // id. `${turnIndex}-${part.id}` was the earlier fix and is still right for the ordinary
-  // case, but it assumes the backend's per-turn ids are actually unique within whatever
-  // `timeline()` groups as one turn — true for a turn that is one `stream_agent` call, and
-  // false for older conversations where a reminder continued the same conversation_id
-  // with no new user message in between: two separate turns, each restarting its own ids at
-  // c1, land in the transcript with nothing to tell `timeline()` to split them, so "c9" can
-  // appear twice *inside* one rendered turn. No amount of scoping by turn index fixes a
-  // collision that happens within a single turn index — only something that can never repeat
-  // does, so this counts instead of reading anything the backend assigned.
-  let callSeq = 0;
-  for (const turn of timeline) {
-    const content: unknown[] = [];
-    // Collected rather than pushed as they arrive. One of these is recorded per model request,
-    // and pushing each as its own data part is what made a reopened conversation a column of
-    // six-figure token counts — "328,422 tokens", "165,292 tokens", a dozen deep — threaded
-    // through the reply. The live stream has always accumulated them into one; a resumed turn
-    // has to read the same, or reopening a conversation does not show you the one you had.
-    //
-    // It also cost the tool grouping: a data part between two tool calls breaks the run, so
-    // eight consecutive calls rendered as eight separate "1 tool call" rows instead of one
-    // line saying what he touched.
-    const rounds: { uncached: number; cached: number; out: number }[] = [];
-    // One per turn at most, recorded when it ended — see the `context` branch in
-    // `services/conversations`. Collected the same way the counts are, so it lands in the same
-    // footer instead of somewhere in the middle of the reply.
-    let context: ContextLedger | undefined;
-    let baseline: ContextLedger | undefined;
-    let folded = false;
-    let retried = 0;
-    for (const part of turn.parts) {
-      if (part.kind === "text") content.push({ type: "text", text: part.text });
-      else if (part.kind === "reasoning")
-        content.push({ type: "reasoning", text: part.text });
-      else if (part.kind === "tool") {
-        content.push({
-          type: "tool-call",
-          // The backend resets its own tool-call ids to c1 at the start of every turn, so the
-          // raw id repeats across nearly every message in a long conversation — 209 times for
-          // "c9" alone in one real conversation, which is what actually crashed the thread on
-          // reopening it: two different messages both offering a tool call keyed "c9" collided
-          // in assistant-ui's own resource cache. A counter rather than the backend's id or
-          // even `${turnIndex}-${part.id}`: those still collide on a turn that is really two
-          // continuations glued together with no user message between them (older
-          // conversations, from before this stopped happening unaskedsation on their own) —
-          // both restart their own ids at c1, landing two "c9"s inside what `timeline()`
-          // reads as one turn. This never repeats, by construction, regardless of what the
-          // backend assigned or how the transcript is shaped.
-          toolCallId: `call-${callSeq++}`,
-          toolName: part.name,
-          args: part.arguments,
-          argsText: JSON.stringify(part.arguments),
-          result: part.result,
-        });
-      } else if (part.kind === "context") {
-        context = part.context;
-        // `{}` — not absent — on a turn recorded before this field existed; `window` is
-        // always present on a real reading, never on that placeholder. `turn-usage.tsx`
-        // falls back to `context` when this is undefined.
-        baseline = part.baseline?.window
-          ? (part.baseline as ContextLedger)
-          : undefined;
-        folded = part.folded;
-        retried = part.retried ?? 0;
-      } else {
-        rounds.push({
-          uncached: part.uncached,
-          cached: part.cached,
-          out: part.out,
-        });
-      }
-    }
-    // Last, so the figure lands at the foot of the turn and nothing is split around it.
-    // Token counts ride back as the same data part the live stream uses, so the footer reads
-    // the same on a resumed turn as it did on a fresh one.
-    if (rounds.length || context) {
-      content.push({
-        type: "data",
-        name: USAGE_PART,
-        data: { rounds, context, baseline, folded, retried },
-      });
-    }
-    // `createdAt` from the transcript, never left to default. A `ThreadMessageLike` without one
-    // is stamped with the moment it was converted, so every turn in a conversation reopened now
-    // would read as having happened now — a clock that is wrong on exactly the messages it is
-    // there to date. Omitted rather than guessed when the turn predates the field.
-    const at = turn.at ? new Date(turn.at) : null;
-    if (content.length) {
-      out.push({
-        role: turn.role,
-        content,
-        ...(at && !Number.isNaN(at.getTime()) ? { createdAt: at } : {}),
-      });
-    }
-  }
-  // One cast, at the boundary: the shapes above are the library's own, and its content
-  // union narrows by role in a way that defeats inference through a map.
-  return out as ThreadMessageLike[];
 }

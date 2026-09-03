@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuiState } from "@assistant-ui/react";
 import { ChevronRight, Layers, Maximize2 } from "lucide-react";
 
-import { latestUsage } from "@/components/assistant-ui/thread";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { foldNow } from "@/lib/commands";
+import { useFocusedChat } from "@/lib/focused-chat";
 import { byGroup, FOLDS_AT } from "@/lib/context-groups";
 import { pathForContext } from "@/lib/router";
 import { formatTokens } from "@/lib/tokens";
@@ -31,9 +30,13 @@ import type { ContextLedger } from "@/lib/backend/types";
 
 export function ContextSection({ conversationId }: { conversationId?: string }) {
   const navigate = useNavigate();
-  const messages = useAuiState((s) => s.thread.messages);
-  const running = useAuiState((s) => s.thread.isRunning);
-  const usage = latestUsage(messages);
+  /* Read from the focused chat rather than from a runtime.
+   *
+   * This panel is its own pane now, outside every chat's provider, so `useAuiState` throws
+   * here — during render, which took the whole Work panel down with it. The focused chat
+   * publishes what this needs; see `lib/focused-chat`. */
+  const usage = useFocusedChat((state) => state.usage);
+  const running = useFocusedChat((state) => state.running);
   const [open, setOpen] = useState(false);
   const [folding, setFolding] = useState(false);
   // The reading a fold leaves behind. A fold takes no reading of its own, so until the next turn

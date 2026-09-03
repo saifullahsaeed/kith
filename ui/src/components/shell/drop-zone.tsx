@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { useComposerRuntime } from "@assistant-ui/react";
 import { Paperclip } from "lucide-react";
+
+import { activeComposer } from "@/lib/active-composer";
 
 /**
  * Dropping a file anywhere in the window attaches it.
@@ -21,7 +22,11 @@ import { Paperclip } from "lucide-react";
  * another application.
  */
 export function DropZone({ enabled }: { enabled: boolean }) {
-  const composer = useComposerRuntime();
+  /* The composer is looked up at drop time rather than by a hook.
+   *
+   * There is one per chat pane now, and this listens on the window — above all of them, where
+   * `useComposerRuntime()` finds none and throws, taking the whole app down with it. The
+   * focused chat publishes itself; see `lib/active-composer`. */
   // How many files are hovering. Zero means no drag — one piece of state rather than a
   // boolean and a count that can disagree.
   const [hovering, setHovering] = useState(0);
@@ -69,7 +74,7 @@ export function DropZone({ enabled }: { enabled: boolean }) {
       clear();
       if (!enabled) return;
       for (const file of Array.from(event.dataTransfer?.files ?? [])) {
-        void composer.addAttachment(file);
+        void activeComposer()?.addAttachment(file);
       }
     };
 
@@ -89,7 +94,9 @@ export function DropZone({ enabled }: { enabled: boolean }) {
       window.removeEventListener("dragend", clear);
       window.removeEventListener("blur", clear);
     };
-  }, [enabled, composer]);
+    // No composer in the dependencies any more: it is read at drop time, so a change of
+    // focused chat must not tear these listeners down and put them back.
+  }, [enabled]);
 
   if (!hovering) return null;
 

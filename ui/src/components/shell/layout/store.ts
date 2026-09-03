@@ -7,6 +7,8 @@ import {
   hasTab,
   openTab,
   pane,
+  paneFor,
+  renameTab,
   panes,
   resizeSplit,
   split,
@@ -109,6 +111,8 @@ export type LayoutState = {
   close: (key: string) => void;
   dock: (key: string, paneId: string, edge: Edge) => void;
   activate: (paneId: string, index: number) => void;
+  /** Re-key a tab in place — a new chat learning its conversation id. */
+  rename: (key: string, ref: TabRef) => void;
   focus: (paneId: string) => void;
   resize: (splitId: string, sizes: number[]) => void;
   reset: () => void;
@@ -140,7 +144,7 @@ export const useLayout = create<LayoutState>((set, get) => {
 
     open: (ref) => {
       const { tree, focused } = get();
-      const result = openTab(tree, ref, focused);
+      const result = openTab(tree, ref, paneFor(tree, ref.surface, focused));
       commit(result.tree, result.paneId);
     },
 
@@ -149,6 +153,8 @@ export const useLayout = create<LayoutState>((set, get) => {
     dock: (key, paneId, edge) => commit(dockTab(get().tree, key, paneId, edge)),
 
     activate: (paneId, index) => commit(activateTab(get().tree, paneId, index), paneId),
+
+    rename: (key, ref) => commit(renameTab(get().tree, key, ref)),
 
     focus: (paneId) => set({ focused: paneId }),
 

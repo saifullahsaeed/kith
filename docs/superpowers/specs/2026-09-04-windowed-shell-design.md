@@ -171,7 +171,7 @@ Created on open, disposed on close, held in a zustand map keyed by conversation 
 This is why the shell is not a docking framework's job. A chat tab is not a passive panel; it
 owns a live runtime.
 
-### Background tabs
+### Background tabs — narrower than specified
 
 `/api/events` is a single process-wide `EventSource` that invalidates by key — already
 consolidated down from two sources and eleven timers. So a background chat tab learns its turn
@@ -180,6 +180,13 @@ mount a thread, and a background tab that has not been looked at drops its windo
 on focus.
 
 That, plus tranche 1, is what stops N tabs costing N × 22 MB.
+
+**As built, an inactive tab unmounts entirely** rather than staying mounted and subscribed. A
+pane renders only its active tab, so a background chat holds no runtime, no window and no
+listeners at all — better for memory than what was specified, and it makes switching a cache
+read rather than a fetch. What it costs is the dot: a background tab cannot show that its turn
+finished, because nothing of it is running to notice. Worth adding, and it wants a
+subscription that outlives the component rather than a mounted-but-hidden pane.
 
 ### Breaking up workspace.tsx
 
@@ -198,6 +205,28 @@ impossible while the session is component state in one 54 KB file.
 - **vitest** that opening a conversation never places the full timeline in state.
 - **playwright** (already a devDependency): open the 492-turn conversation, assert the thread
   paints.
+
+## What tranche 3 actually needed that the design did not foresee
+
+Splitting one runtime into one per pane broke everything *outside* a pane that had been reading
+it, and both failures were the same shape: a hook that throws during render, taking its whole
+subtree down.
+
+`DropZone` listens on the window — it must, because without a `preventDefault` a dropped file
+stays a navigation to a `file://` URL and the desktop shell opens it in Preview. It called
+`useComposerRuntime()` from above every provider. The focused chat publishes its composer into
+`lib/active-composer` instead, read at drop time, so the drop is still swallowed when no chat is
+open and simply attaches to nothing.
+
+The Work panel's context meter read `thread.messages` and `thread.isRunning` off the runtime.
+It publishes through `lib/focused-chat` now — two facts, not a handle on the runtime, because
+handing out the runtime would let anything outside a pane reach into a conversation it is not
+in, which is the coupling the split was for.
+
+One more the browser found: a new tab opened into whichever pane had focus, and clicking a
+conversation focuses the *sidebar*, so the chat landed in a 240px column beside the list it came
+from. `paneFor` groups a new tab with a pane already holding its kind, which is what makes the
+second conversation open as a tab beside the first.
 
 ## Not doing
 

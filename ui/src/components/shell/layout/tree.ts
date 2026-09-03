@@ -245,6 +245,50 @@ export function resizeSplit(root: Node, splitId: string, sizes: number[]): Node 
   return walk(root);
 }
 
+/** Give a tab a new identity in place, keeping its pane and its position.
+ *
+ * Exists for one case, and it is the case that makes chat tabs possible at all: a new chat has
+ * no conversation until its first turn comes back, so its tab opens keyed on nothing and is
+ * re-keyed the moment the server names it. Closing and reopening would work, and would move the
+ * tab to the end of the strip and steal focus from wherever you had gone in the meantime — mid
+ * first reply, which is exactly when you are watching.
+ *
+ * A rename onto a key that already exists is refused rather than merged. Two tabs claiming one
+ * conversation is invariant 4 broken, and the honest outcome — the caller finds out its rename
+ * did nothing and closes the draft — is better than a tree with a duplicate in it.
+ */
+export function renameTab(root: Node, key: string, ref: TabRef): Node {
+  const found = findTab(root, key);
+  if (!found) return root;
+  const wanted = tabKey(ref);
+  if (wanted === key) return root;
+  if (findTab(root, wanted)) return root;
+  return (
+    replacePane(root, found.pane.id, (one) => ({
+      ...one,
+      tabs: one.tabs.map((tab, index) => (index === found.index ? ref : tab)),
+    })) ?? root
+  );
+}
+
+/** Where a new tab of this kind belongs.
+ *
+ * A pane that already holds this surface wins, and for chats that is the whole point of tabs:
+ * clicking a conversation focuses the *sidebar* pane it was clicked in, so "open it where you
+ * are looking" put the chat in a 240px column beside the list it came from. Grouping by kind
+ * means the second conversation opens next to the first, as a tab, which is what was asked for.
+ *
+ * Falls back to the focused pane, then to the first — "open the roadmap" must never be answered
+ * with nothing happening.
+ */
+export function paneFor(root: Node, surface: SurfaceId, focused?: string): string {
+  const all = panes(root);
+  const alongside = all.find((one) => one.tabs.some((tab) => tab.surface === surface));
+  if (alongside) return alongside.id;
+  const here = all.find((one) => one.id === focused);
+  return (here ?? all[0])?.id ?? "";
+}
+
 /** Is this tab anywhere in the layout? */
 export function hasTab(root: Node, key: string): boolean {
   return findTab(root, key) !== null;
