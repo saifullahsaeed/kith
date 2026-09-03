@@ -1,17 +1,11 @@
 import {
-  BookText,
-  Brain,
-  CalendarClock,
-  FileText,
-  FolderTree,
   Gauge,
   Inbox,
-  Library,
+  LayoutGrid,
   ListChecks,
   type LucideIcon,
   MessageSquare,
   MessagesSquare,
-  Route,
   Settings,
 } from "lucide-react";
 
@@ -47,13 +41,14 @@ export const SURFACES: Record<SurfaceId, Surface> = {
   conversations: { title: "Conversations", icon: MessagesSquare, minWidth: 240 },
   // 320 was `WORK_MIN`.
   work: { title: "Work", icon: ListChecks, minWidth: 320 },
-  roadmap: { title: "Roadmap", icon: Route, minWidth: 360 },
-  projects: { title: "Projects", icon: FolderTree, minWidth: 320 },
-  journal: { title: "Journal", icon: BookText, minWidth: 320 },
-  memories: { title: "Memory", icon: Brain, minWidth: 320 },
-  files: { title: "Files", icon: FileText, minWidth: 320 },
-  sources: { title: "Sources", icon: Library, minWidth: 320 },
-  schedules: { title: "Schedules", icon: CalendarClock, minWidth: 300 },
+  /* The Control Panel, whole.
+   *
+   * Its eight sections — Projects, Roadmap, Journal, Memory, Files, Sources, Schedules,
+   * Overview — are tabs *inside* it, sharing its routing and its data. Making each a dockable
+   * surface of its own is a refactor of the Control Panel rather than of the layout, and doing
+   * it under cover of this change would mean rewriting the board while also replacing the
+   * shell. One surface here, and the split is its own piece of work. */
+  board: { title: "Board", icon: LayoutGrid, minWidth: 380 },
   settings: { title: "Settings", icon: Settings, minWidth: 420 },
   inbox: { title: "Inbox", icon: Inbox, minWidth: 320 },
   context: { title: "Context", icon: Gauge, minWidth: 420 },

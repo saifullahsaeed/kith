@@ -30,8 +30,8 @@ import {
 
 const chat = (id: string) => ({ surface: "chat" as const, conversationId: id });
 const work = { surface: "work" as const };
-const roadmap = { surface: "roadmap" as const };
-const files = { surface: "files" as const };
+const roadmap = { surface: "board" as const };
+const files = { surface: "settings" as const };
 
 /** Every invariant, checked at once, so each test can assert its own point and still know the
  *  tree it produced is a legal one. */
@@ -66,7 +66,7 @@ describe("opening", () => {
     const { tree: after, focused } = openTab(tree, files, right.id);
 
     expect(focused).toBe(false);
-    const found = findTab(after, "files")!;
+    const found = findTab(after, "settings")!;
     expect(found.pane.id).toBe(right.id);
     expect(found.pane.active).toBe(found.index);
     isSound(after);
@@ -97,7 +97,7 @@ describe("opening", () => {
     const tree = pane([work]);
     const { tree: after } = openTab(tree, files, "a-pane-that-was-closed");
 
-    expect(hasTab(after, "files")).toBe(true);
+    expect(hasTab(after, "settings")).toBe(true);
     isSound(after);
   });
 });
@@ -112,7 +112,7 @@ describe("closing", () => {
 
     expect(after.kind, "a split with one child must become that child").toBe("pane");
     expect(panes(after)).toHaveLength(1);
-    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["roadmap"]);
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["board"]);
     isSound(after);
   });
 
@@ -120,7 +120,7 @@ describe("closing", () => {
     const deep = split("column", [pane([files]), pane([roadmap])]);
     const tree = split("row", [pane([work]), deep]);
 
-    const after = closeTab(closeTab(tree, "files"), "roadmap");
+    const after = closeTab(closeTab(tree, "settings"), "board");
 
     expect(after.kind).toBe("pane");
     expect(panes(after)[0].tabs.map(tabKey)).toEqual(["work"]);
@@ -137,7 +137,7 @@ describe("closing", () => {
 
   it("moves focus to a tab that still exists", () => {
     const one = pane([work, roadmap, files], 2);
-    const after = closeTab(one, "files");
+    const after = closeTab(one, "settings");
 
     expect(panes(after)[0].active).toBe(1);
     isSound(after);
@@ -146,7 +146,7 @@ describe("closing", () => {
   it("leaves the sizes summing to 100 after a sibling goes", () => {
     const tree = split("row", [pane([work]), pane([roadmap]), pane([files])], [50, 30, 20]);
 
-    const after = closeTab(tree, "roadmap");
+    const after = closeTab(tree, "board");
 
     expect(after.kind).toBe("split");
     isSound(after);
@@ -157,7 +157,7 @@ describe("closing", () => {
 
   it("does nothing for a tab that is not there", () => {
     const tree = pane([work]);
-    expect(closeTab(tree, "roadmap")).toBe(tree);
+    expect(closeTab(tree, "board")).toBe(tree);
   });
 });
 
@@ -167,14 +167,14 @@ describe("docking", () => {
     const right = pane([roadmap, files]);
     const tree = split("row", [left, right]);
 
-    const after = dockTab(tree, "files", left.id, "top");
+    const after = dockTab(tree, "settings", left.id, "top");
 
     expect(after.kind).toBe("split");
     const column = (after as { children: Node[] }).children[0];
     expect(column.kind).toBe("split");
     expect((column as { direction: string }).direction).toBe("column");
     // Dropped on the top edge, so it goes first.
-    expect(panes(column)[0].tabs.map(tabKey)).toEqual(["files"]);
+    expect(panes(column)[0].tabs.map(tabKey)).toEqual(["settings"]);
     expect(panes(column)[1].tabs.map(tabKey)).toEqual(["work"]);
     isSound(after);
   });
@@ -183,10 +183,10 @@ describe("docking", () => {
     const left = pane([work]);
     const tree = split("row", [left, pane([roadmap, files])]);
 
-    const after = dockTab(tree, "files", left.id, "right");
+    const after = dockTab(tree, "settings", left.id, "right");
     const row = (after as { children: Node[] }).children[0];
 
-    expect(panes(row).map((p) => p.tabs.map(tabKey))).toEqual([["work"], ["files"]]);
+    expect(panes(row).map((p) => p.tabs.map(tabKey))).toEqual([["work"], ["settings"]]);
     isSound(after);
   });
 
@@ -195,16 +195,16 @@ describe("docking", () => {
     const right = pane([roadmap, files]);
     const tree = split("row", [left, right]);
 
-    const after = dockTab(tree, "files", left.id, "center");
+    const after = dockTab(tree, "settings", left.id, "center");
 
-    expect(findTab(after, "files")!.pane.id).toBe(left.id);
-    expect(panes(after).find((p) => p.id === right.id)!.tabs.map(tabKey)).toEqual(["roadmap"]);
+    expect(findTab(after, "settings")!.pane.id).toBe(left.id);
+    expect(panes(after).find((p) => p.id === right.id)!.tabs.map(tabKey)).toEqual(["board"]);
     isSound(after);
   });
 
   it("is a no-op when a tab is dropped on the strip it came from", () => {
     const one = pane([work, roadmap], 1);
-    expect(dockTab(one, "roadmap", one.id, "center")).toBe(one);
+    expect(dockTab(one, "board", one.id, "center")).toBe(one);
   });
 
   it("refuses to split a pane against its own only tab", () => {
@@ -219,16 +219,16 @@ describe("docking", () => {
   it("still splits when the source pane has other tabs to keep it alive", () => {
     const one = pane([work, roadmap], 0);
 
-    const after = dockTab(one, "roadmap", one.id, "right");
+    const after = dockTab(one, "board", one.id, "right");
 
     expect(after.kind).toBe("split");
-    expect(panes(after).map((p) => p.tabs.map(tabKey))).toEqual([["work"], ["roadmap"]]);
+    expect(panes(after).map((p) => p.tabs.map(tabKey))).toEqual([["work"], ["board"]]);
     isSound(after);
   });
 
   it("does nothing for a tab that is not there", () => {
     const tree = pane([work]);
-    expect(dockTab(tree, "roadmap", tree.id, "left")).toBe(tree);
+    expect(dockTab(tree, "board", tree.id, "left")).toBe(tree);
   });
 });
 

@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { Activity, PanelRightClose } from "lucide-react";
 
 import { WorkingOn } from "@/components/assistant-ui/working-on";
@@ -39,7 +40,9 @@ export function WorkPanel({
   /** Which conversation is on screen. The sections about one conversation take it; background tasks
    *  and the lifetime token count are about the machine. */
   conversationId?: string;
-  width: number;
+  /** A fixed width, for the days when this was a column pinned beside the chat. Omitted inside
+   *  a pane, where the pane decides how wide things are and a hard width would fight it. */
+  width?: number;
   onClose: () => void;
 }) {
   const { status, activity: lines } = activity;
@@ -53,22 +56,27 @@ export function WorkPanel({
 
   return (
     <aside
-      style={{ width }}
-      className="flex h-full shrink-0 flex-col border-l border-border/60 bg-background/45 backdrop-blur-md"
+      style={width ? { width } : undefined}
+      className={cn(
+        "flex h-full flex-col bg-background/45 backdrop-blur-md",
+        width ? "shrink-0 border-l border-border/60" : "w-full",
+      )}
     >
       {/* header */}
       <div className="flex items-center gap-2.5 border-b border-border/60 px-4 py-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-kith">
           <Activity className="size-4" />
         </span>
-        <div className="min-w-0 flex-1 leading-tight">
-          {/* "Work", not "Mind". His actual mind — memories, notes, journal — is the group of that
-              name in the control panel, and having both called Mind meant the word told you nothing
-              about which one you were looking at. */}
-          <div className="flex items-center gap-2 text-sm font-semibold">Work</div>
-          <div className="truncate text-[11px] text-muted-foreground">
-            {steps > 0 ? `${steps} round${steps === 1 ? "" : "s"} this session` : "nothing yet"}
-          </div>
+        {/* The title is on the tab. What was under it is a live count, not a label, so it is
+            the line that stays — and it moves up to where the title was rather than sitting
+            under a gap.
+
+            "Work", not "Mind", is still the name: his actual mind — memories, notes, journal —
+            is the group of that name in the control panel, and having both called Mind meant
+            the word told you nothing about which one you were looking at. It lives in
+            `layout/surfaces.ts` now. */}
+        <div className="min-w-0 flex-1 truncate text-[11px] leading-tight text-muted-foreground">
+          {steps > 0 ? `${steps} round${steps === 1 ? "" : "s"} this session` : "nothing yet"}
         </div>
         <Button
           variant="ghost"

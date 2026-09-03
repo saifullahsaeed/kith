@@ -256,9 +256,11 @@ export function HistoryPanel({
 
   return (
     <aside className="bg-sidebar/40 flex h-full min-h-0 w-full flex-col backdrop-blur-md">
+      {/* No title. The pane's tab is the title now, and a panel that repeats it spends a line
+          of a 240px column saying what the tab above it already said. What is left here is the
+          part a tab cannot carry: the thing you came to do. */}
       <div className="border-border/60 flex items-center gap-2 border-b px-4 py-2.5">
         <MessageSquare className="text-muted-foreground size-4" />
-        <span className="text-sm font-medium">Conversations</span>
         <div className="flex-1" />
         <Button size="sm" variant="outline" onClick={() => onNew()}>
           <Plus className="size-3.5" />

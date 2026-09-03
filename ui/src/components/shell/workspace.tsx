@@ -16,6 +16,13 @@ import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
 import { ThreadSkeleton } from "@/components/chat/thread-skeleton";
+import { LayoutView } from "@/components/shell/layout/layout-view";
+import { useLayout } from "@/components/shell/layout/store";
+import {
+  hasTab as treeHasTab,
+  tabKey as tabKeyOf,
+  type TabRef,
+} from "@/components/shell/layout/tree";
 import { SessionBar } from "@/components/chat/session-bar";
 import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
@@ -24,10 +31,8 @@ import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { keys } from "@/lib/query-keys";
-import { cn } from "@/lib/utils";
 import {
   parseLocation,
-  pathForHome,
   pathForMessages,
   pathForSettings,
   pathForTab,
@@ -69,22 +74,6 @@ const ContextDetailScreen = lazy(() =>
 const InboxPanel = lazy(() =>
   import("@/components/chat/inbox-panel").then((m) => ({ default: m.InboxPanel })),
 );
-
-const WORK_MIN = 320;
-const WORK_MAX = 720;
-const WORK_DEFAULT = 400;
-
-/** The room the chat needs before anything else may have any.
- *
- * With Conversations and Work both pinned open at fixed widths, a 1024px window left the
- * thread 370px and prose wrapped to three words a line — a paragraph became a column. Neither
- * panel yielded, because neither knew the other existed. So the two thresholds below are the
- * order in which they give way: Work first, since it is the ancillary one, then Conversations,
- * which stops taking a column of its own and covers instead. */
-const CHAT_FLOOR = 560;
-const HISTORY_WIDTH = 256;
-const WORK_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + WORK_MIN; // 1136
-const HISTORY_YIELDS_BELOW = CHAT_FLOOR + HISTORY_WIDTH + 96; // 912
 
 /** Where the open conversation is remembered across a reload.
  *
@@ -187,7 +176,6 @@ export function Workspace({
     shift: number;
     offset: number;
   } | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
   // What this session is working on. Held here rather than fetched inside the bar because
   // it changes from two directions — you set it, and so does he, by starting a project or
   // filing a task mid-turn.
@@ -625,17 +613,6 @@ export function Workspace({
 
   const activity = useActivity();
   const inbox = useMessages();
-  // Home is two windows — Chat and Work — side by side. Work can be collapsed to
-  // give Chat the whole room, and the split is draggable (and remembered).
-  const [workOpen, setWorkOpen] = useState(true);
-  const [workWidth, setWorkWidth] = useState(() => {
-    try {
-      const v = Number(localStorage.getItem("kith-work-width"));
-      return v >= WORK_MIN && v <= WORK_MAX ? v : WORK_DEFAULT;
-    } catch {
-      return WORK_DEFAULT;
-    }
-  });
   // The Control Panel (and which tab/task is open) lives in the URL, so deep
   // links, refresh, and back/forward all work.
   const location = useLocation();
@@ -646,6 +623,57 @@ export function Workspace({
   // resting itself) links here — so it has to be a real URL, the same way the task panel
   // and settings already are, not state a click sets and a notification has no way to reach.
   const inboxOpen = route.inboxOpen;
+
+  /** Closing a surface from inside it — its own header X — is closing its tab. Two ways to
+   *  shut the same thing that disagreed would be worse than one. */
+  const closeTab = useLayout((state) => state.close);
+  const openSurface = useLayout((state) => state.open);
+  const layoutTree = useLayout((state) => state.tree);
+  /** Whether a surface is on screen anywhere, for the header's pressed states. Read from the
+   *  tree rather than from a flag beside it, so the button cannot disagree with the layout. */
+  const hasTab = useCallback((key: string) => treeHasTab(layoutTree, key), [layoutTree]);
+  /* The chat tab, while there is only one of it.
+   *
+   * The tree keys a chat by its conversation, which is what will let two of them coexist. Until
+   * then there is one chat tab carrying an empty id, meaning "whichever conversation this
+   * session has open" — and `Workspace` still owns that, as `conversationId`. Writing the real
+   * id into the ref here would be half of per-tab sessions: the tab would rename itself on every
+   * open while one runtime and one timeline window still sat behind it, so two tabs would show
+   * the same conversation under two names. The ref becomes authoritative when the session behind
+   * it does. */
+  const chatKey = tabKeyOf({ surface: "chat", conversationId: "" });
+  /** The header's buttons are toggles: pressing one twice puts the surface away again. */
+  const toggleSurface = useCallback(
+    (surface: "conversations" | "work" | "board" | "settings") => {
+      if (treeHasTab(layoutTree, surface)) closeTab(surface);
+      else openSurface({ surface });
+    },
+    [closeTab, layoutTree, openSurface],
+  );
+
+
+  /* A route names what you are looking at; the layout decides where it goes.
+   *
+   * These five screens used to cover the app, so "open settings" and "put settings on screen"
+   * were the same act. They are panes now, and a deep link — a notification, a refresh, a
+   * back button — has to *dock* the thing it names rather than replace what is there. So the
+   * URL still carries what it always carried and every one of those links still works; it
+   * opens a tab instead of a screen.
+   *
+   * Focus-or-open rather than open: `openTab` finds an existing tab and brings it forward, so
+   * a second notification about the board does not stack a second board. */
+  useEffect(() => {
+    if (route.settingsTab) openSurface({ surface: "settings" });
+  }, [openSurface, route.settingsTab]);
+  useEffect(() => {
+    if (panelOpen) openSurface({ surface: "board" });
+  }, [openSurface, panelOpen]);
+  useEffect(() => {
+    if (inboxOpen) openSurface({ surface: "inbox" });
+  }, [openSurface, inboxOpen]);
+  useEffect(() => {
+    if (route.contextOpen) openSurface({ surface: "context" });
+  }, [openSurface, route.contextOpen]);
 
   /* A notification that lands you in the chat it is about.
 
@@ -663,81 +691,18 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.conversationId]);
 
-  /* Which panels the window can currently afford.
+  /* The three thresholds that used to live here are gone.
    *
-   * `squeezed` is kept apart from `workOpen` on purpose: one is the window's opinion and the
-   * other is yours. Collapsing Work by writing to `workOpen` would overwrite your choice, so
-   * widening the window again would leave it shut and look like the app had forgotten. Held
-   * this way, narrowing hides it and widening brings back exactly what you had.
+   * `CHAT_FLOOR`, `WORK_YIELDS_BELOW` and `HISTORY_YIELDS_BELOW` encoded one intent — do not
+   * squeeze prose to three words a line — as a hand-tuned order in which two named panels gave
+   * way to a third, plus a `squeezed` flag held apart from `workOpen` so that narrowing the
+   * window did not overwrite your choice, plus an overlay mode for the conversation list, plus
+   * a pointer-driven divider that remembered its width in `localStorage`. All of it answered a
+   * question the layout now answers structurally: every surface declares a `minWidth`, the
+   * panel library enforces it, and there is no order of yielding to maintain because there is
+   * no fixed set of three panels to order.
    *
-   * Opening Work by hand while narrow wins — you asked for it — until the window crosses the
-   * threshold again, which is the point at which the question is genuinely being re-asked. */
-  const [viewport, setViewport] = useState(() => window.innerWidth);
-  const [squeezed, setSqueezed] = useState(
-    () => window.innerWidth < WORK_YIELDS_BELOW,
-  );
-  useEffect(() => {
-    let wasNarrow = window.innerWidth < WORK_YIELDS_BELOW;
-    const measure = () => {
-      setViewport(window.innerWidth);
-      const narrow = window.innerWidth < WORK_YIELDS_BELOW;
-      // Only on the crossing, so a hand-opened Work is not slammed shut by every resize event
-      // of a drag that never leaves the narrow range.
-      if (narrow !== wasNarrow) {
-        wasNarrow = narrow;
-        setSqueezed(narrow);
-      }
-    };
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, []);
-
-  const covering = viewport < HISTORY_YIELDS_BELOW;
-  const workVisible = workOpen && !squeezed;
-  const toggleWork = useCallback(() => {
-    if (squeezed) {
-      setSqueezed(false);
-      setWorkOpen(true);
-    } else setWorkOpen((open) => !open);
-  }, [squeezed]);
-  // Clamped to what is actually there rather than to what you dragged it to once on a wider
-  // window. A remembered 720 on a 1100px window is a chat column of nothing.
-  const workRoom = Math.max(
-    WORK_MIN,
-    Math.min(
-      workWidth,
-      viewport - CHAT_FLOOR - (historyOpen && !covering ? HISTORY_WIDTH : 0),
-    ),
-  );
-
-  const startResize = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    const onMove = (ev: PointerEvent) => {
-      const w = Math.max(
-        WORK_MIN,
-        Math.min(WORK_MAX, window.innerWidth - ev.clientX),
-      );
-      setWorkWidth(w);
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-      setWorkWidth((w) => {
-        try {
-          localStorage.setItem("kith-work-width", String(w));
-        } catch {
-          /* ignore */
-        }
-        return w;
-      });
-    };
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }, []);
+   * See `layout/surfaces.ts`, where the same measured numbers survive as one field each. */
 
   // Clicking a desktop notification lands here. The shell dispatches this rather than
   // reloading the window, because a notification arriving mid-reply should not cost you the
@@ -784,6 +749,207 @@ export function Workspace({
   // The room glows green while he is working, and is otherwise his own amber.
   const wash = working ? "var(--roam)" : "var(--kith)";
 
+  /* Which element a tab shows.
+   *
+   * The layout module is handed this rather than importing the surfaces itself, so it never
+   * pulls the Thread or the board into its own chunk, and so every prop these components need
+   * stays here with the state that produces it.
+   *
+   * One `ErrorBoundary` per surface, kept from the fixed layout: a pane that throws takes only
+   * itself down, and the chat surviving a broken roadmap graph is the difference between "one
+   * thing is wrong" and "Kith is down". */
+  const renderSurface = useCallback(
+    (ref: TabRef) => {
+      switch (ref.surface) {
+        case "conversations":
+          return (
+            <ErrorBoundary where="Conversations" compact>
+              <HistoryPanel
+                activeId={conversationId}
+                onOpen={(id) => void openConversation(id)}
+                onNew={(project) => newConversation(project ?? null)}
+                onClose={() => closeTab("conversations")}
+              />
+            </ErrorBoundary>
+          );
+
+        case "chat":
+          return (
+            <div className="relative flex h-full min-h-0 flex-col">
+          <SessionBar
+            conversationId={conversationId}
+            projectId={projectId}
+            onProject={(next) => {
+              setProjectId(next);
+              // Picked before the conversation exists — the bar shows on an empty chat now,
+              // and there is no id to write the binding against until the first turn comes
+              // back. Held in the same place "New chat here" holds it, and written by the
+              // same effect.
+              if (!conversationRef.current) pendingProject.current = next;
+            }}
+          />
+          {/* The thread gets its own box with a definite height rather than sitting
+              straight in the column. Without one, the thread root's `h-full` resolved
+              against the whole column — session bar included — so the moment a
+              conversation existed the composer's bottom edge sat 37px past the window
+              and the send button was clipped clean off it. An empty chat looked fine
+              because the session bar draws nothing, which is what made it read as
+              random rather than as a layout bug.
+
+              A flex column, not a block, and that is the same bug a second time. `Thread`
+              is `h-full`, so in block layout it takes the whole box *and* the "Load
+              earlier" button above it takes its own height on top — the thread's bottom
+              ends up past the box by exactly the height of that button. It only shows on
+              a conversation long enough to be windowed, because that is the only time the
+              button is rendered, so it reads as "big chats are broken" rather than as a
+              layout bug. The bottom-most thing in the thread falls off first, which is
+              the context meter under the composer.
+
+              Anything added beside `Thread` in here has to go in the flow, not on top of
+              it. */}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <ErrorBoundary where="The conversation">
+              <CheckpointsProvider
+                conversationId={conversationId}
+                // How many turns were dropped off the front by the window. Checkpoints are
+                // tagged with their absolute turn index and matched against the *rendered*
+                // message index, so without this the offer silently walks backwards through
+                // the conversation as you window — "restore to here" on the first visible
+                // message would target whatever happened 433 turns earlier. A destructive
+                // action aiming at the wrong commit is the worst thing windowing could have
+                // broken, so the offset travels with the checkpoints rather than being
+                // recomputed anywhere that compares them.
+                // Now read straight off the page the server handed back, rather than
+                // inferred from two client-side lengths. Same number, one definition.
+                turnOffset={windowStart}
+              >
+                {/* Floating, not stacked.
+                    This was a full-width flex row in the flow, which made it a band across
+                    the top of the conversation: it claimed its own height from the thread,
+                    and the first message ran up underneath the thread's top fade to meet
+                    it. Absolute takes it out of the flow entirely — the thread gets the
+                    whole box back, and the pill hovers over the top of it the way a
+                    "jump to latest" chip does at the other end.
+                    `pointer-events-none` on the strip so the full-width row cannot
+                    intercept anything; only the pill itself is clickable. */}
+                {windowStart > 0 && nearTop ? (
+                  <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => void loadEarlier()}
+                      disabled={loadingEarlier}
+                      className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors disabled:opacity-60"
+                    >
+                      {loadingEarlier
+                        ? "Loading earlier…"
+                        : `Load ${Math.min(WINDOW, windowStart)} earlier · ${windowStart} above`}
+                    </button>
+                  </div>
+                ) : null}
+                <div className="relative min-h-0 flex-1">
+                  {opening ? <ThreadSkeleton /> : <Thread conversationId={conversationId} />}
+                </div>
+              </CheckpointsProvider>
+            </ErrorBoundary>
+          </div>
+            </div>
+          );
+
+        case "work":
+          return (
+            <ErrorBoundary where="Work" compact>
+              <WorkPanel
+                activity={activity}
+                conversationId={conversationId}
+                onClose={() => closeTab("work")}
+              />
+            </ErrorBoundary>
+          );
+
+        case "board":
+          return (
+            <ErrorBoundary where="The Control Panel">
+              <Suspense fallback={<ScreenLoading />}>
+                <ControlPanel
+                  tab={route.tab}
+                  openTask={route.taskId}
+                  onSelectTab={(t) => navigate(pathForTab(t))}
+                  onOpenTask={(id) => navigate(pathForTask(id))}
+                  onClose={() => closeTab("board")}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          );
+
+        case "settings":
+          return (
+            <ErrorBoundary where="Settings">
+              <Suspense fallback={<ScreenLoading />}>
+                <SettingsPage
+                  tab={route.settingsTab ?? "model"}
+                  config={config}
+                  onSelectTab={(t) => navigate(pathForSettings(t))}
+                  onSaveConfig={onSaveConfig}
+                  onConnectionSaved={onConnectionSaved}
+                  onClose={() => closeTab("settings")}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          );
+
+        case "inbox":
+          return (
+            <Suspense fallback={<ScreenLoading />}>
+              <InboxPanel inbox={inbox} onClose={() => closeTab("inbox")} />
+            </Suspense>
+          );
+
+        case "context":
+          return (
+            <ErrorBoundary where="The context breakdown">
+              <Suspense fallback={<ScreenLoading />}>
+                <ContextDetailScreen
+                  conversationId={conversationId}
+                  onClose={() => closeTab("context")}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          );
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      activity,
+      closeTab,
+      config,
+      conversationId,
+      inbox,
+      loadingEarlier,
+      nearTop,
+      newConversation,
+      opening,
+      openConversation,
+      projectId,
+      route.settingsTab,
+      route.tab,
+      route.taskId,
+      windowStart,
+    ],
+  );
+
+  /** A chat tab is named by its conversation; everything else by the surface registry. */
+  const titleForTab = useCallback(
+    (ref: TabRef) => {
+      if (ref.surface !== "chat" || !ref.conversationId) return undefined;
+      /* Straight out of the query cache rather than a fetch of its own. Opening the
+       * conversation already put its detail there, so naming its tab is free — and a tab that
+       * had to request a title would put one request per tab on every reload. */
+      const held = cache.getQueryData<{ title?: string }>(keys.conversation(ref.conversationId));
+      return held?.title;
+    },
+    [cache],
+  );
+
   return (
     <TooltipProvider>
       {/* No `key` any more. It was bumped on every conversation switch to force a remount, which
@@ -811,184 +977,42 @@ export function Workspace({
                 onSaveConfig({ ...config, effort });
                 void patchServerConfig({ effort });
               }}
-              historyOpen={historyOpen}
-              onOpenHistory={() => setHistoryOpen((open) => !open)}
+              historyOpen={hasTab("conversations")}
+              onOpenHistory={() => toggleSurface("conversations")}
               onNewConversation={() => newConversation()}
               elsewhere={elsewhere}
               onGoToWorking={(id) => {
                 // One: go straight to it, which is the whole point of knowing where. Several: open
                 // the list, because picking is the question and the panel is where it is answered.
                 if (id) void openConversation(id);
-                else setHistoryOpen(true);
+                else openSurface({ surface: "conversations" });
               }}
               unread={inbox.unread}
-              workOpen={workVisible}
+              workOpen={hasTab("work")}
               onOpenInbox={() => {
                 inbox.enableNotifications();
+                openSurface({ surface: "inbox" });
                 navigate(pathForMessages());
               }}
-              onOpenWork={toggleWork}
-              onOpenPanel={() => navigate(pathForTab("overview"))}
+              onOpenWork={() => toggleSurface("work")}
+              onOpenPanel={() => {
+                openSurface({ surface: "board" });
+                navigate(pathForTab(route.tab ?? "overview"));
+              }}
               onOpenSettings={() => navigate(pathForSettings())}
             />
-            <div className="relative flex min-h-0 flex-1">
-              {historyOpen ? (
-                <>
-                  {/* Covering rather than taking a column, once there is not enough window for
-                      both. A fixed 256px out of 900 is a quarter of the screen spent on a list
-                      you are done with the moment you have picked from it. */}
-                  {covering ? (
-                    <button
-                      type="button"
-                      aria-label="Close the conversation list"
-                      onClick={() => setHistoryOpen(false)}
-                      className="absolute inset-0 z-20 bg-background/50 backdrop-blur-[2px]"
-                    />
-                  ) : null}
-                  <div
-                    className={cn(
-                      "border-border/60 w-64 shrink-0 border-e",
-                      covering &&
-                        "absolute inset-y-0 start-0 z-30 bg-background shadow-2xl",
-                    )}
-                  >
-                    {/* One boundary per panel, so a panel that throws takes only itself down.
-                        The chat surviving a broken roadmap graph is the difference between
-                        "one thing is wrong" and "Kith is down". */}
-                    <ErrorBoundary where="Conversations" compact>
-                      <HistoryPanel
-                        activeId={conversationId}
-                        onOpen={(id) => {
-                          void openConversation(id);
-                          // Picking from a drawer closes the drawer. Leaving it over the
-                          // conversation you just opened is the one thing it must not do.
-                          if (covering) setHistoryOpen(false);
-                        }}
-                        onNew={(project) => {
-                          newConversation(project ?? null);
-                          if (covering) setHistoryOpen(false);
-                        }}
-                        onClose={() => setHistoryOpen(false)}
-                      />
-                    </ErrorBoundary>
-                  </div>
-                </>
-              ) : null}
-              {/* Chat window */}
-              <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                <SessionBar
-                  conversationId={conversationId}
-                  projectId={projectId}
-                  onProject={(next) => {
-                    setProjectId(next);
-                    // Picked before the conversation exists — the bar shows on an empty chat now,
-                    // and there is no id to write the binding against until the first turn comes
-                    // back. Held in the same place "New chat here" holds it, and written by the
-                    // same effect.
-                    if (!conversationRef.current) pendingProject.current = next;
-                  }}
-                />
-                {/* The thread gets its own box with a definite height rather than sitting
-                    straight in the column. Without one, the thread root's `h-full` resolved
-                    against the whole column — session bar included — so the moment a
-                    conversation existed the composer's bottom edge sat 37px past the window
-                    and the send button was clipped clean off it. An empty chat looked fine
-                    because the session bar draws nothing, which is what made it read as
-                    random rather than as a layout bug.
-
-                    A flex column, not a block, and that is the same bug a second time. `Thread`
-                    is `h-full`, so in block layout it takes the whole box *and* the "Load
-                    earlier" button above it takes its own height on top — the thread's bottom
-                    ends up past the box by exactly the height of that button. It only shows on
-                    a conversation long enough to be windowed, because that is the only time the
-                    button is rendered, so it reads as "big chats are broken" rather than as a
-                    layout bug. The bottom-most thing in the thread falls off first, which is
-                    the context meter under the composer.
-
-                    Anything added beside `Thread` in here has to go in the flow, not on top of
-                    it. */}
-                <div className="relative flex min-h-0 flex-1 flex-col">
-                  <ErrorBoundary where="The conversation">
-                    <CheckpointsProvider
-                      conversationId={conversationId}
-                      // How many turns were dropped off the front by the window. Checkpoints are
-                      // tagged with their absolute turn index and matched against the *rendered*
-                      // message index, so without this the offer silently walks backwards through
-                      // the conversation as you window — "restore to here" on the first visible
-                      // message would target whatever happened 433 turns earlier. A destructive
-                      // action aiming at the wrong commit is the worst thing windowing could have
-                      // broken, so the offset travels with the checkpoints rather than being
-                      // recomputed anywhere that compares them.
-                      // Now read straight off the page the server handed back, rather than
-                      // inferred from two client-side lengths. Same number, one definition.
-                      turnOffset={windowStart}
-                    >
-                      {/* Floating, not stacked.
-                          This was a full-width flex row in the flow, which made it a band across
-                          the top of the conversation: it claimed its own height from the thread,
-                          and the first message ran up underneath the thread's top fade to meet
-                          it. Absolute takes it out of the flow entirely — the thread gets the
-                          whole box back, and the pill hovers over the top of it the way a
-                          "jump to latest" chip does at the other end.
-                          `pointer-events-none` on the strip so the full-width row cannot
-                          intercept anything; only the pill itself is clickable. */}
-                      {windowStart > 0 && nearTop ? (
-                        <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
-                          <button
-                            type="button"
-                            onClick={() => void loadEarlier()}
-                            disabled={loadingEarlier}
-                            className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors disabled:opacity-60"
-                          >
-                            {loadingEarlier
-                              ? "Loading earlier…"
-                              : `Load ${Math.min(WINDOW, windowStart)} earlier · ${windowStart} above`}
-                          </button>
-                        </div>
-                      ) : null}
-                      <div className="relative min-h-0 flex-1">
-                        {opening ? <ThreadSkeleton /> : <Thread conversationId={conversationId} />}
-                      </div>
-                    </CheckpointsProvider>
-                  </ErrorBoundary>
-                </div>
-              </div>
-              {/* draggable divider */}
-              {workVisible ? (
-                <div
-                  onPointerDown={startResize}
-                  className="group relative z-10 w-1.5 shrink-0 cursor-col-resize"
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="Resize the work panel"
-                >
-                  <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/60 transition-colors group-hover:bg-kith/60 group-active:bg-kith" />
-                </div>
-              ) : null}
-              {/* Work window */}
-              {workVisible ? (
-                <div style={{ width: workRoom }} className="shrink-0">
-                  <ErrorBoundary where="Work" compact>
-                    <WorkPanel
-                      activity={activity}
-                      conversationId={conversationId}
-                      width={workRoom}
-                      onClose={() => setWorkOpen(false)}
-                    />
-                  </ErrorBoundary>
-                </div>
-              ) : null}
-            </div>
+            <LayoutView render={renderSurface} titleFor={titleForTab} />
           </div>
         </div>
         {/* Drop a file anywhere in the window and it lands on the composer. Disabled — but
             still swallowing the drop — while something is covering the thread, since attaching
             to a composer nobody can see is a file that has vanished. */}
-        <DropZone
-          enabled={
-            !route.settingsTab && !panelOpen && !inboxOpen && !route.contextOpen
-          }
-        />
+        {/* Enabled only while a chat is on screen. It used to be disabled whenever one of the
+            five takeover screens covered the thread; there are no takeovers now, so the
+            question is the one it was always really asking — is there a composer for this file
+            to land on. A drop with the chat tab closed would attach to something nobody can
+            see, which is a file that has vanished. */}
+        <DropZone enabled={hasTab(chatKey)} />
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. Given this session's project, because the paths it is
             handed are mostly relative ones out of his prose and his tool results, and a
@@ -996,48 +1020,6 @@ export function Workspace({
             it the viewer asked the global workspace root and got "there's no
             .kith/work/task-76.md" for a file that was never missing. */}
         <WorkspaceFileViewer projectId={projectId} />
-        {inboxOpen ? (
-          <Suspense fallback={<ScreenLoading />}>
-            <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} />
-          </Suspense>
-        ) : null}
-        {route.contextOpen ? (
-          <ErrorBoundary where="The context breakdown">
-            <Suspense fallback={<ScreenLoading />}>
-            <ContextDetailScreen
-              conversationId={conversationId}
-              onClose={() => navigate(pathForHome())}
-            />
-            </Suspense>
-          </ErrorBoundary>
-        ) : null}
-        {route.settingsTab ? (
-          <ErrorBoundary where="Settings">
-            <Suspense fallback={<ScreenLoading />}>
-            <SettingsPage
-              tab={route.settingsTab}
-              config={config}
-              onSelectTab={(t) => navigate(pathForSettings(t))}
-              onSaveConfig={onSaveConfig}
-              onConnectionSaved={onConnectionSaved}
-              onClose={() => navigate(pathForHome())}
-            />
-            </Suspense>
-          </ErrorBoundary>
-        ) : null}
-        {panelOpen ? (
-          <ErrorBoundary where="The Control Panel">
-            <Suspense fallback={<ScreenLoading />}>
-            <ControlPanel
-              tab={route.tab}
-              openTask={route.taskId}
-              onSelectTab={(t) => navigate(pathForTab(t))}
-              onOpenTask={(id) => navigate(pathForTask(id))}
-              onClose={() => navigate(pathForHome())}
-            />
-            </Suspense>
-          </ErrorBoundary>
-        ) : null}
       </AssistantRuntimeProvider>
     </TooltipProvider>
   );

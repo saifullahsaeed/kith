@@ -16,7 +16,7 @@ import { pane, panes, split, tabKey } from "./tree";
 import { TAB_MIME } from "./drag";
 
 const work = { surface: "work" as const };
-const roadmap = { surface: "roadmap" as const };
+const roadmap = { surface: "board" as const };
 
 /** A drag payload the pane will accept, since jsdom has no real DataTransfer. */
 function transfer(key: string) {
@@ -52,7 +52,7 @@ describe("the pane", () => {
     render(<LayoutView render={body} />);
 
     expect(screen.getByText("Work")).toBeInTheDocument();
-    expect(screen.getByText("Roadmap")).toBeInTheDocument();
+    expect(screen.getByText("Board")).toBeInTheDocument();
     expect(screen.getByText("body:work")).toBeInTheDocument();
   });
 
@@ -62,7 +62,7 @@ describe("the pane", () => {
     fireEvent.click(screen.getByLabelText("Close Work"));
 
     expect(useLayout.getState().tree.kind).toBe("pane");
-    expect(panes(useLayout.getState().tree)[0].tabs.map(tabKey)).toEqual(["roadmap"]);
+    expect(panes(useLayout.getState().tree)[0].tabs.map(tabKey)).toEqual(["board"]);
   });
 
   it("makes tabs draggable and carries the key on the drag", () => {
@@ -88,7 +88,7 @@ describe("dropping", () => {
 
     const tree = useLayout.getState().tree;
     expect(tree.kind, "the emptied source pane collapsed the split").toBe("pane");
-    expect(panes(tree)[0].tabs.map(tabKey)).toEqual(["roadmap", "work"]);
+    expect(panes(tree)[0].tabs.map(tabKey)).toEqual(["board", "work"]);
   });
 
   it("ignores a drag that is not one of ours", () => {

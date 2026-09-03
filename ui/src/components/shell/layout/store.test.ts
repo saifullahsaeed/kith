@@ -39,13 +39,13 @@ describe("what the app opens as", () => {
 
 describe("reading what was stored", () => {
   it("round-trips a layout", () => {
-    const tree = split("row", [pane([{ surface: "work" }]), pane([{ surface: "files" }])]);
+    const tree = split("row", [pane([{ surface: "work" }]), pane([{ surface: "settings" }])]);
     localStorage.setItem(layoutKey, JSON.stringify({ version: layoutVersion, tree }));
 
     const back = readStored();
 
     expect(back).not.toBeNull();
-    expect(panes(back!).map((one) => one.tabs.map(tabKey))).toEqual([["work"], ["files"]]);
+    expect(panes(back!).map((one) => one.tabs.map(tabKey))).toEqual([["work"], ["settings"]]);
   });
 
   it("refuses a layout from a version it does not know", () => {
