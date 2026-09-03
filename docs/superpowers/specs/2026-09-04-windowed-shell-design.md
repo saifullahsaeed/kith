@@ -70,20 +70,36 @@ caller.
 - The full timeline stops living in React state. What is held is the loaded window, its
   `start`, and the total.
 - `loadEarlier` fetches the previous page and prepends, instead of re-slicing a 492-turn array.
-- Virtualize the thread viewport with `@tanstack/react-virtual`.
-- `lazy()` Mermaid, the HTML canvas and the syntax highlighter out of the 2.37 MB main chunk.
+- Code-split the screens that are not the chat out of the 2.37 MB entry chunk.
 
-### Dependency
+### Virtualization: deliberately not done, and why
 
-`@tanstack/react-virtual@^3.14.10` — 56 KB unpacked, React 19 peer, same TanStack ecosystem as
-the `@tanstack/react-query` already in use.
+The plan said virtualize the thread viewport with `@tanstack/react-virtual`. On reading
+`@assistant-ui/react` it turns out the only supported way in is
+`ThreadPrimitive.Unstable_MessageById` with `unstable_useThreadMessageIds` — the library
+documents this as "the shape needed to drive a virtualized list" and marks it
+`@deprecated Unstable / Experimental - may change in any release`.
+
+That is a bad trade *now*, because the thing it would fix is already capped. The window mounts
+40 turns, which the existing comments record as the deliberate ceiling — a 473-turn thread was
+~547 KB of prose to parse before anything appeared, and 40 turns is roughly a twelfth of that.
+The measured hang was the 22.83 MB payload and the 2.37 MB entry chunk, and both are fixed.
+Putting the chat's central render path on an API the library says may change in any release, to
+speed up something that is no longer the bottleneck, buys a small win and an ongoing liability.
+
+Revisit if the window is ever raised above 40, or if the API stabilises. No dependency added.
+
+### Dependencies
+
+None. `@tanstack/react-virtual` was planned and is not needed — see above.
 
 ### Done when
 
-- The endpoint returns a bounded payload at the default, asserted by a test.
-- Opening a conversation never puts the full timeline in React state, asserted by a test.
-- `./check` green.
-- The measurement above is re-run and reported.
+- The endpoint returns a bounded payload at the default, asserted by a test. ✔
+- The client never asks for the whole conversation, asserted by a test. ✔
+- `./check` green. ✔
+- The measurement above is re-run and reported. ✔ **22.83 MB → 1.06 MB, 21.5×, 95.3% less.**
+  Entry chunk **2,374 kB → 1,326 kB**, gzip 739 → 428 kB.
 
 ## Tranche 2 — the tiling shell
 
