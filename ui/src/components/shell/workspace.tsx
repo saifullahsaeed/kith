@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,11 +11,8 @@ import { Thread } from "@/components/assistant-ui/thread";
 import { CheckpointsProvider } from "@/components/assistant-ui/checkpoints-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/shell/app-header";
-import { ControlPanel } from "@/components/control-panel";
-import { SettingsPage } from "@/components/settings/settings-page";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
-import { ContextDetailScreen } from "@/components/chat/context-detail";
-import { InboxPanel } from "@/components/chat/inbox-panel";
+
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
 import { ThreadSkeleton } from "@/components/chat/thread-skeleton";
@@ -48,6 +45,30 @@ import {
   patchServerConfig,
   type ServerConfig,
 } from "@/lib/backend";
+
+/* The four screens that are not the chat, fetched when one is opened rather than before the
+ * chat can paint.
+ *
+ * Every one of them is already rendered conditionally, so this costs nothing at the point of
+ * use — it only stops them riding in the entry chunk, which is what the browser has to parse
+ * before the first message appears. The Control Panel alone pulls in the whole board: the
+ * roadmap graph, the file browser, the memory list.
+ *
+ * `WorkspaceFileViewer` above is deliberately not among them. It is mounted unconditionally
+ * and renders nothing until a file is opened, so lazying it would trade a parse it already
+ * does cheaply for a suspense boundary around the app's most common overlay. */
+const ControlPanel = lazy(() =>
+  import("@/components/control-panel").then((m) => ({ default: m.ControlPanel })),
+);
+const SettingsPage = lazy(() =>
+  import("@/components/settings/settings-page").then((m) => ({ default: m.SettingsPage })),
+);
+const ContextDetailScreen = lazy(() =>
+  import("@/components/chat/context-detail").then((m) => ({ default: m.ContextDetailScreen })),
+);
+const InboxPanel = lazy(() =>
+  import("@/components/chat/inbox-panel").then((m) => ({ default: m.InboxPanel })),
+);
 
 const WORK_MIN = 320;
 const WORK_MAX = 720;
@@ -976,18 +997,23 @@ export function Workspace({
             .kith/work/task-76.md" for a file that was never missing. */}
         <WorkspaceFileViewer projectId={projectId} />
         {inboxOpen ? (
-          <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} />
+          <Suspense fallback={<ScreenLoading />}>
+            <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} />
+          </Suspense>
         ) : null}
         {route.contextOpen ? (
           <ErrorBoundary where="The context breakdown">
+            <Suspense fallback={<ScreenLoading />}>
             <ContextDetailScreen
               conversationId={conversationId}
               onClose={() => navigate(pathForHome())}
             />
+            </Suspense>
           </ErrorBoundary>
         ) : null}
         {route.settingsTab ? (
           <ErrorBoundary where="Settings">
+            <Suspense fallback={<ScreenLoading />}>
             <SettingsPage
               tab={route.settingsTab}
               config={config}
@@ -996,10 +1022,12 @@ export function Workspace({
               onConnectionSaved={onConnectionSaved}
               onClose={() => navigate(pathForHome())}
             />
+            </Suspense>
           </ErrorBoundary>
         ) : null}
         {panelOpen ? (
           <ErrorBoundary where="The Control Panel">
+            <Suspense fallback={<ScreenLoading />}>
             <ControlPanel
               tab={route.tab}
               openTask={route.taskId}
@@ -1007,10 +1035,23 @@ export function Workspace({
               onOpenTask={(id) => navigate(pathForTask(id))}
               onClose={() => navigate(pathForHome())}
             />
+            </Suspense>
           </ErrorBoundary>
         ) : null}
       </AssistantRuntimeProvider>
     </TooltipProvider>
+  );
+}
+
+/** The moment between opening a screen and its chunk arriving.
+ *
+ * A full-bleed backdrop rather than a spinner in the corner: these screens cover the app, so
+ * anything smaller reads as the click having missed. On a warm cache it is one frame. */
+function ScreenLoading() {
+  return (
+    <div className="bg-background/80 fixed inset-0 z-40 backdrop-blur-[2px]" role="status">
+      <span className="sr-only">Loading</span>
+    </div>
   );
 }
 
