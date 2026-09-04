@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Clipboard, Copy, Scissors, TextSelect } from "lucide-react";
+import { Copy, TextSelect } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -13,6 +13,12 @@ import { cn } from "@/lib/utils";
  * one's own rounded corners and warm-paper colours for the one interaction that happened to
  * route through Electron. This is the same menu, in HTML, so it looks like the rest of Kith
  * and can follow the theme.
+ *
+ * **Text fields are deliberately not handled here.** They fall through to the operating
+ * system, because the native menu over a word carries the spelling suggestions, Look Up and
+ * the Services that no HTML menu can reproduce — see the note in the handler and the other
+ * half in `desktop/src/window/window.ts`. What is left for this component is the app's own
+ * surfaces, where a plain grey OS menu was the problem it was built to solve.
  *
  * `onMouseDown` on the menu itself calls `preventDefault` — the same trick
  * `SelectionToolbarPrimitive.Root` already uses for its own floating button — so clicking an
@@ -28,7 +34,6 @@ type MenuState = {
   y: number;
   target: HTMLInputElement | HTMLTextAreaElement | null;
   hasSelection: boolean;
-  editable: boolean;
 };
 
 const EDITABLE_SELECTOR = "input, textarea, [contenteditable='true']";
@@ -37,6 +42,18 @@ function editableAncestor(el: EventTarget | null): HTMLInputElement | HTMLTextAr
   if (!(el instanceof HTMLElement)) return null;
   const found = el.closest(EDITABLE_SELECTOR);
   return found instanceof HTMLInputElement || found instanceof HTMLTextAreaElement ? found : null;
+}
+
+/** Is this anywhere you can type, including a `[contenteditable]`?
+ *
+ * Distinct from `editableAncestor`, which narrows to the form controls whose *selection* has
+ * to be read a special way. This one answers a different question — whose menu is this — and
+ * getting the two confused would have missed the one field that matters most: the composer is
+ * TipTap, so it is a `[contenteditable]` and not an `<input>` at all. Handing the system menu
+ * only to inputs and textareas would have left the spelling suggestions out of the one place
+ * anybody writes prose. */
+function isTypeable(el: EventTarget | null): boolean {
+  return el instanceof HTMLElement && el.closest(EDITABLE_SELECTOR) !== null;
 }
 
 /**
@@ -74,13 +91,33 @@ export function ContextMenu() {
        * the handler so that nothing else runs on an event that was never ours. */
       if (event.defaultPrevented) return;
       const target = editableAncestor(event.target);
-      const editable = target !== null;
       const selected = hasRealSelection(target);
-      // Nothing useful to offer: not a selection, not somewhere you could paste into. Leave it
-      // alone rather than showing a menu whose only option is greyed out.
-      if (!selected && !editable) return;
+
+      /* An editable field is the operating system's, not ours.
+       *
+       * This used to claim every right-click in a text field and offer Copy, Cut, Paste and
+       * Select all — which is all HTML can offer, and a fraction of what the machine has. The
+       * native menu over a word carries its spelling suggestions, Look Up, Search With, the
+       * substitutions, and every Service installed; the suggestions are not even *knowable*
+       * here, they come from Chromium. So a styled menu over a misspelled word was strictly
+       * the worse menu, and for months right-clicking the composer offered four items where
+       * macOS would have offered the correction.
+       *
+       * Not calling `preventDefault` is the whole mechanism: it is what lets Electron emit
+       * `webContents`' `context-menu` so the shell can build the real one — see
+       * `desktop/src/window/window.ts`. In a browser the browser's own menu appears, which is
+       * the same trade and also the better one.
+       *
+       * Everything else — a message, a card, a tab — stays ours: there is nothing the system
+       * could add to it, and a plain grey menu on this app's own surfaces was the reason this
+       * component exists. */
+      if (isTypeable(event.target)) return;
+
+      // Nothing useful to offer: not a selection, and not somewhere the system will take over.
+      // Leave it alone rather than showing a menu whose only option is greyed out.
+      if (!selected) return;
       event.preventDefault();
-      setMenu({ x: event.clientX, y: event.clientY, target, hasSelection: selected, editable });
+      setMenu({ x: event.clientX, y: event.clientY, target, hasSelection: selected });
     };
     const close = (event: Event) => {
       if (menuRef.current?.contains(event.target as Node)) return;
@@ -111,27 +148,12 @@ export function ContextMenu() {
   if (menu.hasSelection) {
     items.push({ label: "Copy", icon: Copy, onClick: () => document.execCommand("copy") });
   }
-  if (menu.editable && menu.hasSelection) {
-    items.push({ label: "Cut", icon: Scissors, onClick: () => document.execCommand("cut") });
-  }
-  if (menu.editable) {
-    items.push({
-      label: "Paste",
-      icon: Clipboard,
-      onClick: () => {
-        // Best-effort: clipboard-read can be denied outright, and unlike copy/cut there is no
-        // fallback for it — `execCommand("paste")` is blocked in Chromium for the same reason
-        // reading the clipboard from a page normally is. Cmd/Ctrl+V still works either way.
-        navigator.clipboard
-          .readText()
-          .then((text) => {
-            menu.target?.focus();
-            document.execCommand("insertText", false, text);
-          })
-          .catch(() => {});
-      },
-    });
-  }
+  /* No Cut and no Paste.
+   *
+   * Both only mean anything in a field you can type in, and nothing typeable reaches this menu
+   * any more — those go to the system, which offers them as real roles with the right labels
+   * and shortcuts alongside the suggestions and Services this could never carry. Keeping them
+   * here would mean two menus disagreeing about which one owns editing. */
   items.push({
     label: "Select All",
     icon: TextSelect,

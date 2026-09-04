@@ -339,7 +339,7 @@ export function ChatPane({
         window.removeEventListener(event, stop);
       }
     };
-  }, [id, resumed]);
+  }, [id, loading, resumed]);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -388,8 +388,26 @@ export function ChatPane({
                   </button>
                 </div>
               ) : null}
+              {/* The thread stays mounted; the skeleton lies over it.
+                  Swapping them was the scroll glitch on opening. Two things went wrong and
+                  both come from the thread not being in the DOM yet. The effect below looks
+                  for `[data-slot="aui_thread-viewport"]` inside this pane, so while the
+                  skeleton was up it found nothing, returned early, and never attached the
+                  scroll listener or ran the settle — so the position was read from a thread
+                  that had not laid out. And the swap itself is a mount: the thread arrived at
+                  its natural height and the library's scroll-to-bottom ran against a box that
+                  was still growing, which is the jump you see.
+
+                  Mounted from the start, the viewport exists before the messages do, the
+                  effect attaches once, and the skeleton is just something drawn on top until
+                  there is something better to look at. */}
               <div className="relative min-h-0 flex-1">
-                {loading ? <ThreadSkeleton /> : <Thread conversationId={id} />}
+                <Thread conversationId={id} />
+                {loading ? (
+                  <div className="bg-background absolute inset-0 z-20">
+                    <ThreadSkeleton />
+                  </div>
+                ) : null}
               </div>
             </CheckpointsProvider>
           </ErrorBoundary>

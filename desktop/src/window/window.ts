@@ -12,7 +12,7 @@
  * anything, and `contextIsolation` and `sandbox` both stay on.
  */
 
-import { BrowserWindow, shell } from "electron";
+import { BrowserWindow, Menu, shell } from "electron";
 
 import { loadWhenReady, recoverFromBackendRestarts } from "../server/backend";
 import { BACKEND_ORIGIN, EXTERNAL_SCHEMES, PRELOAD, WINDOW } from "../config";
@@ -69,6 +69,10 @@ export function createMainWindow(): BrowserWindow {
       webSecurity: true,
       allowRunningInsecureContent: false,
       webviewTag: false,
+      // On, and it is the whole reason the native context menu is back for text fields — see
+      // `nativeMenuForText`. Chromium does the checking; without this `params.misspelledWord`
+      // is always empty and there is nothing to suggest.
+      spellcheck: true,
       // `plugins` is deliberately left at its default of false. The file viewer shows a
       // PDF in Chromium's built-in reader, which older Electron did gate behind this
       // flag — it no longer does, and that was checked here rather than assumed:
@@ -87,6 +91,7 @@ export function createMainWindow(): BrowserWindow {
 
   if (maximized) window.maximize();
   hardenNavigation(window);
+  nativeMenuForText(window);
   trackWindowState(window);
 
   window.on("close", (event) => {
@@ -186,14 +191,70 @@ function hardenNavigation(window: BrowserWindow): void {
 }
 
 /**
- * Right-click, for text, lives in the renderer (`ui/src/components/context-menu.tsx`), not
- * here — tried a native `Menu.popup()` first, and it works, but a native menu is OS chrome:
- * it cannot be styled, so it looks like a different, plainer app dropped on top of this one's
- * own rounded-corner, warm-paper design for the one interaction that happens to route through
- * the main process. The renderer's version calls `event.preventDefault()` on the DOM
- * `contextmenu` event, which stops Electron from ever emitting `webContents`' `context-menu`
- * here at all — so there is nothing left for the main process to do.
+ * Right-click, split by what you clicked on.
+ *
+ * The renderer owns it for the app's own surfaces — a message, a task card, a tab — where a
+ * styled menu matters and there is nothing the operating system could add. It calls
+ * `preventDefault()` on those, which stops Electron emitting `context-menu` at all.
+ *
+ * **Text fields are the exception, and getting that wrong cost the whole system menu.** Inside
+ * an editable field the native menu is not merely OS chrome carrying Copy and Paste, which is
+ * all the styled one could reproduce: it carries the spelling suggestions for the word under
+ * the cursor, Look Up, Search With, the substitutions and transformations, and every Service
+ * the machine has. None of that can be rebuilt in HTML — the suggestions are not even
+ * *knowable* in the page, they come from `params.dictionarySuggestions`. So a styled menu over
+ * a misspelled word is a strictly worse menu, and for months right-clicking in the composer
+ * offered four items where macOS would have offered the correction.
+ *
+ * So the renderer now lets an editable target through, Electron emits here, and this builds the
+ * real thing. The suggestions come first because they are why anybody right-clicks a word.
  */
+function nativeMenuForText(window: BrowserWindow): void {
+  window.webContents.on("context-menu", (_event, params) => {
+    if (!params.isEditable) return;
+
+    const items: Electron.MenuItemConstructorOptions[] = [];
+
+    if (params.misspelledWord) {
+      // Chromium's own suggestions, in its order. An empty list is possible — a word it does
+      // not recognise and cannot correct — and then saying so beats an empty menu.
+      for (const word of params.dictionarySuggestions) {
+        items.push({
+          label: word,
+          click: () => window.webContents.replaceMisspelling(word),
+        });
+      }
+      if (!params.dictionarySuggestions.length) {
+        items.push({ label: "No guesses", enabled: false });
+      }
+      items.push(
+        { type: "separator" },
+        {
+          label: "Learn spelling",
+          click: () =>
+            window.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+        },
+        { type: "separator" },
+      );
+    }
+
+    // Roles rather than hand-rolled clicks: the OS supplies the labels in the right language
+    // and the shortcuts in the right notation, and `undo`/`redo` in a text field are things a
+    // renderer-side menu never had at all.
+    items.push(
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      { role: "cut", enabled: params.editFlags.canCut },
+      { role: "copy", enabled: params.editFlags.canCopy },
+      { role: "paste", enabled: params.editFlags.canPaste },
+      { type: "separator" },
+      { role: "selectAll" },
+    );
+
+    Menu.buildFromTemplate(items).popup({ window });
+  });
+}
 
 /** Chromium's own PDF reader, which renders inside a sub-frame of its own.
  *

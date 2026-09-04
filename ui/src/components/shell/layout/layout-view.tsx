@@ -1,7 +1,15 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { SplitSquareHorizontal, SplitSquareVertical, X, XCircle } from "lucide-react";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 
 import { carriesTab, edgeAt, highlightFor, TAB_MIME } from "./drag";
@@ -243,6 +251,8 @@ function PaneView({
             active={index === pane.active}
             onSelect={() => activate(pane.id, index)}
             onClose={() => close(tabKey(tab))}
+            others={pane.tabs.filter((one) => one.uid !== tab.uid).map(tabKey)}
+            paneId={pane.id}
           />
         ))}
       </div>
@@ -277,15 +287,34 @@ function TabButton({
   active,
   onSelect,
   onClose,
+  others,
+  paneId,
 }: {
   tab: TabRef;
   title: string;
   active: boolean;
   onSelect: () => void;
   onClose: () => void;
+  /** The keys of the other tabs in this pane, for "close the rest". */
+  others: string[];
+  paneId: string;
 }) {
   const Icon = SURFACES[tab.surface].icon;
-  return (
+  const close = useLayout((s) => s.close);
+  const dock = useLayout((s) => s.dock);
+  const key = tabKey(tab);
+
+  /* Right-click on a tab.
+   *
+   * A tab strip you can only close one at a time, and only by hitting a 12px X that appears on
+   * hover, is a tab strip missing the half of the interaction people reach for first — and
+   * splitting was drag-only, which is discoverable by accident or not at all.
+   *
+   * Radix rather than the app's global `contextmenu` handler: that one opens only over a
+   * selection or an editable field, so a tab had nothing to show. Radix calls
+   * `preventDefault()` on its own trigger and the global handler bails on
+   * `event.defaultPrevented`, so the two cannot both open. */
+  const body = (
     <div
       draggable
       onDragStart={(event) => {
@@ -314,6 +343,41 @@ function TabButton({
         <X className="size-3" />
       </button>
     </div>
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{body}</ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <ContextMenuLabel className="truncate">{title}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={onClose}>
+          <X className="size-3.5" /> Close
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!others.length}
+          onSelect={() => others.forEach((one) => close(one))}
+        >
+          <XCircle className="size-3.5" /> Close the others
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {/* Docking onto its own pane, which is how a tab becomes a pane of its own. Disabled
+            when it is the only tab: splitting a pane against its one tab would close the source
+            and leave nothing to split, so the tree refuses it — better greyed than inert. */}
+        <ContextMenuItem
+          disabled={!others.length}
+          onSelect={() => dock(key, paneId, "right")}
+        >
+          <SplitSquareHorizontal className="size-3.5" /> Split to the right
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!others.length}
+          onSelect={() => dock(key, paneId, "bottom")}
+        >
+          <SplitSquareVertical className="size-3.5" /> Split below
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
