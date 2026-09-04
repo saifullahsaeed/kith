@@ -351,30 +351,37 @@ function TabButton({
       <ContextMenuContent className="w-48">
         <ContextMenuLabel className="truncate">{title}</ContextMenuLabel>
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={onClose}>
-          <X className="size-3.5" /> Close
+        {/* `icon` rather than an icon in the children, which is the component's own contract
+            and not decoration: children land in a `flex-1 truncate` span, and Tailwind's
+            preflight sets `svg { display: block }` — so an inline icon pushed every label onto
+            a second line and the menu rendered as eight stacked rows instead of four. */}
+        <ContextMenuItem icon={<X className="size-3.5" />} onSelect={onClose}>
+          Close
         </ContextMenuItem>
         <ContextMenuItem
+          icon={<XCircle className="size-3.5" />}
           disabled={!others.length}
           onSelect={() => others.forEach((one) => close(one))}
         >
-          <XCircle className="size-3.5" /> Close the others
+          Close the others
         </ContextMenuItem>
         <ContextMenuSeparator />
         {/* Docking onto its own pane, which is how a tab becomes a pane of its own. Disabled
             when it is the only tab: splitting a pane against its one tab would close the source
             and leave nothing to split, so the tree refuses it — better greyed than inert. */}
         <ContextMenuItem
+          icon={<SplitSquareHorizontal className="size-3.5" />}
           disabled={!others.length}
           onSelect={() => dock(key, paneId, "right")}
         >
-          <SplitSquareHorizontal className="size-3.5" /> Split to the right
+          Split to the right
         </ContextMenuItem>
         <ContextMenuItem
+          icon={<SplitSquareVertical className="size-3.5" />}
           disabled={!others.length}
           onSelect={() => dock(key, paneId, "bottom")}
         >
-          <SplitSquareVertical className="size-3.5" /> Split below
+          Split below
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
