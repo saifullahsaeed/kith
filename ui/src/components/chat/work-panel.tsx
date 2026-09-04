@@ -1,4 +1,3 @@
-import { cn } from "@/lib/utils";
 import { Activity, PanelRightClose } from "lucide-react";
 
 import { WorkingOn } from "@/components/assistant-ui/working-on";
@@ -33,16 +32,12 @@ type Activity = ReturnType<typeof useActivity>;
 export function WorkPanel({
   activity,
   conversationId = "",
-  width,
   onClose,
 }: {
   activity: Activity;
   /** Which conversation is on screen. The sections about one conversation take it; background tasks
    *  and the lifetime token count are about the machine. */
   conversationId?: string;
-  /** A fixed width, for the days when this was a column pinned beside the chat. Omitted inside
-   *  a pane, where the pane decides how wide things are and a hard width would fight it. */
-  width?: number;
   onClose: () => void;
 }) {
   const { status, activity: lines } = activity;
@@ -55,13 +50,12 @@ export function WorkPanel({
   const hasCounters = steps > 0 || lifetime > 0;
 
   return (
-    <aside
-      style={width ? { width } : undefined}
-      className={cn(
-        "flex h-full flex-col bg-background/45 backdrop-blur-md",
-        width ? "shrink-0 border-l border-border/60" : "w-full",
-      )}
-    >
+    // No width and no border of its own: both were left over from the days when this was a
+    // column pinned to the right of the chat, setting its own width and drawing the line
+    // between itself and the thread. A pane decides how wide things are now and the layout
+    // draws the dividers, so a width here would fight the panel it sits in and the border
+    // would double the one already beside it.
+    <aside className="flex h-full w-full flex-col bg-background/45 backdrop-blur-md">
       {/* header */}
       <div className="flex items-center gap-2.5 border-b border-border/60 px-4 py-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-kith">

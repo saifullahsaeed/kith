@@ -91,7 +91,7 @@ export const GROUP: Record<string, WorkKind> = {
  * call at someone.
  */
 export const TOOL: Record<string, { verb: string; of?: string; group: keyof typeof GROUP }> = {
-  publish: { verb: "shared the work", group: "files" },
+  publish: { verb: "exchanged with the remote", of: "direction", group: "files" },
   check_remote: { verb: "checked the remote", group: "files" },
   take_in_shared_tasks: { verb: "took in shared tasks", group: "tasks" },
   // memory and notes
@@ -150,7 +150,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   check_process: { verb: "checked on", of: "name", group: "shell" },
   stop_process: { verb: "stopped", of: "name", group: "shell" },
   outline: { verb: "read the shape of", of: "paths", group: "reading" },
-  repo_map: { verb: "got his bearings in", of: "path", group: "reading" },
+  repo_map: { verb: "got his bearings in", of: "paths", group: "reading" },
   find_symbol: { verb: "traced every use of", of: "name", group: "search" },
   install_language_support: { verb: "set up language support for", of: "confirm", group: "shell" },
   diagnostics: { verb: "checked for problems in", of: "path", group: "shell" },

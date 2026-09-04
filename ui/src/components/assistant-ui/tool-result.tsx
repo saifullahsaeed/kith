@@ -100,6 +100,22 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
       const minus = (diff.match(/^-(?!-)/gm) || []).length;
       return `${short(args.path)} · +${plus} −${minus}`;
     }
+    case "edit_files": {
+      /* One tool for one edit and for twenty, so the summary has to say which. Without this
+         every edit read as a bare "edited" with nothing about what or how much — and the
+         single-edit shape, which is what a retired `edit_file` call arrives as, names its file
+         the way it always did. */
+      const edits = Array.isArray(args.edits) ? (args.edits as Record<string, unknown>[]) : [];
+      const diff = s(r.diff ?? result);
+      const plus = (diff.match(/^\+(?!\+)/gm) || []).length;
+      const minus = (diff.match(/^-(?!-)/gm) || []).length;
+      const what = edits.length
+        ? edits.length === 1
+          ? short(edits[0]?.path)
+          : `${edits.length} files`
+        : short(args.path);
+      return `${what} · +${plus} −${minus}`;
+    }
     case "write_file":
       return `${short(args.path)} · ${s(args.content).length.toLocaleString()} chars`;
     case "read_file": {
@@ -1325,7 +1341,31 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     // `outline`'s shape is unique to it (`{path, language, definitions, outline}`), so this
     // is keyed on the tool rather than detected from the shape — nothing else returns a
     // rendered listing-of-definitions string under that key.
-    if (name === "outline" && result && typeof result === "object" && "outline" in result) {
+    /* `repo_map` as well as `outline`: the outline is the same result under a new tool name
+       — `repo_map(paths=…)` — and keying only on the old one made this card unreachable, so
+       every outline fell back to raw key/value rows. The old name stays because transcripts
+       from before the merge still hold it. */
+    // A page read from the web: prose a person is meant to read, and now an object saying
+    // which way it was read. Without this the whole card fell back to key/value rows with the
+    // page's text crammed into one of them.
+    if (name === "browse_page" && result && typeof result === "object" && "text" in result) {
+      const r = result as Record<string, unknown>;
+      return (
+        <div className="space-y-1.5">
+          <div className="max-h-96 overflow-auto rounded-lg bg-muted/30 p-2.5 ring-1 ring-border/60">
+            <Prose text={String(r.text ?? "")} />
+          </div>
+          {r.note ? <p className="text-muted-foreground text-[11px]">{String(r.note)}</p> : null}
+        </div>
+      );
+    }
+
+    if (
+      (name === "outline" || name === "repo_map") &&
+      result &&
+      typeof result === "object" &&
+      "outline" in result
+    ) {
       const r = result as { path?: string; outline?: string };
       return <Outline text={String(r.outline ?? "")} path={String(r.path ?? args.path ?? "")} />;
     }
@@ -1372,6 +1412,9 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
       // A fetched page is prose a person is meant to read, not code — the one string result
       // that reads worse in a monospace block than it would as plain text.
       if (name === "fetch_url" || name === "browse_page") {
+        /* Reached only for a *string* result, which is what `fetch_url` returned. `browse_page`
+           returns `{how, text}` now and is handled with the object results above; this branch
+           stays for transcripts recorded before the merge. */
         return (
           <div className="max-h-96 overflow-auto rounded-lg bg-muted/30 p-2.5 ring-1 ring-border/60">
             <Prose text={result} />

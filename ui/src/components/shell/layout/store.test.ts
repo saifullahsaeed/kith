@@ -105,6 +105,21 @@ describe("reading what was stored", () => {
 });
 
 describe("what counts as a layout", () => {
+  it("rejects a surface this build does not know", () => {
+    /* It passed the structural check and then threw during render, on `SURFACES[...]`, out of
+     * stored data — the same class of failure as a duplicate pane id, and reachable the first
+     * time a surface is renamed without bumping the version. */
+    expect(
+      looksLikeLayout({
+        kind: "pane",
+        id: "p",
+        active: 0,
+        tabs: [{ surface: "a-surface-that-was-renamed" }],
+      }),
+    ).toBe(false);
+  });
+
+
   it("rejects the shapes that are not one", () => {
     expect(looksLikeLayout(null)).toBe(false);
     expect(looksLikeLayout("pane")).toBe(false);

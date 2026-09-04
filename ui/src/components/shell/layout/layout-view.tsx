@@ -376,9 +376,20 @@ function PaneBody({ children }: { children: ReactNode }) {
  * A pane rather than a blank window, because something has to be on screen and "nothing" is
  * indistinguishable from a crash. */
 function EmptyPane() {
+  const reset = useLayout((s) => s.reset);
   return (
-    <div className="text-muted-foreground flex h-full items-center justify-center text-xs">
-      Nothing open here — drag a tab in, or open something from the header.
+    <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3 text-xs">
+      <span>Nothing open here — drag a tab in, or open something from the header.</span>
+      {/* The only way back to the default from inside the app. `reset` existed with no caller
+          at all, which is a recovery action you cannot reach — and the layout is stored, so a
+          bad one survives a reload. */}
+      <button
+        type="button"
+        onClick={reset}
+        className="border-border/60 hover:text-foreground hover:border-border rounded-full border px-3 py-1 transition-colors"
+      >
+        Reset the layout
+      </button>
     </div>
   );
 }

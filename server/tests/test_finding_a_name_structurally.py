@@ -234,7 +234,9 @@ class TestThroughTheTool:
         assert out["engine"] == "parser"
         assert len(out["definitions"]) == 1
         assert len(out["references"]) == 3, "`calls` was this tool's word for references"
-        assert "defined" in out["shown"] and "called" in out["shown"]
+        # And nothing else. It used to return a *rendering* of these same lists alongside them,
+        # measured at 3.6x redundant — on a change whose whole purpose was fewer tokens.
+        assert "shown" not in out, "the hit lists are the answer; a second copy of them is not"
 
     def test_an_empty_name_comes_back_as_an_error_not_a_crash(self, workspace_root):
         from kith.tools import code

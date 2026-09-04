@@ -49,6 +49,39 @@ class TestTheMapItself:
         hijack — which is what it was, before `run_tool` learned to check."""
         assert registry.get(old) is None, f"{old} is still registered; drop its RETIRED entry"
 
+    @pytest.mark.parametrize("old,gone", sorted(RETIRED.items(), key=lambda pair: pair[0]))
+    def test_every_translated_argument_is_one_the_survivor_declares(self, old: str, gone: Retired) -> None:
+        """A rename or an `add` pointing at a parameter that does not exist is a translation
+        that silently drops what it was carrying.
+
+        This is the check that was missing when `link_folder`'s unlink shipped broken: with no
+        folder, `translate` produced *no* `directory` key at all, `update_project` gates on the
+        key being present, and the call reported success with the folder still linked. The
+        entry looked right because every key it did name was real.
+        """
+        survivor = registry.require(gone.now)
+        declared = set(survivor.properties)
+        named = set(gone.rename.values()) | set(gone.add)
+        assert named <= declared, f"{old} -> {gone.now} names {named - declared}, which it has no"
+
+    @pytest.mark.parametrize("old,gone", sorted(RETIRED.items(), key=lambda pair: pair[0]))
+    def test_the_old_name_reaches_the_new_tool(self, old: str, gone: Retired, db: Path) -> None:
+        """Dispatched for real, not asserted about.
+
+        Every entry was hand-written and only five of the sixteen were ever called end to end.
+        A wrong `now`, a typo in a rename, or an `add` the survivor rejects all look fine until
+        something dispatches them — so this dispatches all of them. Arguments are deliberately
+        thin: the point is that the call *arrives*, and a tool complaining about a missing
+        argument has already proved that.
+        """
+        result = tools.run_tool(old, {}, db)
+
+        assert isinstance(result, dict)
+        assert "unknown tool" not in str(result.get("error", "")), result
+        # The note is the receipt that the redirect happened rather than something coincidental.
+        said = str(result.get("result", "")) + str(result.get("error", ""))
+        assert gone.now in said, f"{old} did not report reaching {gone.now}: {result}"
+
     def test_a_live_tool_is_never_hijacked(self, db: Path, monkeypatch) -> None:
         """The guard, tested directly. A retirement written before its merge landed used to
         take over the tool it named — it cost a fifth of the suite in one commit."""

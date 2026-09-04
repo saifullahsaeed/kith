@@ -23,6 +23,12 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def itself(name: str) -> str:
+    """The default `dispatched`: a name is its own tool. What a caller with no tool layer —
+    a test, a script — gets, and what the behaviour was before the merges."""
+    return name
+
+
 @dataclass(frozen=True)
 class ToolHost:
     """The two questions a turn asks of the tool layer."""
@@ -37,6 +43,15 @@ class ToolHost:
     #: where execution happens rather than where declarations are built — a model that names a
     #: tool it was not offered still gets refused.
     run: Callable[..., dict[str, Any]]
+
+    #: The name of the tool a given name will actually dispatch to.
+    #:
+    #: Since the merges those are not always the same: a model that says `fetch_url` gets
+    #: `browse_page`. Every policy the loop keys on a tool name — what may run in parallel,
+    #: what is a poll rather than a stall — has to ask about the tool that runs, or one retired
+    #: name de-batches every call around it. Here rather than looked up in the loop, because
+    #: `kith.tools` is an adapter and `services` may not import upward.
+    dispatched: Callable[[str], str] = itself
 
     #: Which of the declared names came from an MCP server, and which he built himself.
     #:

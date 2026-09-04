@@ -276,7 +276,7 @@ class TestWhereItIsSaid:
         project_files.write_brief(
             folder, {"id": 900, "key": "1a015eaff8309001abc", "goal": "Theirs", "status": "working"}
         )
-        assert "check_remote" in board_sync.waiting_here(db)
+        assert "publish" in board_sync.waiting_here(db)
 
     def test_it_still_only_says(self, shared, monkeypatch):
         """`pull` is called by nobody. This is the sentence that lets a person decide."""

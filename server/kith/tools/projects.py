@@ -244,7 +244,7 @@ def update_project(path: Path, args: dict):
             "milestone already has, NOT its position in the list you are creating. Its tasks "
             "stay out of your way until they are all done. If you are laying out a fresh "
             "roadmap and do not have the ids yet, add them all first and then call "
-            "order_milestones with the ids in order.",
+            "update_milestone with `ids` in order.",
         },
     },
     required=("project_id", "title"),

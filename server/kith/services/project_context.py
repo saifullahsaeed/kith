@@ -142,8 +142,8 @@ def _head(project_id: int, name: str, project: dict, directory: str) -> str:
     if not directory:
         lines.append(
             "It has no folder linked, so nothing you write has a home that travels with it and "
-            "there is no `.kith/` to read. If this project has code somewhere, link it with "
-            "`link_folder` before you start."
+            "there is no `.kith/` to read. If this project has code somewhere, point the project at "
+            "it with `update_project` and a `directory` before you start."
         )
         return "\n".join(lines)
 

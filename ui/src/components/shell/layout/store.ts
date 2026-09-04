@@ -1,10 +1,10 @@
 import { create } from "zustand";
 
+import { SURFACES } from "./surfaces";
 import {
   activateTab,
   closeTab,
   dockTab,
-  hasTab,
   ids,
   openTab,
   pane,
@@ -61,10 +61,24 @@ export function looksLikeLayout(value: unknown): value is Node {
   if (!value || typeof value !== "object") return false;
   const node = value as Partial<Node> & Record<string, unknown>;
   if (node.kind === "pane") {
-    return typeof node.id === "string" && Array.isArray(node.tabs) && typeof node.active === "number"
-      && (node.tabs as unknown[]).every(
-        (tab) => !!tab && typeof tab === "object" && typeof (tab as TabRef).surface === "string",
-      );
+    return (
+      typeof node.id === "string" &&
+      Array.isArray(node.tabs) &&
+      typeof node.active === "number" &&
+      (node.tabs as unknown[]).every(
+        (tab) =>
+          !!tab &&
+          typeof tab === "object" &&
+          /* The surface has to be one this build knows, not merely a string.
+           *
+           * `SURFACES[tab.surface]` is dereferenced during render for the icon and the
+           * minimum, so an unknown name from a stored layout throws where nothing can catch
+           * it usefully — a crash out of saved data, which is the same class of failure as the
+           * duplicate ids. Reachable the first time a surface is renamed without bumping
+           * VERSION, and the version bump is exactly the thing that is easy to forget. */
+          (tab as TabRef).surface in SURFACES,
+      )
+    );
   }
   if (node.kind === "split") {
     const children = node.children as unknown;
@@ -136,8 +150,9 @@ export type LayoutState = {
   rename: (key: string, ref: TabRef) => void;
   focus: (paneId: string) => void;
   resize: (splitId: string, sizes: number[]) => void;
+  /** Put the layout back to the default. Reachable from an empty pane, which is exactly where
+   *  somebody who has closed everything is standing. */
   reset: () => void;
-  has: (key: string) => boolean;
 };
 
 function firstPaneId(tree: Node): string {
@@ -200,7 +215,6 @@ export const useLayout = create<LayoutState>((set, get) => {
       commit(tree, firstPaneId(tree));
     },
 
-    has: (key) => hasTab(get().tree, key),
   };
 });
 

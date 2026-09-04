@@ -175,6 +175,15 @@ export function ChatPane({
    * and carries on whether or not anyone is watching. Guarded on `isRunning`, because this pane
    * is already streaming when it started the turn itself — resuming then would put a second
    * reader on the same events and render every token twice. */
+  /** Set while this pane is mounted. A rejoin that lands after it is gone must discard. */
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
   const rejoin = useCallback(() => {
     if (!id) return;
     const wanted = id;
@@ -183,6 +192,11 @@ export function ChatPane({
       // `discard()`, never a bare return: the generator has not started, so letting it go
       // leaves the response body open and a server thread writing into it.
       if (idRef.current !== wanted) return attached.discard();
+      // And the same if the pane went away while the attach was in flight — closing a tab
+      // mid-rejoin otherwise left a held response on one of the browser's six sockets per
+      // origin, with a `live_turns.watch` generator blocked writing into it on the other end.
+      // A tab is closed at exactly the moment a turn is running, so this is not a rare path.
+      if (!alive.current) return attached.discard();
       const state = runtime.thread.getState();
       if (state.isRunning) return attached.discard();
       runtime.thread.resumeRun({

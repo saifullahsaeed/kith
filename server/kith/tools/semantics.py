@@ -3,7 +3,7 @@
 Every one of these can fail for a reason that is nobody's mistake — nothing installed, a
 server that will not start, a symbol that is not in the file. All of those come back as a
 readable result rather than an exception, because an exception ends the round and a sentence
-lets him try the next thing. `outline` and `grep` are always the next thing, and the messages
+lets him try the next thing. `repo_map` and `grep` are always the next thing, and the messages
 say so.
 """
 
@@ -29,7 +29,7 @@ from kith.tools.registry import tool
 NEEDS_A_LANGUAGE_SERVER = frozenset({"rename_symbol"})
 
 #: The mirror image, and it has to be one or the pair is incoherent. `install_language_support`
-#: is worth its schema exactly when the four above are hidden — offering "install a language
+#: is worth its schema exactly when `rename_symbol` is hidden — offering "install a language
 #: server" on a machine that already has one is a line of prompt paid on every round to suggest
 #: something with no effect, and offering it *only* when servers exist would be a tool that can
 #: never fix the thing it is for.
@@ -40,15 +40,6 @@ _NEAR = {
     **INT,
     "description": "Line to disambiguate by, if the name appears more than once (optional).",
 }
-
-
-def _resolved(raw: str) -> Path:
-    from kith.infra import permissions
-    from kith.infra import workspace as sandbox
-
-    target = Path(sandbox.resolve(raw))
-    permissions.require_path("read", target, sandbox.root())
-    return target
 
 
 def _guarded(call, *args, **kwargs):
@@ -150,7 +141,7 @@ def available(root: str | Path | None = None) -> bool:
 @tool(
     "install_language_support",
     "Get the language server for what this project is written in, so the semantic tools "
-    "(references, definition, rename_symbol, diagnostics) start working here. Installs only "
+    "(`find_symbol`, `rename_symbol`, `check_code`) give their exact answers here. Installs only "
     "what this project actually needs — never every language — into Kith's own folder, never "
     "globally. It asks first. Offer this when you find yourself grepping for callers because "
     "the semantic tools are not available; do not run it speculatively.",

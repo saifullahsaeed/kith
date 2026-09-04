@@ -270,6 +270,19 @@ def _has_image(message: dict[str, Any]) -> bool:
 #: too short does not merely lose detail — it invents repeats.
 _SUBJECT_KEYS = ("path", "pattern", "command", "query", "name", "id")
 
+#: Tools whose subject is *not* the first key that happens to be present.
+#:
+#: `find_symbol` is the whole reason this exists. It takes both a `name` and a `path`, and the
+#: list above reaches `path` first — so looking up two different symbols in the same file
+#: produced one subject, and the second call was priced as a repeat of the first and reported
+#: as droppable waste. The subject of "where is this name used" is the name.
+#:
+#: An exception rather than a reordering: the first four keys are a precedence
+#: `conversations._let_go_of_old_results` matches exactly, and the screen and the trimmed-result
+#: stub have to describe the same call in the same words. Moving `name` up would break that
+#: agreement for every tool to fix it for one.
+_SUBJECT_FIRST = {"find_symbol": "name", "rename_symbol": "symbol", "start_process": "name"}
+
 #: The `Line.key`s that `itemise` can break down, in the order a screen should show them. Every
 #: other line — persona, system prompt, live block, project region, the three kinds of tool
 #: schema — comes from config rather than from the conversation, and `messages` and `images` have no call to name. A
@@ -346,7 +359,8 @@ def itemise(
         name = str(message.get("tool_name") or message.get("name") or "")
         key = "skills" if name in _SKILL_TOOLS else "code" if name in _CODE_TOOLS else "tool_results"
         subject = ""
-        for wanted in _SUBJECT_KEYS:
+        override = _SUBJECT_FIRST.get(name)
+        for wanted in (override, *_SUBJECT_KEYS) if override else _SUBJECT_KEYS:
             value = pending.get(wanted)
             # `str`/`int` rather than `str` alone: a task id arrives as a number, and treating
             # "not text" as "no subject" put every task he opened into one group.

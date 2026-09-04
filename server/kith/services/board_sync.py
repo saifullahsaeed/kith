@@ -230,7 +230,8 @@ def _said(found: dict[str, Any]) -> str:
         "Somebody else's work is in `.kith/` and has not been taken in. "
         + "; ".join(said)
         + f". The folder last changed {quiet}. Say the word and I will take it in with "
-        "`take_in_shared_tasks` — and `check_remote` first if nobody has fetched today, because "
+        "`take_in_shared_tasks` — and `publish` with direction 'check' first if nobody has "
+        "fetched today, because "
         "nothing arrives on its own."
     )
 

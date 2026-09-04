@@ -196,6 +196,19 @@ def _hint(name: str, agent_db_path: Path) -> str:
     return f" Did you mean: {', '.join(near)}?"
 
 
+def dispatched(name: str) -> str:
+    """The tool a name will actually run, which is what a policy keyed on names must ask.
+
+    A registered name is itself. An unregistered one that `RETIRED` covers is the tool that
+    took its job — so `fetch_url` answers `browse_page`, and the loop's `_PARALLEL_SAFE` and
+    `_POLL_TOOLS` stop being blind to every retired spelling.
+    """
+    if get(name) is not None:
+        return name
+    gone = aliases.retired(name)
+    return gone.now if gone else name
+
+
 def host(
     agent_db_path: Path,
     *,
@@ -228,6 +241,7 @@ def host(
     available = language_server if language_server is not None else _language_server_available()
     return ToolHost(
         schemas=lambda only=None: tool_schemas(only=only, mcp=mcp, language_server=available),
+        dispatched=dispatched,
         run=lambda name, arguments, allow=None: run_tool(name, arguments, agent_db_path, allow=allow),
         mcp_names=frozenset(str(((one.get("function") or {}).get("name")) or "") for one in mcp),
     )

@@ -232,6 +232,13 @@ def find_symbol(path: Path, args: dict):
     # The same keys the language-server path returns, so a caller reads one shape whichever
     # engine answered. `calls` was this tool's word for the same thing the server calls
     # references; one tool cannot have two words for it.
+    # The hit lists, and not a rendering of them as well.
+    #
+    # This returned both — `definitions`/`references` *and* `search_service.render()` of the
+    # same data, measured at 3.6x redundant — on a change whose entire purpose was sending
+    # fewer tokens. The lists are the shape the language-server branch returns, so they are the
+    # shape that stays: one answer, readable by whatever consumes it, and the same keys
+    # whichever engine answered.
     answer = {
         "name": found["name"],
         "engine": "parser",
@@ -241,7 +248,6 @@ def find_symbol(path: Path, args: dict):
         "definitions": found["definitions"],
         "references": found["calls"],
         "filesSearched": found["files_searched"],
-        "shown": search_service.render(found),
     }
     if unavailable and not found["definitions"] and not found["calls"]:
         answer["unavailable"] = unavailable

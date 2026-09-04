@@ -25,7 +25,7 @@ from typing import Any
 
 from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
-from kith.domain.tooling import ToolHost
+from kith.domain.tooling import ToolHost, itself
 from kith.kernel import session_context, stopping
 from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
@@ -70,6 +70,21 @@ _PARALLEL_SAFE = frozenset(
 # the same thing again with nothing to show for the last attempt; for these two, calling
 # again *is* what showing something for it looks like, not a sign of being stuck.
 _POLL_TOOLS = frozenset({"run_tests", "check_process"})
+
+
+#: A name resolved to the tool that will actually run it.
+#:
+#: Every table below is keyed on a tool name and matched against the name the *model* emitted,
+#: and since the merges those are not always the same: a model that says `fetch_url` gets
+#: `browse_page`, which is parallel-safe — but the membership test saw `fetch_url`, found it in
+#: nothing, and `_batches` splits on the first step that is not parallel-safe, so one retired
+#: name de-batched every call around it and turned a round of six concurrent fetches into six.
+#:
+#: Threaded through as an argument rather than held in a module variable, and that is not
+#: fastidiousness: turns run on their own threads and two conversations can stream at once, so a
+#: module-level resolver set per turn is two turns writing one slot. Identity by default, so a
+#: caller without a tool layer behaves exactly as before.
+Dispatched = Callable[[str], str]
 
 
 #: How many times one round's model call is attempted before the turn gives up on it.
@@ -176,7 +191,7 @@ def _cut_off(config: Config) -> str:
     )
 
 
-def _is_repeat(name: str, seen: int) -> bool:
+def _is_repeat(name: str, seen: int, dispatched: Dispatched = itself) -> bool:
     """Has this exact call been made enough times already to be a stall, not progress?
 
     One free repeat before flagging: a single retry is often legitimate, and it takes a
@@ -186,7 +201,7 @@ def _is_repeat(name: str, seen: int) -> bool:
     be checked on twice before the model is told to stop trying and answer without knowing
     the result.
     """
-    return seen >= 2 and name not in _POLL_TOOLS
+    return seen >= 2 and dispatched(name) not in _POLL_TOOLS
 
 
 # Rounds held back at the end of every turn for *landing* the work. Without a
@@ -674,6 +689,8 @@ def _run_turn(
     budget, reserve, landing_effort = turn.budget, turn.reserve, turn.landing_effort
     routing = turn.routing
     mcp_names = tool_host.mcp_names
+    # This turn's own resolver, so the policy tables read the name of the tool that will run.
+    dispatched = tool_host.dispatched
 
     call_index = 0
     seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
@@ -991,10 +1008,10 @@ def _run_turn(
             sig = f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
             seen = seen_calls.get(sig, 0)
             seen_calls[sig] = seen + 1
-            repeat = _is_repeat(name, seen)
+            repeat = _is_repeat(name, seen, dispatched)
             planned.append({"id": call_id, "name": name, "arguments": arguments, "repeat": repeat})
 
-        for batch in _batches(planned):
+        for batch in _batches(planned, dispatched):
             for step in batch:
                 yield {
                     "type": "tool_call",
@@ -1170,7 +1187,7 @@ def _run(step: dict, run: Callable[..., Any], allow: set[str] | None = None) -> 
     return run(step["name"], step["arguments"], allow)
 
 
-def _batches(planned: list[dict]) -> Iterator[list[dict]]:
+def _batches(planned: list[dict], dispatched: Dispatched = itself) -> Iterator[list[dict]]:
     """Split a round's calls into groups that may run together.
 
     Consecutive parallel-safe calls travel as one batch; anything else goes alone.
@@ -1181,13 +1198,14 @@ def _batches(planned: list[dict]) -> Iterator[list[dict]]:
     at_once = tuning.value("max_parallel")
     batch: list[dict] = []
     for step in planned:
-        if step["name"] in _PARALLEL_SAFE and not step["repeat"] and len(batch) < at_once:
+        safe = dispatched(step["name"]) in _PARALLEL_SAFE
+        if safe and not step["repeat"] and len(batch) < at_once:
             batch.append(step)
             continue
         if batch:
             yield batch
             batch = []
-        if step["name"] in _PARALLEL_SAFE and not step["repeat"]:
+        if safe and not step["repeat"]:
             batch.append(step)  # a full batch just flushed; start the next
         else:
             yield [step]

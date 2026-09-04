@@ -69,8 +69,16 @@ export function paneMinWidth(tabs: TabRef[]): number {
 export const MIN_HEIGHT = 140;
 
 /** The label on a tab. A chat is titled by its conversation, which the caller knows and this
- *  module deliberately does not. */
+ *  module deliberately does not.
+ *
+ * **"New chat" only for a chat that genuinely has no conversation.** It used to be the fallback
+ * for any missing title, so after a reload — when no title is known yet — three open chats read
+ * "New chat", "New chat" and one real name. Two tabs claiming to be a new chat, neither of them
+ * one, and no way to tell which conversation either was. A chat with an id says so instead,
+ * until its title arrives. */
 export function tabTitle(ref: TabRef, chatTitle?: string): string {
-  if (ref.surface === "chat") return chatTitle?.trim() || "New chat";
-  return SURFACES[ref.surface].title;
+  if (ref.surface !== "chat") return SURFACES[ref.surface].title;
+  const given = chatTitle?.trim();
+  if (given) return given;
+  return ref.conversationId ? "Chat" : "New chat";
 }

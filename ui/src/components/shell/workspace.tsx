@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/shell/app-header";
@@ -32,6 +32,7 @@ import {
 } from "@/lib/router";
 import {
   fetchConversation,
+  fetchConversations,
   fetchLiveTurns,
   patchServerConfig,
   type ServerConfig,
@@ -67,6 +68,10 @@ const InboxPanel = lazy(() =>
  * a panel that was also closed — so the app forgot what you were doing every time it
  * reloaded, which is the one thing a window is supposed to be good at. */
 const LAST_CONVERSATION = "kith-conversation";
+
+/** How many conversations to know the titles of. Generous, because the cost is one query the
+ *  sidebar is running anyway, and a tab whose name is missing is a tab you cannot identify. */
+const TITLE_LIMIT = 200;
 
 
 
@@ -151,7 +156,6 @@ export function Workspace({
    * What is left here is the part that was never about one conversation: which chat is in
    * front of you, and how a chat gets opened at all.
    */
-  const cache = useQueryClient();
 
   /** A project picked for a chat that does not exist yet — "New chat here" from the sidebar.
    *  Read once by the pane that mounts next; the pane owns it from then on. */
@@ -457,16 +461,24 @@ export function Workspace({
   const projectId = focusedDetail?.projectId ?? null;
 
   /** A chat tab is named by its conversation; everything else by the surface registry. */
+  /* Every conversation's title in one query — the same one the sidebar runs, so this is a
+   * cache read rather than a request.
+   *
+   * It used to read each tab's title out of `keys.conversation(id)`, the *detail* a pane fetches
+   * when it opens. That is empty on a reload and never filled for a background tab, so after a
+   * reload three open chats read "New chat", "New chat" and one real name — two tabs claiming
+   * to be new, neither of them new, and nothing to tell them apart. */
+  const { data: known = [] } = useQuery({
+    queryKey: keys.conversations(TITLE_LIMIT, ""),
+    queryFn: async () => (await fetchConversations(TITLE_LIMIT)).conversations,
+    staleTime: 30_000,
+  });
   const titleForTab = useCallback(
     (ref: TabRef) => {
       if (ref.surface !== "chat" || !ref.conversationId) return undefined;
-      /* Straight out of the query cache rather than a fetch of its own. Opening the
-       * conversation already put its detail there, so naming its tab is free — and a tab that
-       * had to request a title would put one request per tab on every reload. */
-      const held = cache.getQueryData<{ title?: string }>(keys.conversation(ref.conversationId));
-      return held?.title;
+      return known.find((one) => one.id === ref.conversationId)?.title;
     },
-    [cache],
+    [known],
   );
 
   return (
