@@ -32,9 +32,20 @@ export type SurfaceId =
   | "inbox"
   | "context";
 
+/** A tab, and the two different identities it has.
+ *
+ * `uid` is *this tab*, minted once and never changed — including by the rename that gives a
+ * draft chat its conversation. It is what React keys on, and that is the whole reason it
+ * exists: keying on `conversationId` meant the pane unmounted and remounted the moment the
+ * first turn named the chat, which is mid-reply, discarding the streaming runtime and blanking
+ * to a skeleton. The comment beside that key claimed the opposite was true.
+ *
+ * `tabKey(ref)` is *what the tab shows*, which is how "is this conversation already open"
+ * is answered and why every surface but chat is a singleton. Two identities because they answer
+ * two questions, and a draft chat is exactly the case where they diverge. */
 export type TabRef =
-  | { surface: "chat"; conversationId: string }
-  | { surface: Exclude<SurfaceId, "chat">; conversationId?: undefined };
+  | { surface: "chat"; conversationId: string; uid?: string }
+  | { surface: Exclude<SurfaceId, "chat">; conversationId?: undefined; uid?: string };
 
 export type PaneNode = { kind: "pane"; id: string; tabs: TabRef[]; active: number };
 export type SplitNode = {
@@ -59,15 +70,42 @@ export function tabKey(ref: TabRef): string {
 }
 
 let counter = 0;
-/** Ids are for React keys and for addressing a node in an operation, not for persistence
- *  identity — a reloaded layout keeps whatever ids it was saved with. */
+/** A token unique to this page load, mixed into every id this session mints.
+ *
+ * **Without it the app crashes on the second run.** The counter is module state and starts at
+ * zero on every load, while a stored layout comes back holding the ids it was *saved* with — so
+ * the first pane created after a reload was `pane-1`, which the restored tree already contained.
+ * `react-resizable-panels` refuses duplicate panel ids by throwing during render, below
+ * `LayoutView`, so it unwound to the top-level boundary and the whole window became the crash
+ * panel; and because `commit` writes before it sets, the colliding tree was already in
+ * `localStorage`, so "Try again" and "Reload" both restored the same broken layout. Recovery
+ * meant clearing site data by hand.
+ *
+ * Non-sibling collisions were quieter and worse: `replacePane` runs its change on every id
+ * match, so one `activate` set two panes active and one drop put the same tab in two places. */
+const session = Math.random().toString(36).slice(2, 8);
+
+/** Ids address a node in an operation and key it in React. They are not persistence identity —
+ *  a reloaded layout keeps whatever ids it was saved with, which is exactly why a new one must
+ *  never be able to look like an old one. */
 export function nextId(prefix: string): string {
   counter += 1;
-  return `${prefix}-${counter}`;
+  return `${prefix}-${session}-${counter}`;
+}
+
+/** Every node id in the tree, for the uniqueness check a stored layout has to pass. */
+export function ids(node: Node): string[] {
+  return node.kind === "pane" ? [node.id] : [node.id, ...node.children.flatMap(ids)];
 }
 
 export function pane(tabs: TabRef[] = [], active = 0, id = nextId("pane")): PaneNode {
-  return { kind: "pane", id, tabs, active: clampActive(tabs, active) };
+  return { kind: "pane", id, tabs: tabs.map(withUid), active: clampActive(tabs, active) };
+}
+
+/** Give a tab its permanent identity if it does not have one — a layout stored before `uid`
+ *  existed, or a caller building a ref by hand. */
+export function withUid(ref: TabRef): TabRef {
+  return ref.uid ? ref : { ...ref, uid: nextId("tab") };
 }
 
 export function split(direction: "row" | "column", children: Node[], sizes?: number[]): SplitNode {
@@ -170,7 +208,7 @@ export function openTab(
   }
   const tree = replacePane(root, target.id, (one) => ({
     ...one,
-    tabs: [...one.tabs, ref],
+    tabs: [...one.tabs, withUid(ref)],
     active: one.tabs.length,
   }));
   return { tree: tree ?? root, paneId: target.id, focused: false };
@@ -186,8 +224,20 @@ export function closeTab(root: Node, key: string): Node {
     // Invariant 5: the last pane stays, empty. Something has to be on screen, and an empty
     // pane with an "open something" state is a better answer than a blank window.
     if (!tabs.length && !onlyPane) return null;
-    // Invariant 3: closing the active tab focuses the one that took its place, or the last.
-    return { ...one, tabs, active: clampActive(tabs, Math.min(found.index, tabs.length - 1)) };
+    /* Invariant 3, and only when it has to move.
+     *
+     * This recomputed `active` from the *closed* tab's index unconditionally, so closing a
+     * background tab changed what the pane was showing — click the X on a tab you are not
+     * reading and the pane switches to something else. `dockTab` inherits the same call, so
+     * dragging a background tab out yanked the pane's view along with it.
+     *
+     * Which tab you are reading is identity, not position: it is found again by `uid` after
+     * the removal, and only a close of the active tab has to choose a new one. */
+    const wasActive = one.tabs[one.active];
+    const stillThere = tabs.findIndex((tab) => tab.uid === wasActive?.uid);
+    const active =
+      stillThere >= 0 ? stillThere : clampActive(tabs, Math.min(found.index, tabs.length - 1));
+    return { ...one, tabs, active };
   });
   return tree ?? pane();
 }
@@ -266,7 +316,11 @@ export function renameTab(root: Node, key: string, ref: TabRef): Node {
   return (
     replacePane(root, found.pane.id, (one) => ({
       ...one,
-      tabs: one.tabs.map((tab, index) => (index === found.index ? ref : tab)),
+      // The `uid` rides across, which is the point: the tab is the same tab, so React keeps
+      // the pane — and the runtime streaming inside it — rather than rebuilding both.
+      tabs: one.tabs.map((tab, index) =>
+        index === found.index ? { ...ref, uid: tab.uid ?? nextId("tab") } : tab,
+      ),
     })) ?? root
   );
 }

@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useCallback, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 
@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { carriesTab, edgeAt, highlightFor, TAB_MIME } from "./drag";
 import { useLayout } from "./store";
 import { MIN_HEIGHT, SURFACES, paneMinWidth, tabTitle } from "./surfaces";
-import { tabKey, type Edge, type Node, type PaneNode, type TabRef } from "./tree";
+import { panes as panesOf, tabKey, type Edge, type Node, type PaneNode, type TabRef } from "./tree";
 
 /**
  * The layout tree, drawn.
@@ -39,6 +39,29 @@ function NodeView({
   titleFor?: (ref: TabRef) => string | undefined;
 }) {
   const resize = useLayout((s) => s.resize);
+  const order = useLayout((s) => s.order);
+  const focus = useLayout((s) => s.focus);
+  const box = useRef<HTMLDivElement | null>(null);
+  const [room, setRoom] = useState(0);
+
+  /* How much room this group actually has.
+   *
+   * Measured, because the minimums cannot be enforced without it — see `railed`. A
+   * `ResizeObserver` rather than a window listener: a nested group's width changes when a
+   * *sibling divider* moves, which no window event reports. */
+  // Read before the early return below, because hooks cannot sit after one — hence reading
+  // the direction defensively rather than off the narrowed type.
+  const along = node.kind === "split" && node.direction === "column" ? "height" : "width";
+  useEffect(() => {
+    const element = box.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(([entry]) => {
+      const size = entry?.contentRect;
+      if (size) setRoom(along === "height" ? size.height : size.width);
+    });
+    watch.observe(element);
+    return () => watch.disconnect();
+  }, [along]);
 
   if (node.kind === "pane") {
     return <PaneView pane={node} render={render} titleFor={titleFor} />;
@@ -56,8 +79,40 @@ function NodeView({
     );
   };
 
+  /* Which children give way, when there is not room for all of them.
+   *
+   * **The panel library does not enforce `minSize`.** It applies a layout as `flexGrow` onto
+   * panels styled `min-width: 0`, and when the minimums over-subscribe the container it
+   * renormalises and leaves them under-sized rather than refusing. Measured at the app's own
+   * 940px floor with the default layout, whose minimums sum to 1120: the three panes came out
+   * 201 / 469 / 268, every one below its declared minimum and the chat 91px under the 560 that
+   * `CHAT_FLOOR` existed to defend. No overflow, no clamp, no error. So `surfaces.ts` claiming
+   * the minimums are "enforced by the panel library" was simply wrong, and deleting the old
+   * viewport-driven yielding on that basis left nothing in its place.
+   *
+   * This is the rule the design specified and the code did not have: when a split cannot
+   * honour every child's minimum, the least-recently-focused child collapses to a tab rail
+   * instead of every child getting narrower. A rail is a real answer — the pane is one click
+   * from coming back and its tabs are still legible — where 469px of chat is not. */
+  const railed = new Set<string>();
+  if (!stacked && room > 0) {
+    const minimums = node.children.map((child) => minFor(child, false));
+    let needed = minimums.reduce((sum, one) => sum + one, 0);
+    // Least-recently-focused first, and never the last one standing: a group of all rails
+    // shows nothing at all, which is worse than one pane that is too narrow.
+    const giving = [...node.children]
+      .map((child, index) => ({ child, index }))
+      .sort((a, b) => rank(order, b.child) - rank(order, a.child));
+    for (const { child, index } of giving) {
+      if (needed <= room || railed.size >= node.children.length - 1) break;
+      railed.add(child.id);
+      needed -= minimums[index] - RAIL;
+    }
+  }
+
   return (
     <Group
+      elementRef={box}
       orientation={stacked ? "vertical" : "horizontal"}
       className={cn("flex min-h-0 min-w-0", stacked ? "flex-col" : "flex-row")}
       defaultLayout={Object.fromEntries(
@@ -87,10 +142,18 @@ function NodeView({
           ) : null}
           <Panel
             id={child.id}
-            minSize={minFor(child, stacked)}
+            // A railed child is pinned: min and max together, so the library cannot grow it and
+            // its divider is inert. That is also what removes the deficit — the group's demand
+            // drops from this child's real minimum to the width of a rail.
+            minSize={railed.has(child.id) ? RAIL : minFor(child, stacked)}
+            {...(railed.has(child.id) ? { maxSize: RAIL } : {})}
             className="flex min-h-0 min-w-0 flex-col"
           >
-            <NodeView node={child} render={render} titleFor={titleFor} />
+            {railed.has(child.id) ? (
+              <Rail node={child} titleFor={titleFor} onOpen={focus} />
+            ) : (
+              <NodeView node={child} render={render} titleFor={titleFor} />
+            )}
           </Panel>
         </Fragment>
       ))}
@@ -174,7 +237,7 @@ function PaneView({
       <div className="border-border/60 flex shrink-0 items-center gap-px overflow-x-auto border-b">
         {pane.tabs.map((tab, index) => (
           <TabButton
-            key={tabKey(tab)}
+            key={tab.uid ?? tabKey(tab)}
             tab={tab}
             title={tabTitle(tab, titleFor?.(tab))}
             active={index === pane.active}
@@ -185,7 +248,16 @@ function PaneView({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {active ? render(active) : <EmptyPane />}
+        {/* Keyed on the tab's permanent `uid`, which is the fix for a remount mid-reply.
+            `render` returns an element whose identity React decides by position, so switching
+            tabs would otherwise reuse the previous tab's component instance with a new
+            conversation prop — and keying on the conversation instead unmounted the pane the
+            moment a draft chat was named, discarding the runtime that was streaming into it. */}
+        {active ? (
+          <PaneBody key={active.uid ?? tabKey(active)}>{render(active)}</PaneBody>
+        ) : (
+          <EmptyPane />
+        )}
       </div>
 
       {over ? (
@@ -243,6 +315,60 @@ function TabButton({
       </button>
     </div>
   );
+}
+
+/** How wide a collapsed pane is: enough for an icon and its hit target, and no more. */
+const RAIL = 36;
+
+/** Where a node sits in the focus order — the *most* recent of its panes, so a split is not
+ *  collapsed because one corner of it is stale. `order.length` for a pane never focused, which
+ *  puts it first in line to give way. */
+function rank(order: string[], node: Node): number {
+  const mine = panesOf(node).map((one) => order.indexOf(one.id));
+  const known = mine.filter((at) => at >= 0);
+  return known.length ? Math.min(...known) : order.length;
+}
+
+/** A pane with no room for its contents, shown as the tabs it holds.
+ *
+ * Its own answer rather than nothing: the pane is one click from coming back, and what it holds
+ * stays readable. Clicking focuses it, which moves it to the front of the focus order — so the
+ * pane that was giving way becomes the one that stays and something else rails instead. */
+function Rail({
+  node,
+  titleFor,
+  onOpen,
+}: {
+  node: Node;
+  titleFor?: (ref: TabRef) => string | undefined;
+  onOpen: (paneId: string) => void;
+}) {
+  const tabs = panesOf(node).flatMap((one) => one.tabs.map((tab) => ({ tab, pane: one.id })));
+  return (
+    <div className="border-border/60 bg-background flex h-full w-full flex-col items-center gap-1 border-e py-2">
+      {tabs.map(({ tab, pane }) => {
+        const Icon = SURFACES[tab.surface].icon;
+        return (
+          <button
+            key={tab.uid ?? tabKey(tab)}
+            type="button"
+            title={tabTitle(tab, titleFor?.(tab))}
+            aria-label={`Show ${tabTitle(tab, titleFor?.(tab))}`}
+            onClick={() => onOpen(pane)}
+            className="text-muted-foreground hover:text-foreground hover:bg-muted rounded p-1.5 transition-colors"
+          >
+            <Icon className="size-4" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A keyed wrapper, and nothing else. `render`'s element cannot carry a key the caller does
+ *  not control, so the key goes here. */
+function PaneBody({ children }: { children: ReactNode }) {
+  return <>{children}</>;
 }
 
 /** What the last closed tab leaves behind.

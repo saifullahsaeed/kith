@@ -26,7 +26,6 @@ import {
   fetchConversation,
   resumeTurn,
   setConversationProject,
-  type StoredTurn,
 } from "@/lib/backend";
 
 /**
@@ -77,7 +76,12 @@ export function ChatPane({
   const pendingProject = useRef<number | null>(initialProject);
 
   const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
-  const [timeline, setTimeline] = useState<StoredTurn[]>([]);
+  /* No `timeline` state.
+   *
+   * It held the fetched turns so that "load earlier" could rebuild the thread from them — which
+   * is exactly what erased the session, because nothing ever appended a live turn to it. The
+   * thread's own messages are the tail now, so the only thing worth keeping between pages is
+   * where the loaded window starts. */
   const [windowStart, setWindowStart] = useState(0);
   const [loading, setLoading] = useState(!!conversationId);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -135,7 +139,6 @@ export function ChatPane({
       .then((detail) => {
         if (!live) return;
         setProjectId(detail.projectId ?? null);
-        setTimeline(detail.timeline);
         setWindowStart(detail.windowStart ?? 0);
         setResumed(toThreadMessages(detail.timeline));
         setLoading(false);
@@ -150,10 +153,20 @@ export function ChatPane({
 
   /* Put the loaded page into the thread.
    *
-   * No cancel-and-wait dance: this runtime only ever holds this conversation, so there is
-   * never a foreign run to unwind first. It fires on open and on each "load earlier". */
+   * No cancel-and-wait dance, because this runtime only ever holds this conversation and there
+   * is never a foreign run to unwind. But `reset` is still destructive — it clears the
+   * repository and re-imports, minting new message ids — so it must not land on a run in
+   * flight: the streaming reply's captured `parentId` stops existing, the next chunk throws
+   * `Parent message not found`, and the reply simply disappears while the server keeps
+   * generating into nothing. It does not even look stuck, because `isRunning` is derived from
+   * the last message's status and after a reset that is a completed stored turn.
+   *
+   * The guard is here as well as on the button because a turn can start between the click and
+   * the page arriving. */
   useEffect(() => {
-    if (resumed.length) runtime.thread.reset(resumed);
+    if (!resumed.length) return;
+    if (runtime.thread.getState().isRunning) return;
+    runtime.thread.reset(resumed);
   }, [runtime, resumed]);
 
   /* Rejoin the turn already running here.
@@ -196,7 +209,10 @@ export function ChatPane({
 
   /** Fetch the page above the one on screen and put it on the front. */
   const loadEarlier = useCallback(async () => {
+    // Never while a turn is running: widening the window rebuilds the thread, and rebuilding
+    // it under a live run loses the reply. The pill says so rather than doing nothing silently.
     if (loadingEarlier || windowStart <= 0 || !id) return;
+    if (runtime.thread.getState().isRunning) return;
     setLoadingEarlier(true);
     const older = await fetchConversation(id, { turns: WINDOW, before: windowStart }).catch(
       () => null,
@@ -204,8 +220,17 @@ export function ChatPane({
     setLoadingEarlier(false);
     if (!older || !older.timeline.length) return;
 
-    const widened = [...older.timeline, ...timeline];
-    const grown = toThreadMessages(widened);
+    /* The older page in front of what is *on screen*, not in front of what was fetched.
+     *
+     * It used to rebuild from `older.timeline + timeline`, and `timeline` is written only by
+     * the open fetch — nothing appends a live turn to it, because the open is an imperative
+     * `fetchQuery` rather than a subscription. So loading earlier turns deleted every message
+     * produced during the session from the thread: not from disk, but from in front of you,
+     * which is worse because it looks like loss. Taking the thread's own messages as the tail
+     * keeps the session and still puts the older page above it. */
+    const onScreen = runtime.thread.getState().messages as ThreadMessageLike[];
+    const older_ = toThreadMessages(older.timeline);
+    const grown = onScreen.length ? [...older_, ...onScreen] : older_;
     // Remember which message you were reading before the thread is torn down and rebuilt longer.
     const viewport = root.current?.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
     anchor.current = null;
@@ -217,15 +242,19 @@ export function ChatPane({
       if (index >= 0) {
         anchor.current = {
           index,
-          shift: grown.length - messages.length,
+          // How many messages were added *in front*, which is the only number that shifts an
+          // index. This was `grown.length - messages.length`: a converted-message count minus
+          // a count of DOM nodes, two different things that only agree when every message is
+          // mounted — so with anything virtualised or not yet laid out it pinned the wrong
+          // message and fought the scroll for 2.5 seconds.
+          shift: older_.length,
           offset: messages[index].getBoundingClientRect().top - top,
         };
       }
     }
-    setTimeline(widened);
     setWindowStart(older.windowStart ?? 0);
     setResumed(grown);
-  }, [id, loadingEarlier, timeline, windowStart]);
+  }, [id, loadingEarlier, runtime, windowStart]);
 
   /* Whether you are near the top of what is loaded, and putting you back where you were after
    * "load earlier" rebuilt the thread.
@@ -389,10 +418,20 @@ function PublishToTheWorkPanel({ active }: { active: boolean }) {
   const publish = useFocusedChat((state) => state.publish);
   const clear = useFocusedChat((state) => state.clear);
   const usage = latestUsage(messages);
+  /* Depended on by value, not by identity.
+   *
+   * `latestUsage` builds a fresh object out of the last message on every render, and the thread
+   * re-renders on every streamed chunk — so an effect keyed on the object ran clear-then-publish
+   * hundreds of times a turn, each pair a store write and a re-render of the meter. The numbers
+   * are what the meter draws, so the numbers are what the effect watches. */
+  const share = usage?.context?.share ?? usage?.baseline?.share ?? -1;
+  const window = usage?.context?.window ?? 0;
+  const folded = !!usage?.folded;
   useEffect(() => {
     if (!active) return;
     publish({ usage, running });
     return clear;
-  }, [active, clear, publish, running, usage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, clear, publish, running, share, window, folded]);
   return null;
 }

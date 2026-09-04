@@ -34,16 +34,20 @@ REPEATING = "repeating"
 
 def _pending(path: Path) -> list[dict]:
     return [
-        {**r, "kind": ONCE, "fires": clock.humanize_until(r["fire_at"])}
+        {**r, "kind": ONCE, "fires": clock.humanize_until(r["fire_at"]), "at": r["fire_at"]}
         for r in repo.reminders.list_reminders(path, status="pending")
     ]
 
 
 def _standing(path: Path) -> list[dict]:
     return [
-        {**s, "kind": REPEATING, "fires": clock.humanize_until(s["next_fire"])}
+        {**s, "kind": REPEATING, "fires": clock.humanize_until(s["next_fire"]), "at": s["next_fire"]}
         for s in repo.schedules.list_schedules(path)
     ]
+
+
+def _soonest(rows: list[dict]) -> list[dict]:
+    return sorted(rows, key=lambda row: str(row.get("at") or ""))
 
 
 @tool(
@@ -91,8 +95,19 @@ def list_schedules(path: Path, args: dict):
     Two lists meant it was asked twice or, more often, asked once and answered half — a turn
     that checked `list_reminders`, found nothing, and concluded nothing was pending while a
     daily job sat in the other table.
+
+    **The standing jobs are never paged away, and that is what makes one list honest.** Merging
+    them and paging the result reproduced the very failure the merge was for: twenty pending
+    reminders fill a page of ten and every standing job is off the end, so "what have I got
+    waiting" is answered without a word about the thing that fires every day. Sorting by time
+    does not fix it either — a reminder an hour from now sorts ahead of tomorrow's briefing.
+    The two are different in *kind*: standing jobs are a handful of long-lived commitments,
+    one-off reminders are the many. So the handful is always shown and the many are paged.
     """
-    return paging.page(_pending(path) + _standing(path), args)
+    standing = _soonest(_standing(path))
+    paged = paging.page(_soonest(_pending(path)), args)
+    items = standing + list(paged.get("items", []))
+    return {**paged, "items": items, "standing": len(standing)}
 
 
 @tool(

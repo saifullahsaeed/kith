@@ -80,8 +80,26 @@ def browse_page(path: Path, args: dict):
     if render is True:
         return {"how": "rendered in a browser", "text": sandbox.browse_page(url)}
 
-    text = sandbox.fetch_url(url)
-    if render is False or len(text.strip()) >= _TOO_LITTLE_TO_BE_A_PAGE:
+    if render is False:
+        return {"how": "downloaded", "text": sandbox.fetch_url(url)}
+    try:
+        text = sandbox.fetch_url(url)
+    except Exception as exc:
+        # The download failing is a reason to try the browser, not a reason to stop. A curl
+        # timeout, a max-filesize overrun, a TLS reject or a host that refuses this user agent
+        # all land here for pages the renderer loads perfectly — and the old code reported "is
+        # this machine online?" for every one of them, having never started the browser the
+        # tool exists for.
+        try:
+            return {
+                "how": "rendered in a browser",
+                "text": sandbox.browse_page(url),
+                "note": f"The plain download failed ({exc}), so this is the rendered page.",
+            }
+        except Exception as also:
+            return {"error": f"could not download it ({exc}) and could not render it ({also})"}
+
+    if len(text.strip()) >= _TOO_LITTLE_TO_BE_A_PAGE:
         return {"how": "downloaded", "text": text}
 
     try:

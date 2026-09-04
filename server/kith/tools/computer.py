@@ -489,9 +489,17 @@ def glob(path: Path, args: dict):
 def changes(path: Path, args: dict):
     """Uncommitted and committed are one question — "what changed here" — asked over two
     windows, so they are one tool with an argument rather than `changes` and `history`."""
-    commits = args.get("commits")
-    if commits:
-        return sandbox.log(int(commits))
+    raw = args.get("commits")
+    if raw:
+        # A bad number is the default, not a `ValueError` in the model's face.
+        try:
+            many = int(raw)
+        except (TypeError, ValueError):
+            many = 20
+        # `path` is declared on this tool, so dropping it here answered a question about one
+        # folder with the history of the whole repository — confidently, with nothing in the
+        # result to say the scope had been thrown away.
+        return sandbox.log(many, args.get("path") or None)
     return sandbox.diff(args.get("path") or None)
 
 

@@ -198,12 +198,21 @@ def diff(path: str | None = None, staged: bool = False) -> str:
     return _clip(out)
 
 
-def log(limit: int = 20) -> str:
-    """Recent history, one line each."""
+def log(limit: int = 20, path: str | None = None) -> str:
+    """Recent history, one line each — of the whole repository, or of one path in it.
+
+    `path` exists because `changes` declares one and used to throw it away: a request for the
+    history of one folder came back as the history of everything, read as that folder's, with
+    nothing in the answer to say the scope had been dropped.
+    """
     if not ensure_repo():
         return "git is not available on this machine."
-    out = _git("log", f"-{max(1, min(limit, 200))}", "--format=%h %ad %s", "--date=format:%d %b %H:%M").output
-    return _clip(out.strip()) or "No history yet."
+    args = ["log", f"-{max(1, min(limit, 200))}", "--format=%h %ad %s", "--date=format:%d %b %H:%M"]
+    if path:
+        # `--` so a path that happens to look like a revision is still read as a path.
+        args += ["--", path]
+    out = _git(*args).output
+    return _clip(out.strip()) or ("No history for that path yet." if path else "No history yet.")
 
 
 def _nowhere_to_send(verb: str) -> str:

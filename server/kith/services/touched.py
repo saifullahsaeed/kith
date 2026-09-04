@@ -181,9 +181,15 @@ def _paths(tool_name: str, arguments: dict) -> list[str]:
     """
     if tool_name == "edit_files":
         edits = arguments.get("edits")
-        if not isinstance(edits, list):
-            return []
-        return [str(edit["path"]) for edit in edits if isinstance(edit, dict) and edit.get("path")]
+        if isinstance(edits, list):
+            return [str(edit["path"]) for edit in edits if isinstance(edit, dict) and edit.get("path")]
+        # A single edit at the top level, which is the shape a retired `edit_file` call arrives
+        # as — `RETIRED` translates the name and leaves the arguments alone, so the hot edit
+        # path came through here with no `edits` key and recorded nothing. The file he had just
+        # written never entered the manifest, its version was never stamped, and a file
+        # previously *read* kept only its read row: the next look computed `stale` and told him
+        # the file had changed under him because of an edit he made himself.
+        # Falls through rather than returning [], so the `many` reader below handles it.
     # `read_file` takes `paths`, a list, and the manifest has to name every file in a batch or
     # a four-file read is recorded as one. `many` is the same reader the tool itself uses, so
     # the two cannot disagree about what a call named — which they would, immediately, if this

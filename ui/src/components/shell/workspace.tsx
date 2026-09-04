@@ -11,10 +11,10 @@ import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
 import { LayoutView } from "@/components/shell/layout/layout-view";
 import { useLayout } from "@/components/shell/layout/store";
+import { useCanAttach } from "@/lib/active-composer";
 import {
   hasTab as treeHasTab,
   panes as panesOf,
-  tabKey as tabKeyOf,
   type TabRef,
 } from "@/components/shell/layout/tree";
 import { DropZone } from "@/components/shell/drop-zone";
@@ -24,6 +24,7 @@ import { useMessages } from "@/hooks/use-messages";
 import { keys } from "@/lib/query-keys";
 import {
   parseLocation,
+  pathForHome,
   pathForMessages,
   pathForSettings,
   pathForTab,
@@ -94,13 +95,38 @@ export function Workspace({
 
   /** Closing a surface from inside it — its own header X — is closing its tab. Two ways to
    *  shut the same thing that disagreed would be worse than one. */
-  const closeTab = useLayout((state) => state.close);
+  const closeLayoutTab = useLayout((state) => state.close);
   const openSurface = useLayout((state) => state.open);
   const layoutTree = useLayout((state) => state.tree);
   /** Whether a surface is on screen anywhere, for the header's pressed states. Read from the
    *  tree rather than from a flag beside it, so the button cannot disagree with the layout. */
   const hasTab = useCallback((key: string) => treeHasTab(layoutTree, key), [layoutTree]);
   const focusedPane = useLayout((state) => state.focused);
+  /** Whether a composer is mounted and claiming drops — see `lib/active-composer`. */
+  const canAttach = useCanAttach();
+
+  /* Closing a surface the URL still names has to clear the URL too.
+   *
+   * Four of these are reachable by route — Settings, the board, the inbox, the context
+   * breakdown — and an effect above reopens whatever the route names. So closing one by its X
+   * shut the tab and left `/settings/model` in the address bar: the effect had already run, so
+   * nothing reopened it, but the header button was now a no-op because navigating to the route
+   * it was already on fires nothing. It looked like the button had broken.
+   *
+   * Before this the takeover screens were rendered *off* the route, so closing them navigated
+   * home by construction and the question could not arise. */
+  const closeTab = useCallback(
+    (key: string) => {
+      closeLayoutTab(key);
+      const routed =
+        (key === "settings" && route.settingsTab) ||
+        (key === "board" && panelOpen) ||
+        (key === "inbox" && inboxOpen) ||
+        (key === "context" && route.contextOpen);
+      if (routed) navigate(pathForHome());
+    },
+    [closeLayoutTab, inboxOpen, navigate, panelOpen, route.contextOpen, route.settingsTab],
+  );
 
   /** The header's buttons are toggles: pressing one twice puts the surface away again. */
   const toggleSurface = useCallback(
@@ -157,14 +183,37 @@ export function Workspace({
    *
    *  The focused pane's active tab when that is a chat, and otherwise the first chat anywhere
    *  in the layout — so closing the focused pane does not leave Work pointed at nothing. */
+  /* The last chat that was actually in front of you, remembered.
+   *
+   * The fallback used to be "the first chat anywhere in the tree", and that is not a harmless
+   * default: `PaneView` focuses a pane on the mousedown of *any* click inside it, so one click
+   * in the Work pane re-elected a different conversation — and the Fold button in that very
+   * panel then folded it. A fold is appended to the transcript and there is no unfold anywhere
+   * in the app or the server, so a stray click permanently changed what the model replays for
+   * a conversation nobody had looked at.
+   *
+   * Sticky instead: a click outside a chat leaves the answer where it was. It only changes when
+   * a chat is genuinely focused, or when the one being pointed at is no longer open. */
+  const lastChat = useRef("");
   const conversationId = useMemo(() => {
     const all = panesOf(layoutTree);
-    const here = all.find((one) => one.id === focusedPane)?.tabs[
-      all.find((one) => one.id === focusedPane)?.active ?? 0
-    ];
-    if (here?.surface === "chat") return here.conversationId ?? "";
-    const anywhere = all.flatMap((one) => one.tabs).find((tab) => tab.surface === "chat");
-    return anywhere?.surface === "chat" ? (anywhere.conversationId ?? "") : "";
+    const pane = all.find((one) => one.id === focusedPane);
+    const here = pane?.tabs[pane.active];
+    if (here?.surface === "chat") {
+      lastChat.current = here.conversationId ?? "";
+      return lastChat.current;
+    }
+    const open = all.flatMap((one) => one.tabs).filter((tab) => tab.surface === "chat");
+    if (open.some((tab) => (tab.conversationId ?? "") === lastChat.current)) {
+      return lastChat.current;
+    }
+    // The one it was pointing at has been closed. Anything still open beats nothing, and the
+    // *visible* one beats a background tab.
+    const visible = all
+      .map((one) => one.tabs[one.active])
+      .find((tab) => tab?.surface === "chat");
+    lastChat.current = (visible ?? open[0])?.conversationId ?? "";
+    return lastChat.current;
   }, [focusedPane, layoutTree]);
 
   // Reopen where you were. A reload used to land on an empty chat with the conversation you
@@ -186,6 +235,9 @@ export function Workspace({
      conversation, and an alert that drops you into whichever chat you last had open has not
      finished its job. */
   useEffect(() => {
+    // `openTab` focuses an existing tab rather than duplicating it, so re-running is harmless
+    // in effect — but each call still commits a tree and writes `localStorage`, and there were
+    // two of these effects doing it. One, and only when the id actually changes.
     if (route.conversationId) openConversation(route.conversationId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.conversationId]);
@@ -216,21 +268,6 @@ export function Workspace({
     if (route.contextOpen) openSurface({ surface: "context" });
   }, [openSurface, route.contextOpen]);
 
-  /* A notification that lands you in the chat it is about.
-
-     A question he is waiting on lives in exactly one conversation, and the answer can only be
-     given there — so "he needs you" that drops you into whichever chat you last had open is a
-     notification that has not finished its job. `/chat/<id>` is the one route that could not be
-     expressed before.
-
-     Guarded on already being there, or every render would reopen it and throw away the thread
-     you are reading. */
-  useEffect(() => {
-    const wanted = route.conversationId;
-    if (!wanted || wanted === conversationId) return;
-    void openConversation(wanted);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route.conversationId]);
 
   /* The three thresholds that used to live here are gone.
    *
@@ -308,17 +345,18 @@ export function Workspace({
           );
 
         case "chat":
-          /* Keyed on the conversation, which is what makes the tabs real.
+          /* No key here. `PaneView` keys the body on the tab's permanent `uid`, which is what
+           * survives a draft chat being named — keying on the conversation unmounted the pane
+           * mid-first-reply and threw away the runtime streaming into it.
            *
-           * A pane's conversation never changes, so React tearing one down and building
-           * another is exactly right when the key changes — and there is no key change in the
-           * ordinary life of a tab, because a draft chat learning its id renames its *tab*
-           * rather than being replaced. */
+           * `initialProject` is only handed to a chat that has no conversation yet. It used to
+           * go to every pane that mounted, read off a mutable ref cleared by one code path out
+           * of several — so opening "New chat here" on project 7 and then clicking an existing
+           * chat's tab re-bound *that* conversation to project 7 on the server. */
           return (
             <ChatPane
-              key={ref.conversationId || "draft"}
               conversationId={ref.conversationId ?? ""}
-              initialProject={draftProject.current}
+              initialProject={ref.conversationId ? null : draftProject.current}
               active={(ref.conversationId ?? "") === conversationId}
             />
           );
@@ -487,12 +525,14 @@ export function Workspace({
         {/* Drop a file anywhere in the window and it lands on the composer. Disabled — but
             still swallowing the drop — while something is covering the thread, since attaching
             to a composer nobody can see is a file that has vanished. */}
-        {/* Enabled only while a chat is on screen. It used to be disabled whenever one of the
-            five takeover screens covered the thread; there are no takeovers now, so the
-            question is the one it was always really asking — is there a composer for this file
-            to land on. A drop with the chat tab closed would attach to something nobody can
-            see, which is a file that has vanished. */}
-        <DropZone enabled={hasTab(tabKeyOf({ surface: "chat", conversationId }))} />
+        {/* Armed only when something can actually receive the file.
+            It used to be disabled whenever one of the five takeover screens covered the
+            thread; there are no takeovers now, so the question is the one it was always really
+            asking. Asking the *layout* whether a chat tab exists was not it — a pane renders
+            only its active tab, so a chat sitting behind a Work tab satisfies the tree and has
+            no composer mounted, and the overlay promised "Drop to attach" over a file that
+            then went nowhere. The composer answers for itself. */}
+        <DropZone enabled={canAttach} />
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. Given this session's project, because the paths it is
             handed are mostly relative ones out of his prose and his tool results, and a

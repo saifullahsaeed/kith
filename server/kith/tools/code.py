@@ -198,15 +198,32 @@ def find_symbol(path: Path, args: dict):
 
     wanted = str(args.get("name") or "")
     asked = Path(sandbox.resolve(args.get("path") or "."))
+    unavailable = ""
     if asked.is_file() and semantics.available(asked.parent):
         permissions.require_path("read", asked, sandbox.root())
         found = semantics.definition_and_references(asked, wanted, int(args.get("near_line") or 0))
-        return {"name": wanted, "engine": "language server", **found}
+        # An `unavailable` from the server is not an answer, and returned verbatim it reads as
+        # one — empty `definitions` and `references` beside a sentence the caller may not act
+        # on. It is reachable by naming a method inherited from a base class, which is an
+        # ordinary thing to ask about. So the parser gets a go.
+        #
+        # The sentence is kept, though, and put back below if the parser finds nothing either:
+        # "that name is not in this file, try …" is a *useful* nothing, and dropping it in
+        # favour of a bare empty result would trade one bad answer for another.
+        if not found.get("unavailable"):
+            return {"name": wanted, "engine": "language server", **found}
+        unavailable = str(found["unavailable"])
 
-    # A file with no server behind it searches the folder it is in, not the file. The name was
-    # given with a file to *locate* it, and answering "where else is this used" by looking only
-    # in the one file it was named from would be the emptiest true answer available.
-    target = asked.parent if asked.is_file() else asked
+    # A file is where the name *is*, not where its callers are, so the parser searches the
+    # project the file belongs to rather than the one folder it sits in.
+    #
+    # This searched `asked.parent`, which turned "who uses this" into "who uses this in the same
+    # directory" — silently, under a plain `engine: "parser"`. Measured: a symbol defined in
+    # `pkg/target.py` and called from `other/caller.py` came back `references: []`,
+    # `filesSearched: 1`. A false "nothing uses this" from the one tool whose own description
+    # warns that "'no matches' from grep is not evidence that nothing calls something" is the
+    # conclusion that precedes deleting shared code.
+    target = _project_root(asked) if asked.is_file() else asked
     permissions.require_path("read", target, sandbox.root())
     try:
         found = search_service.find(target, wanted)
@@ -215,14 +232,42 @@ def find_symbol(path: Path, args: dict):
     # The same keys the language-server path returns, so a caller reads one shape whichever
     # engine answered. `calls` was this tool's word for the same thing the server calls
     # references; one tool cannot have two words for it.
-    return {
+    answer = {
         "name": found["name"],
         "engine": "parser",
+        # What was actually searched, because the honest answer to "nothing uses this" depends
+        # on it and the caller cannot see the scope from here.
+        "searched": str(target),
         "definitions": found["definitions"],
         "references": found["calls"],
         "filesSearched": found["files_searched"],
         "shown": search_service.render(found),
     }
+    if unavailable and not found["definitions"] and not found["calls"]:
+        answer["unavailable"] = unavailable
+    return answer
+
+
+#: What marks the top of a project, for deciding how wide "across a project" is.
+_ROOTS = ("pyproject.toml", "package.json", "go.mod", "Cargo.toml", ".git", "tsconfig.json")
+
+
+def _project_root(file: Path) -> Path:
+    """The project a file belongs to, or its own folder if nothing above it says.
+
+    Bounded by the workspace root, so this cannot walk out into somebody's home directory
+    looking for a `package.json`.
+    """
+    from kith.infra import workspace as sandbox
+
+    here = Path(sandbox.root())
+    probe = file.parent
+    while True:
+        if any((probe / marker).exists() for marker in _ROOTS):
+            return probe
+        if probe == here or probe.parent == probe or here not in probe.parents:
+            return file.parent
+        probe = probe.parent
 
 
 @tool(

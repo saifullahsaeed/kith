@@ -178,16 +178,27 @@ def update_project(path: Path, args: dict):
     of its own thereafter. The grant that comes with it is unchanged; see `_link_folder`, which
     is where all of that still lives.
 
-    `directory` is handled before anything else and returns, because it is not an ordinary
-    column write: it creates folders, seeds `.kith/`, invalidates the permission cache and
-    claims the conversation. Falling through to `repo.projects.update_project` afterwards would
-    write the row a second time with the same values.
+    `directory` is not an ordinary column write — it creates folders, seeds `.kith/`,
+    invalidates the permission cache and claims the conversation — so it is done by
+    `_link_folder`. It used to *return* from there, which silently threw away any `name`,
+    `description` or `status` sent in the same call, and took two guards with it: a project
+    could be marked `done` (which only a person may do) and a project could be `paused` while
+    still being claimed by this conversation, the one update the code below says must not claim
+    it. The schema advertises all five fields with only `id` required and says nothing about
+    exclusivity, so a caller setting two of them was doing what it was told.
     """
     foreign = _out_of_scope(path, args.get("id"))
     if foreign is not None:
         return foreign
+    linked: dict | None = None
     if "directory" in args:
-        return _link_folder(path, args)
+        linked = _link_folder(path, args)
+        # An error from linking is the whole answer: the folder is what the rest of the call is
+        # about, and half-applying the other fields onto a project whose link failed is worse.
+        if isinstance(linked, dict) and linked.get("error"):
+            return linked
+        if not any(args.get(key) is not None for key in ("status", "name", "description")):
+            return linked
     status = args.get("status")
     if status == "done":
         # The schema already leaves "done" off the enum; this is the backstop for a
@@ -209,7 +220,13 @@ def update_project(path: Path, args: dict):
     # keep it pointed at work nobody wants touched right now.
     if status in (None, "active"):
         project_binding.adopt(path, args["id"])
-    return out
+    # Both halves, when both ran: the caller asked for the link *and* the column changes, and a
+    # result carrying only one of them reads as the other having been ignored. `out` can be
+    # falsy — `update_project` returns nothing for a project that is not there — in which case
+    # the link is the whole answer.
+    if linked and isinstance(out, dict):
+        return {**linked, **out}
+    return out or linked
 
 
 @tool(

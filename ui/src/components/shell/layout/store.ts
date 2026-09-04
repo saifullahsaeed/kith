@@ -5,6 +5,7 @@ import {
   closeTab,
   dockTab,
   hasTab,
+  ids,
   openTab,
   pane,
   paneFor,
@@ -34,7 +35,10 @@ const KEY = "kith-layout";
  * failure it can cause is the worst kind: the app does not start. So an unreadable layout, a
  * newer one, or one that fails its own invariants is *silently* replaced with the default. The
  * arrangement is worth remembering; it is not worth a white screen. */
-const VERSION = 1;
+/* 2: tabs gained a permanent `uid`, so a stored v1 tab has none and every React key would be
+ * undefined. `withUid` could fill them in on read, but the default layout is a correct answer
+ * and a layout is a convenience — a migration for one field is more code to be wrong. */
+const VERSION = 2;
 
 /** What the app opens as, and what "reset layout" restores.
  *
@@ -87,7 +91,17 @@ export function readStored(): Node | null {
     // A newer version is not an error and not something to guess at. The default is a correct
     // layout; a half-understood one is not.
     if (held.version !== VERSION) return null;
-    return looksLikeLayout(held.tree) ? held.tree : null;
+    if (!looksLikeLayout(held.tree)) return null;
+    /* Duplicate ids are checked here as well as prevented at the source.
+     *
+     * `nextId` mixes a per-load token in so a new id cannot look like a stored one, which is the
+     * actual fix. This is the second lock: a tree with two panes sharing an id throws inside the
+     * panel library during render, which takes the window down rather than one pane, and the
+     * only recovery from a *stored* one is clearing site data. Cheap to check, and the default
+     * layout is a fine answer. */
+    const seen = ids(held.tree);
+    if (new Set(seen).size !== seen.length) return null;
+    return held.tree;
   } catch {
     // Private mode, no storage, or something that is not JSON. All three mean the same thing.
     return null;
@@ -107,6 +121,13 @@ export type LayoutState = {
   /** The pane a new tab lands in. Follows what you last clicked, so "open the roadmap" puts it
    *  where you are looking rather than always in the first column. */
   focused: string;
+  /** Pane ids, most recently focused first.
+   *
+   * Exists so that "when a split cannot honour every child's minimum, the least-recently
+   * focused pane gives way" has something to mean. Without an order the only available answer
+   * is position, and collapsing the leftmost pane because it is leftmost is arbitrary in a way
+   * you feel immediately. */
+  order: string[];
   open: (ref: TabRef) => void;
   close: (key: string) => void;
   dock: (key: string, paneId: string, edge: Edge) => void;
@@ -130,17 +151,27 @@ export const useLayout = create<LayoutState>((set, get) => {
   const commit = (tree: Node, focused?: string) => {
     writeStored(tree);
     const panesNow = panes(tree);
+    const alive = new Set(panesNow.map((one) => one.id));
     const wanted = focused ?? get().focused;
+    const now = alive.has(wanted) ? wanted : firstPaneId(tree);
     set({
       tree,
       // A focused pane that has just been closed would leave new tabs opening into nothing.
-      focused: panesNow.some((one) => one.id === wanted) ? wanted : firstPaneId(tree),
+      focused: now,
+      // Closed panes drop out; panes that appeared (a split) join at the back, so a pane you
+      // have never looked at is the first to give way when the window runs out of room.
+      order: [
+        now,
+        ...get().order.filter((id) => id !== now && alive.has(id)),
+        ...panesNow.map((one) => one.id).filter((id) => id !== now && !get().order.includes(id)),
+      ],
     });
   };
 
   return {
     tree: initial,
     focused: firstPaneId(initial),
+    order: panes(initial).map((one) => one.id),
 
     open: (ref) => {
       const { tree, focused } = get();
@@ -156,7 +187,11 @@ export const useLayout = create<LayoutState>((set, get) => {
 
     rename: (key, ref) => commit(renameTab(get().tree, key, ref)),
 
-    focus: (paneId) => set({ focused: paneId }),
+    focus: (paneId) =>
+      set((was) => ({
+        focused: paneId,
+        order: [paneId, ...was.order.filter((id) => id !== paneId)],
+      })),
 
     resize: (splitId, sizes) => commit(resizeSplit(get().tree, splitId, sizes)),
 

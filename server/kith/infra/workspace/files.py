@@ -749,6 +749,29 @@ def check_code(path: str = ".") -> dict:
     permissions.require_path("read", target, root())
     if not target.is_dir():
         target = target.parent
+    # Walk up for the project marker rather than looking in one directory.
+    #
+    # Given a file, this took its parent and asked only there. So `check_code("pkg/mod.py")` in
+    # a project whose `pyproject.toml` is two levels up found no marker and returned
+    # `clean: True` having run nothing at all — a machine-readable "nothing is wrong" about a
+    # file with real errors in it, which is the worst answer this function can give. `clean` is
+    # the field the model acts on; the `note` explaining that nothing said how to check it is
+    # not.
+    #
+    # Stops at the workspace root, so it cannot wander into somebody's home directory looking
+    # for a package.json.
+    here = root()
+    found: Path | None = None
+    probe = target
+    while True:
+        if any((probe / marker).is_file() for marker, _c, _l in _CHECKERS):
+            found = probe
+            break
+        if probe == here or probe.parent == probe or here not in probe.parents:
+            break
+        probe = probe.parent
+    target = found or target
+
     for marker, command, label in _CHECKERS:
         if not (target / marker).is_file():
             continue
@@ -767,11 +790,20 @@ def check_code(path: str = ".") -> dict:
             # entire point, so it is kept.
             "problems": "" if proc.returncode == 0 else _clip(out),
         }
+    # `clean` is deliberately absent, not `True`.
+    #
+    # It used to say `clean: True`, which reads as "checked, nothing wrong" to anything acting
+    # on the result — for a folder where no checker could even be identified. "I did not check"
+    # and "I checked and it was fine" are opposite facts, and the field that carried them was
+    # the same. */
     return {
         "ran": "",
-        "clean": True,
+        "checked": False,
         "problems": "",
-        "note": f"Nothing in {path} says how it is checked — no tsconfig.json, pyproject.toml or package.json.",
+        "note": (
+            f"Nothing at or above {path} says how it is checked — no tsconfig.json, "
+            "pyproject.toml or package.json — so nothing was run. This is not a clean result."
+        ),
     }
 
 

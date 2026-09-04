@@ -38,17 +38,30 @@ class TestNothingReturnsWithoutABound:
     #: `git.fetch`, whose whole return value is one sentence from `standing` or `_last_line`.
     SELF_LIMITING: ClassVar[set[str]] = {"create_project", "publish", "check_remote"}
 
-    # `glob` is word-bounded because it is a common English substring — it sits inside "global",
-    # and a tool's *docstring* is scanned along with its code (they arrive as one string), so a
-    # comment that said "leaves it global" read as a call to `glob` and flagged a memory tool that
-    # reads nothing in bulk. `\bglob\b` still matches the call `sandbox.glob(` and no longer
-    # matches the prose. The rest are left bare on purpose: `fetch` has to keep matching
-    # `fetch_url`, so a boundary there would blind the guard to a real bulk reader.
-    BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|\bglob\b|grep|requests\.")
+    # Prose is stripped before either pattern is applied — see `_without_prose`. It used to be
+    # scanned along with the code, and every one of these words is one a comment about bulk
+    # reading naturally uses: `glob` was word-bounded because it sits inside "global", and a
+    # comment saying "leaves it global" flagged a memory tool that reads nothing at all. Then a
+    # comment quoting `find_symbol`'s own description — "'no matches' from grep is not evidence
+    # that nothing calls something" — flagged `find_symbol` for the same reason, which is when
+    # patching the pattern list stopped being the fix. The words stay bare now, including
+    # `fetch`, which has to keep matching `fetch_url`.
+    BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|glob|grep|requests\.")
     # `MAX_` rather than `_MAX_`: a bound is a bound whether the constant naming it is private
     # to its module or exported. `outline.MAX_BYTES` and `repomap.MAX_BUDGET_TOKENS` are as
     # real as `sandbox.files._MAX_WRITE`, and only the underscore told them apart.
     GUARD = re.compile(r"paging\.page|_clip|_bounded|\[:\s*\d|MAX_|_OUTPUT_LIMIT|\[:limit\]|hits\[:")
+
+    @staticmethod
+    def _without_prose(source: str) -> str:
+        """The code, with docstrings and comments taken out.
+
+        The question this test asks is what a handler *calls*, and prose about what it calls
+        answers it wrongly in both directions: a comment naming a bulk reader flags a tool that
+        does not read, and a comment naming a cap clears one that has none. Both have happened.
+        """
+        without_strings = re.sub(r'("""|\'\'\')(?:.|\n)*?\1', "", source)
+        return re.sub(r"#[^\n]*", "", without_strings)
 
     @staticmethod
     def _reachable_source(handler) -> str:
@@ -102,7 +115,7 @@ class TestNothingReturnsWithoutABound:
         for name, tool in sorted(all_tools().items()):
             if name in self.SELF_LIMITING:
                 continue
-            source = self._reachable_source(tool.run)
+            source = self._without_prose(self._reachable_source(tool.run))
             paged = "PAGE_PARAMS" in str(tool.properties)
             if self.BULK.search(source) and not self.GUARD.search(source) and not paged:
                 loose.append(name)
