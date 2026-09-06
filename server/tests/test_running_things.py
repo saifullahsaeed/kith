@@ -169,11 +169,20 @@ class TestActuallyRunningASuite:
         assert result["ok"] is True
         assert result["passed"] == 2, f"the counts were lost: {result}"
 
-    def test_a_missing_runner_is_not_reported_as_a_failing_suite(self, workspace_root):
-        """Opposite actions: one is a bug to fix, the other is a thing to install."""
-        (workspace_root / "tests").mkdir()
-        (workspace_root / "tests" / "test_a.py").write_text("def test_ok(): assert True\n")
+    def test_a_missing_runner_is_not_reported_as_a_failing_suite(self, bare_project):
+        """Opposite actions: one is a bug to fix, the other is a thing to install.
 
+        **The project gets its own empty virtualenv, and that is the point of the fixture.**
+        This test used to create only `tests/`, which left `python_for` falling through to the
+        ambient `python3` — so what it actually asserted was "the machine running the suite has
+        no pytest installed globally". On a machine where it does, pytest ran, the one test in
+        the fixture passed, and nothing raised: a green product reported as a red test, for a
+        reason nothing in the failure named.
+
+        An empty venv makes the interpreter the test's own. It is the same thing the `project`
+        fixture builds, minus the `pip install` — which is exactly the difference the two tests
+        are about.
+        """
         with pytest.raises(testing.TestingError) as caught:
             testing.run(".")
 
@@ -184,6 +193,19 @@ class TestActuallyRunningASuite:
         with pytest.raises(testing.TestingError) as caught:
             testing.run(".")
         assert "shell" in str(caught.value)
+
+
+@pytest.fixture
+def bare_project(workspace_root):
+    """A Python project with an interpreter of its own and nothing installed in it.
+
+    Deliberately not `project` minus a line: the two fixtures differ by exactly the thing under
+    test, and reading them side by side is what makes that obvious.
+    """
+    (workspace_root / "tests").mkdir()
+    (workspace_root / "tests" / "test_a.py").write_text("def test_ok(): assert True\n")
+    subprocess.run([sys.executable, "-m", "venv", str(workspace_root / ".venv")], capture_output=True)
+    return workspace_root
 
 
 @pytest.fixture
