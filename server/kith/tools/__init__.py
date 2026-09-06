@@ -28,6 +28,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     journal,
     memory,
     outreach,
+    plugins,
     projects,
     semantics,
     skills,
@@ -48,6 +49,7 @@ def tool_schemas(
     only: set[str] | None = None,
     mcp: list[dict] | None = None,
     language_server: bool | None = None,
+    plugin_state: bool | None = None,
 ) -> list[dict]:
     """The tool declarations to hand the model — the built-ins, plus any MCP tools passed in.
 
@@ -72,6 +74,11 @@ def tool_schemas(
     # needs one is hidden and the one that installs it is offered; with a server, the reverse.
     # `None` means nobody has an opinion, and nothing is hidden.
     hide: set[str] = set()
+    if plugin_state is False:
+        # No installed plugin keeps state, so the tool that reads it can only ever answer "no
+        # plugin called that". Its schema is not free, and this is the difference between an
+        # idle plugin costing nothing and costing a couple of hundred characters a round.
+        hide.add("plugin_state")
     if language_server is False:
         hide |= set(NEEDS_A_LANGUAGE_SERVER)
     elif language_server is True:
@@ -79,6 +86,18 @@ def tool_schemas(
     wanted = None if only is None else set(only) - hide
     builtins = [one for one in schemas(wanted) if one.get("function", {}).get("name") not in hide]
     return builtins + list(mcp or [])
+
+
+def _any_plugin_holds_state() -> bool:
+    """Does any enabled plugin declare a store? Wrapped, because a plugin fault must never
+    decide the shape of the tools block — the safe answer is to offer the tool."""
+    try:
+        from kith import settings as live
+        from kith.services.plugins import registry
+
+        return any((plugin.state or {}) for plugin in registry.enabled(live.CONFIG_DB_PATH))
+    except Exception:
+        return True
 
 
 def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | None = None) -> dict:
@@ -220,7 +239,38 @@ def _run_mcp(mcp, name: str, arguments: dict) -> dict:
         # snapshot. `mcp.run` already answers that readably, and refusing here instead would
         # replace a sentence he can act on with a prompt about a program that no longer exists.
         permissions.require_plugin(signature, f"{label}/{tool}" if tool else label, who)
-    return mcp.run(name, arguments, tuning.value("mcp_call_timeout"))
+    answer = mcp.run(name, arguments, tuning.value("mcp_call_timeout"))
+    _absorb_state(config_db, label, answer)
+    return answer
+
+
+def _absorb_state(config_db, label: str, answer: dict) -> None:
+    """A plugin's server says what it changed by putting it on its own tool result.
+
+    No reverse channel, no second port, no per-install token injected into a subprocess
+    environment — which would be a new credential kind to mint, store, revoke and leak into
+    `ps -E` and into everything the subprocess spawns, all to reach a function this module can
+    call on the line after `mcp.run` returns.
+
+    `_kith_state` is reserved on an MCP result and taken off before the model sees it, so a
+    server that returns that name for its own purposes cannot use it either way.
+
+    **Swallowed on failure, and after the gate rather than before.** Bookkeeping must never
+    fail the call it describes, and a refused call did not happen — recording that it did is
+    the same lie this function's caller avoids by returning before `touched.record` on a denial.
+    """
+    held = answer.pop("_kith_state", None) if isinstance(answer, dict) else None
+    if not isinstance(held, dict) or not held:
+        return
+    try:
+        from kith import settings as live
+        from kith.services.plugins import registry, state
+
+        if not registry.owner_of_label(config_db, label):
+            return
+        state.write(live.AGENT_DB_PATH, label, held, writer="server")
+    except Exception:
+        pass
 
 
 def _plugin_named(config_db, label: str) -> str:
@@ -295,8 +345,18 @@ def host(
 
         mcp = mcp_manager.snapshot()
     available = language_server if language_server is not None else _language_server_available()
+    # Whether `plugin_state` is worth its schema, resolved once here for the same cache reason
+    # as everything else in this function.
+    #
+    # This is what makes "an installed but idle plugin costs nothing" true rather than nearly
+    # true. A tool nobody can use still costs its declaration on every round of every turn, and
+    # `language_server` above already established the shape: a tool that is *categorically*
+    # unusable is hidden rather than offered so it can answer "not installed".
+    holds_state = _any_plugin_holds_state()
     return ToolHost(
-        schemas=lambda only=None: tool_schemas(only=only, mcp=mcp, language_server=available),
+        schemas=lambda only=None: tool_schemas(
+            only=only, mcp=mcp, language_server=available, plugin_state=holds_state
+        ),
         dispatched=dispatched,
         run=lambda name, arguments, allow=None: run_tool(name, arguments, agent_db_path, allow=allow),
         mcp_names=frozenset(str(((one.get("function") or {}).get("name")) or "") for one in mcp),

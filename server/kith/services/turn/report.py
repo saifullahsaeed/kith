@@ -461,6 +461,28 @@ def _content_text(message: dict) -> str:
     return str(content or "")
 
 
+def _plugin_digest(conversation_id: str, project: dict | None) -> str:
+    """The plugin digest as the prompt would have built it.
+
+    A second call rather than a stored copy, matching how the project region is recomputed
+    above — and the two must agree to the character, or this screen describes a request that was
+    never made. Wrapped, because a breakdown is a read-only screen and a plugin fault must not
+    take it down.
+    """
+    try:
+        from kith import settings as live
+        from kith.services.plugins import state as plugin_state
+
+        return plugin_state.digest(
+            live.AGENT_DB_PATH,
+            live.CONFIG_DB_PATH,
+            conversation_id,
+            int(project["id"]) if project and project.get("id") else None,
+        )
+    except Exception:
+        return ""
+
+
 def category_text(
     conversation_id: str,
     key: str,
@@ -502,9 +524,15 @@ def category_text(
     # prompt was built from, so it is the same text) rather than by the stored char count, which
     # says how big the region is but not where in the block it sits.
     region = ""
-    if key in ("live", "project"):
+    digest = ""
+    if key in ("live", "project", "plugins"):
         found = project_context.resolve(AGENT_DB_PATH, conversation_id)
         region = project_context.block(AGENT_DB_PATH, found) if found else ""
+        # Recomputed the same way, and for the same reason: this splits the block by removing
+        # each part's own text rather than by a stored character count, which says how big a
+        # region is but not where in the block it sits. Three parts now, so `live` has to have
+        # both removed or it double-counts what the other two lines already showed.
+        digest = _plugin_digest(conversation_id, found)
 
     chunks: list[str] = []
     for message in messages:
@@ -514,8 +542,15 @@ def category_text(
             if key == "project":
                 if region:
                     chunks.append(region)
+            elif key == "plugins":
+                if digest:
+                    chunks.append(digest)
             elif key == "live":
-                chunks.append(text.replace(region, "").strip() if region else text)
+                rest = text
+                for part in (region, digest):
+                    if part:
+                        rest = rest.replace(part, "")
+                chunks.append(rest.strip())
         elif role == "system" and message.get("_summary"):
             if key == "summary":
                 chunks.append(text)

@@ -741,6 +741,40 @@ def _migrations():
             "AND project_id NOT IN (SELECT id FROM projects)"
         )
 
+    def v44_plugin_state(conn):
+        """Where a plugin keeps what it is holding.
+
+        Keyed rather than one JSON blob per plugin: per-key revisions make a compare-and-set
+        possible, a partial write does not have to read-modify-write the whole slot, and the
+        slot cap is a `SUM(bytes)` with no parsing. The blob shape would need all three built
+        on top of it.
+
+        In agent.db and not config.db, which is the opposite of where the install row lives.
+        `permissions._store()` is a standing order that config.db holds what the guarded party
+        must not be able to rewrite; plugin state is written by plugins on purpose, so it
+        belongs with the rest of what he accumulates.
+        """
+        conn.executescript(
+            """
+            CREATE TABLE plugin_state (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id  TEXT NOT NULL,
+                scope      TEXT NOT NULL,
+                owner      TEXT NOT NULL DEFAULT '',
+                key        TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                bytes      INTEGER NOT NULL DEFAULT 0,
+                writer     TEXT NOT NULL DEFAULT 'host',
+                revision   INTEGER NOT NULL DEFAULT 1,
+                at         TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX plugin_state_one
+                ON plugin_state (plugin_id, scope, owner, key);
+            CREATE INDEX plugin_state_slot
+                ON plugin_state (scope, owner, plugin_id);
+            """
+        )
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -785,6 +819,7 @@ def _migrations():
         v41_unbind_deleted_projects,
         v42_memory_project,
         v43_message_project,
+        v44_plugin_state,
     ]
 
 

@@ -415,7 +415,14 @@ def run(name: str, arguments: dict, call_timeout: float) -> dict:
     if answer.get("isError"):
         # The tool ran and refused. That is a result he can act on, not a transport failure.
         return {"ok": False, "error": str(answer.get("content") or "the tool reported an error")}
-    return {"ok": True, "result": answer.get("content", "")}
+    out = {"ok": True, "result": answer.get("content", "")}
+    # A plugin's server saying what it changed, carried on its own result under a reserved name.
+    # Lifted onto the envelope here and taken off again by `tools._absorb_state`, so the model
+    # never sees it and a server cannot use `_kith_state` for anything of its own.
+    held = answer.get("_kith_state")
+    if isinstance(held, dict):
+        out["_kith_state"] = held
+    return out
 
 
 def connect_async(config_db: Path) -> None:

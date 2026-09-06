@@ -61,6 +61,7 @@ KINDS = (
     # publishes, which is the right way round, because a widget subscribed to a kind nobody
     # sends looks merely quiet rather than broken.
     "plugin",
+    "plugin_state",
 )
 
 

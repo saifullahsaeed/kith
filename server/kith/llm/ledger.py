@@ -162,6 +162,7 @@ def take(
     mcp = frozenset(mcp_names)
 
     system_chars = persona_chars = live_chars = directive_chars = project_chars = summary_chars = 0
+    plugin_chars = 0
     said_chars = tool_chars = skill_chars = code_chars = image_chars = 0
 
     for message in convo:
@@ -181,9 +182,18 @@ def take(
             # reminders. Left together, "Where he is right now: 5,112" cannot tell you whether
             # to prune a memory file or stop carrying a task list, which are the only two things
             # a person can do about that number.
+            #
+            # The same argument once more for the plugin digest. It is small by construction —
+            # capped at 740 characters — but it is the only part of this block a person can
+            # switch off, and a number you can act on has to be visible to be acted on.
+            #
+            # Clamped against what project did not already claim, so the three always partition
+            # the block rather than double-counting it if a caller ever reports both wrongly.
             mine = min(int(message.get("_project_chars") or 0), size)
+            theirs = min(int(message.get("_plugin_chars") or 0), size - mine)
             project_chars += mine
-            live_chars += size - mine
+            plugin_chars += theirs
+            live_chars += size - mine - theirs
         elif role == "system" and message.get("_summary"):
             # The folded brief — a summary of the older turns. A `system` message on the wire, but
             # the conversation compressed, so it is counted with the conversation rather than under
@@ -240,6 +250,7 @@ def take(
         Line("built_in_tools", "System tools", _tokens(built_in_chars, ratio)),
         Line("mcp_tools", "MCP tools", _tokens(mcp_chars, ratio)),
         Line("project", "The project he is in", _tokens(project_chars, ratio)),
+        Line("plugins", "Plugins", _tokens(plugin_chars, ratio)),
         Line("live", "Where he is right now", _tokens(live_chars, ratio)),
         Line("directives", "Turn directives", _tokens(directive_chars, ratio)),
         Line("messages", "Messages", _tokens(said_chars, ratio)),

@@ -282,6 +282,38 @@ class Checkpoint(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class PluginState(Base):
+    """One key a plugin is holding, in one slot of one scope.
+
+    One row per ``(plugin_id, scope, owner, key)`` — a write replaces rather than appends, the
+    same shape `FileTouch` uses and for the same reason: the question asked of this table is
+    what a plugin is holding *now*, so it stays the size of the key set rather than the write
+    count.
+
+    ``owner`` is the conversation id, the project id as text, or ``''`` for global. It is
+    resolved inside `state.write()` from the ambient session context and is never passed in by
+    a caller — the sealed surface knows a conversation id only because we told it, the MCP
+    subprocess knows nothing at all, and a route body is whatever arrived over HTTP.
+
+    ``bytes`` is denormalised so the per-slot cap is one ``SUM`` in the write's own transaction,
+    with no JSON parsing. ``writer`` records which of the three wrote it, which is what makes a
+    misbehaving surface diagnosable rather than merely noisy.
+    """
+
+    __tablename__ = "plugin_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plugin_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    owner: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    writer: Mapped[str] = mapped_column(Text, nullable=False, default="host")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class FileTouch(Base):
     """One file a conversation has opened or changed, and the version of it he saw.
 

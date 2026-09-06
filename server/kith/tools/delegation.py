@@ -111,6 +111,15 @@ WITHHELD = frozenset(
         "forget",
         "journal",
         "set_memory_level",
+        # What a plugin is holding. Read-only, and withheld anyway — which is the one entry
+        # here that is not about damage.
+        #
+        # A plugin's store is keyed on the conversation, and a scout's slot is its own: the
+        # answer it would get is empty, and an empty answer to a question that looks answerable
+        # is worse than not being offered the question. It also costs a schema on every round of
+        # the scout's turn to say so. The main agent has the state and the surface in front of
+        # it; the scout has a search to do.
+        "plugin_state",
         # The board, written. A sub-agent that files tasks is a sub-agent making plans, and
         # the plan is the one thing that must stay in the conversation a person can see.
         "add_task",

@@ -89,6 +89,12 @@ export const GROUP_OF: Record<string, string> = {
   live: "place",
   project: "place",
   directives: "place",
+  // A key missing from this map is dropped silently by `byGroup`, and the bar then stops summing
+  // to its own total with nothing failing anywhere — that is the `directives` bug, recorded in
+  // the comment above this object. So both plugin lines land here in the same commit as the
+  // server-side lines that produce them.
+  plugins: "place",
+  plugin_tools: "tools",
   persona: "self",
   system: "self",
 };

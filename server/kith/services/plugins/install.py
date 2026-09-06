@@ -225,6 +225,8 @@ def uninstall(config_db: Path, plugin_id: str, *, delete_state: bool = False) ->
         except Exception:
             shutil.rmtree(directory, ignore_errors=True)
 
+    if delete_state:
+        _forget_state(plugin_id)
     changes.publish("plugin")
     _reconnect(config_db)
 
@@ -253,10 +255,23 @@ def sweep(config_db: Path) -> list[dict]:
     ]
     for plugin_id in expired:
         held.pop(plugin_id, None)
+        _forget_state(plugin_id)
         done.append({"kind": "retired", "id": plugin_id})
     if expired:
         registry.write_rows(config_db, held)
     return done
+
+
+def _forget_state(plugin_id: str) -> None:
+    """Drop everything a plugin was holding. Only ever reached by a deliberate delete or by the
+    thirty-day sweep — never by a plain uninstall, which marks instead."""
+    from kith import settings as live
+    from kith.services.plugins import state
+
+    try:
+        state.forget_plugin(live.AGENT_DB_PATH, plugin_id)
+    except Exception as exc:  # pragma: no cover - a tidy-up must not fail the removal
+        print(f"[kith] plugins: could not clear {plugin_id}'s state ({exc})")
 
 
 def _reconnect(config_db: Path) -> None:

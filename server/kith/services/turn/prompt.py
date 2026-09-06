@@ -259,9 +259,36 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
                 # For the ledger, like `_live` itself — `openai_compat._to_openai` rebuilds every
                 # message from role and content alone, so nothing internal reaches a host.
                 "_project_chars": sizes.get("project", 0),
+                # Same reasoning as the line above it. Inside "Where he is right now" a plugin
+                # digest is indistinguishable from the clock, and switching one off is the only
+                # thing a person can do about that number — so they have to be able to see it.
+                "_plugin_chars": sizes.get("plugins", 0),
             }
         )
     return out
+
+
+def _plugin_digest(conversation_id: str, project: dict | None) -> str:
+    """One line per plugin that has state and has been switched on to say so, or "".
+
+    Wrapped, because this runs inside prompt assembly: a plugin fault must cost a line of
+    context, never the turn. And it is resolved from what `_present_state` already knows rather
+    than from ambient context vars — the conversation and the project are both settled here, and
+    `report._sent` rebuilds this block outside a turn where those vars are not set.
+    """
+    try:
+        from kith import settings as live
+        from kith.services.plugins import state as plugin_state
+
+        return plugin_state.digest(
+            live.AGENT_DB_PATH,
+            live.CONFIG_DB_PATH,
+            conversation_id,
+            int(project["id"]) if project and project.get("id") else None,
+        )
+    except Exception as exc:  # pragma: no cover - a plugin must not be able to break a turn
+        print(f"[kith] plugins: could not build the digest ({exc})")
+        return ""
 
 
 #: What a canvas may say about itself before it is talking rather than reporting. Small on
@@ -553,6 +580,22 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None) -> str
     # its own line rather than leaving it inside "System prompt".
     if _sizes is not None:
         _sizes["project"] = len(about_project)
+    # What his plugins are holding, one capped line each.
+    #
+    # **Here rather than in `config.system` beside `skills.index()`**, and that placement is the
+    # whole cost story. `caching.stable_head` matches the head of the system message against
+    # `config.system` itself, so a digest that varies per turn appended there moves the seam on
+    # every request — and on Anthropic the tools block sits *ahead* of system in the cache
+    # ordering, so it re-bills the persona and every tool schema at write price. Measured shape
+    # of that failure elsewhere in this file: identical consecutive messages, 0% cached, versus
+    # 99.7% once the volatile part moved out.
+    #
+    # This block is the one region rewritten every turn, so everything ahead of it stays cached
+    # and a digest here costs one small cache write per turn and nothing else.
+    from_plugins = _plugin_digest(conversation_id, project)
+    blocks.append(from_plugins)
+    if _sizes is not None:
+        _sizes["plugins"] = len(from_plugins)
     # Last, so it is the closest thing to what was just asked. Everything above is about him or
     # about the project; this is the only part that is about the conversation, and it is the part
     # that stops him opening a file he has already read — measured at 54% of every read he makes.

@@ -49,7 +49,12 @@ export type ChangeKind =
   | "question"
   | "permission"
   | "schedule"
-  | "steer";
+  | "steer"
+  // Kept in step with `kernel/changes.KINDS` by hand — there is no type coupling across this
+  // boundary. A kind the server sends and this union does not name is dropped by `STALE_ON`
+  // and nothing refetches, which looks like a quiet widget rather than a broken one.
+  | "plugin"
+  | "plugin_state";
 
 export interface Change {
   kind: ChangeKind;

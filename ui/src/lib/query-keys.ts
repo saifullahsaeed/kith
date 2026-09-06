@@ -109,4 +109,12 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   schedule: [["brain"], ["schedules"]],
   // Queued, delivered, or taken back — all three change what the thread is showing.
   steer: [["steers"]],
+  // Install, enable, disable, upgrade, uninstall — a plugin can change what tabs exist, what
+  // tools exist and what skills exist at once, so this invalidates all three. Deliberately
+  // coarse *and* deliberately rare, which is why state writes get their own key below rather
+  // than riding this one: `/api/skills` walks the folder tree, and paying for that at a
+  // surface's write cadence is the whole reason the two are separate kinds.
+  plugin: [["plugins"], ["mcp"], ["skills"]],
+  // Only what a plugin is holding. Nothing else refetches.
+  plugin_state: [["plugins", "state"]],
 };

@@ -164,6 +164,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   grep: { verb: "searched files for", of: "patterns", group: "search" },
   // his own tools and skills
   read_skill: { verb: "opened the skill", of: "name", group: "skills" },
+  plugin_state: { verb: "read what the plugin is holding", of: "plugin", group: "skills" },
   // sending someone else to look
   delegate_subtask: { verb: "sent someone to find out", of: "objective", group: "delegation" },
 };

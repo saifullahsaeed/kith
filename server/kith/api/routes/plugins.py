@@ -24,6 +24,18 @@ from kith.services.plugins import registry
 from kith.settings import CONFIG_DB_PATH
 
 
+def _plugin_state_rows() -> list[dict]:
+    """Per-plugin store diagnostics. Wrapped, because a read-only screen must not be the thing
+    that a plugin fault takes down."""
+    try:
+        from kith import settings as live
+        from kith.services.plugins import state
+
+        return state.slots(live.AGENT_DB_PATH, CONFIG_DB_PATH)
+    except Exception as exc:  # pragma: no cover - diagnostics are not worth a 500
+        return [{"error": str(exc)}]
+
+
 def _snapshot() -> dict:
     held = registry.rows(CONFIG_DB_PATH)
     plugins = registry.installed(CONFIG_DB_PATH)
@@ -46,6 +58,12 @@ def _snapshot() -> dict:
             for plugin in plugins
         ],
         "problems": registry.health(CONFIG_DB_PATH),
+        # What each plugin is actually holding, and — the highest-value item in this block — the
+        # digest line rendered verbatim. A plugin has up to five independently-failing parts, and
+        # before this the diagnostic path for "it does nothing" was to guess. Seeing the line he
+        # is actually given answers "why does he not know about my state" in one glance, where
+        # every other signal only says that something was written.
+        "state": _plugin_state_rows(),
         # The one figure that decides whether installing another plugin is free. Same shape the
         # Skills screen already uses for its index.
         "promptChars": registry.installed_prompt_chars(CONFIG_DB_PATH),
