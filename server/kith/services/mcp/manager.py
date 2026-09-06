@@ -184,11 +184,16 @@ def probe(server: MCPServer, connect_timeout: float, call_timeout: float) -> dic
 
     Its own process every time, separate from any running one, so probing a server that is
     already connected cannot disturb the conversation a turn is having with it.
+
+    **A probe is the first place a plugin's code runs**, so it takes the same boundary the real
+    thing will. Otherwise the review screen would describe a confinement that the act of
+    reviewing has already stepped around — which is worse than no screen, because it is a screen
+    that is wrong.
     """
     problems = server.problems()
     if problems:
         return {"ok": False, "detail": problems[0], "tools": []}
-    process = StdioServer(server.command, list(server.args), server.env, connect_timeout)
+    process = StdioServer(server.command, list(server.args), server.env, connect_timeout, owner=server.owner)
     try:
         process.start()
         tools = process.list_tools(call_timeout)
@@ -239,7 +244,9 @@ def connect(config_db: Path, connect_timeout: float, call_timeout: float) -> dic
             existing = _live.get(server.label)
             if existing is not None and existing.process.alive:
                 continue
-        process = StdioServer(server.command, list(server.args), server.env, connect_timeout)
+        process = StdioServer(
+            server.command, list(server.args), server.env, connect_timeout, owner=server.owner
+        )
         try:
             process.start()
             tools = process.list_tools(call_timeout)

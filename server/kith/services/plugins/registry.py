@@ -270,17 +270,32 @@ def mcp_servers(config_db: Path) -> list[MCPServer]:
 
 
 def spawn_signature(plugin: Plugin) -> str:
-    """What must be granted for this plugin's program to run."""
-    from kith.infra import permissions
+    """What must be granted for this plugin's program to run.
+
+    The **resolved** reach is hashed, not the manifest's spelling of it: `~/Notes` and
+    `/Users/x/Notes` are one boundary, and two signatures for one boundary would re-ask for
+    nothing. And the seal — whether this machine could confine at all — is a segment of its own,
+    so an OS that loses `sandbox-exec` stops matching rather than quietly running unconfined
+    under consent that was given for a confined program.
+    """
+    from kith.infra import confinement, permissions
 
     if plugin.server is None:
+        return ""
+    try:
+        reach = confinement.resolve(plugin.server.reach, plugin.id).public()
+        canonical = json.dumps(reach, sort_keys=True, separators=(",", ":"))
+    except confinement.ConfinementError:
+        # An unresolvable reach can never be granted, so it needs no stable signature — and
+        # `problems()` is what says why, in words, at the review.
         return ""
     return permissions.spawn_signature(
         plugin.id,
         plugin.server.command,
         plugin.server.args,
         plugin.server.env_keys,
-        reach=plugin.server.reach.canonical(),
+        seal="sealed" if confinement.available() else "open",
+        reach=canonical,
     )
 
 

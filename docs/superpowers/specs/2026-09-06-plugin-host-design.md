@@ -1,12 +1,17 @@
 # A plugin host, and the boundary it needs first
 
-**Status:** T1, T3, T5, T6 and most of T7 built 2026-09-06 on branch `plugin-host-design`, with
-`examples/plugins/sketchpad` as the worked example. **Not built yet:** T2 and T4 (confinement,
-and plugin-contributed MCP servers running inside a boundary), T7's `host` delivery and toolbar
-buttons, T8 (the frame RPC), T9 (the Work rebuild). A plugin today may contribute a tab, skills,
-state, a digest and `state`-delivery commands; it may declare a server, and that server is
-gated and namespaced, but it is **not yet confined** — so the review screen cannot honestly
-claim a boundary and T2 is what makes it able to.
+**Status:** T1, T2, T3, T4, T5, T6 and most of T7 built on branch `plugin-host-design`, with
+`examples/plugins/sketchpad` as the worked example. A plugin's subprocess now runs inside a
+kernel-enforced boundary it declared and cannot enforce, with a constructed environment and its
+own working directory. **Not built:** T7's `host` delivery and toolbar buttons, T8 (the frame
+RPC), T9 (the Work rebuild).
+
+**One measurement in this document was wrong and is corrected in the code.** The profile shape
+below — broad denies followed by narrow allows — does not work: a `deny` is not overridable by
+a later `allow` in either order, so a plugin granted `~/Documents/Notes` could not read it. Each
+deny carries its exceptions instead (`require-all` + `require-not`). It passed every test that
+used a temp directory, because macOS puts those outside `$HOME`, which is why
+`test_a_plugins_program_runs_inside_a_boundary.py` grants a real folder under the real home.
 
 ## Why
 

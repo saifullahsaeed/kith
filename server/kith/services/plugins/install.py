@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 from kith.domain.plugins import MANIFEST, Plugin, PluginError, parse
-from kith.infra import permissions
+from kith.infra import confinement, permissions
 from kith.kernel import changes
 from kith.services.plugins import registry
 
@@ -55,6 +55,11 @@ def inspect(source: Path, config_db: Path) -> dict:
     plugin = parse(directory)
     faults = list(plugin.problems())
     faults += _collision_faults(plugin, config_db)
+    if plugin.server is not None:
+        try:
+            confinement.resolve(plugin.server.reach, plugin.id)
+        except confinement.ConfinementError as refused:
+            faults.append(str(refused))
     if plugin.surfaces:
         from kith.services.plugins import documents
 
@@ -134,6 +139,20 @@ def install(
         # surface and no subprocess installed with nothing granted, and the very first command
         # the model called stopped the turn with a dialog — for a plugin that runs no program at
         # all and therefore has nothing a dialog could usefully be about.
+        if plugin.server is not None:
+            # Built before the grant, so a boundary that will not compile is a refused install
+            # rather than a granted plugin that starts unconfined. `write_profile` proves it by
+            # running it over `/usr/bin/true` — with the person still here, rather than at first
+            # start where it would look like the server being broken.
+            confinement.write_profile(
+                plugin.id,
+                confinement.resolve(plugin.server.reach, plugin.id),
+                # The command it will actually run, so the profile can let the interpreter read
+                # itself. Without it a plugin whose server is a virtualenv python dies before
+                # any of its own code runs — see `confinement.runtime_root`.
+                runtime=_runtime_of(plugin.server.command),
+            )
+
         signature = registry.spawn_signature(plugin)
         if signature:
             permissions.grant_now(signature, standing=standing)
@@ -229,6 +248,9 @@ def uninstall(config_db: Path, plugin_id: str, *, delete_state: bool = False) ->
     if signature:
         permissions.revoke(signature)
     permissions.revoke(f"plugin:{plugin_id}:*")
+    # The profile goes with the grant. Its *storage* does not — that is the person's data, and
+    # it follows the same thirty-day rule as the plugin's state.
+    confinement.forget(plugin_id)
 
     directory = registry.root() / plugin_id
     if directory.is_dir():
@@ -318,3 +340,10 @@ def _parsed(stamp: str) -> float:
         return time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _runtime_of(command: str) -> str:
+    """The absolute path of a command, resolved the way the shell would resolve it."""
+    import shutil
+
+    return shutil.which(command) or command

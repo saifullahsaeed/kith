@@ -46,11 +46,23 @@ class StdioServer:
     could join that set later.
     """
 
-    def __init__(self, command: str, args: list[str], env: dict[str, str], connect_timeout: float):
+    def __init__(
+        self,
+        command: str,
+        args: list[str],
+        env: dict[str, str],
+        connect_timeout: float,
+        *,
+        owner: str = "",
+    ):
         self._command = command
         self._args = list(args)
         self._env = dict(env)
         self._connect_timeout = connect_timeout
+        #: Which plugin contributes this, or "" for a server the person configured themselves.
+        #: Decides whether the process is confined and whether its environment is constructed
+        #: or inherited — see `start`.
+        self._owner = owner
         self._process: subprocess.Popen | None = None
         self._next_id = 0
         self._lock = threading.Lock()
@@ -61,9 +73,10 @@ class StdioServer:
     def start(self) -> None:
         if self._process is not None:
             return
+        argv, env, cwd = self._launch()
         try:
             self._process = subprocess.Popen(
-                [self._command, *self._args],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 # Kept separate and drained nowhere: a server that logs chattily to stderr
@@ -71,7 +84,8 @@ class StdioServer:
                 # loses the logs, which is the right trade for a background process nobody
                 # is reading — a failure still surfaces as a dead pipe on the next call.
                 stderr=subprocess.DEVNULL,
-                env={**os.environ, **self._env},
+                env=env,
+                cwd=cwd,
                 text=True,
                 bufsize=1,  # line buffered, which is what the framing assumes
             )
@@ -91,6 +105,36 @@ class StdioServer:
         # Required by the protocol, and servers do wait for it before answering anything
         # else. It is a notification, so there is no reply to read.
         self._notify("notifications/initialized")
+
+    def _launch(self) -> tuple[list[str], dict[str, str], str | None]:
+        """What to run, with what environment, and from where.
+
+        A server the person typed in is unchanged: the whole environment and this process's
+        working directory, exactly as before. Narrowing those under someone who has a working
+        setup would break it on upgrade for a boundary they never asked for — that is its own
+        piece of work, with its own switch.
+
+        A plugin's server gets all three. The **cwd is not hygiene**: measured on macOS,
+        `python3` fails under a deny-`$HOME` profile whenever the working directory is inside
+        the denied subtree, because `sys.path[0]` is the cwd and `_path_importer_cache` raises
+        during import bootstrap. This process runs from inside the repository, which is under
+        `$HOME`, so without an explicit cwd every Python, `uvx` and `pipx` server would fail
+        under confinement with a traceback naming nothing relevant.
+        """
+        argv = [self._command, *self._args]
+        if not self._owner:
+            return argv, {**os.environ, **self._env}, None
+
+        from kith.infra import confinement
+
+        home = confinement.home_for(self._owner)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "tmp").mkdir(exist_ok=True)
+        return (
+            confinement.confine(argv, self._owner),
+            confinement.environment(self._owner, self._env),
+            str(home),
+        )
 
     def stop(self) -> None:
         process, self._process = self._process, None
