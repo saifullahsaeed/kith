@@ -16,7 +16,8 @@ Three deliberate relaxations, all consequences of how the UI is built:
 * ``img-src`` allows ``data:`` and ``blob:``. Icons are inlined and file previews are
   built client-side. Remote images stay blocked, which also means agent-authored
   markdown cannot silently phone home by referencing an image.
-* ``frame-src`` allows ``'self'``. A canvas he drew is framed from ``/api/canvas/<id>``, which
+* ``frame-src`` allows ``'self'``. A canvas he drew is framed from ``/api/canvas/<id>`` and a
+  plugin's surface from ``/api/plugins/frame/<ticket>`` — both same-origin, both sealed, which
   serves it under its own much stricter policy — that indirection exists precisely because a
   ``srcdoc`` frame would inherit *this* policy instead. See ``routes/canvas.py``.
 * ``object-src`` allows ``blob:``. A PDF he wrote is shown in the viewer by handing a
