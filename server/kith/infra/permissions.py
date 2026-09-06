@@ -615,7 +615,7 @@ def check_command(command: str, root: Path, purpose: str = "") -> Decision:
     return Decision(True)
 
 
-def spawn_signature(owner: str, command: str, args, env_keys, *, seal: str = "open") -> str:
+def spawn_signature(owner: str, command: str, args, env_keys, *, seal: str = "open", reach: str = "") -> str:
     """What a person is saying yes to when they let a program act for him.
 
     ``plugin:<owner>:<seal>:<hash>``. `owner` is a plugin id, or ``user-<label>`` for a server
@@ -641,7 +641,7 @@ def spawn_signature(owner: str, command: str, args, env_keys, *, seal: str = "op
         [str(command), [str(a) for a in (args or ())], sorted(str(k) for k in (env_keys or ()))],
         separators=(",", ":"),
     )
-    digest = hashlib.sha256(material.encode()).hexdigest()[:12]
+    digest = hashlib.sha256((reach + "\x00" + material).encode()).hexdigest()[:12]
     return f"plugin:{owner}:{seal}:{digest}"
 
 

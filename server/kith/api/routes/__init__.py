@@ -24,6 +24,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     messages,
     permissions,
     persona,
+    plugins,
     processes,
     renderer,
     roadmap,

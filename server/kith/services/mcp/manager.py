@@ -55,13 +55,37 @@ _lock = threading.Lock()
 # -- what is configured ----------------------------------------------------- #
 
 
-def configured(config_db: Path) -> list[MCPServer]:
+def _stored_rows(config_db: Path) -> list[MCPServer]:
+    """Only what the person configured. The persisted blob, and nothing else."""
     raw = config_store.load_settings(config_db).get(SERVERS_KEY)
     try:
         rows = json.loads(raw) if isinstance(raw, str) else list(raw or [])
     except (TypeError, ValueError):
         return []
     return [MCPServer.from_stored(row) for row in rows if isinstance(row, dict)]
+
+
+def configured(config_db: Path) -> list[MCPServer]:
+    """The person's rows, then the enabled plugins'.
+
+    Plugins are merged **here** rather than written into `mcp.servers` on install, and that is
+    the whole of what gives a plugin's server its lifecycle. This function is the single reader
+    every other one goes through, and `connect()` and `_retire()` are reconcilers against
+    whatever it returns — so start, stop, enable, disable, upgrade and uninstall all follow from
+    one edit.
+
+    Writing plugin rows into the blob instead would outlive the plugin: the settings page PUTs
+    the whole list, so the row round-trips into the person's own configuration and nothing ever
+    removes it again.
+    """
+    mine = _stored_rows(config_db)
+    try:
+        from kith.services.plugins import registry as plugins
+
+        return mine + plugins.mcp_servers(config_db)
+    except Exception as exc:  # pragma: no cover - a plugin fault must not cost the person's servers
+        print(f"[kith] mcp: could not read plugin servers ({exc})")
+        return mine
 
 
 def save(config_db: Path, servers: list[MCPServer]) -> list[MCPServer]:
@@ -88,10 +112,23 @@ def save(config_db: Path, servers: list[MCPServer]) -> list[MCPServer]:
     the one thing a merge would otherwise make impossible; a key absent from the request keeps
     whatever is stored.
     """
-    held = {existing.label: existing.env for existing in configured(config_db)}
+    from kith.services.plugins import registry as plugins
+
+    owned = {row.label: row.owner for row in plugins.mcp_servers(config_db)}
+    held = {existing.label: existing.env for existing in _stored_rows(config_db)}
+    # A plugin row never round-trips into the person's configuration. `owner` is absent from
+    # `stored()` and from `from_stored()`, so a row arriving here with one set can only have
+    # come from `mcp_servers()` — which means a client echoing back what `GET /api/mcp` showed
+    # it. Dropping them is what keeps the two stores from merging by accident.
+    servers = [s for s in servers if not s.owner]
     merged: list[MCPServer] = []
     seen: set[str] = set()
     for server in servers:
+        if server.label in owned:
+            raise ValueError(
+                f"{server.label!r} is the {owned[server.label]!r} plugin's server. Choose another "
+                f"label, or remove the plugin."
+            )
         problems = server.problems()
         if problems:
             raise ValueError(f"{server.label or '(no label)'}: {problems[0]}")
@@ -104,7 +141,11 @@ def save(config_db: Path, servers: list[MCPServer]) -> list[MCPServer]:
     config_store.update_settings(config_db, {SERVERS_KEY: json.dumps([s.stored() for s in servers])})
     # Anything that should no longer be running stops now rather than at the next restart —
     # and "should no longer be running" includes *switched off*, not just removed.
-    _retire({s.label for s in servers if s.enabled})
+    #
+    # Recomputed from `configured()` rather than from `servers`: `servers` is only the person's
+    # rows now, so retiring against it would stop every plugin's process on any unrelated
+    # settings save.
+    _retire({s.label for s in configured(config_db) if s.enabled})
     return servers
 
 

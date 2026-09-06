@@ -52,6 +52,15 @@ KINDS = (
     "permission",
     "schedule",
     "steer",
+    # Install, enable, disable, upgrade, uninstall. Deliberately coarse and deliberately rare:
+    # it invalidates plugins, MCP servers and skills together, because a plugin can change all
+    # three at once. State writes and command dispatch will get their own narrower kinds rather
+    # than riding this one — publishing `plugin` on every state write would refetch the skills
+    # list, which walks the folder tree, at a surface's write cadence. Those two are added with
+    # their publishers and not before: the two-way coverage test fails on a kind nothing
+    # publishes, which is the right way round, because a widget subscribed to a kind nobody
+    # sends looks merely quiet rather than broken.
+    "plugin",
 )
 
 

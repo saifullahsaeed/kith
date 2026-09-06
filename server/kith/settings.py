@@ -166,6 +166,29 @@ def skills_dir() -> Path:
     return Path(configured).expanduser() if configured else DATA_DIR / "skills"
 
 
+#: The variable naming the plugins folder.
+#:
+#: Here rather than in ``services/plugins/`` for exactly the reason ``SKILLS_DIR_KEY`` is here:
+#: ``infra/permissions.py`` has to answer "is this path inside a plugin someone else wrote"
+#: before allowing a write, and a gate at the bottom of the tree must not reach the top to find
+#: out.
+PLUGINS_DIR_KEY = "KITH_PLUGINS_DIR"
+
+
+def plugins_dir() -> Path:
+    """Where plugins are installed. Read per call; creates nothing.
+
+    Beside the databases rather than in his workspace, the same bargain skills strike: a plugin
+    is part of what he can do, not part of what he has made, and the workspace is a folder
+    someone may move — which must not take his capabilities with it.
+
+    A function rather than a constant for the reason ``skills_dir`` gives: fixtures set the
+    variable after this module is imported, and a constant resolved at import would ignore them.
+    """
+    configured = _text(PLUGINS_DIR_KEY)
+    return Path(configured).expanduser() if configured else DATA_DIR / "plugins"
+
+
 #: Replaces the whole persona with one inline prompt. For experiments — it bypasses the
 #: ``persona/`` fragments entirely rather than adding to them.
 SYSTEM_PROMPT_OVERRIDE = _text("KITH_SYSTEM")

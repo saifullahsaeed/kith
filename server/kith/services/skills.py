@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +112,14 @@ class Skill:
     #: Files beside SKILL.md, relative to the skill root. He is told these exist without
     #: their contents being read — that is level 3 of progressive disclosure.
     resources: tuple[str, ...] = ()
+    #: Which plugin ships this skill, or "" for one in the person's own folder.
+    #:
+    #: Deliberately **not** in `index()`. Attribution there costs four to six tokens per skill
+    #: per request, forever, inside the cached prefix, to answer a question he does not need in
+    #: order to decide whether to read one. It appears at level 2 instead — `read()` carries it —
+    #: which is exactly the moment he is about to follow a stranger's instructions and the one
+    #: place the sentence is worth its tokens.
+    owner: str = ""
 
     def public(self) -> dict:
         return {
@@ -125,6 +133,7 @@ class Skill:
             "bodyChars": self.body_chars,
             "resources": list(self.resources),
             "path": str(self.path),
+            "owner": self.owner,
         }
 
 
@@ -280,20 +289,68 @@ def _resources(directory: Path) -> tuple[str, ...]:
     return tuple(found)
 
 
+def roots() -> list[tuple[str, Path]]:
+    """(owner, directory) for every place a skill can come from.
+
+    **The person's own folder is first, so it wins a collision.** A plugin cannot shadow a skill
+    someone wrote — the same rule as "a built-in always wins by construction", one layer out.
+    Order is the whole mechanism; there is no precedence table.
+
+    A plugin fault must never cost the person their own skills, so the plugin half is wrapped:
+    the worst case is a skills list missing a plugin's contributions, not a prompt with no skill
+    index in it at all.
+    """
+    found = [("", root())]
+    try:
+        from kith import settings as live
+        from kith.services.plugins import registry as plugins
+
+        # `settings.CONFIG_DB_PATH` read as an attribute, never `from … import CONFIG_DB_PATH`.
+        # That form copies the value at import, which is the exact trap `tests/conftest.py`
+        # documents at length — thirteen modules did it with the agent database and patching
+        # `kith.settings` alone did nothing for any of them.
+        found += plugins.skill_roots(live.CONFIG_DB_PATH)
+    except Exception as exc:  # pragma: no cover - a plugin fault is not a skills outage
+        print(f"[kith] skills: could not read plugin skills ({exc})")
+    return found
+
+
 def installed() -> list[Skill]:
     """Every readable skill, by name. Unreadable ones are skipped, not fatal.
 
     One broken skill must not cost him all the others — it would take the prompt's skill
     index with it and the failure would look like the feature not existing.
+
+    A duplicate name is skipped and *reported*, rather than first-past-the-post and silent,
+    which is what it used to be: two folders both saying `name: notes` produced two identical
+    index lines and `read('notes')` returned whichever sorted first, with `problems()` reporting
+    nothing at all.
     """
     found: list[Skill] = []
-    for directory in sorted(root().iterdir()):
-        if not directory.is_dir() or directory.name.startswith("."):
+    seen: set[str] = set()
+    for owner, place in roots():
+        if not place.is_dir():
             continue
-        try:
-            found.append(parse(directory))
-        except SkillError as exc:
-            print(f"[kith] skipping skill {directory.name}: {exc}")
+        base = place.resolve()
+        for directory in sorted(place.iterdir()):
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            # A symlink pointing out of the root is not a skill in this root. Resolve first,
+            # then confirm containment — the order `spa.py` wrote down, because doing it the
+            # other way lets `../` walk out.
+            resolved = directory.resolve()
+            if resolved != base and base not in resolved.parents:
+                continue
+            try:
+                skill = replace(parse(directory), owner=owner)
+            except SkillError as exc:
+                print(f"[kith] skipping skill {directory.name}: {exc}")
+                continue
+            if skill.name in seen:
+                print(f"[kith] skipping duplicate skill {skill.name} from {owner or 'your folder'}")
+                continue
+            seen.add(skill.name)
+            found.append(skill)
     return found
 
 
@@ -385,6 +442,22 @@ def read(name: str) -> dict:
             ),
             "allowedTools": list(skill.allowed_tools),
             "compatibility": skill.compatibility,
+            # Level 2 is where provenance belongs, and this is the sentence it buys: he is
+            # about to follow instructions someone else wrote, and this is the moment that
+            # fact is worth its tokens. In `index()` it would cost four to six tokens per
+            # skill on every request forever to answer a question that does not change
+            # whether he opens one.
+            **(
+                {
+                    "from": skill.owner,
+                    "note": (
+                        f"These instructions come from the {skill.owner!r} plugin, not from "
+                        f"your own skills folder."
+                    ),
+                }
+                if skill.owner
+                else {}
+            ),
         }
     known = ", ".join(skill.name for skill in installed()) or "none installed"
     raise SkillError(f"no skill called {wanted!r}. Installed: {known}")
@@ -504,16 +577,30 @@ def remove(name: str) -> None:
     wanted = str(name or "").strip()
     if not wanted or "/" in wanted or wanted.startswith("."):
         raise SkillError(f"{wanted!r} is not a skill name.")
-    directory = root() / wanted
-    if not directory.is_dir():
-        raise SkillError(f"no skill called {wanted}.")
 
-    from kith.infra import workspace
+    # Resolved through `installed()` rather than `root()/<name>`.
+    #
+    # The frontmatter name and the folder name can differ, and every caller passes the
+    # frontmatter one — so a folder called `on-disk` whose manifest says `in-frontmatter` was
+    # un-removable through the interface. That was an edge case while every skill was one
+    # someone unzipped by hand; a plugin's folders are named for the plugin, so it stops being
+    # one the moment plugins exist.
+    for skill in installed():
+        if skill.name != wanted:
+            continue
+        if skill.owner:
+            raise SkillError(
+                f"{skill.name} comes from the {skill.owner!r} plugin. Remove the plugin to remove "
+                f"it — deleting the folder here would leave the plugin half-installed."
+            )
+        from kith.infra import workspace
 
-    try:
-        workspace.trash_path(directory)
-    except Exception as exc:
-        raise SkillError(f"couldn't remove {wanted}: {exc}") from None
+        try:
+            workspace.trash_path(skill.path)
+        except Exception as exc:
+            raise SkillError(f"couldn't remove {wanted}: {exc}") from None
+        return
+    raise SkillError(f"no skill called {wanted}.")
 
 
 def snapshot() -> dict:

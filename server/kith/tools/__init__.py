@@ -203,17 +203,37 @@ def _run_mcp(mcp, name: str, arguments: dict) -> dict:
     `mcp_call_timeout` (30s by default). Gate below it and every prompt becomes a timed-out
     call.
     """
+    from kith import settings as live
     from kith.domain.mcp import split_tool_name
-    from kith.settings import CONFIG_DB_PATH
 
+    config_db = live.CONFIG_DB_PATH
     label, tool = split_tool_name(name)
-    signature = mcp.grant_signature(CONFIG_DB_PATH, label)
+    signature = mcp.grant_signature(config_db, label)
     if signature:
+        # Named by the plugin that contributes it where there is one, because "the 'circulars'
+        # server" is a label out of a config file and "the Circular Watch plugin's helper" is
+        # the thing the person actually installed. Composed here, in code, from the plugin's
+        # own name rendered as data — never from a sentence a manifest supplied.
+        owner = _plugin_named(config_db, label)
+        who = f"{owner}'s helper program" if owner else f"the {label!r} server"
         # No signature means no configured row — the server was removed while a turn held its
         # snapshot. `mcp.run` already answers that readably, and refusing here instead would
         # replace a sentence he can act on with a prompt about a program that no longer exists.
-        permissions.require_plugin(signature, f"{label}/{tool}" if tool else label, f"the {label!r} server")
+        permissions.require_plugin(signature, f"{label}/{tool}" if tool else label, who)
     return mcp.run(name, arguments, tuning.value("mcp_call_timeout"))
+
+
+def _plugin_named(config_db, label: str) -> str:
+    """The display name of the plugin contributing this label, or "" for a typed-in server."""
+    try:
+        from kith.services.plugins import registry as plugins
+
+        if not plugins.owner_of_label(config_db, label):
+            return ""
+        plugin = plugins.get(config_db, label)
+        return plugin.name if plugin else ""
+    except Exception:
+        return ""
 
 
 def _hint(name: str, agent_db_path: Path) -> str:

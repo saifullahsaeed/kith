@@ -57,6 +57,15 @@ class MCPServer:
     #: have to be separable — otherwise the only way to stop paying for one is to delete it
     #: and lose its configuration.
     enabled: bool = True
+    #: Which plugin contributes this row, or "" for one the person configured themselves.
+    #:
+    #: Set only when the row is built by `plugins.registry.mcp_servers()`. `stored()` never
+    #: writes it and `from_stored()` never reads it, so **provenance cannot be forged** — not
+    #: by hand-editing the config database and not by a PUT. That matters in one direction
+    #: specifically: `manager.save` refuses to persist any row carrying an owner, so a forged
+    #: one would be silently dropped from the person's own configuration on the next settings
+    #: write rather than quietly inheriting a plugin's grant.
+    owner: str = ""
 
     def problems(self) -> list[str]:
         """What is structurally wrong, in words worth showing someone."""
@@ -92,6 +101,7 @@ class MCPServer:
             "args": list(self.args),
             "envKeys": sorted(self.env),
             "enabled": self.enabled,
+            "owner": self.owner,
             "problems": self.problems(),
         }
 
