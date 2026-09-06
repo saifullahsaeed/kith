@@ -689,6 +689,7 @@ def _run_turn(
     budget, reserve, landing_effort = turn.budget, turn.reserve, turn.landing_effort
     routing = turn.routing
     mcp_names = tool_host.mcp_names
+    plugin_names = tool_host.plugin_names
     # This turn's own resolver, so the policy tables read the name of the tool that will run.
     dispatched = tool_host.dispatched
 
@@ -779,6 +780,7 @@ def _run_turn(
                 window=config.context_window,
                 chars_per_token=room.chars_per_token,
                 mcp_names=mcp_names,
+                plugin_names=plugin_names,
             )
 
         book = yield from _make_room(

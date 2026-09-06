@@ -103,6 +103,34 @@ def token_script() -> str:
     return f"window.__kithToken={json.dumps(auth.token(settings.DATA_DIR))};"
 
 
+def plugins_block() -> str:
+    """The plugin surface index, inline, as data.
+
+    **Why it cannot be a fetch.** The layout store evaluates `readStored() ?? defaultLayout()`
+    at module import, before any request can resolve — so an index that arrives over HTTP
+    arrives too late to give a rehydrated plugin tab its real title, icon and minimum width, and
+    the pane would paint at the placeholder's width and then resize under the person.
+
+    **A `<script type="application/json">`, never an executable one.** `script-src` hashes apply
+    only to scripts that run, so this adds nothing to the hash list — and the hash list is
+    exactly what broke the first time an inline script went into this document: it went in, the
+    policy did not know about it, and the page loaded with no token and 401'd everything. See
+    `token_script` above, which exists for that reason.
+
+    `</` is escaped so the payload cannot close its own tag. Wrapped, because a plugin fault must
+    never be the reason the app will not boot.
+    """
+    try:
+        from kith.services.plugins import registry
+        from kith.settings import CONFIG_DB_PATH
+
+        payload = json.dumps({"surfaces": registry.surfaces(CONFIG_DB_PATH)})
+    except Exception as exc:  # pragma: no cover - no plugins is a fine answer; no page is not
+        print(f"[kith] plugins: could not build the surface index ({exc})")
+        payload = '{"surfaces": []}'
+    return f'<script type="application/json" id="kith-plugins">{payload.replace("</", "<\\/")}</script>'
+
+
 def _index(root: Path):
     """index.html, with the API token handed to the page.
 
@@ -119,7 +147,7 @@ def _index(root: Path):
     """
     html = (root / "index.html").read_text()
     marker = "</head>"
-    script = f"<script>{token_script()}</script>"
+    script = f"<script>{token_script()}</script>{plugins_block()}"
     if marker in html:
         html = html.replace(marker, f"{script}{marker}", 1)
     else:

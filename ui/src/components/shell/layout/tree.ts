@@ -20,6 +20,9 @@
  *    two chats are two tabs and the same chat opened twice is one.
  * 5. The root is always a node. An empty layout is an empty pane, never `null` — a renderer
  *    that has to handle "no tree" grows a second empty state that is only reachable by bug.
+ * 6. Every tab's `surface` is a key of `SURFACES`. Unstated while the union was one-to-one with
+ *    that record; written down now that `"plugin"` covers many surfaces, because a rule enforced
+ *    only by a union type stops being enforced the moment the union opens.
  */
 
 /** Everything that can be a tab. `chat` is the only one that repeats. */
@@ -30,7 +33,19 @@ export type SurfaceId =
   | "board"
   | "settings"
   | "inbox"
-  | "context";
+  | "context"
+  /* Every plugin surface, under one member.
+   *
+   * Not `SurfaceId = string`, and not a member per plugin. Widening to `string` produces **zero**
+   * compile errors at the four unguarded `SURFACES[...]` derefs — `tsconfig.app.json` has no
+   * `strict` — and all four sit in `LayoutView`'s own render tree, above every per-surface
+   * `ErrorBoundary`, so an unknown id there takes the whole window rather than one pane. A member
+   * per plugin fails `looksLikeLayout` for an uninstalled one, which propagates to the root and
+   * silently replaces the person's entire arrangement with the default.
+   *
+   * One static member keeps every deref safe by construction, and which plugin a tab shows lives
+   * in the fields below instead. */
+  | "plugin";
 
 /** A tab, and the two different identities it has.
  *
@@ -44,8 +59,33 @@ export type SurfaceId =
  * is answered and why every surface but chat is a singleton. Two identities because they answer
  * two questions, and a draft chat is exactly the case where they diverge. */
 export type TabRef =
-  | { surface: "chat"; conversationId: string; uid?: string }
-  | { surface: Exclude<SurfaceId, "chat">; conversationId?: undefined; uid?: string };
+  | {
+      surface: "chat";
+      conversationId: string;
+      plugin?: undefined;
+      view?: undefined;
+      instance?: undefined;
+      uid?: string;
+    }
+  | {
+      surface: "plugin";
+      /** The plugin's id, which is also its folder name and its tool namespace. */
+      plugin: string;
+      /** Which of its surfaces. */
+      view: string;
+      /** Set only for a surface declaring `instances: "many"`. */
+      instance?: string;
+      conversationId?: undefined;
+      uid?: string;
+    }
+  | {
+      surface: Exclude<SurfaceId, "chat" | "plugin">;
+      conversationId?: undefined;
+      plugin?: undefined;
+      view?: undefined;
+      instance?: undefined;
+      uid?: string;
+    };
 
 export type PaneNode = { kind: "pane"; id: string; tabs: TabRef[]; active: number };
 export type SplitNode = {
@@ -66,7 +106,19 @@ export type Edge = "left" | "right" | "top" | "bottom" | "center";
  * a conversation that is already open focuses it instead of making a second copy of a live
  * runtime. */
 export function tabKey(ref: TabRef): string {
-  return ref.surface === "chat" ? `chat:${ref.conversationId}` : ref.surface;
+  if (ref.surface === "chat") return `chat:${ref.conversationId}`;
+  /* `plugin:<id>/<view>` — the namespace prefix and the plugin/view boundary use different
+   * separators, so neither is ambiguous, and a plugin id contains neither `/` nor `#`.
+   *
+   * Collision with a built-in is impossible because no built-in id contains a colon, and
+   * collision between plugins is impossible because an id *is* a folder name. `#<instance>` is
+   * what lets a surface declaring `instances: "many"` be open more than once while everything
+   * else stays a singleton by construction — which is invariant 4, unchanged. */
+  if (ref.surface === "plugin") {
+    const base = `plugin:${ref.plugin}/${ref.view}`;
+    return ref.instance ? `${base}#${ref.instance}` : base;
+  }
+  return ref.surface;
 }
 
 let counter = 0;

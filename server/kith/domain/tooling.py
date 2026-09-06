@@ -60,6 +60,11 @@ class ToolHost:
     #: knows — the alternative was the turn re-deriving both from a snapshot it also had to
     #: hold, which meant two places that could disagree about which tools exist.
     mcp_names: frozenset[str] = frozenset()
+    #: The `plugin__…` names in this turn's snapshot. Its own set rather than folded into
+    #: `mcp_names`, because the two answer different questions: the ledger prices them as
+    #: separate lines, and a person deciding what to switch off cannot act on one number
+    #: covering both.
+    plugin_names: frozenset[str] = frozenset()
 
 
 def many(args: dict, plural: str, singular: str) -> list[str]:

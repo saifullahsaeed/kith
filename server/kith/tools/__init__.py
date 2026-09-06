@@ -162,16 +162,18 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
     # construction. A server shipping a tool called `shell` cannot reach the MCP arm, because
     # its name is `mcp__<label>__shell` and nothing of ours is spelled that way.
     from kith.services.mcp import manager as mcp
+    from kith.services.plugins import commands as plugin_commands
 
     entry = get(name)
     mine = entry is not None
-    if mine or mcp.owns(name):
+    if mine or plugin_commands.owns(name) or mcp.owns(name):
         try:
-            answer = (
-                {"ok": True, "result": entry.run(agent_db_path, arguments or {})}
-                if mine
-                else _run_mcp(mcp, name, arguments or {})
-            )
+            if mine:
+                answer = {"ok": True, "result": entry.run(agent_db_path, arguments or {})}
+            elif plugin_commands.owns(name):
+                answer = _run_plugin(name, arguments or {}, agent_db_path)
+            else:
+                answer = _run_mcp(mcp, name, arguments or {})
         except permissions.Denied as denied:
             # Not a failure — a question. The request rides along so the interface can put
             # an Allow button on this very tool result, instead of making someone hunt for
@@ -199,6 +201,20 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
         return answer
 
     return {"ok": False, "error": f"unknown tool: {name}.{_hint(name, agent_db_path)}"}
+
+
+def _run_plugin(name: str, arguments: dict, agent_db_path: Path) -> dict:
+    """One plugin command. Dispatched **above** the MCP arm and inside the same `try`.
+
+    Above it because both namespaces are well-formed and only one of them is this: a command
+    spelled `mcp__…__…` would be swallowed by the MCP arm and answered "that server is not
+    connected", which is the reason `plugin__` exists as a separate prefix at all. Built-ins
+    still win, because nothing built-in is spelled either way.
+    """
+    from kith import settings as live
+    from kith.services.plugins import commands as plugin_commands
+
+    return plugin_commands.run(agent_db_path, live.CONFIG_DB_PATH, name, arguments)
 
 
 def _run_mcp(mcp, name: str, arguments: dict) -> dict:
@@ -320,6 +336,7 @@ def host(
     *,
     language_server: bool | None = None,
     mcp: list[dict] | None = None,
+    plugin: list[dict] | None = None,
 ) -> ToolHost:
     """The whole tool layer, frozen for one turn.
 
@@ -353,11 +370,33 @@ def host(
     # `language_server` above already established the shape: a tool that is *categorically*
     # unusable is hidden rather than offered so it can answer "not installed".
     holds_state = _any_plugin_holds_state()
+    # Frozen once, beside the MCP snapshot, for the identical reason: a plugin enabled or
+    # disabled in another tab mid-turn would otherwise change the tools block between rounds and
+    # discard the whole prompt cache.
+    if plugin is None:
+        plugin = _plugin_snapshot()
     return ToolHost(
         schemas=lambda only=None: tool_schemas(
-            only=only, mcp=mcp, language_server=available, plugin_state=holds_state
+            only=only,
+            mcp=(mcp or []) + (plugin or []),
+            language_server=available,
+            plugin_state=holds_state,
         ),
         dispatched=dispatched,
         run=lambda name, arguments, allow=None: run_tool(name, arguments, agent_db_path, allow=allow),
         mcp_names=frozenset(str(((one.get("function") or {}).get("name")) or "") for one in mcp),
+        plugin_names=frozenset(str(((one.get("function") or {}).get("name")) or "") for one in plugin),
     )
+
+
+def _plugin_snapshot() -> list[dict]:
+    """Every enabled plugin's model-facing commands. Wrapped: a plugin fault must cost its own
+    tools, never the whole tools block."""
+    try:
+        from kith import settings as live
+        from kith.services.plugins import commands as plugin_commands
+
+        return plugin_commands.snapshot(live.CONFIG_DB_PATH)
+    except Exception as exc:
+        print(f"[kith] plugins: could not read command schemas ({exc})")
+        return []

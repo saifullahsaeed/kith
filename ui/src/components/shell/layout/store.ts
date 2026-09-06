@@ -71,12 +71,21 @@ export function looksLikeLayout(value: unknown): value is Node {
           typeof tab === "object" &&
           /* The surface has to be one this build knows, not merely a string.
            *
-           * `SURFACES[tab.surface]` is dereferenced during render for the icon and the
-           * minimum, so an unknown name from a stored layout throws where nothing can catch
-           * it usefully — a crash out of saved data, which is the same class of failure as the
-           * duplicate ids. Reachable the first time a surface is renamed without bumping
-           * VERSION, and the version bump is exactly the thing that is easy to forget. */
-          (tab as TabRef).surface in SURFACES,
+           * Every deref now goes through `surfaceFor`, which never returns undefined, so this
+           * is no longer about crashing — it is about not accepting a tab nothing can draw.
+           *
+           * **A plugin tab is checked structurally, not against what is installed.** Asking
+           * "is this plugin here" discards the *whole tree* when the answer is no: every
+           * split, every size, and every other tab in the window. So uninstalling one plugin
+           * used to reset the layout. "Is it installed" is a render-time question now, where
+           * the answer can be a placeholder pane with a Close button — one tab, not the
+           * arrangement. */
+          ((tab as TabRef).surface === "plugin"
+            ? typeof (tab as TabRef).plugin === "string" &&
+              typeof (tab as TabRef).view === "string" &&
+              !!(tab as TabRef).plugin &&
+              !!(tab as TabRef).view
+            : (tab as TabRef).surface in SURFACES),
       )
     );
   }

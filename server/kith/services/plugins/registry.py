@@ -284,6 +284,17 @@ def spawn_signature(plugin: Plugin) -> str:
     )
 
 
+def command_signature(plugin_id: str, command: str) -> str:
+    """What must be granted for one command to run.
+
+    Three segments, so ``plugin:<id>:*`` covers it through `granted()`'s segment-wise
+    containment while the four-segment spawn grant stays exact-match. Grant the plugin at the
+    review, cover its commands; never the other way round, because a wildcard over a boundary
+    would let a widened one inherit consent given for a narrower one.
+    """
+    return f"plugin:{plugin_id}:{command}"
+
+
 def skill_roots(config_db: Path) -> list[tuple[str, Path]]:
     """(owner, directory) for every enabled plugin that ships skills."""
     return [(p.id, p.path / "skills") for p in enabled(config_db) if p.skills]

@@ -226,6 +226,7 @@ def context_category(conversation_id: str, key: str):
             _tool_block_chars(),
             schemas=host.schemas(),
             mcp_names=tuple(host.mcp_names),
+            plugin_names=tuple(host.plugin_names),
         )
     )
 

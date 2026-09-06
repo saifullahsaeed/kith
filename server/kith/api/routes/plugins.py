@@ -19,8 +19,8 @@ from flask import jsonify, request
 
 from kith.api.blueprint import api
 from kith.domain.plugins import PluginError
+from kith.services.plugins import icons, registry
 from kith.services.plugins import install as installer
-from kith.services.plugins import registry
 from kith.settings import CONFIG_DB_PATH
 
 
@@ -185,3 +185,220 @@ def remove_plugin(plugin_id: str):
 )
 def list_plugin_surfaces():
     return jsonify({"surfaces": registry.surfaces(CONFIG_DB_PATH)})
+
+
+# --------------------------------------------------------------------------- #
+# Surfaces: mounting, serving, and what a frame says back
+# --------------------------------------------------------------------------- #
+
+
+@api.post("/plugins/<plugin_id>/surface/<view>/mount")
+@api.doc(
+    summary="Claim a ticket for one frame",
+    description=(
+        "Returns a single-use URL for the sealed document. A ticket rather than a stable path, "
+        "because a frame's `src` cannot carry the API token and a guessable open path would "
+        "drop the unguessable-id property that exemption rests on."
+    ),
+)
+def mount_surface(plugin_id: str, view: str):
+    from kith.services.plugins import documents
+
+    payload = request.get_json(silent=True) or {}
+    plugin = registry.get(CONFIG_DB_PATH, plugin_id)
+    if plugin is None or plugin_id not in registry.enabled_ids(CONFIG_DB_PATH):
+        return jsonify({"error": f"{plugin_id!r} is not installed or is switched off."}), 404
+    surface = plugin.surface(view)
+    if surface is None:
+        return jsonify({"error": f"{plugin.name} has no {view!r} surface."}), 404
+    try:
+        entry = documents.mount(
+            plugin_id,
+            view,
+            instance=str(payload.get("instance") or ""),
+            client=str(payload.get("client") or ""),
+            conversation=str(payload.get("conversation") or ""),
+            tab=str(payload.get("tab") or ""),
+        )
+        entry.document = documents.sealed(
+            plugin, surface, _palette(payload.get("theme")), icons.named(_icon_names(plugin))
+        )
+    except PluginError as refused:
+        return jsonify({"error": str(refused)}), 400
+    return jsonify(
+        {
+            "ticket": entry.ticket,
+            "url": f"/api/plugins/frame/{entry.ticket}",
+            "protocol": 1,
+            "title": surface.title,
+            "minWidth": surface.min_width,
+        }
+    )
+
+
+@api.get("/plugins/frame/<ticket>")
+@api.doc(
+    summary="Serve a mounted surface",
+    description=(
+        "The sealed document, with the same policy a canvas carries. Every asset is already "
+        "inlined, so nothing here fetches anything."
+    ),
+)
+def serve_frame(ticket: str):
+    from flask import Response
+
+    from kith.domain.seal import POLICY
+    from kith.services.plugins import documents
+
+    entry = documents.held(ticket)
+    if entry is None or not entry.document:
+        return jsonify({"error": "that surface is not mounted"}), 404
+    # The frame has said nothing yet, but fetching its own document is the only thing that
+    # happens between mounting and `ready`, so this is where the mount becomes answerable.
+    entry.ready = True
+    response = Response(entry.document, mimetype="text/html")
+    # `setdefault` elsewhere means this policy is the one that survives; without it the
+    # document would inherit the app's, which permits `script-src 'self'`.
+    response.headers["Content-Security-Policy"] = POLICY
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@api.delete("/plugins/frame/<ticket>")
+@api.doc(summary="Release a mounted surface", description="Called when a plugin tab unmounts.")
+def release_frame(ticket: str):
+    from kith.services.plugins import documents
+
+    documents.unmount(ticket)
+    return jsonify({"ok": True})
+
+
+@api.post("/plugins/frame/<ticket>/state")
+@api.doc(
+    summary="What a surface changed",
+    description=(
+        "A sealed frame cannot reach the API — it has no network and no origin — so it asks the "
+        "renderer, which asks this. **Which plugin is writing comes from the ticket, never from "
+        "the body**: identity before content, applied to a namespace instead of a payload."
+    ),
+)
+def write_surface_state(ticket: str):
+    from kith.kernel import session_context
+    from kith.services.plugins import documents, state
+    from kith.settings import AGENT_DB_PATH
+
+    entry = documents.held(ticket)
+    if entry is None:
+        return jsonify({"error": "that surface is not mounted"}), 404
+    payload = request.get_json(silent=True) or {}
+    values = payload.get("values")
+    if not isinstance(values, dict):
+        return jsonify({"error": 'send {"values": {...}}'}), 400
+    supplied = payload.get("expect")
+    expect = {str(k): int(v) for k, v in supplied.items()} if isinstance(supplied, dict) else None
+    # The slot comes from the mount's conversation, and the write runs inside that context so
+    # `state._owner` resolves it the one way it is allowed to be resolved.
+    try:
+        with session_context.working_in(entry.conversation):
+            written = state.write(AGENT_DB_PATH, entry.plugin, values, writer="surface", expect=expect)
+    except state.PluginStateError as refused:
+        return jsonify({"error": str(refused)}), 400
+    return jsonify(written)
+
+
+@api.post("/plugins/frame/<ticket>/drop")
+@api.doc(summary="Keys a surface no longer needs")
+def drop_surface_state(ticket: str):
+    from kith.kernel import session_context
+    from kith.services.plugins import documents, state
+    from kith.settings import AGENT_DB_PATH
+
+    entry = documents.held(ticket)
+    if entry is None:
+        return jsonify({"error": "that surface is not mounted"}), 404
+    keys = (request.get_json(silent=True) or {}).get("keys")
+    if not isinstance(keys, list):
+        return jsonify({"error": 'send {"keys": [...]}'}), 400
+    try:
+        with session_context.working_in(entry.conversation):
+            gone = state.drop(AGENT_DB_PATH, entry.plugin, [str(k) for k in keys])
+    except state.PluginStateError as refused:
+        return jsonify({"error": str(refused)}), 400
+    return jsonify({"dropped": gone})
+
+
+@api.get("/plugins/<plugin_id>/state")
+@api.doc(
+    summary="What a plugin is holding, for its surface to render",
+    description="Scoped to the conversation the caller names, verified against the plugin's own scope.",
+)
+def read_plugin_state(plugin_id: str):
+    from kith.kernel import session_context
+    from kith.services.plugins import state
+    from kith.settings import AGENT_DB_PATH
+
+    conversation = str(request.args.get("conversation") or "")
+    try:
+        with session_context.working_in(conversation):
+            return jsonify(state.read(AGENT_DB_PATH, plugin_id))
+    except state.PluginStateError as refused:
+        return jsonify({"error": str(refused)}), 400
+
+
+@api.post("/plugins/<plugin_id>/command/<command>")
+@api.doc(
+    summary="Run a declared command as the person",
+    description=(
+        "For a button Kith drew in its own chrome. A person clicking one IS the authorisation, "
+        "so this origin skips the permission gate — which is only safe while core draws every "
+        "affordance, and is why a sealed frame has no action channel of its own."
+    ),
+)
+def run_plugin_command(plugin_id: str, command: str):
+    from kith.kernel import session_context
+    from kith.services.plugins import commands
+    from kith.settings import AGENT_DB_PATH
+
+    plugin = registry.get(CONFIG_DB_PATH, plugin_id)
+    if plugin is None:
+        return jsonify({"error": f"{plugin_id!r} is not installed."}), 404
+    declared = plugin.command(command)
+    if declared is None:
+        return jsonify({"error": f"{plugin.name} has no {command!r} command."}), 404
+    payload = request.get_json(silent=True) or {}
+    args, wrong = commands.coerce(declared, payload.get("args") or {})
+    if wrong:
+        return jsonify({"error": f"{declared.title!r} {wrong}"}), 400
+    with session_context.working_in(str(payload.get("conversation") or "")):
+        answer = commands.dispatch(AGENT_DB_PATH, CONFIG_DB_PATH, plugin, declared, args, origin="person")
+    return jsonify(answer)
+
+
+def _icon_names(plugin) -> list[str]:
+    """Every icon this plugin named, across its surfaces and its buttons."""
+    found = [surface.icon for surface in plugin.surfaces]
+    found += [str(command.present.get("icon") or "") for command in plugin.commands]
+    return [name for name in found if name]
+
+
+def _palette(theme) -> dict:
+    """The tokens a surface starts from.
+
+    Supplied by the renderer, which is the only place that knows whether the person is in light
+    or dark — and passed through `canvasTokens`-shaped names so one document and one live theme
+    message cannot drift, which is the bug that comment in `canvas-bridge.ts` exists for.
+    """
+    if isinstance(theme, dict) and theme:
+        return {str(k): str(v) for k, v in theme.items()}
+    return {
+        "bg": "#faf9f7",
+        "line": "#e4e1dc",
+        "text": "#1c1a17",
+        "dim": "#6b6660",
+        "accent": "#b4703a",
+        "accent-soft": "#f0e2d5",
+        "second": "#3a6b58",
+        "second-soft": "#dceade",
+        "muted": "#f2f0ed",
+    }

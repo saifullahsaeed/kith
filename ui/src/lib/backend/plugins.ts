@@ -1,0 +1,153 @@
+/** Client for the plugin API — what is installed, and what tabs it contributes.
+ *
+ * Note what is *not* here, and it is the same omission `mcp.ts` documents: a way to read an
+ * environment value back. The server sends key names and never values, because that is where a
+ * plugin's API token goes and a settings page that round-trips one hands it to anything that can
+ * read the response. Editing a value means typing it again.
+ */
+
+import type { PluginSurface } from "@/lib/plugin-index";
+
+export interface PluginCommand {
+  name: string;
+  title: string;
+  description: string;
+  delivery: "host" | "state" | "surface";
+  surface: string;
+  present: { in?: string; icon?: string; when?: string };
+  /** Whether it costs prompt tokens by being offered to him. Defaults false in a manifest. */
+  model: boolean;
+}
+
+export interface Plugin {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  publisher: string;
+  homepage: string;
+  license: string;
+  path: string;
+  server: {
+    command: string;
+    args: string[];
+    /** Names only. Never their values. */
+    envKeys: string[];
+    reach: { read: string[]; write: string[]; network: boolean };
+  } | null;
+  surfaces: Omit<PluginSurface, "plugin" | "pluginName">[];
+  commands: PluginCommand[];
+  skills: string[];
+  state: Record<string, unknown>;
+  /** Manifest fields this build has no concept of — shown rather than silently dropped. */
+  unsupportedFields: string[];
+  /** What it adds to every request, forever, if fully enabled. */
+  promptChars: number;
+  promptTokens: number;
+  problems: string[];
+  /** What the *person* decided, kept separate from what the manifest offers. A screen that
+   *  merged them could render a default as though somebody had chosen it. */
+  decided: {
+    enabled: boolean;
+    digest: boolean;
+    envKeys: string[];
+    installedAt: string;
+    version: string;
+  };
+}
+
+export interface PluginTrouble {
+  id: string;
+  kind: "broken" | "incompatible" | "orphan" | "stray";
+  error: string;
+}
+
+export interface PluginStateRow {
+  plugin: string;
+  keys: number;
+  bytes: number;
+  limit: number;
+  digestOn: boolean;
+  /** The digest line he is actually given, verbatim. The one thing that answers "why does he
+   *  not know about my state" in a glance. */
+  digestLine: string;
+}
+
+export interface PluginsSnapshot {
+  root: string;
+  plugins: Plugin[];
+  problems: PluginTrouble[];
+  state: PluginStateRow[];
+  promptChars: number;
+  promptTokens: number;
+  promptLimit: number;
+}
+
+export interface PluginReview {
+  plugin: Plugin;
+  faults: string[];
+  installable: boolean;
+  replacing: Record<string, unknown> | null;
+  signature: string;
+  promptChars: number;
+  promptTokens: number;
+  installedPromptChars: number;
+}
+
+export async function fetchPlugins(): Promise<PluginsSnapshot> {
+  const response = await fetch("/api/plugins");
+  if (!response.ok) throw new Error(`/api/plugins returned ${response.status}`);
+  return (await response.json()) as PluginsSnapshot;
+}
+
+export async function fetchPluginSurfaces(): Promise<PluginSurface[]> {
+  const response = await fetch("/api/plugins/surfaces");
+  if (!response.ok) throw new Error(`/api/plugins/surfaces returned ${response.status}`);
+  return ((await response.json()).surfaces ?? []) as PluginSurface[];
+}
+
+/** Read a folder as a plugin without installing it. Writes nothing — see `install`. */
+export async function reviewPlugin(path: string): Promise<PluginReview> {
+  const response = await fetch(`/api/plugins/review?path=${encodeURIComponent(path)}`);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `could not read that folder (${response.status})`);
+  return body as PluginReview;
+}
+
+export async function installPlugin(
+  path: string,
+  env: Record<string, string> = {},
+): Promise<PluginsSnapshot> {
+  const response = await fetch("/api/plugins", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, env }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `could not install (${response.status})`);
+  return body as PluginsSnapshot;
+}
+
+export async function patchPlugin(
+  id: string,
+  changes: { enabled?: boolean; digest?: boolean; env?: Record<string, string> },
+): Promise<PluginsSnapshot> {
+  const response = await fetch(`/api/plugins/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `could not save (${response.status})`);
+  return body as PluginsSnapshot;
+}
+
+/** Remove a plugin. Its stored state survives thirty days unless `deleteData` says otherwise. */
+export async function removePlugin(id: string, deleteData = false): Promise<PluginsSnapshot> {
+  const response = await fetch(`/api/plugins/${id}${deleteData ? "?data=delete" : ""}`, {
+    method: "DELETE",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `could not remove (${response.status})`);
+  return body as PluginsSnapshot;
+}

@@ -28,6 +28,12 @@ export const keys = {
   projects: () => ["projects"] as const,
   /** The lifetime event log. A second endpoint, so a second key — one key must mean one shape. */
   timeline: () => ["timeline"] as const,
+  /** What is installed, and what each plugin decided/offers. */
+  plugins: () => ["plugins"] as const,
+  /** Only the tabs, which is what the layout needs and is a much smaller answer. */
+  pluginSurfaces: () => ["plugins", "surfaces"] as const,
+  /** What one plugin is holding. Invalidated by `plugin_state` and nothing else. */
+  pluginState: (plugin: string) => ["plugins", "state", plugin] as const,
   /** One project's roadmap graph. */
   roadmap: (projectId: number) => ["roadmap", projectId] as const,
   /** One task, in the detail panel. */

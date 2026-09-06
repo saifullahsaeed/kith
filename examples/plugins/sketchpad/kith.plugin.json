@@ -1,0 +1,144 @@
+{
+  "manifest": 1,
+  "id": "sketchpad",
+  "name": "Sketchpad",
+  "version": "0.1.0",
+  "description": "A canvas he can draw on, and you can draw on, in a tab that outlives the message.",
+  "publisher": "kith",
+  "license": "MIT",
+  "surfaces": [
+    {
+      "id": "board",
+      "title": "Sketchpad",
+      "icon": "palette",
+      "minWidth": 360,
+      "minHeight": 240,
+      "entry": "ui/board.html",
+      "instances": "single",
+      "answers": "conversation"
+    }
+  ],
+  "commands": [
+    {
+      "name": "draw",
+      "title": "Draw a shape",
+      "description": "Add one shape to the Sketchpad. Shapes stack in the order they were added.",
+      "params": {
+        "shape": {
+          "type": "string",
+          "enum": [
+            "rect",
+            "circle",
+            "line",
+            "text"
+          ]
+        },
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "w": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "h": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "colour": {
+          "type": "string",
+          "enum": [
+            "accent",
+            "second",
+            "dim",
+            "text"
+          ]
+        }
+      },
+      "required": [
+        "shape",
+        "x",
+        "y"
+      ],
+      "delivery": "state",
+      "does": {
+        "collect": "pending"
+      },
+      "present": {
+        "in": "none"
+      },
+      "model": true
+    },
+    {
+      "name": "set_title",
+      "title": "Name the sketch",
+      "description": "Give the Sketchpad a title, so it is clear what the drawing is of.",
+      "params": {
+        "title": {
+          "type": "string",
+          "maxLength": 60
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "delivery": "state",
+      "does": {
+        "set": [
+          "title"
+        ]
+      },
+      "present": {
+        "in": "none"
+      },
+      "model": true
+    },
+    {
+      "name": "clear",
+      "title": "Clear the sketch",
+      "description": "Remove every shape from the Sketchpad and start again.",
+      "params": {
+        "confirm": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "confirm"
+      ],
+      "delivery": "state",
+      "does": {
+        "collect": "pending"
+      },
+      "present": {
+        "in": "toolbar",
+        "icon": "trash",
+        "when": "always"
+      },
+      "model": true
+    }
+  ],
+  "state": {
+    "scope": "conversation",
+    "digest": {
+      "enabled": false,
+      "lead": "Sketchpad",
+      "keys": [
+        "title",
+        "shapes",
+        "note"
+      ]
+    }
+  }
+}

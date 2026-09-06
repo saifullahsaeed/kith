@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/shell/app-header";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
+import { PluginSurface } from "@/components/shell/plugin-surface";
 
 import { ChatPane } from "@/components/chat/chat-pane";
 import { WorkPanel } from "@/components/chat/work-panel";
@@ -21,6 +22,7 @@ import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
+import { setPluginSurfaces } from "@/lib/plugin-index";
 import { keys } from "@/lib/query-keys";
 import {
   parseLocation,
@@ -34,6 +36,7 @@ import {
   fetchConversation,
   fetchConversations,
   fetchLiveTurns,
+  fetchPluginSurfaces,
   patchServerConfig,
   type ServerConfig,
 } from "@/lib/backend";
@@ -319,6 +322,21 @@ export function Workspace({
     queryKey: keys.liveTurns(),
     queryFn: fetchLiveTurns,
   });
+
+  /* What plugin surfaces exist, kept current.
+   *
+   * The document already carries this inline, because the layout tree rehydrates at module
+   * import and a fetch arrives too late to give a restored plugin tab its real width. This is
+   * the other half: installing or switching off a plugin must not need a reload, and
+   * `STALE_ON.plugin` invalidates this key. */
+  const { data: plugins } = useQuery({
+    queryKey: keys.pluginSurfaces(),
+    queryFn: fetchPluginSurfaces,
+    staleTime: 30_000,
+  });
+  useEffect(() => {
+    if (plugins) setPluginSurfaces(plugins);
+  }, [plugins]);
   const working = conversationId !== "" && live.includes(conversationId);
   const elsewhere = live.filter((id) => id !== conversationId);
   // The room glows green while he is working, and is otherwise his own amber.
@@ -412,6 +430,21 @@ export function Workspace({
             <Suspense fallback={<ScreenLoading />}>
               <InboxPanel inbox={inbox} onClose={() => closeTab("inbox")} />
             </Suspense>
+          );
+
+        case "plugin":
+          /* One arm, so the ErrorBoundary is structural rather than a per-case convention —
+           * which matters, because two of the seven existing arms lack one despite the comment
+           * above claiming otherwise. A plugin surface that throws costs its own pane. */
+          return (
+            <ErrorBoundary where={`${ref.plugin}/${ref.view}`} compact>
+              <PluginSurface
+                plugin={ref.plugin}
+                view={ref.view}
+                instance={ref.instance}
+                conversationId={conversationId}
+              />
+            </ErrorBoundary>
           );
 
         case "context":

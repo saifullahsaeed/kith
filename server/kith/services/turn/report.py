@@ -489,6 +489,7 @@ def category_text(
     tool_chars: int,
     schemas: list[dict] | None = None,
     mcp_names: tuple[str, ...] = (),
+    plugin_names: tuple[str, ...] = (),
 ) -> dict:
     """The literal text behind one line of the breakdown — the persona, the schemas, the block
     rewritten each turn — gathered the way the ledger counted it, so what you read is what the
@@ -507,12 +508,15 @@ def category_text(
     """
     persona = (default_config().system or "").strip()
 
-    if key in ("built_in_tools", "mcp_tools"):
+    if key in ("built_in_tools", "mcp_tools", "plugin_tools"):
         mcp = set(mcp_names)
+        from_plugins = set(plugin_names)
         parts: list[str] = []
         for schema in schemas or []:
             name = str(((schema.get("function") or {}).get("name")) or "")
-            kind = "mcp_tools" if name in mcp else "built_in_tools"
+            kind = (
+                "plugin_tools" if name in from_plugins else "mcp_tools" if name in mcp else "built_in_tools"
+            )
             if kind == key:
                 parts.append(f"// {name}\n{json.dumps(schema, indent=2)}")
         return _capped("\n\n".join(parts))

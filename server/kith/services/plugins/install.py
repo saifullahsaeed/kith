@@ -55,6 +55,13 @@ def inspect(source: Path, config_db: Path) -> dict:
     plugin = parse(directory)
     faults = list(plugin.problems())
     faults += _collision_faults(plugin, config_db)
+    if plugin.surfaces:
+        from kith.services.plugins import documents
+
+        # Checked here rather than at serve time. A surface whose stylesheet lives on a CDN
+        # renders unstyled with nothing on screen saying why — the seal has no network — and the
+        # honest moment to say so is while somebody is deciding, once, with the href quoted.
+        faults += documents.asset_faults(plugin)
 
     already = registry.row(config_db, plugin.id)
     together = registry.installed_prompt_chars(config_db) + plugin.prompt_chars()
@@ -121,13 +128,20 @@ def install(
         if plugin.problems():
             raise PluginError(plugin.problems()[0])
 
+        # Two grants, and they are independent — which they were not for one commit, and the bug
+        # is worth the comment. The spawn grant was written only when the plugin bundled a
+        # server, and the *command* grant was written inside the same branch. So a plugin with a
+        # surface and no subprocess installed with nothing granted, and the very first command
+        # the model called stopped the turn with a dialog — for a plugin that runs no program at
+        # all and therefore has nothing a dialog could usefully be about.
         signature = registry.spawn_signature(plugin)
         if signature:
             permissions.grant_now(signature, standing=standing)
-            # The command grant covers every declared command through `granted()`'s segment-wise
-            # containment. Written here, at the moment a person approved the install, so the
-            # per-call gate never prompts in normal operation — it exists for a revocation
-            # landing mid-turn, and to carry the `permission` envelope when it does.
+        if plugin.commands:
+            # Covers every declared command through `granted()`'s segment-wise containment.
+            # Written here, at the moment a person approved the install, so the per-call gate
+            # never prompts in normal operation — it exists for a revocation landing mid-turn,
+            # and to carry the `permission` envelope when it does.
             permissions.grant_now(f"plugin:{plugin.id}:*", standing=standing)
 
         destination = place / plugin.id

@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 
 import { carriesTab, edgeAt, highlightFor, TAB_MIME } from "./drag";
 import { useLayout } from "./store";
-import { MIN_HEIGHT, SURFACES, paneMinWidth, tabTitle } from "./surfaces";
+import { MIN_HEIGHT, paneMinWidth, surfaceFor, tabTitle } from "./surfaces";
 import { panes as panesOf, tabKey, type Edge, type Node, type PaneNode, type TabRef } from "./tree";
 
 /**
@@ -299,7 +299,7 @@ function TabButton({
   others: string[];
   paneId: string;
 }) {
-  const Icon = SURFACES[tab.surface].icon;
+  const Icon = surfaceFor(tab).icon;
   const close = useLayout((s) => s.close);
   const dock = useLayout((s) => s.dock);
   const key = tabKey(tab);
@@ -418,7 +418,7 @@ function Rail({
   return (
     <div className="border-border/60 bg-background flex h-full w-full flex-col items-center gap-1 border-e py-2">
       {tabs.map(({ tab, pane }) => {
-        const Icon = SURFACES[tab.surface].icon;
+        const Icon = surfaceFor(tab).icon;
         return (
           <button
             key={tab.uid ?? tabKey(tab)}

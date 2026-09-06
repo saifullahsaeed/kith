@@ -320,8 +320,13 @@ class CommandDecl:
                 )
         if self.delivery == "state":
             keys = self.does.get("set")
-            if not isinstance(keys, list) or not keys:
-                found.append(f"{self.name!r} writes to the plugin's store but names no keys.")
+            collect = self.does.get("collect")
+            if collect is not None and not isinstance(collect, str):
+                found.append(f"{self.name!r}'s `collect` must name one key.")
+            elif not collect and (not isinstance(keys, list) or not keys):
+                found.append(
+                    f"{self.name!r} writes to the plugin's store but names neither `set` nor `collect`."
+                )
         if len(self.params) > MAX_PARAM_KEYS:
             found.append(f"{self.name!r} declares more than {MAX_PARAM_KEYS} parameters.")
         if len(self.returns) > MAX_RETURN_KEYS:

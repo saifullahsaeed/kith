@@ -1,0 +1,272 @@
+<!--
+  Sketchpad — a plugin surface, and the shortest honest demonstration of the whole loop.
+
+  He calls `draw`, which lands one record in the plugin's store under `pending`. Core pushes the
+  store into this frame. This page folds the record into its own `shapes` list and writes the
+  list back. You drag a shape; that writes back too. The next thing you say to him carries the
+  digest line, so he knows the sketch has eleven shapes and that you moved one.
+
+  Nothing here fetches anything. There is no network inside the seal, every asset is inlined by
+  the server before the document is served, and `window.kith` is the only channel out — with no
+  verb that reaches past this plugin's own store.
+-->
+<div id="chrome">
+  <span id="title">Sketchpad</span>
+  <span id="count"></span>
+  <button id="wipe" type="button">
+    <svg class="kith-icon"><use href="#icon-trash" /></svg>
+    Clear
+  </button>
+</div>
+
+<svg id="board" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet"></svg>
+
+<p id="empty">Nothing on it yet. Ask him to draw something.</p>
+
+<style>
+  /* The token stylesheet arrives before this one and sets the ground, the font and the form
+     controls, so what is left here is only what this surface adds. `--kith-*` rather than
+     literal colours: the person can flip the theme while the tab is open and core repaints
+     these without remounting the frame. */
+  body {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #chrome {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--kith-line);
+    flex: 0 0 auto;
+  }
+  #title {
+    font-weight: 550;
+    letter-spacing: -0.01em;
+  }
+  #count {
+    color: var(--kith-dim);
+    font-size: 11px;
+    margin-right: auto;
+  }
+  #wipe {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+  }
+  #board {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+  }
+  #board.empty {
+    display: none;
+  }
+  #board [data-shape] {
+    cursor: grab;
+  }
+  #board [data-shape].held {
+    cursor: grabbing;
+    opacity: 0.75;
+  }
+  #empty {
+    margin: auto;
+    padding: 0 24px;
+    text-align: center;
+    color: var(--kith-dim);
+    font-size: 12px;
+  }
+  #empty.gone {
+    display: none;
+  }
+</style>
+
+<script>
+  (function () {
+    var NS = "http://www.w3.org/2000/svg";
+    var board = document.getElementById("board");
+    var empty = document.getElementById("empty");
+    var titleEl = document.getElementById("title");
+    var countEl = document.getElementById("count");
+
+    /* What is on the board, and the last queued record we folded in.
+     *
+     * `seen` is why a re-render is idempotent: core pushes the whole store on every change, so
+     * without it every push would fold the same `pending` record again and the sketch would
+     * grow a duplicate shape per repaint. */
+    var shapes = [];
+    var seen = 0;
+    var title = "Sketchpad";
+
+    var COLOURS = {
+      accent: "var(--kith-accent)",
+      second: "var(--kith-second)",
+      dim: "var(--kith-dim)",
+      text: "var(--kith-text)",
+    };
+
+    function colour(name) {
+      return COLOURS[name] || COLOURS.text;
+    }
+
+    function draw() {
+      while (board.firstChild) board.removeChild(board.firstChild);
+      for (var i = 0; i < shapes.length; i++) render(shapes[i], i);
+      var any = shapes.length > 0;
+      board.classList.toggle("empty", !any);
+      empty.classList.toggle("gone", any);
+      titleEl.textContent = title;
+      countEl.textContent = any ? shapes.length + (shapes.length === 1 ? " shape" : " shapes") : "";
+    }
+
+    function render(shape, index) {
+      var group = document.createElementNS(NS, "g");
+      group.setAttribute("data-shape", String(index));
+      var stroke = colour(shape.colour);
+
+      if (shape.shape === "rect") {
+        var rect = document.createElementNS(NS, "rect");
+        rect.setAttribute("x", shape.x);
+        rect.setAttribute("y", shape.y);
+        rect.setAttribute("width", shape.w || 180);
+        rect.setAttribute("height", shape.h || 60);
+        rect.setAttribute("rx", "8");
+        rect.setAttribute("fill", "none");
+        rect.setAttribute("stroke", stroke);
+        rect.setAttribute("stroke-width", "2");
+        group.appendChild(rect);
+        if (shape.label) group.appendChild(text(shape, stroke));
+      } else if (shape.shape === "circle") {
+        var circle = document.createElementNS(NS, "circle");
+        circle.setAttribute("cx", shape.x);
+        circle.setAttribute("cy", shape.y);
+        circle.setAttribute("r", shape.w || 40);
+        circle.setAttribute("fill", "none");
+        circle.setAttribute("stroke", stroke);
+        circle.setAttribute("stroke-width", "2");
+        group.appendChild(circle);
+        if (shape.label) {
+          var mid = { x: shape.x - (shape.w || 40), y: shape.y - 6, w: (shape.w || 40) * 2, label: shape.label };
+          group.appendChild(text(mid, stroke));
+        }
+      } else if (shape.shape === "line") {
+        var line = document.createElementNS(NS, "line");
+        line.setAttribute("x1", shape.x);
+        line.setAttribute("y1", shape.y);
+        line.setAttribute("x2", Number(shape.x) + Number(shape.w || 0));
+        line.setAttribute("y2", Number(shape.y) + Number(shape.h || 0));
+        line.setAttribute("stroke", stroke);
+        line.setAttribute("stroke-width", "2");
+        line.setAttribute("stroke-linecap", "round");
+        group.appendChild(line);
+      } else {
+        group.appendChild(text(shape, stroke));
+      }
+      board.appendChild(group);
+    }
+
+    function text(shape, stroke) {
+      var label = document.createElementNS(NS, "text");
+      label.setAttribute("x", Number(shape.x) + Number(shape.w || 180) / 2);
+      label.setAttribute("y", Number(shape.y) + Number(shape.h || 60) / 2 + 6);
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("fill", stroke);
+      label.setAttribute("font-size", "20");
+      label.textContent = shape.label || "";
+      return label;
+    }
+
+    /* Dragging, which is the half he cannot see happen.
+     *
+     * A shape moved here writes straight back into the plugin's store, so the next message
+     * carries it in the digest and he does not have to ask whether anything moved. */
+    var held = null;
+    board.addEventListener("pointerdown", function (event) {
+      var group = event.target.closest("[data-shape]");
+      if (!group) return;
+      var box = board.getBoundingClientRect();
+      held = {
+        index: Number(group.getAttribute("data-shape")),
+        group: group,
+        scale: 1000 / Math.min(box.width, box.height),
+        from: { x: event.clientX, y: event.clientY },
+      };
+      group.classList.add("held");
+      board.setPointerCapture(event.pointerId);
+    });
+    board.addEventListener("pointermove", function (event) {
+      if (!held) return;
+      var dx = (event.clientX - held.from.x) * held.scale;
+      var dy = (event.clientY - held.from.y) * held.scale;
+      held.group.setAttribute("transform", "translate(" + dx + "," + dy + ")");
+      held.moved = { dx: dx, dy: dy };
+    });
+    board.addEventListener("pointerup", function (event) {
+      if (!held) return;
+      var moved = held.moved;
+      var index = held.index;
+      held.group.classList.remove("held");
+      held = null;
+      try {
+        board.releasePointerCapture(event.pointerId);
+      } catch (e) {}
+      if (!moved || (Math.abs(moved.dx) < 2 && Math.abs(moved.dy) < 2)) return;
+      var shape = shapes[index];
+      if (!shape) return;
+      shape.x = Math.round(Math.max(0, Math.min(1000, Number(shape.x) + moved.dx)));
+      shape.y = Math.round(Math.max(0, Math.min(1000, Number(shape.y) + moved.dy)));
+      commit("moved " + (shape.label || shape.shape));
+      draw();
+    });
+
+    document.getElementById("wipe").addEventListener("click", function () {
+      shapes = [];
+      commit("cleared");
+      draw();
+    });
+
+    /* The one call out. `shapes` is the list, and `note` is a short phrase for the digest — both
+     * are keys the manifest declared, so they are the only two this can reach. */
+    function commit(note) {
+      window.kith.state.set({
+        shapes: shapes,
+        note: note,
+        title: title,
+      });
+    }
+
+    /* Core pushes the whole store whenever it changes, and this is the only inbound data path.
+     *
+     * `pending` is where a `draw` or `clear` call lands. Folding it here rather than server-side
+     * is what makes the surface the authority on its own picture: the model says "add a rect at
+     * 100,100", and what that *means* for the drawing is this page's business. */
+    window.kith.render(function (state) {
+      if (Array.isArray(state.shapes)) shapes = state.shapes.slice();
+      if (typeof state.title === "string" && state.title) title = state.title;
+
+      var queued = state.pending;
+      if (queued && typeof queued === "object" && Number(queued.seq || 0) > seen) {
+        seen = Number(queued.seq);
+        if (queued.command === "clear") {
+          shapes = [];
+        } else if (queued.command === "draw" && queued.args) {
+          shapes.push({
+            shape: queued.args.shape,
+            x: queued.args.x,
+            y: queued.args.y,
+            w: queued.args.w,
+            h: queued.args.h,
+            label: queued.args.label,
+            colour: queued.args.colour,
+          });
+        }
+        commit(queued.command === "clear" ? "cleared" : "drew " + (queued.args.label || queued.args.shape));
+      }
+      draw();
+    });
+
+    draw();
+  })();
+</script>

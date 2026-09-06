@@ -51,3 +51,19 @@ export * from "./language-servers";
 export * from "./checkpoints";
 export * from "./context";
 export * from "./shared-board";
+export type {
+  Plugin,
+  PluginCommand,
+  PluginReview,
+  PluginStateRow,
+  PluginTrouble,
+  PluginsSnapshot,
+} from "./plugins";
+export {
+  fetchPluginSurfaces,
+  fetchPlugins,
+  installPlugin,
+  patchPlugin,
+  removePlugin,
+  reviewPlugin,
+} from "./plugins";

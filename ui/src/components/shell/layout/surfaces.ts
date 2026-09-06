@@ -1,4 +1,6 @@
 import {
+  Check,
+  Circle,
   Gauge,
   Inbox,
   LayoutGrid,
@@ -6,8 +8,19 @@ import {
   type LucideIcon,
   MessageSquare,
   MessagesSquare,
+  Palette,
+  Pencil,
+  Plus,
+  Puzzle,
+  RefreshCw,
+  Scroll,
   Settings,
+  Square,
+  Trash2,
+  X,
 } from "lucide-react";
+
+import { indexSettled, pluginSurface } from "@/lib/plugin-index";
 
 import type { SurfaceId, TabRef } from "./tree";
 
@@ -52,6 +65,58 @@ export const SURFACES: Record<SurfaceId, Surface> = {
   settings: { title: "Settings", icon: Settings, minWidth: 420 },
   inbox: { title: "Inbox", icon: Inbox, minWidth: 320 },
   context: { title: "Context", icon: Gauge, minWidth: 420 },
+  /* The placeholder every plugin surface resolves through when its own declaration is not
+   * (yet) known. A real static key, which is what keeps the four `SURFACES[...]` derefs safe by
+   * construction rather than by a guard someone could forget — see `SurfaceId` in `tree.ts`. */
+  plugin: { title: "Plugin", icon: Puzzle, minWidth: 320 },
+};
+
+/** What a surface is called and drawn with, for any tab including a plugin's.
+ *
+ * Every deref of `SURFACES` goes through this. A plugin tab has three answers rather than two,
+ * and the third is the point: `loading` is the window between module import — when the layout
+ * rehydrates from local storage — and the first `GET /api/plugins`. A tab that says "this plugin
+ * is not installed" for 200ms and then works is worse than one that says nothing for 200ms.
+ */
+export function surfaceFor(ref: TabRef): Surface & { standing: "known" | "loading" | "absent" } {
+  if (ref.surface !== "plugin") return { ...SURFACES[ref.surface], standing: "known" };
+  const declared = pluginSurface(ref.plugin, ref.view);
+  if (declared) {
+    return {
+      title: declared.title,
+      icon: ICONS[declared.icon] ?? Puzzle,
+      minWidth: declared.minWidth,
+      standing: "known",
+    };
+  }
+  return {
+    ...SURFACES.plugin,
+    title: ref.view || SURFACES.plugin.title,
+    standing: indexSettled() ? "absent" : "loading",
+  };
+}
+
+/** The lucide components a plugin may name, keyed by the same names the server's sprite uses.
+ *
+ * A plugin names an icon and never supplies one, so this is a lookup and not a loader. Kept in
+ * step with `services/plugins/icons.py` by hand — a name in one and not the other renders the
+ * fallback, which is visible and harmless, where accepting arbitrary markup would not be. */
+const ICONS: Record<string, LucideIcon> = {
+  puzzle: Puzzle,
+  check: Check,
+  plus: Plus,
+  x: X,
+  pencil: Pencil,
+  trash: Trash2,
+  circle: Circle,
+  square: Square,
+  "list-checks": ListChecks,
+  scroll: Scroll,
+  palette: Palette,
+  gauge: Gauge,
+  inbox: Inbox,
+  "layout-grid": LayoutGrid,
+  refresh: RefreshCw,
 };
 
 /** Narrowest a pane may be: the widest minimum among the tabs it holds.
@@ -61,7 +126,7 @@ export const SURFACES: Record<SurfaceId, Surface> = {
  * as the app rearranging itself for no reason. */
 export function paneMinWidth(tabs: TabRef[]): number {
   if (!tabs.length) return 240;
-  return Math.max(...tabs.map((tab) => SURFACES[tab.surface].minWidth));
+  return Math.max(...tabs.map((tab) => surfaceFor(tab).minWidth));
 }
 
 /** Shortest a pane is worth being. One number for every surface: unlike width, no surface here
@@ -77,7 +142,7 @@ export const MIN_HEIGHT = 140;
  * one, and no way to tell which conversation either was. A chat with an id says so instead,
  * until its title arrives. */
 export function tabTitle(ref: TabRef, chatTitle?: string): string {
-  if (ref.surface !== "chat") return SURFACES[ref.surface].title;
+  if (ref.surface !== "chat") return surfaceFor(ref).title;
   const given = chatTitle?.trim();
   if (given) return given;
   return ref.conversationId ? "Chat" : "New chat";
