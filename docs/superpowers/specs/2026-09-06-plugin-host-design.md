@@ -1,7 +1,12 @@
 # A plugin host, and the boundary it needs first
 
-**Status:** design, 2026-09-06. Nine tranches, built in order. T1 and T2 ship as security fixes
-with no plugin concept attached.
+**Status:** T1, T3, T5, T6 and most of T7 built 2026-09-06 on branch `plugin-host-design`, with
+`examples/plugins/sketchpad` as the worked example. **Not built yet:** T2 and T4 (confinement,
+and plugin-contributed MCP servers running inside a boundary), T7's `host` delivery and toolbar
+buttons, T8 (the frame RPC), T9 (the Work rebuild). A plugin today may contribute a tab, skills,
+state, a digest and `state`-delivery commands; it may declare a server, and that server is
+gated and namespaced, but it is **not yet confined** — so the review screen cannot honestly
+claim a boundary and T2 is what makes it able to.
 
 ## Why
 

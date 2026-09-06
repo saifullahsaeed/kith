@@ -264,7 +264,10 @@ def test_a_command_that_needs_the_tab_says_so_rather_than_failing_oddly(db: Path
     from dataclasses import replace
 
     plugin = registry.get(config_db, "sketchpad")
-    surface_command = replace(plugin.command("draw"), delivery="surface", surface="board")
+    assert plugin is not None
+    declared = plugin.command("draw")
+    assert declared is not None
+    surface_command = replace(declared, delivery="surface", surface="board")
 
     with in_a_conversation():
         answer = commands.dispatch(db, config_db, plugin, surface_command, {"shape": "rect", "x": 1, "y": 1})

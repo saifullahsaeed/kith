@@ -255,6 +255,7 @@ def test_you_cannot_take_a_plugins_label(tmp_path: Path, config_db: Path):
 def test_an_ungranted_server_is_not_offered_at_all(tmp_path: Path, config_db: Path):
     installer.install(config_db, a_plugin(tmp_path, server={"command": "npx", "args": ["x@1.0.0"]}))
     plugin = registry.get(config_db, "circulars")
+    assert plugin is not None
     permissions.revoke(registry.spawn_signature(plugin))
 
     # Not started, not listed, not in any prompt — decided before any turn exists, so nothing
@@ -322,6 +323,7 @@ def test_a_newer_manifest_keeps_its_row_and_says_what_it_needs(tmp_path: Path, c
 def test_removing_a_plugin_revokes_what_let_it_run(tmp_path: Path, config_db: Path):
     installer.install(config_db, a_plugin(tmp_path, server={"command": "npx", "args": ["x@1.0.0"]}))
     plugin = registry.get(config_db, "circulars")
+    assert plugin is not None
     signature = registry.spawn_signature(plugin)
     assert permissions.granted(signature)
 
