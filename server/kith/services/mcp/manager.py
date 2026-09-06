@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 from kith.domain.mcp import MCPServer, split_tool_name, tool_name
@@ -69,7 +70,26 @@ def save(config_db: Path, servers: list[MCPServer]) -> list[MCPServer]:
     Labels are unique because a label is a namespace: two servers called `files` would
     contribute tools with identical names, and the second would silently shadow the first
     with no way to tell which one a call reached.
+
+    **Environment values are merged, not replaced, and that fixes a bug that destroyed them.**
+    `public()` reports env *names* and never values — correct, and the reason a settings page
+    physically cannot send back what it never received. `mcp-servers.tsx` therefore sends
+    `env: {}` for every row it is not editing, under a comment saying "The server keeps what it
+    has for a label it already knows; this only ever adds."
+
+    It did not. This function wrote `[s.stored() for s in servers]` with no read of what was
+    stored, so switching one server off — or removing an unrelated one, or any other wholesale
+    PUT, which is the only way this list is edited — wiped the API token of *every* configured
+    server. The failure is silent and total: the next connect starts each server with no
+    credentials, and the server reports an auth error that looks like the remote's fault.
+
+    So the merge lives here rather than in the client. Any client gets it, and the comment that
+    was already promising this behaviour becomes true. **An empty value means remove**, which is
+    the one thing a merge would otherwise make impossible; a key absent from the request keeps
+    whatever is stored.
     """
+    held = {existing.label: existing.env for existing in configured(config_db)}
+    merged: list[MCPServer] = []
     seen: set[str] = set()
     for server in servers:
         problems = server.problems()
@@ -78,6 +98,9 @@ def save(config_db: Path, servers: list[MCPServer]) -> list[MCPServer]:
         if server.label in seen:
             raise ValueError(f"there is already a server called {server.label!r}")
         seen.add(server.label)
+        env = {**held.get(server.label, {}), **server.env}
+        merged.append(replace(server, env={k: v for k, v in env.items() if v != ""}))
+    servers = merged
     config_store.update_settings(config_db, {SERVERS_KEY: json.dumps([s.stored() for s in servers])})
     # Anything that should no longer be running stops now rather than at the next restart —
     # and "should no longer be running" includes *switched off*, not just removed.
@@ -202,9 +225,21 @@ def disconnect_all() -> None:
 
 
 def running() -> dict[str, list[dict]]:
-    """label -> its tools, as last fetched."""
+    """label -> its tools, as last fetched. Only the ones whose process is still alive.
+
+    The `alive` check is not tidiness. This dict is what `GET /api/mcp` turns into
+    `connected: true` and the tool list beside it, and without the check a server that crashed
+    an hour ago still reads "Connected — 5 tools" forever, because nothing removes a dead entry:
+    `_retire` only runs on a config change, and nothing watches the child. So the one screen
+    that exists to tell you whether a server is working was answering from a registry that only
+    records whether it ever *started*.
+
+    Deliberately a read, not a reap — the dead entry stays in `_live` so a turn holding its
+    snapshot still gets the readable "not connected, carry on without it" from `run()` rather
+    than "unknown tool", which would tell him he invented a tool he was handed two rounds ago.
+    """
     with _lock:
-        return {label: list(entry.tools) for label, entry in _live.items()}
+        return {label: list(entry.tools) for label, entry in _live.items() if entry.process.alive}
 
 
 # -- what the model sees ---------------------------------------------------- #
@@ -280,6 +315,41 @@ def owns(name: str) -> bool:
     """
     label, tool = split_tool_name(name)
     return bool(label and tool)
+
+
+def row_for(config_db: Path, label: str) -> MCPServer | None:
+    """The configured server behind a label, or None.
+
+    Read from the configuration rather than from `_live`, for the reason `owns` gives: a turn
+    holds its tool snapshot after a server has gone, so the row still has to be findable in
+    order to say something accurate about a call to it.
+    """
+    for server in configured(config_db):
+        if server.label == label:
+            return server
+    return None
+
+
+def grant_signature(config_db: Path, label: str) -> str:
+    """What must be granted for this server's program to act.
+
+    ``plugin:user-<label>:open:<hash>`` for a server someone typed into the settings page.
+    `user-` rather than a bare label so a plugin can never collide with a hand-configured
+    server in the grant namespace — a plugin id and an MCP label share a grammar, and two
+    different things resolving to one signature is one of them silently inheriting the other's
+    consent.
+
+    `open` is the seal: nothing confines these processes yet. When confinement lands, granted
+    servers move to `sealed` and every signature changes — which re-asks once, deliberately.
+    Trust given to an unconfined program is not trust in a confined one, and the reverse
+    matters more.
+    """
+    server = row_for(config_db, label)
+    if server is None:
+        return ""
+    from kith.infra import permissions
+
+    return permissions.spawn_signature(f"user-{label}", server.command, server.args, server.env.keys())
 
 
 def run(name: str, arguments: dict, call_timeout: float) -> dict:

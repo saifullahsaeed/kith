@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, ShieldCheck, TerminalSquare, X } from "lucide-react";
+import { FolderOpen, Puzzle, ShieldCheck, TerminalSquare, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -135,16 +135,34 @@ function Grant({
   onDrop: () => void;
   busy: boolean;
 }) {
+  /* Three namespaces now, and this row is the only place a person can take one back.
+   *
+   * A plugin grant is `plugin:<owner>:<seal>:<hash>`, and the hash is deliberately unreadable —
+   * it covers the command line, its environment names and the boundary the program runs
+   * inside, so that any change to what actually gets spawned stops matching and asks again.
+   * Showing it raw would be a row of hex nobody can act on, so the owner is what is rendered
+   * and the hash becomes the sentence underneath. Revoking this row is how you stop a server's
+   * process without deleting its configuration. */
   const isPath = signature.startsWith("path:");
-  const body = signature.slice(signature.indexOf(":") + 1);
-  const Icon = isPath ? FolderOpen : TerminalSquare;
+  const isPlugin = signature.startsWith("plugin:");
+  const parts = signature.split(":");
+  const owner = isPlugin ? (parts[1] ?? "").replace(/^user-/, "") : "";
+  const sealed = isPlugin && parts[2] === "sealed";
+  const body = isPlugin ? owner : signature.slice(signature.indexOf(":") + 1);
+  const Icon = isPath ? FolderOpen : isPlugin ? Puzzle : TerminalSquare;
   return (
     <div className="group flex items-start gap-2.5 px-3 py-2.5">
       <Icon className="text-muted-foreground/60 mt-0.5 size-3.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <code className="block font-mono text-[11px] break-all">{body}</code>
         <p className="text-muted-foreground/70 mt-0.5 text-[11px]">
-          {isPath ? "This and anything inside it" : "This command, whenever he runs it"}
+          {isPath
+            ? "This and anything inside it"
+            : isPlugin
+              ? sealed
+                ? "Its program may run, inside the boundary you approved"
+                : "Its program may run, with your full access"
+              : "This command, whenever he runs it"}
         </p>
       </div>
       <button

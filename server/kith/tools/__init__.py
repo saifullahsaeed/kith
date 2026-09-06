@@ -138,10 +138,21 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
                 "you were given, or finish with what you have."
             ),
         }
+    # MCP is resolved here rather than after the built-in branch, and that ordering is still
+    # the collision policy: `entry` is consulted first, so a built-in always wins by
+    # construction. A server shipping a tool called `shell` cannot reach the MCP arm, because
+    # its name is `mcp__<label>__shell` and nothing of ours is spelled that way.
+    from kith.services.mcp import manager as mcp
+
     entry = get(name)
-    if entry is not None:
+    mine = entry is not None
+    if mine or mcp.owns(name):
         try:
-            answer = {"ok": True, "result": entry.run(agent_db_path, arguments or {})}
+            answer = (
+                {"ok": True, "result": entry.run(agent_db_path, arguments or {})}
+                if mine
+                else _run_mcp(mcp, name, arguments or {})
+            )
         except permissions.Denied as denied:
             # Not a failure — a question. The request rides along so the interface can put
             # an Allow button on this very tool result, instead of making someone hunt for
@@ -168,16 +179,41 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
         touched.record(agent_db_path, name, arguments or {}, answer.get("result"))
         return answer
 
-    # MCP last, and that ordering is the collision policy. A built-in always wins by
-    # construction rather than by a check someone could forget to write — a server shipping
-    # a tool called `shell` simply cannot reach this line, because its name is
-    # `mcp__<label>__shell` and nothing of ours is spelled that way.
-    from kith.services.mcp import manager as mcp
-
-    if mcp.owns(name):
-        return mcp.run(name, arguments or {}, tuning.value("mcp_call_timeout"))
-
     return {"ok": False, "error": f"unknown tool: {name}.{_hint(name, agent_db_path)}"}
+
+
+def _run_mcp(mcp, name: str, arguments: dict) -> dict:
+    """One MCP tool call, gated.
+
+    **This branch used to sit below the `try` above, and that was the whole bug.** A built-in
+    tool's `permissions.Denied` is caught up there and turned into the `{ok, error, permission}`
+    envelope the interface draws an Allow button on; `mcp.run` was called directly, so an MCP
+    server was the one actor in the process that reached your disk with no gate in front of it
+    and no row in `touched`. Moving the call inside that `try` is the fix — the gate below can
+    raise, and the envelope, the Allow button and the `touched.record` all come for free from
+    code that already existed.
+
+    What is checked is the *program*, not the call. Kith cannot read an opaque `tools/call` and
+    say which file it is about to open, so a per-call path check here would be a gate that
+    inspects nothing while looking exactly like the ones that inspect everything. The honest
+    unit is: may this program act for him at all. Confinement is what bounds *what* it can
+    reach, and that is a separate piece of work with its own screen.
+
+    The gate is above `mcp.run` rather than inside it so the wait for a person sits outside
+    `mcp_call_timeout` (30s by default). Gate below it and every prompt becomes a timed-out
+    call.
+    """
+    from kith.domain.mcp import split_tool_name
+    from kith.settings import CONFIG_DB_PATH
+
+    label, tool = split_tool_name(name)
+    signature = mcp.grant_signature(CONFIG_DB_PATH, label)
+    if signature:
+        # No signature means no configured row — the server was removed while a turn held its
+        # snapshot. `mcp.run` already answers that readably, and refusing here instead would
+        # replace a sentence he can act on with a prompt about a program that no longer exists.
+        permissions.require_plugin(signature, f"{label}/{tool}" if tool else label, f"the {label!r} server")
+    return mcp.run(name, arguments, tuning.value("mcp_call_timeout"))
 
 
 def _hint(name: str, agent_db_path: Path) -> str:

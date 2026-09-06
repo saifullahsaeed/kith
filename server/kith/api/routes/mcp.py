@@ -12,6 +12,7 @@ from flask import jsonify, request
 
 from kith.api.blueprint import api
 from kith.domain.mcp import MCPServer
+from kith.infra import permissions
 from kith.services import tuning
 from kith.services.mcp import manager
 from kith.settings import CONFIG_DB_PATH
@@ -95,9 +96,45 @@ def save_mcp_servers():
     # Bring up anything newly enabled straight away, so saving and it working are one action
     # rather than two. Failures are reported rather than raised: one broken server must not
     # stop the others being saved and started.
+    # Saving a server on this form IS the authorisation to run it, so the grant is written
+    # here and the tool gate never prompts for anything someone typed. One human act, one
+    # grant. Without this the first call to every newly-saved server would stop the turn with
+    # a dialog asking permission for a program the person configured ten seconds earlier,
+    # which reads as the app not having noticed.
+    #
+    # Standing rather than session-scoped: a server survives a restart, so consent that did
+    # not would produce one prompt per launch — the shape people turn gates off over.
+    for server in saved:
+        if server.enabled:
+            permissions.grant_now(manager.grant_signature(CONFIG_DB_PATH, server.label), standing=True)
+
     connect_timeout, call_timeout = _timeouts()
     trouble = manager.connect(CONFIG_DB_PATH, connect_timeout, call_timeout)
     return jsonify({"servers": [s.public() for s in saved], "failed": trouble})
+
+
+@api.delete("/mcp/<label>")
+@api.doc(
+    summary="Remove one server",
+    description=(
+        "Removes it, stops its process and revokes the grant that let it run. The whole-list "
+        "PUT can express this too, but only by sending every other server back — which is how "
+        "a client with nothing to say about a row still ends up rewriting it."
+    ),
+)
+def forget_mcp_server(label: str):
+    name = str(label or "").strip().lower()
+    # Read before removing: the signature is derived from the row, so revoking after the
+    # delete would compute a signature for a server that no longer exists and revoke nothing,
+    # leaving a grant behind that a reinstall under the same name would silently inherit.
+    signature = manager.grant_signature(CONFIG_DB_PATH, name)
+    try:
+        remaining = manager.forget(CONFIG_DB_PATH, name)
+    except ValueError as refused:
+        return jsonify({"error": str(refused)}), 400
+    if signature:
+        permissions.revoke(signature)
+    return jsonify({"servers": [s.public() for s in remaining]})
 
 
 @api.post("/mcp/reconnect")

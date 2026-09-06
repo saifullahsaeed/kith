@@ -69,6 +69,13 @@ const POLICY = [
   "img-src data: blob:",
   "font-src data:",
   "media-src data: blob:",
+  // These two were only on the server's copy for a while, and nothing anywhere noticed.
+  // Policies compose by intersection, so a document served from `/api/canvas/` was covered by
+  // the stricter half and one mounted any other way was not. `server/kith/domain/seal.py` is
+  // now the single statement and `test_the_seal_is_stated_once.py` reads this array to check
+  // the two agree.
+  "form-action 'none'",
+  "base-uri 'none'",
 ].join("; ");
 
 /**

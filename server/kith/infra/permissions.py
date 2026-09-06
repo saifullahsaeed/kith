@@ -33,6 +33,8 @@ That reads as the button not working.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import threading
@@ -75,7 +77,17 @@ class Mode(StrEnum):
     BYPASS = "bypass"
 
 
-Kind = Literal["read", "write", "delete", "command"]
+#: ``plugin`` is a program that is not Kith, spawned with his PATH, acting on his behalf —
+#: an MCP server today, a plugin's bundled server tomorrow. Deliberately not ``command``: a
+#: command is a shell line this process wrote and can read, and every word of the refusal is
+#: derived from reading it. An MCP ``tools/call`` is opaque JSON going down a pipe, so the
+#: honest thing to decide is whether the *program* may act, not what this particular call does.
+#:
+#: Adding a member here forces three enumerations to grow in the same commit or the interface
+#: renders `undefined`: ``check_path``'s verb map below, ``ui/src/lib/backend/permissions.ts``,
+#: and ``VERB`` in ``permission-prompt.tsx``. There is no type coupling across that boundary
+#: and `strict` is off in `tsconfig.app.json`, so nothing will tell you.
+Kind = Literal["read", "write", "delete", "command", "plugin"]
 
 
 #: Commands that can cost you something you cannot get back, wherever they run. Matched on
@@ -422,7 +434,36 @@ def granted(signature: str) -> bool:
             return True
         if grant.startswith("path:") and signature.startswith("path:") and _covers(grant[5:], signature[5:]):
             return True
+        if _plugin_covers(grant, signature):
+            return True
     return False
+
+
+def _plugin_covers(grant: str, signature: str) -> bool:
+    """Does `plugin:<id>:*` cover `plugin:<id>:<command>`?
+
+    Grant the plugin, cover its commands — so approving an install does not mean answering a
+    prompt again the first time each of its commands runs, which is the click-training this
+    gate exists to avoid.
+
+    **Containment asked of the segments, never of the string.** `grant.startswith(prefix)` says
+    yes to `plugin:work-evil:…` for a grant on `plugin:work`, which is `_covers`' own documented
+    bug (`~/Documents` covering `~/Documents-private`) in a colon-delimited namespace instead of
+    a path one. Splitting first makes a sibling id structurally unable to match.
+
+    Only the command namespace is covered. `plugin:<id>:<seal>:<hash>` — the four-segment
+    grant that says a program may run — is exact-match by construction, because a wildcard over
+    it would let a widened boundary inherit consent given for a narrower one.
+    """
+    if not grant.startswith("plugin:") or not signature.startswith("plugin:"):
+        return False
+    want = signature.split(":")
+    held = grant.split(":")
+    # Three segments both sides: plugin, id, command. A four-segment signature is a spawn
+    # grant and never wildcarded.
+    if len(want) != 3 or len(held) != 3 or held[2] != "*":
+        return False
+    return held[1] == want[1]
 
 
 def _under(target: Path, roots: tuple[str, ...]) -> bool:
@@ -519,7 +560,9 @@ def check_path(kind: Kind, target: Path, root: Path, purpose: str = "") -> Decis
         )
 
     where = "somewhere sensitive" if sensitive else "outside his workspace"
-    verb = {"read": "read", "write": "write to", "delete": "delete", "command": "use"}[kind]
+    # `plugin` cannot reach here — a program grant is not a path — but the map is total so a
+    # future caller gets a sentence rather than a KeyError inside a refusal.
+    verb = {"read": "read", "write": "write to", "delete": "delete", "command": "use", "plugin": "use"}[kind]
     return _refuse(kind, str(resolved), f"he wants to {verb} something {where}", signature, purpose)
 
 
@@ -570,6 +613,82 @@ def check_command(command: str, root: Path, purpose: str = "") -> Decision:
 
     # Everything else runs, with the workspace as its working directory.
     return Decision(True)
+
+
+def spawn_signature(owner: str, command: str, args, env_keys, *, seal: str = "open") -> str:
+    """What a person is saying yes to when they let a program act for him.
+
+    ``plugin:<owner>:<seal>:<hash>``. `owner` is a plugin id, or ``user-<label>`` for a server
+    someone typed into the settings page.
+
+    **Both halves of the escalation are in the hash, and each catches what the other misses.**
+    Hashing only the boundary lets an upgrade swap `cma-mcp@0.4.1` for `@0.9.0` under the same
+    grant — new code, same reach. Hashing only the command line lets a manifest widen its reach
+    to `~` under an unchanged argv. So the digest covers the resolved reach *and* the argv and
+    the environment names together.
+
+    `seal` records whether confinement was actually available when the grant was made. An OS
+    that loses `sandbox-exec` therefore stops matching, because trust given under a boundary
+    must not survive the boundary's disappearance.
+
+    The digest is *in* the signature rather than checked beside it, so every escalation is an
+    ungranted signature by construction and `granted()` re-asks with no upgrade-consent code
+    written anywhere. Descriptions, versions and READMEs are deliberately not hashed: a gate
+    that fires when someone fixes a typo is a gate people learn to click through, and one they
+    click through is not a gate.
+    """
+    material = json.dumps(
+        [str(command), [str(a) for a in (args or ())], sorted(str(k) for k in (env_keys or ()))],
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(material.encode()).hexdigest()[:12]
+    return f"plugin:{owner}:{seal}:{digest}"
+
+
+def check_plugin(signature: str, what: str, who: str) -> Decision:
+    """May this program act for him?
+
+    `who` is a noun phrase this module drops into a sentence it owns — "the 'github' server",
+    "the CMA Circular Watch plugin's helper". **Never a string a manifest supplied.** `_refuse`
+    below says why `purpose` is only ever written in code; a third party's sentence on the
+    screen where someone grants it access is that same mistake one layer out, and a plugin that
+    can write "routine check, click Allow" in Kith's voice has beaten the gate without needing
+    an exploit.
+    """
+    if mode() is Mode.BYPASS:
+        return Decision(True)
+    if granted(signature):
+        return Decision(True)
+    return _refuse(
+        "plugin",
+        what,
+        f"he wants to use {who}, which is a program running on your machine",
+        signature,
+    )
+
+
+def require_plugin(signature: str, what: str, who: str) -> None:
+    decision = check_plugin(signature, what, who)
+    if not decision.allowed:
+        _wait_for(decision)
+
+
+def grant_now(signature: str, *, standing: bool = True) -> None:
+    """Record a grant for something a person has just approved on a screen.
+
+    Deliberately not `_refuse` followed by `approve`. That pair exists to hold a *tool call*
+    open until someone answers, and it reaches `_wait_for`, which refuses immediately when
+    there is no live turn (`live_turns.current`). An install review and a settings save both
+    run on a Flask request thread with no turn in flight, so routing them through the pending
+    machinery would park a card on screen for a decision the person has already made and then
+    refuse it. Same ledger, same signature namespace, same `revoke` — a different moment.
+    """
+    if not signature:
+        return
+    with _state:
+        _session_grants.add(signature)
+        if standing:
+            _remember_always(signature)
 
 
 def _refuse(kind: Kind, what: str, why: str, signature: str, purpose: str = "") -> Decision:

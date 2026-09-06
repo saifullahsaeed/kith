@@ -10,6 +10,21 @@ const VERB: Record<PermissionRequest["kind"], string> = {
   write: "write to",
   delete: "delete",
   command: "run",
+  plugin: "use",
+};
+
+/** What the thing being asked about *is*, which used to be a single hardcoded phrase.
+ *
+ * It read "something outside his folder" for everything that was not a command — true of a
+ * path and flatly wrong of a program, where the whole question is whether a process that is
+ * not Kith may act on your behalf. A prompt that misdescribes what it is asking about is a
+ * prompt people answer wrongly. */
+const SUBJECT: Record<PermissionRequest["kind"], string> = {
+  read: "something outside his folder",
+  write: "something outside his folder",
+  delete: "something outside his folder",
+  command: "a command",
+  plugin: "a program on your machine that is not Kith",
 };
 
 /**
@@ -46,8 +61,7 @@ export function PermissionPrompt() {
           <ShieldAlert className="text-roam mt-0.5 size-4 shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="text-sm">
-              He wants to {VERB[request.kind]}{" "}
-              {request.kind === "command" ? "a command" : "something outside his folder"}.
+              He wants to {VERB[request.kind]} {SUBJECT[request.kind]}.
             </p>
             <code className="text-muted-foreground mt-0.5 block font-mono text-[11px] break-all">
               {request.what}

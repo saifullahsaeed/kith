@@ -4,7 +4,10 @@ export type PermissionMode = "ask" | "auto" | "bypass";
 
 export interface PermissionRequest {
   id: string;
-  kind: "read" | "write" | "delete" | "command";
+  /** Kept in step with `permissions.Kind` on the server by hand — there is no type coupling
+   *  across this boundary and `strict` is off, so a member missing here renders `undefined`
+   *  in the prompt rather than failing to compile. */
+  kind: "read" | "write" | "delete" | "command" | "plugin";
   /** The path or the command itself. */
   what: string;
   why: string;

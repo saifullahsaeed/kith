@@ -36,32 +36,9 @@ from flask import Response, abort, request
 
 from kith.api.blueprint import api
 
-#: What the canvas may do. The mirror of ``FRAME_SANDBOX``/``POLICY`` in ``ui/src/lib/canvas.ts``
-#: — the UI bakes the same policy into the document as a ``<meta>``, and this is the copy that has
-#: authority. Two statements of one rule is a cost, but the alternative is a document whose only
-#: policy arrives from a server it might not have come from.
-#:
-#: ``default-src 'none'`` carries it: connect, frame, worker, form and object all inherit that
-#: denial. The exceptions are what a drawing needs and none of them leave the page — inline style,
-#: inline script, and data-URI images, fonts and media. Not ``'unsafe-eval'``: there is no network
-#: to load a library from, so nothing legitimate needs it.
-POLICY = "; ".join(
-    (
-        "default-src 'none'",
-        "style-src 'unsafe-inline'",
-        "script-src 'unsafe-inline'",
-        "img-src data: blob:",
-        "font-src data:",
-        "media-src data: blob:",
-        "form-action 'none'",
-        "base-uri 'none'",
-    )
-)
-
-#: A ceiling on one document. Generous next to anything he actually writes — the animated pages in
-#: the transcripts run 4-6 KB — and small enough that a runaway reply cannot park a large object
-#: here.
-MAX_BYTES = 2_000_000
+# The seal itself lives in `domain/seal.py`, so a service that may not import a route can
+# state the same policy. Both names are used below.
+from kith.domain.seal import MAX_BYTES, POLICY
 
 #: How many to keep. One conversation on screen is a handful of canvases; the oldest going first
 #: only means a frame that scrolls back into view re-POSTs, which it does on mount regardless.
