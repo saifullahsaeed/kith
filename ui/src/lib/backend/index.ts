@@ -60,12 +60,17 @@ export type {
   PluginsSnapshot,
 } from "./plugins";
 export type { PluginStateRead } from "./plugins";
+export type { PluginCall } from "./plugins";
 export {
+  fetchPluginCalls,
+  fetchPluginFile,
   fetchPluginState,
   fetchPluginSurfaces,
   fetchPlugins,
   installPlugin,
   patchPlugin,
   removePlugin,
+  putSurfaceFile,
+  replyToPluginCall,
   reviewPlugin,
 } from "./plugins";

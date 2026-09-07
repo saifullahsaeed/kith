@@ -46,6 +46,22 @@ export const MAX_VALUE_BYTES = 8_000;
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 /** A reply field's ceiling, before the command's own declared `maxLength` narrows it. */
 export const MAX_REPLY_BYTES = 2_000;
+/** Bytes in one file a surface hands back. Just under what `read_image` will accept, so a
+ *  surface cannot produce something the tool that reads it would then reject. */
+export const MAX_FILE_BYTES = 2_800_000;
+/** What a surface may hand back — things a person or the model can look at, and nothing
+ *  executable. Kept in step with `services/plugins/state.FILE_KINDS` by hand. */
+export const FILE_KINDS = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "image/svg+xml",
+  "application/pdf",
+  "text/csv",
+  "text/plain",
+  "application/json",
+]);
 
 export type PluginValue = string | number | boolean | null | PluginValue[] | { [k: string]: PluginValue };
 
@@ -59,7 +75,14 @@ export type PluginMessage =
   /** An answer to a command core asked. */
   | { type: "result"; call: string; ok: boolean; value: Record<string, PluginValue> }
   /** "I would like to be this tall." Ignored for a pane surface, which the layout sizes. */
-  | { type: "size"; px: number };
+  | { type: "size"; px: number }
+  /** Bytes the surface produced — a rendered image, an export.
+   *
+   * The one message carrying something unbounded, which is why it is bounded here twice: a
+   * declared type from a closed list, and a ceiling the server re-checks. It exists because a
+   * surface has no other way to hand bytes to Kith — the store caps a value at 8 KB because it
+   * feeds the prompt, and the frame has no network. */
+  | { type: "file.put"; id: string; name: string; mime: string; bytes: ArrayBuffer };
 
 /**
  * One message from a frame, or null.
@@ -97,6 +120,27 @@ export function readPluginMessage(data: unknown): PluginMessage | null {
       if (typeof message.call !== "string" || !message.call) return null;
       const value = bounded(message.value, MAX_REPLY_BYTES) ?? {};
       return { type: "result", call: message.call, ok: message.ok === true, value };
+    }
+
+    case "file.put": {
+      // An ArrayBuffer, never base64: base64 is a third larger, and this codebase has paid for
+      // base64 arriving somewhere that counted it as text once already.
+      const bytes = message.bytes;
+      if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0) return null;
+      if (bytes.byteLength > MAX_FILE_BYTES) return null;
+      const mime = String(message.mime ?? "").split(";")[0].trim().toLowerCase();
+      // A closed list, and nothing executable. A plugin writing a script into a folder Kith can
+      // run would be a plugin out of its boundary through the front door.
+      if (!FILE_KINDS.has(mime)) return null;
+      return {
+        type: "file.put",
+        id: typeof message.id === "string" ? message.id : "",
+        // A hint for a directory listing, not a filename: the server composes the real one, so
+        // a name from an untrusted page cannot be a path.
+        name: String(message.name ?? "").slice(0, 60),
+        mime,
+        bytes,
+      };
     }
 
     case "size": {

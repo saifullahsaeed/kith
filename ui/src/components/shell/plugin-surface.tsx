@@ -65,6 +65,9 @@ export function PluginSurface({
   const client = useRef<string>("");
   if (!client.current) client.current = Math.random().toString(36).slice(2, 10);
 
+  /** Calls delivered into the frame and not yet answered, each with its own clock running. */
+  const pending = useRef<Map<string, { id: string; timer: number }>>(new Map());
+
   const mount = useCallback(async () => {
     setFailure("");
     try {
@@ -96,6 +99,10 @@ export function PluginSurface({
       const open = ticket.current;
       ticket.current = "";
       setReady("no");
+      // Every clock stopped. A timer firing after unmount would answer for a frame that no
+      // longer exists; the server's own deadline is the right thing to cover that case.
+      for (const call of pending.current.values()) window.clearTimeout(call.timer);
+      pending.current.clear();
       if (open) void fetch(`/api/plugins/frame/${open}`, { method: "DELETE" }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

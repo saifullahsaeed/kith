@@ -402,3 +402,138 @@ def _palette(theme) -> dict:
         "second-soft": "#dceade",
         "muted": "#f2f0ed",
     }
+
+
+# --------------------------------------------------------------------------- #
+# Two-way: what a surface is being asked, and what it hands back
+# --------------------------------------------------------------------------- #
+
+
+@api.get("/plugins/calls")
+@api.doc(
+    summary="What a surface is being asked right now",
+    description=(
+        "Snapshot-then-subscribe, the same join `use-activity` uses. A renderer fetches this on "
+        "mount **and** on a `plugin_call` change — so a call survives a reload rather than being "
+        "lost with a push that had already happened. Handing one out claims it for that "
+        "renderer, so two windows on one backend do not both deliver it and race to answer."
+    ),
+)
+def list_plugin_calls():
+    from kith.services.plugins import calls
+
+    return jsonify(
+        {
+            "calls": calls.pending(
+                str(request.args.get("conversation") or ""),
+                str(request.args.get("client") or ""),
+            )
+        }
+    )
+
+
+@api.post("/plugins/calls/<call_id>/reply")
+@api.doc(
+    summary="A surface's answer",
+    description=(
+        "Validated against the command's declared `returns` **again** here, after the renderer "
+        "has already done it — the deliberate duplication the prompt builder insists on, because "
+        "the first check ran on the far side of an HTTP request anything local can make. It is "
+        "what stops an RPC reply becoming a prose channel into a turn."
+    ),
+)
+def reply_to_plugin_call(call_id: str):
+    from kith.services.plugins import calls, commands
+
+    payload = request.get_json(silent=True) or {}
+    supplied = payload.get("value")
+    value = supplied if isinstance(supplied, dict) else {}
+    ok = bool(payload.get("ok", True))
+
+    held = calls.held(call_id)
+    if held is None:
+        # Not an error: a late reply to a call that has already timed out is the ordinary shape
+        # of a slow frame, and the renderer has nothing useful to do about it.
+        return jsonify({"accepted": False, "note": "that call is no longer open"})
+
+    plugin = registry.get(CONFIG_DB_PATH, held.plugin)
+    declared = plugin.command(held.command) if plugin else None
+    shaped = commands.shape_reply(declared, value) if declared else {}
+    return jsonify({"accepted": calls.reply(call_id, shaped, ok=ok)})
+
+
+@api.post("/plugins/frame/<ticket>/file")
+@api.doc(
+    summary="A file a surface produced",
+    description=(
+        "The channel a surface has for handing bytes back — a rendered image, an export. The "
+        "store cannot carry them (a value caps at 8 KB, because it feeds the prompt) and the "
+        "frame has no network. Written into the plugin's own storage, which is inside its "
+        "confinement boundary, and the reply is the path the model reads it by."
+    ),
+)
+def put_surface_file(ticket: str):
+    from kith.services.plugins import documents, state
+
+    entry = documents.held(ticket)
+    if entry is None:
+        return jsonify({"error": "that surface is not mounted"}), 404
+    blob = request.get_data(cache=False)
+    # Which plugin is writing comes from the ticket, never the body: identity before content,
+    # applied to a namespace instead of a payload.
+    try:
+        written = state.put_file(
+            entry.plugin,
+            str(request.args.get("name") or ""),
+            request.headers.get("Content-Type", ""),
+            blob,
+        )
+    except state.PluginStateError as refused:
+        return jsonify({"error": str(refused)}), 400
+    return jsonify(written)
+
+
+@api.get("/plugins/<plugin_id>/file")
+@api.doc(
+    summary="A file the plugin holds, for its own surface to show",
+    description=(
+        "The other direction. A surface cannot fetch anything — `default-src 'none'` — so a "
+        "screenshot its server took cannot be displayed by asking for it. The renderer reads it "
+        "here and hands the bytes over the bridge, where the frame turns them into a `blob:` "
+        "URL; the seal already permits `img-src blob:`. Confined to the plugin's own storage."
+    ),
+)
+def get_plugin_file(plugin_id: str):
+    from flask import Response
+
+    from kith.infra import confinement
+
+    wanted = str(request.args.get("path") or "").strip()
+    if not wanted:
+        return jsonify({"error": "send ?path="}), 400
+    root = (confinement.home_for(plugin_id) / "files").resolve()
+    # Resolve first, then confirm containment. The other order lets `../` walk out, and this
+    # path arrived over HTTP.
+    target = Path(wanted).expanduser().resolve()
+    if root not in target.parents or not target.is_file():
+        return jsonify({"error": "that file is not one of this plugin's"}), 404
+    if target.stat().st_size > state_max_file_bytes():
+        return jsonify({"error": "that file is too large to hand to a surface"}), 413
+    response = Response(target.read_bytes(), mimetype=_mime_of(target))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def state_max_file_bytes() -> int:
+    from kith.services.plugins import state
+
+    return state.MAX_FILE_BYTES
+
+
+def _mime_of(target: Path) -> str:
+    from kith.services.plugins import state
+
+    for mime, suffix in state.FILE_KINDS.items():
+        if target.suffix.lower() == suffix:
+            return mime
+    return "application/octet-stream"

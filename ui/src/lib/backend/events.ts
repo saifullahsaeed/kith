@@ -54,7 +54,8 @@ export type ChangeKind =
   // boundary. A kind the server sends and this union does not name is dropped by `STALE_ON`
   // and nothing refetches, which looks like a quiet widget rather than a broken one.
   | "plugin"
-  | "plugin_state";
+  | "plugin_state"
+  | "plugin_call";
 
 export interface Change {
   kind: ChangeKind;

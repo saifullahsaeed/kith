@@ -79,6 +79,9 @@ def _stop(conversation_id: str) -> bool:
     # Now nothing that wakes up can get past its next check, so it is safe to wake it.
     questions.release(conversation_id)
     permissions.release_waiting()
+    # A turn parked on a plugin surface is not reading the stop switch either, so stopping it
+    # has to reach in and wake it — the same reason the two lines above exist.
+    _release_plugin_calls(conversation_id)
     return was_running
 
 
@@ -1125,3 +1128,13 @@ def _turn(
     # After the `finally`, so the order the client sees is unchanged: the row is written and
     # the feed is closed, and only then does the stream say it is over.
     yield json.dumps({"type": "done"}) + "\n"
+
+
+def _release_plugin_calls(conversation_id: str) -> None:
+    """Wrapped and lazy: a plugin fault must never be what stops a stop from working."""
+    try:
+        from kith.services.plugins import calls
+
+        calls.release(conversation_id)
+    except Exception:
+        pass

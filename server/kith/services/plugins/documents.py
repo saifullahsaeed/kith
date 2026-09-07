@@ -317,7 +317,7 @@ def _bridge(plugin: str, view: str) -> str:
     such a button can be treated as the authorisation.
     """
     return (
-        "(function(){var H=[],S={},R=null,N=0,W={};"
+        "(function(){var H=[],S={},R=null,N=0,W={},A={},AH=[];"
         "function post(m){try{parent.postMessage(m,'*')}catch(e){}}"
         # `event.source !== parent` first, before the type switch. The canvas bridge checks type
         # first, which is harmless with one inbound message and not harmless with three.
@@ -326,6 +326,13 @@ def _bridge(plugin: str, view: str) -> str:
         "if(m.type==='render'){S=m.state||{};R=m.host||{};H.forEach(function(f){try{f(S,R)}catch(x){}})}"
         "else if(m.type==='theme'){var t=m.tokens||{};for(var k in t){"
         "document.documentElement.style.setProperty('--kith-'+k,t[k])}}"
+        # Bytes in. Turned into a `blob:` URL here rather than by the page, so a surface never
+        # has to know it is holding an ArrayBuffer — it asks `kith.asset('shot')` and gets
+        # something it can put in a `src`. The previous URL for a key is revoked, or a browser
+        # session's worth of screenshots leaks one object per capture.
+        "else if(m.type==='asset'){try{if(A[m.key])URL.revokeObjectURL(A[m.key]);"
+        "A[m.key]=m.bytes?URL.createObjectURL(new Blob([m.bytes],{type:m.mime||''})):'';"
+        "AH.forEach(function(f){try{f(m.key,A[m.key])}catch(x){}})}catch(x){}}"
         "else if(m.type==='command'){var f=W[m.name];if(!f){post({kith:1,type:'result',call:m.call,"
         "ok:false,value:{}});return}"
         "try{var out=f(m.args||{});"
@@ -339,9 +346,19 @@ def _bridge(plugin: str, view: str) -> str:
         f"plugin:{plugin!r},view:{view!r},"
         "render:function(f){H.push(f);if(R!==null){try{f(S,R)}catch(x){}}},"
         "on:function(n,f){W[n]=f},"
+        # An asset the host pushed, as an object URL. `img-src blob:` is already in the policy,
+        # so a screenshot the plugin's own server took can be *displayed* without the frame
+        # fetching anything — which it cannot do, and which is why this exists at all.
+        "asset:function(k){return A[k]||''},"
+        "onasset:function(f){AH.push(f)},"
         "state:{get:function(k){return S[k]},all:function(){return S},"
         "set:function(v,x){N++;post({kith:1,type:'state.set',id:'w'+N,values:v,expect:x})},"
         "drop:function(k){N++;post({kith:1,type:'state.drop',id:'d'+N,keys:k})}},"
+        # Hand bytes back. An ArrayBuffer, transferred rather than base64'd — base64 would be a
+        # third larger and this codebase has already paid 2.8 million tokens once for base64
+        # arriving somewhere that counted it as text.
+        "file:function(name,mime,bytes){N++;post({kith:1,type:'file.put',id:'f'+N,"
+        "name:name,mime:mime,bytes:bytes})},"
         "size:function(px){post({kith:1,type:'size',px:px})}"
         "};"
         "post({kith:1,type:'ready',protocol:1,handles:[]});"

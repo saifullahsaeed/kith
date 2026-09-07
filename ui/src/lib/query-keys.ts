@@ -37,6 +37,9 @@ export const keys = {
    *  per-conversation genuinely holds different things in each and one key must mean one shape. */
   pluginState: (plugin: string, conversation: string) =>
     ["plugins", "state", plugin, conversation] as const,
+  /** What a surface is being asked. Keyed by conversation only — a renderer delivers every
+   *  pending call for the chat it is showing, whichever plugin asked. */
+  pluginCalls: (conversation: string) => ["plugins", "calls", conversation] as const,
   /** One project's roadmap graph. */
   roadmap: (projectId: number) => ["roadmap", projectId] as const,
   /** One task, in the detail panel. */
@@ -126,4 +129,7 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   plugin: [["plugins"], ["mcp"], ["skills"]],
   // Only what a plugin is holding. Nothing else refetches.
   plugin_state: [["plugins", "state"]],
+  // And only what is being asked of one. Narrow on purpose: a call opening and closing is the
+  // most frequent event in this subsystem, and it must not drag the skills list behind it.
+  plugin_call: [["plugins", "calls"]],
 };

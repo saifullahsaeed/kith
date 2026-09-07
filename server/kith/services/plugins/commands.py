@@ -202,22 +202,43 @@ def _ask_renderer(plugin: Plugin, command: CommandDecl, args: dict) -> dict:
 
 
 def _ask_surface(plugin: Plugin, command: CommandDecl, args: dict) -> dict:
-    """`surface` delivery — routed into the live frame.
+    """`surface` delivery — the call is routed into the live frame and awaited.
 
-    Not built in this tranche either. The answer is deliberately the *specific* one — whether a
-    surface is open at all — because that is the answer he can act on, and it is right for the
-    common case regardless of whether the RPC exists yet.
+    **Refuse the call, never the schema.** A `surface` command is declared whether or not its
+    surface is open, because a turn holds its tool snapshot from its first round to its last —
+    so shrinking the block when a tab closes would discard the whole prompt cache, and answering
+    "unknown tool" would tell him he invented something he was handed two rounds ago. What
+    changes when the tab is shut is that the *call* says so, in a sentence he can act on.
+
+    A pane renders only its active tab, so a surface sitting behind another tab in the same pane
+    is genuinely unmounted and gets the same answer. That is correct rather than a limitation: a
+    `surface` command means "do something to the thing the person is looking at".
     """
-    from kith.services.plugins import documents
+    from kith.services.plugins import calls, documents
 
     surface = plugin.surface(command.surface)
     title = surface.title if surface else command.surface
-    mounts = documents.live(plugin.id, command.surface, conversation=session_context.current())
+    conversation = session_context.current()
+    mounts = documents.live(plugin.id, command.surface, conversation=conversation)
     if not mounts:
         return _refuse("surface_not_open", title=title)
-    if len(mounts) > 1:
+    if len({one.instance for one in mounts}) > 1:
+        # Naming them beats picking one: picking is how a person ends up watching a command act
+        # somewhere they are not looking.
         return _refuse("surface_ambiguous", title=title)
-    return _refuse("not_supported", plugin=plugin.name, command=command.name)
+
+    return calls.ask(
+        calls.new(
+            conversation,
+            plugin.id,
+            command.name,
+            command.surface,
+            args,
+            instance=mounts[0].instance,
+            repeatable=command.repeatable,
+            timeout_ms=command.timeout_ms,
+        )
+    )
 
 
 def _refuse(code: str, **fields) -> dict:
@@ -276,3 +297,39 @@ def snapshot(config_db: Path) -> list[dict]:
     from kith.services.plugins import registry
 
     return registry.tool_schemas(config_db)
+
+
+def shape_reply(command: CommandDecl, value: dict) -> dict:
+    """One surface's answer, brought to the shape its command declared.
+
+    **This is what stops an RPC reply becoming a prose channel into a turn.** A reply is text
+    written by a third party inside a frame that was sealed because it is not trusted, and it
+    lands in a tool result the model reads. So there is no field for prose unless the manifest
+    declared one and said how long it may be: fields not in `returns` are dropped, strings are
+    cut to their declared `maxLength`, numbers are clamped, and anything that is not a primitive
+    goes — structure being how you would smuggle a paragraph in dressed as a label.
+
+    Run here as well as in the renderer, which is the deliberate duplication `prompt.py` insists
+    on: the renderer's check ran on the far side of an HTTP request anything local can make.
+    """
+    out: dict = {}
+    for key, shape in (command.returns or {}).items():
+        if key not in value:
+            continue
+        held = value[key]
+        kind = shape.get("type")
+        if kind == "string":
+            out[key] = " ".join(str(held).split())[: int(shape.get("maxLength") or 200)]
+        elif kind in ("number", "integer"):
+            try:
+                number = float(held)
+            except (TypeError, ValueError):
+                continue
+            if "minimum" in shape:
+                number = max(float(shape["minimum"]), number)
+            if "maximum" in shape:
+                number = min(float(shape["maximum"]), number)
+            out[key] = int(number) if kind == "integer" else number
+        elif kind == "boolean":
+            out[key] = bool(held)
+    return out

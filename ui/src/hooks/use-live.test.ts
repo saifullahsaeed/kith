@@ -258,6 +258,7 @@ describe("the map itself", () => {
       "steer",
       "plugin",
       "plugin_state",
+      "plugin_call",
     ];
     for (const kind of kinds) {
       expect(STALE_ON[kind], `no keys go stale on "${kind}"`).toBeTruthy();

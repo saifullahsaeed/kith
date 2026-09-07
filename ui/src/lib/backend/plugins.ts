@@ -172,3 +172,75 @@ export async function fetchPluginState(
   if (!response.ok) throw new Error(`could not read ${plugin}'s state (${response.status})`);
   return (await response.json()) as PluginStateRead;
 }
+
+export interface PluginCall {
+  id: string;
+  conversation: string;
+  plugin: string;
+  command: string;
+  view: string;
+  instance: string;
+  args: Record<string, unknown>;
+  timeoutMs: number;
+  repeatable: boolean;
+}
+
+/** What a surface is being asked, right now.
+ *
+ * Fetched on mount **and** on a `plugin_call` change — snapshot-then-subscribe, the same join
+ * `use-activity` uses. That is what makes a call survive a renderer reload rather than being
+ * lost along with the push that had already happened.
+ *
+ * `client` claims what it hands out, so two windows on one backend do not both deliver the same
+ * call and race to answer it. */
+export async function fetchPluginCalls(
+  conversation: string,
+  client: string,
+): Promise<PluginCall[]> {
+  const query = new URLSearchParams({ conversation, client });
+  const response = await fetch(`/api/plugins/calls?${query}`);
+  if (!response.ok) throw new Error(`could not read pending calls (${response.status})`);
+  return ((await response.json()).calls ?? []) as PluginCall[];
+}
+
+export async function replyToPluginCall(
+  id: string,
+  value: Record<string, unknown>,
+  ok = true,
+): Promise<void> {
+  await fetch(`/api/plugins/calls/${id}/reply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value, ok }),
+  }).catch(() => {});
+}
+
+/** Bytes a surface handed back, written into the plugin's own storage.
+ *
+ * Posted raw with the type as the Content-Type, rather than as JSON with base64 in it: base64
+ * is a third larger, and the reply is the path the model reads the file by. */
+export async function putSurfaceFile(
+  ticket: string,
+  name: string,
+  mime: string,
+  bytes: ArrayBuffer,
+): Promise<{ path: string } | null> {
+  const response = await fetch(
+    `/api/plugins/frame/${ticket}/file?name=${encodeURIComponent(name)}`,
+    { method: "POST", headers: { "Content-Type": mime }, body: bytes },
+  );
+  if (!response.ok) return null;
+  return (await response.json()) as { path: string };
+}
+
+/** A file the plugin holds, for its own surface to display.
+ *
+ * The frame cannot fetch — `default-src 'none'` — so the renderer reads it and hands the bytes
+ * over the bridge, where the frame turns them into a `blob:` URL. */
+export async function fetchPluginFile(plugin: string, path: string): Promise<ArrayBuffer | null> {
+  const response = await fetch(
+    `/api/plugins/${plugin}/file?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) return null;
+  return await response.arrayBuffer();
+}

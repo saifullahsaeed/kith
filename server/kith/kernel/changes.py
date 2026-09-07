@@ -62,6 +62,7 @@ KINDS = (
     # sends looks merely quiet rather than broken.
     "plugin",
     "plugin_state",
+    "plugin_call",
 )
 
 

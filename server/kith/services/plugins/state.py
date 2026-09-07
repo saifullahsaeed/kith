@@ -463,3 +463,93 @@ def _line_for(agent_db: Path, config_db: Path, plugin_id: str) -> str:
         if line.startswith(lead) or line.startswith(plugin_id):
             return line
     return ""
+
+
+# --------------------------------------------------------------------------- #
+# Files a surface produces
+# --------------------------------------------------------------------------- #
+
+#: What one file a surface hands back may weigh.
+#:
+#: A screenshot at a normal window size is 40-120 KB and `workspace.read_image` refuses anything
+#: over 3 MB, so this sits just under that: a surface cannot produce something the tool that
+#: reads it would then reject, which would be a file that exists and cannot be looked at.
+MAX_FILE_BYTES = 2_800_000
+
+#: How many a plugin may keep. Enough for a session's worth of captures, and bounded so a
+#: surface writing on a timer cannot fill a disk overnight. Oldest goes first, because what was
+#: just produced is what somebody is about to look at.
+MAX_FILES = 32
+
+#: What a surface may hand back. Images and PDFs — the things a person or the model can actually
+#: look at — and nothing executable, because a plugin writing a script into a folder Kith can
+#: run is a plugin that has escaped its boundary through the front door.
+FILE_KINDS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+    "application/pdf": ".pdf",
+    "text/csv": ".csv",
+    "text/plain": ".txt",
+    "application/json": ".json",
+}
+
+
+def put_file(plugin_id: str, name: str, mime: str, blob: bytes) -> dict:
+    """Write a file a surface produced, and return the path the model can read it by.
+
+    **This is the channel that was missing, and the reason it has to exist.** A surface cannot
+    hand bytes to Kith any other way: the store caps a value at 8 KB because it feeds the prompt,
+    and the frame has no network. So a design surface could render something nobody could look
+    at. Now it writes the bytes here and Kith opens the path with `read_file`, which already
+    routes image suffixes to `read_image` — the model genuinely sees it.
+
+    Written into the plugin's own storage, which is inside its confinement boundary, so this
+    grants a surface nothing it did not already have: it is the one directory its own server can
+    write to as well.
+
+    The name is **not** the plugin's to choose. A surface supplies a hint and this composes the
+    filename from a random token plus the extension its declared type implies — because a name
+    from an untrusted page is a path traversal waiting to be written, and because two captures a
+    second apart must not collide.
+    """
+    import re as _re
+    import secrets
+
+    from kith.infra import confinement
+
+    kind = str(mime or "").split(";")[0].strip().lower()
+    if kind not in FILE_KINDS:
+        raise PluginStateError(
+            f"{kind or 'that'} is not a kind of file a surface may hand back. "
+            f"Allowed: {', '.join(sorted(FILE_KINDS))}."
+        )
+    if not blob:
+        raise PluginStateError("there were no bytes in that.")
+    if len(blob) > MAX_FILE_BYTES:
+        raise PluginStateError(
+            f"that file is {len(blob):,} bytes and a surface may hand back {MAX_FILE_BYTES:,}."
+        )
+
+    place = confinement.home_for(plugin_id) / "files"
+    place.mkdir(parents=True, exist_ok=True)
+
+    # The hint is for a person reading a directory listing, so it is reduced to something that
+    # cannot be a path: no separators, no dots, no leading dash.
+    hint = _re.sub(r"[^a-z0-9-]+", "-", str(name or "").lower()).strip("-")[:40]
+    stem = f"{hint}-{secrets.token_hex(4)}" if hint else secrets.token_hex(6)
+    target = place / f"{stem}{FILE_KINDS[kind]}"
+    target.write_bytes(blob)
+
+    # Oldest first. What was just produced is what somebody is about to look at, so the newest
+    # is the last thing that should ever be dropped.
+    held = sorted(place.iterdir(), key=lambda one: one.stat().st_mtime)
+    for stale in held[:-MAX_FILES]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+    return {"path": str(target), "bytes": len(blob), "mime": kind}
