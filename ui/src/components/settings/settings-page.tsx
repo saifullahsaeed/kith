@@ -1,15 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  Cpu,
-  FileText,
-  Loader2,
-  MessageSquare,
-  Puzzle,
-  Settings2,
-  SlidersHorizontal,
-  Wrench,
-  X,
-} from "lucide-react";
+import { Cpu, FileText, Loader2, MessageSquare, PlugZap, Puzzle, Settings2, SlidersHorizontal, Wrench, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { AdvancedTab } from "@/components/settings/advanced-tab";
@@ -18,6 +8,7 @@ import { ModelTab } from "@/components/settings/model-tab";
 import { ToolsTab } from "@/components/settings/tools-tab";
 import { fetchSetup, type ServerConfig, type SetupSnapshot } from "@/lib/backend";
 import { PersonaTab } from "@/components/settings/persona-tab";
+import { PluginsTab } from "@/components/settings/plugins-tab";
 import { SkillsTab } from "@/components/settings/skills-tab";
 import type { SettingsTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -65,6 +56,7 @@ const TABS: {
     layout: "fill",
   },
   { id: "skills", label: "Skills", hint: "what he knows how to do", icon: Puzzle },
+  { id: "plugins", label: "Plugins", hint: "what other people built", icon: PlugZap },
   { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench },
   { id: "chat", label: "Conversation", hint: "reply length and reasoning", icon: MessageSquare },
   {
@@ -244,6 +236,8 @@ export function SettingsPage({
               />
             ) : tab === "skills" ? (
               <SkillsTab />
+            ) : tab === "plugins" ? (
+              <PluginsTab />
             ) : tab === "tools" ? (
               <ToolsTab
                 search={snapshot.search.current}

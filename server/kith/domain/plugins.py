@@ -507,7 +507,13 @@ class Plugin:
             },
             "surfaces": [
                 {
-                    "id": s.id,
+                    # `view` on the wire, not `id`, because that is what identifies a tab
+                    # everywhere else: `registry.surfaces()` emits it, the mount route takes it,
+                    # and the tab key is `plugin:<id>/<view>`. Two names for one thing meant a
+                    # client reading a plugin's own surfaces got a different field from one
+                    # reading the index, which is drift with no upside — the nesting already
+                    # says which plugin it belongs to.
+                    "view": s.id,
                     "title": s.title,
                     "icon": s.icon,
                     "minWidth": s.min_width,
