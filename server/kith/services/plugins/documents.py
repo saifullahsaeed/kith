@@ -55,6 +55,8 @@ _LINK = re.compile(r"""<link\b[^>]*\brel\s*=\s*["']stylesheet["'][^>]*>""", re.I
 _HREF = re.compile(r"""\bhref\s*=\s*["']([^"']+)["']""", re.I)
 _IMG = re.compile(r"""(<img\b[^>]*\bsrc\s*=\s*["'])([^"']+)(["'])""", re.I)
 _REMOTE = re.compile(r"^(?:[a-z][a-z0-9+.-]*:)?//|^data:|^blob:", re.I)
+#: Whether the tag being inlined was a module. See `script` in `_inline`.
+_MODULE = re.compile(r"""\btype\s*=\s*["']module["']""", re.I)
 
 
 @dataclass
@@ -174,7 +176,16 @@ def sealed(plugin: Plugin, surface: SurfaceDecl, palette: dict, icons: dict[str,
 
 
 def _inline(html: str, base: Path, root: Path) -> str:
-    """Replace every local reference with its content. Nothing is left to fetch."""
+    """Replace every local reference with its content. Nothing is left to fetch.
+
+    `root` is resolved here rather than trusted, because the containment check below compares it
+    against a *resolved* target — so an unresolved root fails every comparison and silently drops
+    every asset, producing an empty surface with no error anywhere. On macOS that is the ordinary
+    case rather than an exotic one: `/var` is a symlink to `/private/var`, so any path under a
+    temporary directory hits it. Caught by a test that passed `tempfile.mkdtemp()` straight in.
+    """
+    root = root.resolve()
+    base = base.resolve()
 
     def read(href: str) -> tuple[str, bytes] | None:
         if _REMOTE.match(href):
@@ -188,8 +199,21 @@ def _inline(html: str, base: Path, root: Path) -> str:
         got = read(match.group(1))
         if got is None or got[0] not in _TEXTUAL:
             return ""
-        # No `</script` can survive inside an inline script or it closes the element early.
-        return "<script>" + got[1].decode(errors="replace").replace("</script", "<\\/script") + "</script>"
+        # `type="module"` survives the inlining, and that is not cosmetic.
+        #
+        # Most bundlers emit ES modules by default, so a plugin built with an ordinary Vite or
+        # Rollup config produces a file with top-level `import`/`export` in it. Inlined as a
+        # classic script that is a *syntax error* — the whole surface dies before its first line
+        # runs, with nothing on screen and nothing in any log the person can reach. It is also
+        # the failure a React plugin is most likely to hit, because that is the shape every
+        # React tutorial produces.
+        #
+        # An inline module is still governed by `script-src 'unsafe-inline'`, so keeping the
+        # attribute costs the seal nothing.
+        kind = ' type="module"' if _MODULE.search(match.group(0)) else ""
+        # No `</script` can survive inside an inline script, or it closes the element early.
+        body = got[1].decode(errors="replace").replace("</script", "<\\/script")
+        return f"<script{kind}>{body}</script>"
 
     def link(match: re.Match) -> str:
         href = _HREF.search(match.group(0))

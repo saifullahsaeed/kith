@@ -18,6 +18,7 @@ import {
   ReasoningText,
   ReasoningTrigger,
 } from "@/components/assistant-ui/reasoning";
+import { PluginRunOutcome } from "@/components/assistant-ui/plugin-outcome";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import {
   ToolGroupContent,
@@ -1145,18 +1146,32 @@ const ToolRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, chi
       })
       .join(RUN_SEPARATOR),
   );
-  const run = summariseRun(joined.split(RUN_SEPARATOR).filter(Boolean));
+  const names = joined.split(RUN_SEPARATOR).filter(Boolean);
+  const run = summariseRun(names);
 
   return (
-    <ToolGroupRoot variant="ghost">
-      <ToolGroupTrigger
-        count={group.indices.length}
-        active={group.status.type === "running"}
-        summary={run.text}
-        icons={run.icons}
-      />
-      <ToolGroupContent>{children}</ToolGroupContent>
-    </ToolGroupRoot>
+    <>
+      <ToolGroupRoot variant="ghost">
+        <ToolGroupTrigger
+          count={group.indices.length}
+          active={group.status.type === "running"}
+          summary={run.text}
+          icons={run.icons}
+        />
+        <ToolGroupContent>{children}</ToolGroupContent>
+      </ToolGroupRoot>
+      {/* A way into a plugin's tab, **outside** the collapse.
+        *
+        * It was inside, on each tool result, which is the same as not existing: seventeen
+        * `draw` calls collapse to one line reading "18 tools", so the button was two clicks
+        * and a guess away — expand the group, expand a row. Reported as it not appearing at
+        * all, which is the right way to describe a thing nobody would ever find.
+        *
+        * Here it is one card per plugin per run, at the level the run itself is at, which is
+        * the level the *result* of the run lives at: what he drew is the board, not the
+        * seventeen writes that produced it. */}
+      <PluginRunOutcome names={names} />
+    </>
   );
 };
 

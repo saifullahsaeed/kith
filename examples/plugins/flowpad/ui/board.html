@@ -1,0 +1,19 @@
+<!--
+  Flowpad — a plugin surface built with React and React Flow.
+
+  The point of this example is that **a plugin is not limited to hand-written DOM.** Any React
+  library works, because the host inlines the bundle into the sealed document before serving it —
+  so there is nothing to fetch, which is what makes `default-src 'none'` survivable.
+
+  What that costs, and it is worth knowing before copying this: React, React DOM and React Flow
+  bundle to a few hundred kilobytes, and those bytes are inlined on every mount. `sketchpad`
+  next door does the same job with no dependencies at all and builds to about twelve kilobytes.
+  Reach for this when the library earns it — a real graph with dragging, panning, zooming and
+  edge routing does; a rectangle does not.
+
+  `board.js` and `board.css` are build output from `src/board.tsx`. Run `npm run build` after
+  changing anything in `src/`.
+-->
+<div id="root"></div>
+<link rel="stylesheet" href="board.css" />
+<script type="module" src="board.js"></script>

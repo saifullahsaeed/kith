@@ -1,0 +1,21 @@
+{
+  "name": "kith-plugin-flowpad",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A Kith plugin surface built with React and React Flow.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.11.6",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "vite": "npm:rolldown-vite@latest"
+  }
+}

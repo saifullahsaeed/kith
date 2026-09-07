@@ -20,9 +20,27 @@ from typing import ClassVar
 import pytest
 
 import kith.tools  # noqa: F401  — importing registers every tool
+from kith import settings
 from kith.infra import workspace as sandbox
 from kith.services import skills
 from kith.tools.registry import all_tools
+
+
+def _shipped_skills() -> list[str]:
+    """The skills in this checkout, read off the folder rather than through the service.
+
+    Deliberately not `skills.installed()`: that reads live state, and this is evaluated at
+    collection time when no fixture has redirected anything yet. Reading the directory that
+    ships is both the honest subject and the only stable one.
+    """
+    place = settings.BUNDLED_SKILLS_DIR
+    if not place.is_dir():
+        return []
+    return [
+        one.name
+        for one in place.iterdir()
+        if one.is_dir() and not one.name.startswith(".") and (one / skills.MANIFEST).is_file()
+    ]
 
 
 class TestNothingReturnsWithoutABound:
@@ -196,12 +214,24 @@ class TestReadingASkill:
         instructions = out.split("\n\n…[")[0]
         assert instructions.endswith("completely.")
 
-    @pytest.mark.parametrize("skill", sorted(s.name for s in skills.installed()))
-    def test_no_installed_skill_is_anywhere_near_the_ceiling(self, skill):
+    @pytest.mark.parametrize("skill", sorted(_shipped_skills()))
+    def test_no_shipped_skill_is_anywhere_near_the_ceiling(self, skill):
         """If one is, the ceiling is wrong rather than the skill — the instructions are the
-        whole value and this must never be trimming a real one."""
-        body = skills.read(skill)["instructions"]
-        assert "more characters of this skill" not in body
+        whole value and this must never be trimming a real one.
+
+        **Over what ships, not over what is installed.** This used to enumerate
+        `skills.installed()`, and a `parametrize` argument is evaluated at *collection* time —
+        before any fixture has redirected anything — so it read whatever was really on the
+        machine. Harmless while that could only be skills someone had unzipped, and not harmless
+        once a plugin contributes them: installing one in the app made this suite fail on a
+        skill nobody in it had written, and pass again on uninstall.
+
+        A plugin's own instructions are the plugin author's to keep under the ceiling, and
+        `validate()` tells them at install. What this protects is that *Kith's* skills fit.
+        """
+        body = (settings.BUNDLED_SKILLS_DIR / skill / skills.MANIFEST).read_text(errors="replace")
+        _, instructions = skills.split_frontmatter(body)
+        assert len(instructions) < skills.MAX_INSTRUCTION_CHARS
 
 
 class TestTheTranscriptStaysReadable:

@@ -1,0 +1,93 @@
+/* The surface's own styling, on top of the token stylesheet the host injects.
+ *
+ * `--kith-*` rather than literal colours throughout: the person can flip the theme while the
+ * tab is open and the host repaints those custom properties without remounting the frame — so
+ * mapping React Flow's own variables onto them means the graph follows the app with nothing to
+ * keep in step by hand. */
+
+.flow-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.flow-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--kith-line);
+  flex: 0 0 auto;
+}
+
+.flow-title {
+  font-weight: 550;
+  letter-spacing: -0.01em;
+}
+
+.flow-count {
+  color: var(--kith-dim);
+  font-size: 11px;
+  margin-right: auto;
+}
+
+.flow-empty {
+  margin: auto;
+  padding: 0 24px;
+  text-align: center;
+  color: var(--kith-dim);
+  font-size: 12px;
+}
+
+.react-flow {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* React Flow reads these; pointing them at the host's tokens is the whole of the theming. */
+  --xy-background-color: var(--kith-bg);
+  --xy-edge-stroke: var(--kith-line);
+  --xy-edge-stroke-selected: var(--kith-accent);
+  --xy-edge-label-color: var(--kith-dim);
+  --xy-controls-button-background-color: var(--kith-muted);
+  --xy-controls-button-color: var(--kith-text);
+  --xy-controls-button-border-color: var(--kith-line);
+  --xy-minimap-background-color: var(--kith-muted);
+  --xy-node-color: var(--kith-text);
+  --xy-node-border: 1px solid var(--kith-line);
+  --xy-node-background-color: var(--kith-bg);
+  --xy-attribution-background-color: transparent;
+}
+
+.react-flow__node {
+  font-size: 12px;
+  line-height: 1.35;
+  border-radius: 8px;
+  padding: 8px 12px;
+  max-width: 220px;
+  /* Wrapping rather than overflowing. The hand-written sketchpad had to compute this; here the
+     browser does it, which is most of the argument for a real layout engine. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+/* Four kinds, and no more. A diagram in nine styles is a diagram nobody can scan. */
+.flow-step {
+  border: 1px solid var(--kith-line);
+  background: var(--kith-bg);
+}
+.flow-decision {
+  border: 1px solid var(--kith-accent);
+  background: var(--kith-accent-soft);
+  color: var(--kith-text);
+}
+.flow-data {
+  border: 1px solid var(--kith-second);
+  background: var(--kith-second-soft);
+  border-radius: 14px;
+}
+.flow-note {
+  border: 1px dashed var(--kith-line);
+  background: transparent;
+  color: var(--kith-dim);
+  font-size: 11px;
+}

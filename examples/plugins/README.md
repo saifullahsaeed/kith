@@ -58,3 +58,59 @@ prices your plugin before anyone agrees to it. And a `params` shape is primitive
 string, number, integer, boolean — in both directions; objects and arrays are how structure
 gets smuggled into a turn, so a command that needs a record uses `does.collect` and lets the
 surface do the folding.
+
+## flowpad — the same thing, with React
+
+`sketchpad` is hand-written DOM with no dependencies. `flowpad` is React + React Flow, and it
+exists to prove the more useful claim: **a surface is an ordinary web page, so any library works
+inside it.** Dragging, panning, zooming, edge routing, a minimap and keyboard handling come from
+the library rather than from several hundred lines of hand-rolled SVG.
+
+```sh
+cd flowpad && npm install && npm run build
+```
+
+Then install `examples/plugins/flowpad` the same way. Ask him for a diagram:
+
+```
+Draw me the plugin install flow on the Flowpad — a node per step,
+edges showing the order, decisions as `decision` nodes. Name it first.
+```
+
+Nodes are draggable, and a drag writes back — so the next thing you say carries what you moved.
+
+### What it costs, measured
+
+| | |
+| --- | --- |
+| `board.js` (React + React DOM + React Flow, minified) | 371 KB |
+| `board.css` (React Flow's stylesheet + the example's) | 17 KB |
+| The sealed document as served | **392 KB — 20% of the 2 MB ceiling** |
+| Added to every request | ~466 tokens (its four command schemas) |
+
+Two things worth separating there. The bundle is **browser** cost, paid on mount; the prompt cost
+is the command schemas and nothing else. A React surface is not expensive in the way that
+matters most, because the bytes never reach the model.
+
+But `sketchpad` does its job in about 12 KB. Reach for a library when it earns its size — a real
+graph does; a rectangle does not.
+
+### The rules a bundle has to follow
+
+**Nothing may be fetched.** The seal is `default-src 'none'`, so a CDN is not an option and
+neither is code-splitting. Bundle to one JS file and one CSS file, both referenced relatively;
+the host inlines them into the document before serving it, and a reference it cannot inline is
+refused at install with the URL quoted. `flowpad/vite.config.ts` shows the config —
+`inlineDynamicImports` plus fixed output names is the whole of it.
+
+**`type="module"` is preserved**, so an ES-module bundle works. It has to be: most bundlers emit
+modules by default, and a module inlined as a classic script is a syntax error that kills the
+surface before its first line runs.
+
+**Theme through `--kith-*`.** The host repaints those custom properties when the person flips the
+theme, without remounting the frame. `flowpad/src/board.css` maps React Flow's own `--xy-*`
+variables onto them, which is the whole of its theming.
+
+**`window.kith` is the only channel out**, and it has no verb reaching past the plugin's own
+store. `flowpad/src/kith.d.ts` is the shape, hand-written because a plugin is a folder someone
+drops in — there is nothing to install.

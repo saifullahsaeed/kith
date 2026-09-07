@@ -1,0 +1,88 @@
+{
+  "manifest": 1,
+  "id": "flowpad",
+  "name": "Flowpad",
+  "version": "0.1.0",
+  "description": "A flow diagram he builds a node at a time, with React Flow — dragging, panning, zooming and edge routing.",
+  "publisher": "kith",
+  "license": "MIT",
+
+  "surfaces": [
+    {
+      "id": "board",
+      "title": "Flowpad",
+      "icon": "layout-grid",
+      "minWidth": 420,
+      "minHeight": 300,
+      "entry": "ui/board.html",
+      "instances": "single",
+      "answers": "conversation"
+    }
+  ],
+
+  "commands": [
+    {
+      "name": "node",
+      "title": "Add a node",
+      "description": "Add or replace one node on the Flowpad. Calling it again with the same id updates that node rather than adding a second.",
+      "params": {
+        "id": { "type": "string", "maxLength": 40 },
+        "label": { "type": "string", "maxLength": 120 },
+        "kind": { "type": "string", "enum": ["step", "decision", "data", "note"] },
+        "x": { "type": "integer", "minimum": 0, "maximum": 4000 },
+        "y": { "type": "integer", "minimum": 0, "maximum": 4000 }
+      },
+      "required": ["id", "label"],
+      "delivery": "state",
+      "does": { "collect": "pending" },
+      "present": { "in": "none" },
+      "model": true
+    },
+    {
+      "name": "edge",
+      "title": "Link two nodes",
+      "description": "Draw an arrow from one node to another, by their ids. Optionally label it.",
+      "params": {
+        "from": { "type": "string", "maxLength": 40 },
+        "to": { "type": "string", "maxLength": 40 },
+        "label": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["from", "to"],
+      "delivery": "state",
+      "does": { "collect": "pending" },
+      "present": { "in": "none" },
+      "model": true
+    },
+    {
+      "name": "set_title",
+      "title": "Name the diagram",
+      "description": "Give the Flowpad a title, so it is clear what the diagram is of.",
+      "params": { "title": { "type": "string", "maxLength": 80 } },
+      "required": ["title"],
+      "delivery": "state",
+      "does": { "collect": "pending" },
+      "present": { "in": "none" },
+      "model": true
+    },
+    {
+      "name": "clear",
+      "title": "Clear the diagram",
+      "description": "Remove every node and edge and start again.",
+      "params": { "confirm": { "type": "boolean" } },
+      "required": ["confirm"],
+      "delivery": "state",
+      "does": { "collect": "pending" },
+      "present": { "in": "toolbar", "icon": "trash", "when": "always" },
+      "model": true
+    }
+  ],
+
+  "state": {
+    "scope": "conversation",
+    "digest": {
+      "enabled": false,
+      "lead": "Flowpad",
+      "keys": ["title", "note"]
+    }
+  }
+}
