@@ -345,6 +345,11 @@ def surfaces(config_db: Path) -> list[dict]:
                     "view": surface.id,
                     "title": surface.title,
                     "icon": surface.icon,
+                    # A browser pane is a different element entirely — see `plugin-web-view.tsx`
+                    # — and the layout tree has to know before it paints, which is why this is
+                    # in the inlined index rather than only in a mount answer.
+                    "kind": surface.kind,
+                    "home": surface.home,
                     "minWidth": surface.min_width,
                     "minHeight": surface.min_height,
                     "instances": surface.instances,

@@ -21,6 +21,12 @@ export interface PluginSurface {
   pluginName: string;
   view: string;
   title: string;
+  /** What the tab is. `document` is a sealed frame holding the plugin's own page; `web` is a
+   *  real browser the Electron shell composites over the pane. Absent on an older server's
+   *  answer, which is `document`. */
+  kind?: "document" | "web";
+  /** Where a `web` surface starts. */
+  home?: string;
   icon: string;
   minWidth: number;
   minHeight: number;

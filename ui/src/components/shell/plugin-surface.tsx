@@ -363,7 +363,7 @@ export function PluginSurface({
  * A placeholder rather than a discarded layout. Uninstalling a plugin used to reset every split
  * and every size in the window, because an unknown surface failed the stored-layout check at the
  * root; it costs one tab now, and the tab says which plugin it was waiting for. */
-function Absent({
+export function Absent({
   title,
   detail,
   onRetry,

@@ -2,190 +2,259 @@
   "manifest": 1,
   "id": "browser",
   "name": "Browser",
-  "version": "0.1.0",
-  "description": "A real browser he drives \u2014 you watch each step, and you can click into it when he is stuck.",
-  "publisher": "kith",
+  "version": "0.2.0",
+  "description": "A browser in a Kith tab. You use it with your hands; he drives the same page.",
+  "publisher": "Kith",
   "license": "MIT",
-  "server": {
-    "command": "node",
-    "args": [
-      "server/index.mjs"
-    ],
-    "env": [
-      "PLAYWRIGHT_BROWSERS_PATH"
-    ],
-    "reach": {
-      "read": [
-        "~/Library/Caches/ms-playwright"
-      ],
-      "write": [
-        "plugin:state"
-      ],
-      "network": "any"
-    }
-  },
   "surfaces": [
     {
       "id": "page",
       "title": "Browser",
-      "icon": "layout-grid",
-      "minWidth": 420,
-      "minHeight": 320,
-      "entry": "ui/board.html",
+      "kind": "web",
+      "icon": "globe",
+      "minWidth": 480,
+      "minHeight": 360,
       "instances": "single",
-      "answers": "conversation",
-      "assets": [
-        "shot"
-      ]
+      "answers": "any"
     }
   ],
   "commands": [
     {
-      "name": "navigate",
-      "title": "Go to a page",
-      "description": "Open a URL in the browser. The tab's address bar uses this too, so a page you open by hand and one he opens are the same act.",
+      "name": "open",
+      "title": "Open a page",
+      "description": "Go to an address in the Browser tab. Waits until the page has settled, and answers with its title and where it ended up after any redirects.",
+      "delivery": "view",
+      "surface": "page",
+      "does": {
+        "act": "open"
+      },
       "params": {
         "url": {
           "type": "string",
-          "maxLength": 1000
+          "maxLength": 1000,
+          "description": "The address to open."
         }
       },
       "required": [
         "url"
       ],
-      "delivery": "server",
-      "does": {
-        "tool": "open"
+      "returns": {
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "failure": {
+          "type": "string"
+        }
       },
-      "present": {
-        "in": "surface"
-      },
-      "model": false
+      "timeout_ms": 40000,
+      "model": true
     },
     {
-      "name": "go_back",
-      "title": "Back",
-      "description": "Go back one page.",
+      "name": "read",
+      "title": "Read the page",
+      "description": "The visible text of the page, as a person would read it. A few hundred tokens for an ordinary page. Reach for this before looking at a picture.",
+      "delivery": "view",
+      "surface": "page",
+      "does": {
+        "act": "read"
+      },
       "params": {},
-      "required": [],
-      "delivery": "server",
-      "does": {
-        "tool": "back"
+      "returns": {
+        "text": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
       },
-      "present": {
-        "in": "surface"
-      },
-      "model": false
+      "timeout_ms": 40000,
+      "model": true
     },
     {
-      "name": "refresh",
-      "title": "Reload",
-      "description": "Take a fresh screenshot of the page as it is now.",
-      "params": {},
-      "required": [],
-      "delivery": "server",
+      "name": "click",
+      "title": "Click something",
+      "description": "Click by what it says \u2014 click(text: \"Sign in\"). A CSS selector works too, for an icon with no label. If nothing matches, the answer lists what is clickable so you can pick without taking a screenshot.",
+      "delivery": "view",
+      "surface": "page",
       "does": {
-        "tool": "look"
+        "act": "click"
       },
-      "present": {
-        "in": "surface"
+      "params": {
+        "text": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "The words on the thing to click."
+        },
+        "selector": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "A CSS selector, when text will not do."
+        }
       },
-      "model": false
+      "returns": {
+        "clicked": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "options": {
+          "type": "string"
+        }
+      },
+      "timeout_ms": 40000,
+      "model": true
     },
     {
-      "name": "scroll_by",
-      "title": "Scroll",
-      "description": "Scroll the page by whole viewport-heights.",
+      "name": "type",
+      "title": "Type into the page",
+      "description": "Type into whatever is focused, or name a field with `into` to click it first. This is a paste rather than keystrokes, so it survives fields that reformat as you go.",
+      "delivery": "view",
+      "surface": "page",
+      "does": {
+        "act": "type"
+      },
+      "params": {
+        "text": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "What to type."
+        },
+        "into": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "The field's label or selector, if it needs focusing first."
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "returns": {
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "timeout_ms": 40000,
+      "model": true
+    },
+    {
+      "name": "press",
+      "title": "Press a key",
+      "description": "A key that means something rather than a character \u2014 Enter to submit a form, Tab to move on, Escape to dismiss.",
+      "delivery": "view",
+      "surface": "page",
+      "does": {
+        "act": "press"
+      },
+      "params": {
+        "key": {
+          "type": "string",
+          "enum": [
+            "Enter",
+            "Tab",
+            "Escape",
+            "Backspace",
+            "ArrowDown",
+            "ArrowUp"
+          ],
+          "description": "Which key."
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "returns": {
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "timeout_ms": 40000,
+      "model": true
+    },
+    {
+      "name": "scroll",
+      "title": "Scroll the page",
+      "description": "Scroll down by a number of pixels, or up with a negative one. Only needed for pages that load as you scroll \u2014 `read` already returns text below the fold.",
+      "delivery": "view",
+      "surface": "page",
+      "does": {
+        "act": "scroll"
+      },
       "params": {
         "by": {
           "type": "number",
-          "minimum": -10,
-          "maximum": 10
+          "minimum": -20000,
+          "maximum": 20000,
+          "description": "Pixels; negative scrolls up."
         }
       },
-      "required": [
-        "by"
-      ],
-      "delivery": "server",
-      "does": {
-        "tool": "scroll"
-      },
-      "present": {
-        "in": "surface"
-      },
-      "model": false
-    },
-    {
-      "name": "where",
-      "title": "Ask the tab what it is showing",
-      "description": "Ask the Browser tab what is on screen and whether a click is queued for you. Needs the tab open \u2014 for what the page says, use the browser's own read tool instead.",
-      "params": {},
-      "required": [],
-      "delivery": "surface",
-      "surface": "page",
       "returns": {
         "url": {
-          "type": "string",
-          "maxLength": 400
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "showing": {
-          "type": "string",
-          "maxLength": 40
-        },
-        "pendingClick": {
-          "type": "string",
-          "maxLength": 20
-        },
-        "steps": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 999
+          "type": "string"
         }
       },
-      "timeout_ms": 2500,
-      "repeatable": true,
-      "present": {
-        "in": "none"
-      },
+      "timeout_ms": 40000,
       "model": true
     },
     {
-      "name": "clear_click",
-      "title": "Clear the queued click",
-      "description": "Drop a click the person queued, once you have acted on it. Do this straight after clicking it, or you will act on it again next time you look.",
-      "params": {
-        "confirm": {
-          "type": "boolean"
+      "name": "back",
+      "title": "Go back",
+      "description": "Back one page, the way the button does.",
+      "delivery": "view",
+      "surface": "page",
+      "does": {
+        "act": "back"
+      },
+      "params": {},
+      "returns": {
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
         }
       },
-      "required": [
-        "confirm"
-      ],
-      "delivery": "state",
+      "timeout_ms": 40000,
+      "model": true
+    },
+    {
+      "name": "look",
+      "title": "Look at the page",
+      "description": "A screenshot, written to a file. Costs almost nothing until you read it \u2014 and reading one costs a few thousand tokens, so only look when layout is the question or they asked what it looks like.",
+      "delivery": "view",
+      "surface": "page",
       "does": {
-        "set": [
-          "click"
-        ]
+        "act": "look"
       },
-      "present": {
-        "in": "none"
+      "params": {},
+      "returns": {
+        "shot": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
       },
+      "timeout_ms": 40000,
       "model": true
     }
-  ],
-  "state": {
-    "scope": "conversation",
-    "digest": {
-      "enabled": false,
-      "lead": "Browser",
-      "keys": [
-        "url",
-        "title"
-      ]
-    }
-  }
+  ]
 }

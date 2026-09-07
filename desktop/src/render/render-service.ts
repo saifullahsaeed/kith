@@ -26,6 +26,8 @@ import { APP_ICON, BACKEND_ORIGIN } from "../config";
 
 import { getMainWindow, showMainWindow } from "../window/window";
 
+import * as views from "../web/web-views";
+
 import { BrowserWindow, Notification, dialog, session, shell } from "electron";
 
 /** Matches the sandbox implementation this replaces (playwright's 30s goto). */
@@ -82,7 +84,7 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   };
 
   const route = (request.url ?? "").split("?")[0] ?? "";
-  const ROUTES = ["/render", "/notify", "/open-pane", "/pick-folder"];
+  const ROUTES = ["/render", "/notify", "/open-pane", "/pick-folder", "/browse"];
   if (request.method !== "POST" || !ROUTES.includes(route)) {
     return reply(404, { error: "not found" });
   }
@@ -94,6 +96,7 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
     return reply(401, { error: "bad or missing token" });
   }
 
+  if (route === "/browse") return browse(request, reply);
   if (route === "/notify") return notify(request, reply);
   if (route === "/open-pane") return openPane(request, reply);
   if (route === "/pick-folder") return pickFolder(request, reply);
@@ -118,14 +121,88 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   }
 }
 
-function readBody(request: http.IncomingMessage): Promise<string> {
+/**
+ * Drive a plugin's browser pane, for the model.
+ *
+ * The person's own clicks on the chrome go over IPC — see `web/web-view-channel.ts` — because
+ * the renderer is right there. The model's calls arrive here instead: they start in a Python
+ * tool call, and this loopback service with its per-launch token is the channel that already
+ * exists between the two processes. One browser, two drivers, two paths in because the drivers
+ * are in different processes.
+ *
+ * Nothing is granted here that was not granted at install. What arrives has already been
+ * through `permissions.require_plugin` on the Python side, so this checks the shape of the
+ * request and not the right to make it.
+ */
+async function browse(
+  request: http.IncomingMessage,
+  reply: (status: number, body: unknown) => void,
+): Promise<void> {
+  let asked: { act?: string; plugin?: string; view?: string; [key: string]: unknown };
+  try {
+    asked = JSON.parse(await readBody(request, 64_000)) as typeof asked;
+  } catch (error) {
+    return reply(400, { error: `bad request: ${(error as Error).message}` });
+  }
+
+  const plugin = String(asked.plugin ?? "");
+  const view = String(asked.view ?? "");
+  const act = String(asked.act ?? "");
+  if (!plugin || !view) return reply(400, { error: "plugin and view are required" });
+
+  try {
+    switch (act) {
+      case "open":
+        return reply(200, await views.navigate(plugin, view, String(asked.url ?? ""), String(asked.home ?? "")));
+      case "read":
+        return reply(200, await views.read(plugin, view));
+      case "click":
+        return reply(
+          200,
+          await views.click(plugin, view, {
+            text: typeof asked.text === "string" ? asked.text : undefined,
+            selector: typeof asked.selector === "string" ? asked.selector : undefined,
+            x: typeof asked.x === "number" ? asked.x : undefined,
+            y: typeof asked.y === "number" ? asked.y : undefined,
+          }),
+        );
+      case "type":
+        return reply(200, await views.type(plugin, view, String(asked.text ?? ""), String(asked.into ?? "")));
+      case "press":
+        return reply(200, await views.press(plugin, view, String(asked.key ?? "Enter")));
+      case "scroll":
+        return reply(200, await views.scroll(plugin, view, Number(asked.by ?? 600)));
+      case "back":
+        return reply(200, await views.back(plugin, view));
+      case "forward":
+        return reply(200, await views.forward(plugin, view));
+      case "reload":
+        return reply(200, await views.reload(plugin, view));
+      case "look":
+        return reply(200, await views.shot(plugin, view));
+      case "status": {
+        const now = views.status(plugin, view);
+        return now ? reply(200, now) : reply(409, { error: "that browser pane is not open" });
+      }
+      default:
+        return reply(400, { error: `no such act ${act}` });
+    }
+  } catch (error) {
+    // 409 rather than 500: "its tab is not open" is a state the caller can act on, and the
+    // model is told to ask the person to open it rather than to retry.
+    reply(409, { error: (error as Error).message });
+  }
+}
+
+function readBody(request: http.IncomingMessage, limit = 8_192): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk: string) => {
       body += chunk;
-      // A render request is a URL. Anything large is a mistake or an attack.
-      if (body.length > 8_192) reject(new Error("body too large"));
+      // A render request is a URL. Anything large is a mistake or an attack. `/browse` raises
+      // the limit, because typing a page's worth of text into a field is a legitimate call.
+      if (body.length > limit) reject(new Error("body too large"));
     });
     request.on("end", () => resolve(body));
     request.on("error", reject);

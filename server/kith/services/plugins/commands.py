@@ -41,6 +41,10 @@ REFUSALS = {
         "Carry on and say what you skipped."
     ),
     "no_renderer": "No window is open, so nothing could do that. Carry on and say what you skipped.",
+    #: The shell's own words, passed through. A browser pane refuses for reasons only it knows —
+    #: its tab is shut, the address is not one it can open — and each of those is a sentence the
+    #: model should act on rather than a code it has to interpret.
+    "no_view": "{error}",
 }
 
 
@@ -109,6 +113,8 @@ def dispatch(
         return _write_state(agent_db, plugin, command, args)
     if command.delivery == "server":
         return _ask_server(agent_db, config_db, plugin, command, args)
+    if command.delivery == "view":
+        return _ask_view(agent_db, plugin, command, args)
     if command.delivery == "host":
         return _ask_renderer(plugin, command, args)
     return _ask_surface(plugin, command, args)
@@ -226,6 +232,71 @@ def _ask_server(agent_db: Path, config_db: Path, plugin: Plugin, command: Comman
             state.write(agent_db, plugin.id, held, writer="server")
         except state.PluginStateError as refused:
             print(f"[kith] plugins: {plugin.id} could not record what it changed ({refused})")
+    return answer
+
+
+def _ask_view(agent_db: Path, plugin: Plugin, command: CommandDecl, args: dict) -> dict:
+    """`view` delivery — the shell's browser pane performs it.
+
+    **The other driver of one browser.** A `web` surface is web contents Electron composites over
+    the pane: the person scrolls and types in it directly, and this is how the model reaches the
+    same page. Not a copy and not a screenshot — so a login the person completes is a login the
+    next call sees, which is the thing the screenshot version could never do.
+
+    Two properties worth stating, because both are load-bearing:
+
+    * **Nothing new is granted.** The gate in `dispatch` has already run. What arrives here has
+      an install-time grant behind it, and the pane's session is the plugin's own — never the
+      person's browser and never Kith's — so navigating it is an ordinary act rather than a
+      privileged one. There is no prompt on this path by design, not by omission.
+    * **The plugin cannot script the page.** `VIEW_ACTS` is a closed list of the things a person
+      does with their hands. A plugin that could run JavaScript in the pane would not need any
+      of this, and the pane would stop being Kith's browser and become the plugin's.
+    """
+    from kith.infra import renderer
+
+    act = str(command.does.get("act") or "")
+    answer = renderer.browse(plugin.id, command.surface, act, **args)
+    if answer is None:
+        # No shell. Said in a sentence he can act on, the way `_ask_surface` does for a tab that
+        # is shut: a scheduled turn at four in the morning has no window, and `None` is not
+        # something to put in a transcript.
+        # `no_renderer`, the same code `_ask_surface` and `_ask_renderer` use, because it is
+        # the same fact: there is no window. A browser pane's own refusals — a shut tab, an
+        # address it will not open — are `no_view`, and carry the shell's own sentence.
+        return _refuse("no_renderer")
+    if answer.get("error"):
+        return _refuse("no_view", error=str(answer["error"]))
+
+    # A list, flattened where the rule that forbids it lives.
+    #
+    # Return fields are primitives in both directions — the same rule `readCanvasMessage`
+    # applies, because a structure in a return value is how you smuggle structure into a turn.
+    # `click` genuinely has a list to give back when it cannot find what was asked for, and that
+    # list is the useful half of the failure, so it is joined rather than dropped. Dropping it
+    # is what `shape_reply` was silently doing, which made the skill's promise that "the answer
+    # lists what is clickable" untrue.
+    if isinstance(answer.get("options"), list):
+        answer["options"] = ", ".join(str(one) for one in answer["options"] if one)
+
+    # A screenshot comes back as base64 and is written into the plugin's own storage, so what the
+    # model receives is a *path* it can choose to read — the same bargain the screenshot version
+    # struck, and the reason a look costs about fifty tokens until he decides it is worth
+    # thousands.
+    if isinstance(answer.get("png"), str):
+        import base64
+
+        from kith.services.plugins import state
+
+        try:
+            written = state.put_file(
+                plugin.id, f"{command.surface}.png", "image/png", base64.b64decode(answer.pop("png"))
+            )
+            answer["shot"] = written.get("path", "")
+        except Exception as refused:  # pragma: no cover - a picture is never worth the turn
+            answer.pop("png", None)
+            answer["shot"] = ""
+            print(f"[kith] plugins: could not keep {plugin.id}'s screenshot ({refused})")
     return answer
 
 

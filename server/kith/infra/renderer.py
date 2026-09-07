@@ -192,6 +192,61 @@ def pick_folder(title: str = "", start: str = "") -> str | None:
     return path if isinstance(path, str) else ""
 
 
+#: A browser act is a page load plus a settle, so it needs the render timeout rather than the
+#: five seconds a notification gets. Not the full 55: a person is usually watching this happen
+#: in a pane, and a call that hangs for a minute on a page that will not load is worse than one
+#: that says so.
+_BROWSE_TIMEOUT = 40
+
+
+def browse(plugin: str, view: str, act: str, **args) -> dict | None:
+    """Drive a plugin's browser pane. None when the desktop shell is not there.
+
+    **The one path a model has to a browser it shares with the person.** A `web` surface is web
+    contents the shell composites over a pane; the person drives it with their hands and this is
+    the other driver. It is the same page — not a copy, not a screenshot — so a login they
+    complete is a login the next call sees.
+
+    None means "no shell", which is not an error: a scheduled turn at four in the morning has no
+    window, and the caller turns that into a sentence saying the tab has to be open. An `error`
+    key in the answer means the shell was there and said no, and that sentence is the model's to
+    act on — usually that the pane is not open.
+
+    Unlike `_ask`, an HTTP failure is *read* rather than swallowed. The body carries the reason
+    ("its tab has to be open for this"), and discarding it would leave the model with a bare
+    None for two situations that call for different behaviour.
+    """
+    with _lock:
+        endpoint = _endpoint
+    if endpoint is None:
+        return None
+
+    payload = json.dumps({"plugin": plugin, "view": view, "act": act, **args}).encode()
+    request = urllib.request.Request(
+        f"{endpoint.url}/browse",
+        data=payload,
+        headers={"Content-Type": "application/json", "X-Kith-Token": endpoint.token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_BROWSE_TIMEOUT) as response:
+            body = json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        try:
+            body = json.loads(exc.read().decode(errors="replace"))
+        except ValueError:
+            body = {"error": f"the browser pane refused this ({exc.code})"}
+        return body if isinstance(body, dict) else {"error": "the browser pane said something unreadable"}
+    except (urllib.error.URLError, TimeoutError) as exc:
+        # Same reasoning as `render`: the shell has gone away, so drop the registration rather
+        # than paying this timeout on every later call.
+        unregister()
+        return {"error": f"the desktop app went away mid-call ({exc})"}
+    except ValueError:
+        return {"error": "the browser pane said something unreadable"}
+    return body if isinstance(body, dict) else {"error": "the browser pane said something unreadable"}
+
+
 def _ask(route: str, payload: dict, timeout: float = 5) -> dict | None:
     """One short request to the shell. None when it is not there or says no.
 

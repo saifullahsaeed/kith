@@ -109,6 +109,12 @@ def asset_faults(plugin: Plugin) -> list[str]:
     """
     faults: list[str] = []
     for surface in plugin.surfaces:
+        # A browser has no document of its own — the shell provides the web contents — so there
+        # is no entry to resolve and nothing to inline. Checked here rather than left to fail,
+        # because `resolve_entry` on an empty entry resolves to the plugin's own folder and then
+        # reports `'' is not there`, which is true and unhelpful.
+        if surface.kind == "web":
+            continue
         try:
             entry = resolve_entry(plugin, surface)
         except PluginError as exc:

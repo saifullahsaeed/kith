@@ -102,7 +102,7 @@ CHARS_PER_TOKEN = 3.7
 #: the cheapest thing that makes "the subprocess is the code that was reviewed" true at all.
 _RUNNERS = ("npx", "uvx", "pipx", "bunx", "dlx", "pnpx")
 
-Delivery = Literal["host", "state", "surface", "server"]
+Delivery = Literal["host", "state", "surface", "server", "view"]
 
 #: Where a command may offer itself a button. `none` is the default and the overwhelming
 #: majority: a command exists for him to call, and chrome for it is the exception.
@@ -112,6 +112,17 @@ Delivery = Literal["host", "state", "surface", "server"]
 #: manifest saying where a button belongs is not wrong for arriving before the button.
 #: `surface` means the plugin draws it inside its own frame, and is the one core forwards.
 PRESENTED_IN = frozenset({"none", "surface", "toolbar"})
+
+#: What a `view` command may ask a browser pane to do.
+#:
+#: A closed list, and short. These are the things a person does to a browser with their hands,
+#: and the model gets exactly those and nothing more — there is no "run this script in the
+#: page", because a plugin that could script the page would not need Kith's permission to do
+#: anything at all, and the whole point of the pane is that it is Kith's browser rather than
+#: the plugin's.
+VIEW_ACTS = frozenset(
+    {"open", "read", "click", "type", "press", "scroll", "back", "forward", "reload", "look", "status"}
+)
 
 #: Effects a command may ask core to perform. A closed list, in the renderer, and the invariant
 #: that bounds it: *a host effect may only do something a person can already do with one click
@@ -260,10 +271,26 @@ class SurfaceDecl:
 
     id: str
     title: str
+    #: What this tab *is*.
+    #:
+    #: `document` is a sealed frame holding a page the plugin wrote — the original and the
+    #: default. `web` is a real browser the shell composites over the pane: web contents in the
+    #: plugin's own session, which the person drives with their hands and the model drives
+    #: through `view` commands, both against the same page.
+    #:
+    #: A separate kind rather than a widened seal, and that distinction is the whole design. The
+    #: seal exists so a stranger's code can run in this window; loosening it for the one plugin
+    #: that wants a network would loosen it for every plugin that says the same word. A `web`
+    #: surface runs no plugin code at all — the plugin does not draw it, does not script it and
+    #: cannot read it except by asking Kith — so it needs no seal to be safe.
+    kind: Literal["document", "web"] = "document"
     icon: str = "puzzle"
     min_width: int = 320
     min_height: int = 140
     entry: str = ""
+    #: Where a `web` surface starts, if anywhere. Optional: a browser that opens on a blank page
+    #: and waits to be told is a reasonable browser.
+    home: str = ""
     instances: Literal["single", "many"] = "single"
     #: Which conversation this surface answers for. Named `answers` rather than `scope` because
     #: `state.scope` already means something else on a different axis, and one word meaning two
@@ -286,7 +313,22 @@ class SurfaceDecl:
             found.append(f"{self.id!r} is not a surface id (lower-case letters, digits, hyphens).")
         if not self.title:
             found.append(f"The {self.id!r} surface has no title, so its tab would have no label.")
-        if not self.entry:
+        if self.kind == "web":
+            # An entry would be a document, and a `web` surface has none — the shell provides the
+            # browser. Refusing it rather than ignoring it, because a manifest that names a page
+            # nothing will ever load is an author who believes something untrue about their tab.
+            if self.entry:
+                found.append(
+                    f"The {self.id!r} surface is a browser, so it has no entry page — the "
+                    f"shell provides the browser. Remove {self.entry!r}."
+                )
+            if self.assets:
+                found.append(f"The {self.id!r} surface is a browser, so nothing pushes files into it.")
+            if self.home and not re.match(r"^https?://", self.home):
+                found.append(
+                    f"The {self.id!r} surface starts at {self.home!r}, which is not an http(s) address."
+                )
+        elif not self.entry:
             found.append(f"The {self.id!r} surface names no entry page.")
         for want in self.wants:
             if want not in WANTS:
@@ -334,12 +376,22 @@ class CommandDecl:
             found.append(f"{self.name!r} is not a command name (lower-case, digits, underscores).")
         if not self.title:
             found.append(f"The {self.name!r} command has no title, so nothing could label it.")
-        if self.delivery not in ("host", "state", "surface", "server"):
+        if self.delivery not in ("host", "state", "surface", "server", "view"):
             found.append(f"{self.name!r} has an unknown delivery {self.delivery!r}.")
         if self.delivery == "server":
             tool = str(self.does.get("tool") or "")
             if not tool:
                 found.append(f"{self.name!r} is performed by the plugin's server but names no tool.")
+        if self.delivery == "view":
+            act = str(self.does.get("act") or "")
+            if act not in VIEW_ACTS:
+                found.append(
+                    f"{self.name!r} asks a browser pane to {act!r}. It can be {', '.join(sorted(VIEW_ACTS))}."
+                )
+            if self.surface not in surfaces:
+                found.append(
+                    f"{self.name!r} drives the {self.surface!r} browser, which this plugin does not have."
+                )
         where = self.present.get("in", "none")
         if where not in PRESENTED_IN:
             found.append(
@@ -504,6 +556,27 @@ class Plugin:
                 f"{offered} commands are offered to him and the limit is {MAX_MODEL_COMMANDS}. "
                 f"Each one costs prompt tokens on every round of every turn."
             )
+        # **A plugin whose commands nobody can invoke.**
+        #
+        # `model` is opt-in and defaults false, which is the right default — a command is a
+        # prompt-token cost on every round of every turn, so it should have to be asked for. But
+        # the failure mode is silent and complete: a manifest with eight commands and no `model`
+        # key anywhere installs cleanly, reports no faults, shows eight commands on the review
+        # screen, and hands him none of them. Which is exactly what happened while this browser
+        # was being written, to somebody who had read the schema.
+        #
+        # A command that is neither offered to him nor presented anywhere has no caller at all,
+        # so if that is true of *every* command it is a mistake rather than a choice.
+        if (
+            self.commands
+            and not offered
+            and not any(c.present.get("in", "none") != "none" for c in self.commands)
+        ):
+            found.append(
+                f"None of these {len(self.commands)} commands can be invoked by anything. "
+                f'`model` defaults to false, so add `"model": true` to the ones he should be '
+                f"able to call, or `present` to the ones a person clicks."
+            )
         if self.server is not None:
             found += self.server.problems()
         ids = tuple(surface.id for surface in self.surfaces)
@@ -582,6 +655,11 @@ class Plugin:
                     # says which plugin it belongs to.
                     "view": s.id,
                     "title": s.title,
+                    # The review screen has to say "this is a browser" in as many words, because
+                    # a tab that can reach the whole web is a materially different thing to
+                    # install than a tab holding a page the plugin wrote.
+                    "kind": s.kind,
+                    "home": s.home,
                     "icon": s.icon,
                     "minWidth": s.min_width,
                     "minHeight": s.min_height,
@@ -619,7 +697,7 @@ class Plugin:
 
 _SERVER_KEYS = {"command", "args", "env", "reach"}
 _SURFACE_KEYS = {
-    "id", "title", "icon", "minWidth", "minHeight", "entry",
+    "id", "title", "kind", "icon", "minWidth", "minHeight", "entry", "home",
     "instances", "answers", "wants", "assets",
 }  # fmt: skip
 _COMMAND_KEYS = {
@@ -686,10 +764,12 @@ def parse(directory: Path) -> Plugin:
             SurfaceDecl(
                 id=_text(block.get("id"), 32),
                 title=_text(block.get("title"), MAX_TITLE),
+                kind="web" if block.get("kind") == "web" else "document",
                 icon=_text(block.get("icon"), 40) or "puzzle",
                 min_width=_clamp(block.get("minWidth", 320), 240, 720, 320),
                 min_height=_clamp(block.get("minHeight", 140), 80, 480, 140),
                 entry=_text(block.get("entry"), 512),
+                home=_text(block.get("home"), 512),
                 instances="many" if block.get("instances") == "many" else "single",
                 answers="any" if block.get("answers") == "any" else "conversation",
                 wants=tuple(_text(w, 32) for w in (block.get("wants") or [])),

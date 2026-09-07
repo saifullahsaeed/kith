@@ -20,6 +20,10 @@ import { contextBridge, ipcRenderer } from "electron";
 
 /** Mirrors `CHANNEL` in `server/events.ts`. The two are the whole contract. */
 const CHANNEL = "kith:event";
+/** Mirrors `ASK` and `STATUS` in `web/web-view-channel.ts`, which is where the reasoning for a
+ *  two-way channel existing at all is written down. */
+const WEB_VIEW = "kith:web-view";
+const WEB_VIEW_STATUS = "kith:web-view-status";
 
 contextBridge.exposeInMainWorld("kith", {
   /**
@@ -36,5 +40,30 @@ contextBridge.exposeInMainWorld("kith", {
     return () => {
       ipcRenderer.off(CHANNEL, forward);
     };
+  },
+
+  /**
+   * A browser pane: where it goes, and what it is showing.
+   *
+   * The one thing on this surface that the page can *do* rather than hear, and it exists because
+   * a `WebContentsView` is composited by the main process and is invisible to CSS — so only the
+   * renderer knows where the pane is and only the main process can put the view there. The verb
+   * list is fixed and every call is checked against the installed plugins on the far side; see
+   * `web/web-view-channel.ts`.
+   *
+   * Absent outside the desktop shell, which is how `plugin-web-view.tsx` knows to say that a
+   * browser pane needs the app rather than drawing an empty rectangle.
+   */
+  webView: {
+    ask(request: { verb: string; plugin: string; view: string; [key: string]: unknown }) {
+      return ipcRenderer.invoke(WEB_VIEW, request) as Promise<Record<string, unknown>>;
+    },
+    onStatus(listener: (status: Record<string, unknown>) => void): () => void {
+      const forward = (_: unknown, status: Record<string, unknown>) => listener(status);
+      ipcRenderer.on(WEB_VIEW_STATUS, forward);
+      return () => {
+        ipcRenderer.off(WEB_VIEW_STATUS, forward);
+      };
+    },
   },
 });

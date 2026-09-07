@@ -1,76 +1,80 @@
 ---
 name: driving-a-browser
-description: Use when driving the Browser plugin — reading a page, filling a form, getting past a login, or checking something rendered. Covers how to spend the fewest rounds, when a screenshot is worth its tokens, and how to accept help from the person when you are stuck.
+description: Use when driving the Browser tab — reading a page, filling a form, getting past a login, or checking how something looks. Covers spending the fewest rounds, when a screenshot is worth its tokens, and how to hand the wheel back when you are stuck.
 ---
 
 # Driving the browser
 
-`mcp__browser__*` gives you a real Chromium. The **Browser** tab shows the person what you are
-looking at, and they can click into it.
+The **Browser** tab is a real browser in one of Kith's panes, and you are not the only one
+driving it. The person scrolls it, types in it and logs into it with their hands; you drive the
+same page with `plugin__browser__*`. Not a copy of their page and not a screenshot of it — the
+same one. That single fact is what most of this skill follows from.
 
 ## Read before you look
 
-`read` returns the page as text and costs a few hundred tokens. `open`, `click`, `type`, `look`
-and `scroll` all return a **screenshot path**, and reading one costs a few thousand.
+`read` returns the page as text and costs a few hundred tokens. `look` returns a **path to a
+screenshot**, and reading one costs a few thousand.
 
-So: `read` to find out what a page says. Reach for the picture only when
+So `read` to find out what a page says. Reach for the picture only when
 
-- layout is the question ("is this button hidden?", "does it wrap on mobile?"),
+- layout is the question ("is this button off screen?", "does it wrap?"),
 - the text does not explain what you are seeing, or
-- the person asked you what it *looks* like.
+- they asked what it *looks* like.
 
-A screenshot path is a file. It does nothing until you `read_file` it — so a step that returns
-one has not cost you anything yet, and you can decide.
+A path is not an image. `look` costs you almost nothing until you `read_file` it — so a step
+that returns one has not spent anything yet, and the decision is still yours.
 
-## Click by text, not by selector
+## Click by what it says
 
-`click(text: "Sign in")` survives a redesign and is what a person would say. A CSS selector is
-for when text will not do — two identical buttons, an icon with no label.
+`click(text: "Sign in")` survives a redesign and is how a person would describe it. A selector
+is for when text will not do — an icon with no label, two identical buttons.
 
-When a click fails, the reply lists what *is* clickable. Use that list rather than taking another
-screenshot to find out.
+When nothing matches, the answer lists **what is clickable**. Use that list rather than taking a
+screenshot to find out; it is already in front of you and costs nothing.
 
-## Getting past something you cannot do
+To fill a field: `type(text: "…", into: "Work email")`, then `press(key: "Enter")` — or click
+the button by name. `type` is a paste rather than keystrokes, so it survives fields that
+reformat as you go.
 
-Logins, captchas, a two-factor prompt, a cookie wall that will not dismiss. Do not grind at
-these — **ask, and let them click.**
+## When you are stuck, hand the wheel back
 
-1. `look`, so there is a current screenshot in the tab.
-2. Use `ask` to say what is in the way and what you need: *"there's a login on this page — could
-   you sign in, or click the button you want me to use? I'll carry on from there."*
-3. When they click on the picture, a coordinate lands in the plugin's store. Call
-   `plugin_state(plugin: "browser")` to see it — it comes back as `click: {x, y}`.
-4. Act on it, then call `plugin__browser__clear_click(confirm: true)` **straight away**. A click
-   you leave in the store is a click you will act on again next time you look.
+A login, a captcha, two-factor, a cookie wall that will not dismiss. Do not grind at these.
 
-`plugin__browser__where` asks the tab directly, and its answer includes `pendingClick`. Use it
-when you want to know whether they have done something without pulling the whole store.
+**Just ask them to do it.** The tab is right there and it is the same page:
 
-## What the tab is for
+> "There's a login on this page — could you sign in? I'll carry on from where you leave it."
 
-It is a view, not the browser. Chromium runs in the plugin's own subprocess — a surface is a
-sealed frame with no network, so it could not load a page even if you asked it to. The tab shows
-the last screenshot, the URL, and a log of your steps, so the person can follow what you did
-without reading the transcript.
+They type into the tab, and your next call is on the far side of it. Nothing needs clearing,
+nothing needs passing back, and no coordinate goes anywhere. This is the one thing the old
+screenshot version of this plugin could not do at all, and it is why almost everything else in
+this skill is shorter than it used to be.
 
-If the tab is not open, everything above still works except `where` and the person clicking.
-Nothing needs the tab to be open for you to drive.
+The session persists, so a login holds for later turns as well. It is the plugin's own browser
+profile — not their everyday one — so it starts logged out and holds only what they have signed
+into here.
 
-## Costs worth knowing
+## Things worth knowing
+
+- **The app has to be running.** The browser is a view the Kith app draws, so a scheduled turn
+  with no app has none. The call tells you in a sentence; do not retry it.
+- **Opening, reading, clicking and typing all work with the tab shut.** The page is live whether
+  or not anybody is looking at it, so you can do a whole errand and only then ask them to look.
+- **`look` is the exception** — a screenshot needs the tab open, because there is no picture of a
+  page that is not on screen. The call says so and tells you to use `read` instead, which works
+  either way. Prefer `read` regardless; see the top of this skill.
+- **One page.** No tabs, so `back` is how you retrace, and a link that would open a new window
+  opens in this one instead.
+- **The person can see everything you do.** Every navigation, every click. That is a feature —
+  you do not have to narrate what you are looking at — but it also means a page you open is a
+  page they are looking at.
+- **Kith's own address is unreachable** from in here, deliberately. Other local addresses are
+  not: opening `localhost:5173` to look at something they are building is expected.
+
+## Costs
 
 | | |
 | --- | --- |
 | `read` on an ordinary page | a few hundred tokens |
 | `read_file` on a screenshot | a few thousand |
-| a step that returns a path you do not read | ~50 tokens |
-
-The browser starts on your first call and stays up for the rest of the session, so the first
-`open` is slower than the ones after it. That is Chromium starting, not the page being slow.
-
-## Things it will not do
-
-- **No downloads.** The plugin's storage is the only place it may write, and nothing serves
-  files out of it. Read what you need from the page instead.
-- **No second tab.** One page, so `back` is how you retrace.
-- **A fixed 1280x820 window**, deliberately: a screenshot whose dimensions change between calls
-  is one you cannot compare to the last.
+| `look`, unread | ~50 tokens |
+| every other call | ~50 tokens |

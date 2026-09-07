@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader } from "@/components/shell/app-header";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 import { PluginSurface } from "@/components/shell/plugin-surface";
+import { PluginWebView } from "@/components/shell/plugin-web-view";
 
 import { ChatPane } from "@/components/chat/chat-pane";
 import { WorkPanel } from "@/components/chat/work-panel";
@@ -22,7 +23,7 @@ import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
-import { setPluginSurfaces } from "@/lib/plugin-index";
+import { pluginSurface, setPluginSurfaces } from "@/lib/plugin-index";
 import { keys } from "@/lib/query-keys";
 import {
   parseLocation,
@@ -435,15 +436,25 @@ export function Workspace({
         case "plugin":
           /* One arm, so the ErrorBoundary is structural rather than a per-case convention —
            * which matters, because two of the seven existing arms lack one despite the comment
-           * above claiming otherwise. A plugin surface that throws costs its own pane. */
+           * above claiming otherwise. A plugin surface that throws costs its own pane.
+           *
+           * Two kinds inside it. A `document` surface is the sealed frame; a `web` surface is a
+           * browser the Electron shell composites over the pane, which shares no code with the
+           * frame at all — no ticket, no bridge, no store, because there is no plugin page in it
+           * to talk to. Chosen here rather than inside `PluginSurface` so neither component
+           * carries a branch for the other's whole mechanism. */
           return (
             <ErrorBoundary where={`${ref.plugin}/${ref.view}`} compact>
-              <PluginSurface
-                plugin={ref.plugin}
-                view={ref.view}
-                instance={ref.instance}
-                conversationId={conversationId}
-              />
+              {pluginSurface(ref.plugin, ref.view)?.kind === "web" ? (
+                <PluginWebView plugin={ref.plugin} view={ref.view} />
+              ) : (
+                <PluginSurface
+                  plugin={ref.plugin}
+                  view={ref.view}
+                  instance={ref.instance}
+                  conversationId={conversationId}
+                />
+              )}
             </ErrorBoundary>
           );
 

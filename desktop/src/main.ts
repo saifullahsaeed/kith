@@ -39,6 +39,8 @@ import { startRenderService } from "./render/render-service";
 import { createTray, destroyTray } from "./window/tray";
 import { ensureServer, stopServer } from "./server/server-process";
 import { createMainWindow, markQuitting, showMainWindow } from "./window/window";
+import { installWebViewChannel } from "./web/web-view-channel";
+import { forgetAll as forgetWebViews } from "./web/web-views";
 
 // A second instance would fight the first over the same backend and the same
 // window; hand focus to the original instead.
@@ -106,6 +108,9 @@ async function start(): Promise<void> {
   // Offer our Chromium for rendering pages, so he doesn't need a second browser
   // in his sandbox. Best-effort: a shell that can't do this is still a fine shell.
   try {
+    // Before the render service, which serves `/browse` against these views: the handler has
+    // to be able to answer the first call rather than the second.
+    installWebViewChannel();
     await registerRenderer(await startRenderService());
   } catch (error) {
     console.warn("[kith] render service unavailable, sandbox will render instead:", error);
@@ -216,6 +221,9 @@ app.on("before-quit", () => {
   stopServer();
   // Tell the backend to stop offering our renderer — the port dies with us, and a
   // stale registration would cost every later browse a timeout before falling back.
+  // Every browser pane goes with the app. A `WebContentsView` holds a renderer process, and
+  // one left behind is a process with no window and nothing to close it.
+  forgetWebViews();
   void unregisterRenderer();
 });
 
