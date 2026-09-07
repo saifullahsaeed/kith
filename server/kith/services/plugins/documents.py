@@ -359,6 +359,12 @@ def _bridge(plugin: str, view: str) -> str:
         # arriving somewhere that counted it as text.
         "file:function(name,mime,bytes){N++;post({kith:1,type:'file.put',id:'f'+N,"
         "name:name,mime:mime,bytes:bytes})},"
+        # The one verb that reaches past this plugin's own store, and the narrowest one that
+        # could exist. The host refuses any name the manifest did not declare `in: "surface"`,
+        # and `host` delivery cannot be declared that way at all — so a surface may drive its
+        # own plugin and can never drive Kith.
+        "run:function(name,args){N++;post({kith:1,type:'command.run',id:'r'+N,"
+        "name:name,args:args||{}})},"
         "size:function(px){post({kith:1,type:'size',px:px})}"
         "};"
         "post({kith:1,type:'ready',protocol:1,handles:[]});"

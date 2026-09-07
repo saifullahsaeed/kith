@@ -82,7 +82,18 @@ export type PluginMessage =
    * declared type from a closed list, and a ceiling the server re-checks. It exists because a
    * surface has no other way to hand bytes to Kith — the store caps a value at 8 KB because it
    * feeds the prompt, and the frame has no network. */
-  | { type: "file.put"; id: string; name: string; mime: string; bytes: ArrayBuffer };
+  | { type: "file.put"; id: string; name: string; mime: string; bytes: ArrayBuffer }
+  /** "Set off one of my plugin's own commands."
+   *
+   * **The one message that reaches past the plugin's own store**, and it is narrow by
+   * construction rather than by trust: the host refuses any name the manifest did not declare
+   * `present: {in: "surface"}`, and a command with `host` delivery cannot be declared that way
+   * at all. So a surface may drive its own plugin — an address bar, a reload — and can never
+   * reach the five privileged effects that fold a conversation or rearrange the window.
+   *
+   * It exists because without it a surface could *show* you something and never let you act on
+   * it: a browser tab with no address bar, because a person's click had nowhere to go. */
+  | { type: "command.run"; id: string; name: string; args: Record<string, PluginValue> };
 
 /**
  * One message from a frame, or null.
@@ -140,6 +151,21 @@ export function readPluginMessage(data: unknown): PluginMessage | null {
         name: String(message.name ?? "").slice(0, 60),
         mime,
         bytes,
+      };
+    }
+
+    case "command.run": {
+      const name = String(message.name ?? "");
+      // The same grammar the server enforces on a command name. A name that cannot be a
+      // command cannot be one the manifest declared, so it is dropped before it travels.
+      if (!/^[a-z][a-z0-9_]{0,39}$/.test(name)) return null;
+      return {
+        type: "command.run",
+        id: typeof message.id === "string" ? message.id : "",
+        name,
+        // Bounded like every other field. The server coerces them against the command's
+        // declared `params` as well, and drops anything it did not declare.
+        args: bounded(message.args, MAX_VALUE_BYTES) ?? {},
       };
     }
 

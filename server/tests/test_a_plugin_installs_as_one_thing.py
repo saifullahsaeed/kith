@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from kith.domain.plugins import PluginError, parse
-from kith.infra import permissions
+from kith.infra import confinement, permissions
 from kith.services import skills as skills_service
 from kith.services.plugins import install as installer
 from kith.services.plugins import registry
@@ -166,6 +166,70 @@ def test_an_upgrade_keeps_the_credentials_you_typed(tmp_path: Path, config_db: P
     )
 
     assert registry.row(config_db, "circulars")["env"] == {"TOKEN": "secret"}
+
+
+def test_an_upgrade_keeps_what_the_plugin_wrote(tmp_path: Path, config_db: Path):
+    """**Install replaces the plugin's folder, so nothing the plugin owns may live inside it.**
+
+    It did. `home_for` was `<plugins>/<id>/.home`, and install is an `rmtree` and one `os.rename`
+    over that same folder — so every upgrade destroyed every file the plugin had written, while
+    the store went on holding the *paths* to them. The browser plugin came back from an upgrade
+    with a store that said it had a screenshot and a tab that could not show one.
+
+    Two paths in `confinement` and one constant in `registry` have to agree about where storage
+    is for this to hold, and none of them can see the other two, so this is the test that they
+    do.
+    """
+    source = a_plugin(tmp_path)
+    installer.install(config_db, source)
+    kept = confinement.home_for("circulars")
+    kept.mkdir(parents=True, exist_ok=True)
+    (kept / "a-screenshot.png").write_bytes(b"\x89PNG")
+
+    installer.install(config_db, a_plugin(tmp_path, version="0.2.0"))
+
+    assert (confinement.home_for("circulars") / "a-screenshot.png").read_bytes() == b"\x89PNG"
+
+
+def test_a_plugin_cannot_read_another_plugins_files(tmp_path: Path, config_db: Path):
+    """Storage sits under one shared folder, so the boundary has to name the plugin's own and
+    never its parent. The profile used to work the id back out of the storage path, which
+    answered ".storage" once storage moved — granting a read over all of them at once."""
+    installer.install(config_db, a_plugin(tmp_path))
+    resolved = confinement.resolve(None, "circulars")
+
+    written = confinement.profile(resolved, confinement.home_for("circulars"), plugin_id="circulars")
+
+    # The quote closes, so this matches a rule naming the shared root *itself* and not the
+    # plugin's own folder inside it.
+    assert f'"{registry.root() / registry.STORAGE}"' not in written
+    assert f'"{confinement.home_for("circulars")}"' in written
+
+
+def test_deleting_a_plugins_data_deletes_its_files_too(tmp_path: Path, config_db: Path):
+    """The other half of moving storage out. It used to go with the code folder — which is how
+    it came to be destroyed on an upgrade — so the delete path never had to name it."""
+    installer.install(config_db, a_plugin(tmp_path))
+    home = confinement.home_for("circulars")
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "held.png").write_bytes(b"x")
+
+    installer.uninstall(config_db, "circulars", delete_state=True)
+
+    assert not home.exists()
+
+
+def test_uninstalling_keeps_a_plugins_files_the_way_it_keeps_its_state(tmp_path: Path, config_db: Path):
+    """Uninstall marks rather than deletes, and its own comment says storage is the person's
+    data on the same thirty-day rule. It trashed it with the code."""
+    installer.install(config_db, a_plugin(tmp_path))
+    home = confinement.home_for("circulars")
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "held.png").write_bytes(b"x")
+
+    installer.uninstall(config_db, "circulars")
+
+    assert (home / "held.png").exists()
 
 
 def test_a_disabled_plugin_contributes_nothing(tmp_path: Path, config_db: Path):

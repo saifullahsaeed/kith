@@ -30,6 +30,9 @@ export interface PluginSurface {
    *  reads the bytes and pushes them in as an asset — declared, never requested, because a
    *  frame has no verb that reaches outside its own store. */
   assets?: string[];
+  /** Commands this surface may set off itself — `present: {in: "surface"}` in the manifest.
+   *  Checked before anything a frame asks for is forwarded. */
+  surfaceCommands?: string[];
 }
 
 let surfaces: PluginSurface[] = read();

@@ -51,6 +51,19 @@ ROWS_KEY = "plugins.installed"
 #: one filesystem rather than a copy that can fail halfway.
 STAGING = ".staging"
 
+#: Where a plugin's own files live: `<plugins>/.storage/<id>`, a sibling of its code.
+#:
+#: **Not inside the plugin's folder, which is the whole point.** It was `<plugins>/<id>/.home`,
+#: and install replaces that folder with one `os.rename` over an `rmtree` — so every upgrade
+#: destroyed everything the plugin had written, while the store kept the *paths* to it and a
+#: surface came back from an upgrade showing a broken image. Uninstall had the same hole against
+#: its own stated rule: its comment says storage "is the person's data" and follows the
+#: thirty-day retirement, and it trashed it with the code.
+#:
+#: Dot-prefixed for the same reason `.staging` is: `installed()` walks rows rather than
+#: directories, so a sibling folder is never mistaken for a plugin.
+STORAGE = ".storage"
+
 #: How long a plugin's state survives being uninstalled.
 #:
 #: Uninstall marks rather than deletes. `skills.remove()` trashes rather than destroys, with the
@@ -337,6 +350,9 @@ def surfaces(config_db: Path) -> list[dict]:
                     "instances": surface.instances,
                     "answers": surface.answers,
                     "assets": list(surface.assets),
+                    # What this tab may set off itself. The renderer refuses anything else a
+                    # frame asks for, so this list *is* the bound.
+                    "surfaceCommands": [one.name for one in plugin.commands if one.from_surface()],
                 }
             )
     return out

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PlugZap, RefreshCw } from "lucide-react";
 
@@ -7,13 +7,14 @@ import { FRAME_SANDBOX } from "@/lib/canvas";
 import { canvasTokens } from "@/lib/canvas-bridge";
 import { paletteFor } from "@/lib/kith-palette";
 import { PROTOCOL, readPluginMessage } from "@/lib/plugin-bridge";
-import { indexSettled, pluginSurface } from "@/lib/plugin-index";
+import { indexSettled, pluginSurfaces, watchPluginSurfaces } from "@/lib/plugin-index";
 import {
   fetchPluginCalls,
   fetchPluginFile,
   fetchPluginState,
   putSurfaceFile,
   replyToPluginCall,
+  runPluginCommand,
 } from "@/lib/backend";
 import { keys } from "@/lib/query-keys";
 import { useDarkMode } from "@/lib/theme";
@@ -62,7 +63,15 @@ export function PluginSurface({
   // authenticated and a second helper would be a second place to forget the header.
   const dark = useDarkMode();
   const tokens = canvasTokens(paletteFor(dark));
-  const declared = pluginSurface(plugin, view);
+  /* This surface's declaration, as a subscription rather than a read.
+   *
+   * `pluginSurface()` reads a module-level array that is replaced when the index refreshes, so
+   * a plain call re-runs only if something else happens to re-render this component. It did —
+   * the workspace holds the query that refreshes the index — which made a correct-looking read
+   * depend on an accident of where its parent's state lives. `watchPluginSurfaces` was written
+   * for this and had no subscriber at all. */
+  const surfaces = useSyncExternalStore(watchPluginSurfaces, pluginSurfaces);
+  const declared = surfaces.find((one) => one.plugin === plugin && one.view === view);
 
   /* The client id is per-renderer, and it is why two windows on one backend are two mounts.
    *
@@ -154,6 +163,22 @@ export function PluginSurface({
          * back — so the *model* can read it. Before this a surface could render something
          * nobody was able to look at. */
         void putSurfaceFile(ticket.current, message.name, message.mime, message.bytes);
+      } else if (message.type === "command.run") {
+        /* The surface setting off one of its own plugin's commands.
+         *
+         * **Checked here against the manifest, not trusted.** Only a command the plugin
+         * declared `present: {in: "surface"}` is forwarded — anything else is dropped in
+         * silence, because a frame asking for a command it was not given is either a bug or an
+         * attempt, and neither deserves a console the person shares.
+         *
+         * Forwarded as `origin: "person"`, which is honest: a surface only gets to ask because
+         * a person opened its tab and clicked in it, and the plugin's author declared that this
+         * tab may. `host` delivery cannot be declared surface-invocable, so the five privileged
+         * effects stay out of reach whatever a manifest says. */
+        const allowed = declared?.surfaceCommands ?? [];
+        if (allowed.includes(message.name)) {
+          void runPluginCommand(plugin, message.name, message.args, conversationId);
+        }
       } else if (message.type === "ready") {
         /* **The frame saying its own script has run**, which `onLoad` does not tell you: the
          * document has loaded by then but nothing guarantees `window.kith.render(...)` has been
@@ -170,7 +195,15 @@ export function PluginSurface({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+    /* Re-registered when what the handler *reads* changes, rather than mounted once.
+     *
+     * It had `[]`, and closed over three values that move: `declared`, which is replaced
+     * wholesale when the surface index refreshes — so upgrading a plugin in place to add a
+     * surface command left this listener checking the old manifest's list and silently
+     * dropping every button in the tab until the app was reloaded; and `plugin` and
+     * `conversationId`, which a stale copy of would forward a person's click to the wrong
+     * conversation. `on`/`off` on one listener is free next to being wrong. */
+  }, [plugin, conversationId, declared]);
 
   /* What the plugin is holding, as a subscription rather than a fetch on load.
    *

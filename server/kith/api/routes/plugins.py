@@ -235,6 +235,7 @@ def mount_surface(plugin_id: str, view: str):
             # Which state keys hold a path to one of this plugin's files. The renderer needs it
             # to know what to read and push; it is the same list the manifest declared.
             "assets": list(surface.assets),
+            "surfaceCommands": [one.name for one in plugin.commands if one.from_surface()],
         }
     )
 

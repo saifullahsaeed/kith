@@ -309,6 +309,13 @@ def _forget_state(plugin_id: str) -> None:
     except Exception as exc:  # pragma: no cover - a tidy-up must not fail the removal
         print(f"[kith] plugins: could not clear {plugin_id}'s state ({exc})")
 
+    # And the files, which are the other half of what it was holding. Nothing deleted these
+    # before, because they used to live inside the code folder and went with it — which is the
+    # same arrangement that destroyed them on every upgrade.
+    from kith.infra import confinement
+
+    shutil.rmtree(confinement.home_for(plugin_id), ignore_errors=True)
+
 
 def _reconnect(config_db: Path) -> None:
     """Bring the MCP set back in line with what is now configured.

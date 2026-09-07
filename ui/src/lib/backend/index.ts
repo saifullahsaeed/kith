@@ -73,4 +73,5 @@ export {
   putSurfaceFile,
   replyToPluginCall,
   reviewPlugin,
+  runPluginCommand,
 } from "./plugins";

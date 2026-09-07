@@ -51,6 +51,8 @@ declare global {
         drop(keys: string[]): void;
       };
       file(name: string, mime: string, bytes: ArrayBuffer): void;
+      /** Set off one of this plugin's own commands. Bounded by the manifest — see `board.tsx`. */
+      run(name: string, args?: Record<string, unknown>): void;
     };
   }
 }
@@ -62,7 +64,27 @@ function Board() {
   const [size, setSize] = useState({ width: 1280, height: 820 });
   const [steps, setSteps] = useState<Step[]>([]);
   const [waiting, setWaiting] = useState<{ x: number; y: number } | null>(null);
+  /** What is in the address bar. Separate from `url` so typing is not overwritten mid-word by
+   *  a push, and re-synced only when the page actually changes underneath. */
+  const [typed, setTyped] = useState("");
+  /** Something is in flight. Cleared by the next push, because a push *is* the answer — the
+   *  server screenshots after every step, so a new `shot` means the step finished. */
+  const [busy, setBusy] = useState(false);
   const image = useRef<HTMLImageElement | null>(null);
+
+  /** Set off one of this plugin's own commands.
+   *
+   * `kith.run` is the frame's one verb that reaches past its own store, and it is bounded by
+   * the manifest: the host refuses any name not declared `present: {in: "surface"}`, and a
+   * command with `host` delivery cannot be declared that way at all. So this can drive the
+   * browser and can never fold a conversation or rearrange the window. */
+  const run = useCallback((name: string, args: Record<string, unknown> = {}) => {
+    setBusy(true);
+    window.kith.run(name, args);
+    // A floor, so a command that fails silently on the server does not leave the bar spinning
+    // for ever. The push normally beats this comfortably.
+    window.setTimeout(() => setBusy(false), 30_000);
+  }, []);
 
   useEffect(() => {
     /* Bytes arriving for a key. Turned into a `blob:` URL by the bridge before it gets here, so
@@ -72,7 +94,14 @@ function Board() {
     });
 
     window.kith.render((state) => {
-      if (typeof state.url === "string") setUrl(state.url);
+      if (typeof state.url === "string") {
+        setUrl(state.url);
+        // Only when the page has genuinely moved. Overwriting on every push would eat what
+        // somebody is halfway through typing, and the store is pushed on every write.
+        setTyped((held) => (state.url !== url ? String(state.url) : held));
+      }
+      // A push carries a fresh screenshot, which means the step it was waiting on is done.
+      setBusy(false);
       if (typeof state.title === "string") setTitle(state.title);
       if (Array.isArray(state.steps)) setSteps(state.steps as Step[]);
       if (typeof state.width === "number" && typeof state.height === "number") {
@@ -131,10 +160,58 @@ function Board() {
   return (
     <div className="browser-shell">
       <header className="browser-chrome">
-        <span className="browser-title">{title || "Browser"}</span>
-        <span className="browser-url" title={url}>
-          {url || "nothing open"}
-        </span>
+        <div className="browser-nav">
+          <button
+            type="button"
+            onClick={() => run("go_back")}
+            disabled={busy || !url}
+            title="Back"
+            aria-label="Back"
+          >
+            <svg className="kith-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m15 18-6-6 6-6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={() => run("refresh")}
+            disabled={busy || !url}
+            title="Reload"
+            aria-label="Reload"
+          >
+            <svg className="kith-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+              <path d="M8 16H3v5" />
+            </svg>
+          </button>
+        </div>
+
+        {/* The address bar. Typing here goes through `navigate`, which the manifest declares as
+            surface-invocable and which the plugin's own server performs — so a page you open by
+            hand and one he opens are the same act, and the tab updates the same way. */}
+        <form
+          className="browser-address"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const wanted = typed.trim();
+            if (!wanted) return;
+            // A bare host is what a person types. Guessing `https` beats refusing them.
+            run("navigate", { url: /^[a-z]+:\/\//i.test(wanted) ? wanted : `https://${wanted}` });
+          }}
+        >
+          <input
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+            onFocus={(event) => event.currentTarget.select()}
+            placeholder="Type an address, or ask him to open one"
+            spellCheck={false}
+            aria-label="Address"
+          />
+          {busy ? <span className="browser-busy" aria-label="Loading" /> : null}
+        </form>
+
         {waiting ? (
           <button
             type="button"
@@ -162,23 +239,42 @@ function Board() {
         </div>
       ) : (
         <p className="browser-empty">
-          Nothing open yet. Ask him to open a page — he can read it, click things and type into
-          it, and you will see each step here.
+          Nothing open yet. Type an address above, or ask him to open one — he can read the
+          page, click things and type into it, and you will see every step here.
         </p>
       )}
 
+      {/* What he did, as one line.
+       *
+       * It was an open list, and after seven steps it had taken a third of the pane and pushed
+       * the page — the thing the tab exists to show — up out of view. A log is reference: worth
+       * having, worth almost no room until asked for. So the latest step stays visible, because
+       * that one *is* status, and the rest is a disclosure.
+       *
+       * `<details>` rather than state, so it opens on a keyboard and reads correctly to a
+       * screen reader without any of that being written here. Closed on every mount on
+       * purpose: it is not worth a slot in the store he can see. */}
       {steps.length ? (
-        <ol className="browser-steps">
-          {steps
-            .slice()
-            .reverse()
-            .map((step) => (
-              <li key={step.at}>
-                <span className="browser-step-note">{step.note}</span>
-                <span className="browser-step-title">{step.title}</span>
-              </li>
-            ))}
-        </ol>
+        <details className="browser-log">
+          <summary>
+            <span className="browser-step-note">{steps[steps.length - 1].note}</span>
+            <span className="browser-step-title">{steps[steps.length - 1].title}</span>
+            <span className="browser-log-count">
+              {steps.length} step{steps.length === 1 ? "" : "s"}
+            </span>
+          </summary>
+          <ol className="browser-steps">
+            {steps
+              .slice()
+              .reverse()
+              .map((step) => (
+                <li key={step.at}>
+                  <span className="browser-step-note">{step.note}</span>
+                  <span className="browser-step-title">{step.title}</span>
+                </li>
+              ))}
+          </ol>
+        </details>
       ) : null}
     </div>
   );

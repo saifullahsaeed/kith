@@ -23,13 +23,88 @@
   min-width: 0;
 }
 
-.browser-title {
-  font-weight: 550;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 40%;
+/* The navigation buttons and the address bar, which are the difference between a browser and a
+   picture of one. Kith's own tokens throughout, so this reads as part of the app rather than as
+   a web page that happens to be embedded in it. */
+.browser-nav {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.browser-nav button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--kith-dim);
+  border-radius: 6px;
+}
+
+.browser-nav button:hover:not(:disabled) {
+  background: var(--kith-muted);
+  color: var(--kith-text);
+  border-color: var(--kith-line);
+}
+
+.browser-nav button:disabled {
+  /* Dimmed rather than hidden: a control that disappears when it cannot be used teaches
+     nobody that it exists. */
+  opacity: 0.35;
+  cursor: default;
+}
+
+.browser-address {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.browser-address input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  border-radius: 13px;
+  background: var(--kith-muted);
+  border: 1px solid transparent;
+}
+
+.browser-address input:focus {
+  outline: none;
+  background: var(--kith-bg);
+  border-color: var(--kith-accent);
+}
+
+/* A ring rather than a progress bar. There is nothing honest to report a percentage from — the
+   server answers when the page has settled and not before — so a spinner is the true shape. */
+.browser-busy {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--kith-line);
+  border-top-color: var(--kith-accent);
+  animation: browser-spin 0.7s linear infinite;
+}
+
+@keyframes browser-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-busy {
+    animation-duration: 2.4s;
+  }
 }
 
 .browser-url {
@@ -88,15 +163,65 @@
   max-width: 34em;
 }
 
-.browser-steps {
+/* The log, which is one line until you ask for it. See the comment in `board.tsx`. */
+.browser-log {
   flex: 0 0 auto;
-  max-height: 27%;
-  overflow: auto;
-  margin: 0;
-  padding: 6px 10px;
-  list-style: none;
+  min-width: 0;
   border-top: 1px solid var(--kith-line);
   font-size: 11px;
+  background: var(--kith-bg);
+}
+
+.browser-log summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  min-width: 0;
+  cursor: default;
+  /* Both, because Chromium honours one and the standard names the other. */
+  list-style: none;
+}
+
+.browser-log summary::-webkit-details-marker {
+  display: none;
+}
+
+.browser-log summary:hover {
+  background: var(--kith-muted);
+}
+
+.browser-log-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--kith-dim);
+  white-space: nowrap;
+}
+
+/* Drawn here rather than left to the default triangle, which sits before the text and pushes
+   the line it labels out of alignment with the chrome above it. */
+.browser-log-count::after {
+  content: "";
+  display: inline-block;
+  margin-left: 7px;
+  vertical-align: 1px;
+  border: 4px solid transparent;
+  border-top-color: var(--kith-dim);
+}
+
+.browser-log[open] .browser-log-count::after {
+  vertical-align: 4px;
+  border-top-color: transparent;
+  border-bottom-color: var(--kith-dim);
+}
+
+.browser-steps {
+  max-height: 30vh;
+  overflow: auto;
+  margin: 0;
+  padding: 0 10px 6px;
+  list-style: none;
+  border-top: 1px solid var(--kith-line);
 }
 
 .browser-steps li {

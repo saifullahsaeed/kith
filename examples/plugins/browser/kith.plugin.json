@@ -41,6 +41,81 @@
   ],
   "commands": [
     {
+      "name": "navigate",
+      "title": "Go to a page",
+      "description": "Open a URL in the browser. The tab's address bar uses this too, so a page you open by hand and one he opens are the same act.",
+      "params": {
+        "url": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "delivery": "server",
+      "does": {
+        "tool": "open"
+      },
+      "present": {
+        "in": "surface"
+      },
+      "model": false
+    },
+    {
+      "name": "go_back",
+      "title": "Back",
+      "description": "Go back one page.",
+      "params": {},
+      "required": [],
+      "delivery": "server",
+      "does": {
+        "tool": "back"
+      },
+      "present": {
+        "in": "surface"
+      },
+      "model": false
+    },
+    {
+      "name": "refresh",
+      "title": "Reload",
+      "description": "Take a fresh screenshot of the page as it is now.",
+      "params": {},
+      "required": [],
+      "delivery": "server",
+      "does": {
+        "tool": "look"
+      },
+      "present": {
+        "in": "surface"
+      },
+      "model": false
+    },
+    {
+      "name": "scroll_by",
+      "title": "Scroll",
+      "description": "Scroll the page by whole viewport-heights.",
+      "params": {
+        "by": {
+          "type": "number",
+          "minimum": -10,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "by"
+      ],
+      "delivery": "server",
+      "does": {
+        "tool": "scroll"
+      },
+      "present": {
+        "in": "surface"
+      },
+      "model": false
+    },
+    {
       "name": "where",
       "title": "Ask the tab what it is showing",
       "description": "Ask the Browser tab what is on screen and whether a click is queued for you. Needs the tab open \u2014 for what the page says, use the browser's own read tool instead.",

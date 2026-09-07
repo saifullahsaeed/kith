@@ -160,8 +160,14 @@ def folder_for(plugin_id: str) -> Path:
 
 
 def home_for(plugin_id: str) -> Path:
-    """A plugin's own storage: its `HOME`, its working directory, the one place it may write."""
-    return _real(settings.plugins_dir() / plugin_id / ".home")
+    """A plugin's own storage: its `HOME`, its working directory, the one place it may write.
+
+    A *sibling* of the plugin's code rather than a folder inside it — see `registry.STORAGE`
+    for why. `.storage` is spelled here rather than imported because `infra` sits below
+    `services`; the two must agree, and the test that they do is in
+    `test_an_upgrade_keeps_what_the_plugin_wrote`.
+    """
+    return _real(settings.plugins_dir() / ".storage" / plugin_id)
 
 
 def resolve(reach, plugin_id: str, *, workspace_root: Path | None = None) -> Resolved:
@@ -276,14 +282,7 @@ def runtime_root(command: str) -> Path | None:
     return None if root in (home, home.parent, Path("/")) else root
 
 
-def _plugin_of(home: Path) -> str:
-    """The plugin id, from its own storage path. `home_for` is `<plugins>/<id>/.home`, so the
-    id is its grandparent's name — derived rather than passed so `profile` keeps one argument
-    for the thing it is building a boundary around."""
-    return home.parent.name
-
-
-def profile(resolved: Resolved, home: Path, runtime: str = "") -> str:
+def profile(resolved: Resolved, home: Path, runtime: str = "", plugin_id: str = "") -> str:
     """The `sandbox-exec` profile for one boundary.
 
     **A deny carries its own exceptions, because a later allow cannot undo it.** Measured on
@@ -324,7 +323,13 @@ def profile(resolved: Resolved, home: Path, runtime: str = "") -> str:
     writable = [home, *(_real(one) for one in resolved.write)]
     # Its own installed folder is readable but **not** writable: a server has to be able to read
     # its own code, and must not be able to rewrite it between restarts.
-    readable = [*writable, folder_for(_plugin_of(home)), *(_real(one) for one in resolved.read)]
+    # **Passed, never re-derived from the path.** It used to read the id back out of `home` by
+    # taking its parent's name, which was true of `<plugins>/<id>/.home` and quietly false the
+    # moment storage moved to `<plugins>/.storage/<id>`: the answer became ".storage", and this
+    # line would then have made the folder holding *every* plugin's files readable to each of
+    # them. A boundary must not be computed from a string somebody may reasonably re-shape.
+    own = folder_for(plugin_id) if plugin_id else None
+    readable = [*writable, *([own] if own else []), *(_real(one) for one in resolved.read)]
     if tree is not None:
         readable.append(tree)
     # The roots the boundary closes. A granted path may sit inside any of them, which is
@@ -392,7 +397,7 @@ def write_profile(plugin_id: str, resolved: Resolved, runtime: str = "") -> Path
     place = settings.DATA_DIR / PROFILES
     place.mkdir(parents=True, exist_ok=True)
     path = place / f"{plugin_id}.sb"
-    path.write_text(profile(resolved, home, runtime))
+    path.write_text(profile(resolved, home, runtime, plugin_id))
 
     if available():
         proof = subprocess.run(

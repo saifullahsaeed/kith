@@ -102,7 +102,16 @@ CHARS_PER_TOKEN = 3.7
 #: the cheapest thing that makes "the subprocess is the code that was reviewed" true at all.
 _RUNNERS = ("npx", "uvx", "pipx", "bunx", "dlx", "pnpx")
 
-Delivery = Literal["host", "state", "surface"]
+Delivery = Literal["host", "state", "surface", "server"]
+
+#: Where a command may offer itself a button. `none` is the default and the overwhelming
+#: majority: a command exists for him to call, and chrome for it is the exception.
+#:
+#: `toolbar` asks core to draw the button, in the tab's own header, and is declared by two of
+#: the examples — nothing draws it yet, and it is listed here rather than refused because a
+#: manifest saying where a button belongs is not wrong for arriving before the button.
+#: `surface` means the plugin draws it inside its own frame, and is the one core forwards.
+PRESENTED_IN = frozenset({"none", "surface", "toolbar"})
 
 #: Effects a command may ask core to perform. A closed list, in the renderer, and the invariant
 #: that bounds it: *a host effect may only do something a person can already do with one click
@@ -325,8 +334,34 @@ class CommandDecl:
             found.append(f"{self.name!r} is not a command name (lower-case, digits, underscores).")
         if not self.title:
             found.append(f"The {self.name!r} command has no title, so nothing could label it.")
-        if self.delivery not in ("host", "state", "surface"):
+        if self.delivery not in ("host", "state", "surface", "server"):
             found.append(f"{self.name!r} has an unknown delivery {self.delivery!r}.")
+        if self.delivery == "server":
+            tool = str(self.does.get("tool") or "")
+            if not tool:
+                found.append(f"{self.name!r} is performed by the plugin's server but names no tool.")
+        where = self.present.get("in", "none")
+        if where not in PRESENTED_IN:
+            found.append(
+                f"{self.name!r} says it is presented in {where!r}. It can be "
+                f"{', '.join(sorted(PRESENTED_IN))}."
+            )
+        if where == "surface":
+            # **The one thing a surface may set off, and the bound that makes it safe.**
+            #
+            # A frame has no verb reaching outside its own plugin, which is what lets a click on
+            # chrome Kith drew count as authorisation. A command declared `in: "surface"` is a
+            # deliberate, reviewed exception: this plugin's author is saying its own tab may
+            # trigger this, and the review screen lists it.
+            #
+            # `host` delivery is refused, and that is the line. Those five effects — folding a
+            # conversation, opening a tab, navigating the app — are the privileged ones, and a
+            # page inside a seal must never reach them however its manifest is written.
+            if self.delivery == "host":
+                found.append(
+                    f"{self.name!r} asks Kith to do something *and* to let its own tab set it "
+                    f"off. A surface may drive its own plugin; it may not drive Kith."
+                )
         if self.delivery == "surface" and self.surface not in surfaces:
             found.append(
                 f"{self.name!r} is delivered by the {self.surface!r} surface, which this "
@@ -358,6 +393,18 @@ class CommandDecl:
             if name not in self.params:
                 found.append(f"{self.name!r} requires {name!r}, which it does not declare.")
         return found
+
+    def from_surface(self) -> bool:
+        """Whether this plugin's own tab may set this off.
+
+        Stated here rather than at the two places that need it — `registry.surfaces` for the
+        index the renderer boots with, and the mount route for the frame it is about to serve.
+        Those two had a copy each of `present["in"] == "surface" and delivery != "host"`, which
+        is the shape the seal constants were in before they drifted apart and one of them
+        stopped matching the policy it was supposed to state. A bound enforced in two places is
+        a bound that will eventually be enforced in one.
+        """
+        return self.present.get("in") == "surface" and self.delivery != "host"
 
     def schema(self, plugin: str, plugin_name: str) -> dict:
         """The function declaration the model is handed.

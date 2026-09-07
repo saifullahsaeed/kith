@@ -244,3 +244,20 @@ export async function fetchPluginFile(plugin: string, path: string): Promise<Arr
   if (!response.ok) return null;
   return await response.arrayBuffer();
 }
+
+/** Set off one of a plugin's commands as the person.
+ *
+ * `origin: "person"` on the server, which skips the permission gate — safe because the only
+ * routes here are chrome Kith drew and a surface the manifest explicitly opted in per command. */
+export async function runPluginCommand(
+  plugin: string,
+  command: string,
+  args: Record<string, unknown>,
+  conversation: string,
+): Promise<void> {
+  await fetch(`/api/plugins/${plugin}/command/${command}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ args, conversation }),
+  }).catch(() => {});
+}

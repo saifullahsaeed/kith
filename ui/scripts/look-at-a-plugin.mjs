@@ -26,7 +26,10 @@ import { chromium } from "playwright";
 
 const [plugin, ...rest] = process.argv.slice(2);
 if (!plugin) {
-  console.error("usage: node look.mjs <plugin-id> [--view board] [--state '<json>'] [--out /tmp/x.png]");
+  console.error(
+    "usage: node look.mjs <plugin-id> [--view board] [--state '<json>'] [--out /tmp/x.png]" +
+      " [--click <selector|text=…>]",
+  );
   process.exit(1);
 }
 
@@ -38,6 +41,8 @@ const flag = (name, fallback) => {
 const view = flag("view", "board");
 const out = flag("out", `/tmp/${plugin}-${view}.png`);
 const state = JSON.parse(flag("state", "{}"));
+/** Something to click before measuring — a CSS selector, or `text=…` for the words on it. */
+const click = flag("click", "");
 const origin = flag("origin", "http://127.0.0.1:8611");
 
 /** The token the page is handed in the document. Read from disk, the way the server writes it.
@@ -113,6 +118,18 @@ try {
   }
   await page.waitForTimeout(900);
 
+  /* Something the person would do, before measuring.
+   *
+   * Several of these surfaces only reach the state worth looking at once somebody has clicked:
+   * the browser's step log is one line until you open it, and a folded panel measured folded
+   * tells you nothing about what unfolding it does. Playwright's `text=` engine is accepted as
+   * well as a selector, because "the thing that says 5 steps" is how you think about it. */
+  if (click) {
+    const target = page.locator(click.startsWith("text=") ? click : click);
+    await target.first().click({ timeout: 4000 });
+    await page.waitForTimeout(400);
+  }
+
   const measured = await page.evaluate(() => {
     const box = (selector) => {
       const el = document.querySelector(selector);
@@ -126,7 +143,7 @@ try {
       root: box("body > div") ?? box("body > svg"),
       // Whatever the surface's own outermost box is, if it named one.
       drawn: document.body.querySelectorAll("svg, canvas, .react-flow__node").length,
-      text: document.body.innerText.split("\n").filter(Boolean).slice(0, 4),
+      text: document.body.innerText.split("\n").filter(Boolean).slice(0, 8),
     };
   });
 

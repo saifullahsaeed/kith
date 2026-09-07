@@ -107,6 +107,8 @@ def dispatch(
 
     if command.delivery == "state":
         return _write_state(agent_db, plugin, command, args)
+    if command.delivery == "server":
+        return _ask_server(agent_db, config_db, plugin, command, args)
     if command.delivery == "host":
         return _ask_renderer(plugin, command, args)
     return _ask_surface(plugin, command, args)
@@ -186,6 +188,45 @@ def _collect(agent_db: Path, plugin: Plugin, key: str, record: dict) -> dict:
         "ok": True,
         "result": {"from": plugin.id, "queued": record, "at": seq, "slot": written["slot"]},
     }
+
+
+def _ask_server(agent_db: Path, config_db: Path, plugin: Plugin, command: CommandDecl, args: dict) -> dict:
+    """`server` delivery — the plugin's own subprocess performs it.
+
+    **The delivery that makes a surface driveable.** Everything a plugin's server can do reaches
+    the model as an `mcp__<plugin>__<tool>` call, and only the model can make one. So a browser
+    plugin's tab could show you a page and had no way to let you type an address into it: the
+    person's own click had nowhere to go.
+
+    This routes a declared command onto one of that plugin's own tools. Nothing new is granted —
+    the server is already running under a grant a person gave at install, and this calls a tool
+    it already offers. What is new is *who* may set it off.
+    """
+    from kith.services.mcp import manager
+    from kith.services.plugins import registry
+
+    tool = str(command.does.get("tool") or "")
+    if not tool:
+        return _refuse("no_such_command", plugin=plugin.name, command=command.name)
+    if plugin.id not in {row.label for row in registry.mcp_servers(config_db)}:
+        return _refuse("plugin_gone", plugin=plugin.name)
+
+    from kith.domain.mcp import tool_name
+    from kith.services import tuning
+
+    answer = manager.run(tool_name(plugin.id, tool), args, float(tuning.value("mcp_call_timeout")))
+    # The reserved key is lifted here as well as in `run_tool`, so a command a *person* set off
+    # updates the surface exactly as one the model made does. Without it a click would work and
+    # the tab would not move, which reads as the click having missed.
+    held = answer.pop("_kith_state", None) if isinstance(answer, dict) else None
+    if isinstance(held, dict) and held:
+        from kith.services.plugins import state
+
+        try:
+            state.write(agent_db, plugin.id, held, writer="server")
+        except state.PluginStateError as refused:
+            print(f"[kith] plugins: {plugin.id} could not record what it changed ({refused})")
+    return answer
 
 
 def _ask_renderer(plugin: Plugin, command: CommandDecl, args: dict) -> dict:
