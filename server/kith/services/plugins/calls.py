@@ -226,6 +226,24 @@ def forget_plugin(plugin: str) -> None:
         call.answered.set()
 
 
+def forget_misses(plugin: str = "", view: str = "", instance: str = "") -> None:
+    """Give a surface its second chance.
+
+    **Without this, three timeouts made a surface permanently unusable**, and the message
+    telling you to reload it was a lie. The only thing that cleared a miss was a successful
+    answer — and the fast-fail above meant no answer could be attempted, so the state it was
+    protecting against became the state it created. A deadlock reached by three slow replies.
+
+    Called from `documents.mount`, so a reload clears it, which is what the error tells a person
+    to do. With no arguments it clears everything, which is what a test between cases wants.
+    """
+    with _LOCK:
+        if not plugin:
+            _MISSES.clear()
+            return
+        _MISSES.pop(f"{plugin}/{view}/{instance}", None)
+
+
 def new(conversation_id: str, plugin: str, command: str, view: str, args: dict, **rest) -> Call:
     return Call(
         id="pc" + secrets.token_urlsafe(9),

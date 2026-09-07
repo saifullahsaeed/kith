@@ -232,6 +232,9 @@ def mount_surface(plugin_id: str, view: str):
             "protocol": 1,
             "title": surface.title,
             "minWidth": surface.min_width,
+            # Which state keys hold a path to one of this plugin's files. The renderer needs it
+            # to know what to read and push; it is the same list the manifest declared.
+            "assets": list(surface.assets),
         }
     )
 
@@ -511,7 +514,14 @@ def get_plugin_file(plugin_id: str):
     wanted = str(request.args.get("path") or "").strip()
     if not wanted:
         return jsonify({"error": "send ?path="}), 400
-    root = (confinement.home_for(plugin_id) / "files").resolve()
+    # The plugin's whole storage, not one folder of it.
+    #
+    # `files/` is where a *surface* hands bytes back; a plugin's **server** writes wherever it
+    # likes inside its own storage — the browser example puts screenshots in `shots/`. Serving
+    # only `files/` meant the one thing this route exists for, showing a surface a picture its
+    # own server took, returned 404. The boundary that matters is the same either way: this
+    # directory is the plugin's own, and the only place its server may write.
+    root = confinement.home_for(plugin_id).resolve()
     # Resolve first, then confirm containment. The other order lets `../` walk out, and this
     # path arrived over HTTP.
     target = Path(wanted).expanduser().resolve()

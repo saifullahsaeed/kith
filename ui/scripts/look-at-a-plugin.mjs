@@ -40,9 +40,13 @@ const out = flag("out", `/tmp/${plugin}-${view}.png`);
 const state = JSON.parse(flag("state", "{}"));
 const origin = flag("origin", "http://127.0.0.1:8611");
 
-/** The token the page is handed in the document. Read from disk, the way the server writes it. */
+/** The token the page is handed in the document. Read from disk, the way the server writes it.
+ *
+ * `--data` for an instance running on its own data directory, which is how you look at a plugin
+ * without touching the one you actually use. */
+const dataDir = flag("data", new URL("../../server/data/", import.meta.url).pathname);
 const token = (
-  await readFile(new URL("../../server/data/api.token", import.meta.url), "utf8").catch(() =>
+  await readFile(new URL("api.token", `file://${dataDir}`), "utf8").catch(() =>
     readFile(new URL("api.token", `file://${process.env.HOME}/.kith/`), "utf8"),
   )
 ).trim();
@@ -77,6 +81,36 @@ try {
   await page.evaluate((held) => {
     window.postMessage({ kith: 1, type: "render", rev: 1, state: held, host: {} }, "*");
   }, state);
+
+  /* And the asset push, which is a separate thing the host does and this tool did not.
+   *
+   * A surface that shows an image reads a *path* from the store — bytes cannot travel in it —
+   * so the host reads the file and pushes the bytes in. Without this the tool showed a browser
+   * tab reporting "nothing open yet" while the store plainly said otherwise, which is a
+   * faithful reproduction of a bug that does not exist. A stand-in that leaves out half of what
+   * it stands in for is worse than none. */
+  const declared = mounted.assets ?? [];
+  for (const key of declared) {
+    const path = state?.[key];
+    if (typeof path !== "string" || !path) continue;
+    const bytes = await fetch(
+      `${origin}/api/plugins/${plugin}/file?path=${encodeURIComponent(path)}`,
+      { headers },
+    ).then((r) => (r.ok ? r.arrayBuffer() : null));
+    if (!bytes) {
+      console.error(`!! could not read the file for "${key}" — the surface will show nothing`);
+      continue;
+    }
+    await page.evaluate(
+      ({ key: name, mime, data }) => {
+        window.postMessage(
+          { kith: 1, type: "asset", key: name, mime, bytes: new Uint8Array(data).buffer },
+          "*",
+        );
+      },
+      { key, mime: mimeOf(path), data: [...new Uint8Array(bytes)] },
+    );
+  }
   await page.waitForTimeout(900);
 
   const measured = await page.evaluate(() => {
@@ -108,4 +142,21 @@ try {
 } finally {
   await browser.close();
   await fetch(`${origin}/api/plugins/frame/${mounted.ticket}`, { method: "DELETE", headers });
+}
+
+
+/** The type a path implies, matching the host's own table. */
+function mimeOf(path) {
+  const suffix = path.slice(path.lastIndexOf(".")).toLowerCase();
+  return (
+    {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+      ".svg": "image/svg+xml",
+      ".pdf": "application/pdf",
+    }[suffix] ?? "application/octet-stream"
+  );
 }

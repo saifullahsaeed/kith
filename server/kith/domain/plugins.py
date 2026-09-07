@@ -77,6 +77,9 @@ MAX_DESCRIPTION = 240
 MAX_MODEL_COMMANDS = 8
 MAX_COMMANDS = 32
 MAX_SURFACES = 4
+#: State keys one surface may declare as files. Small because each is bytes read from disk and
+#: pushed over postMessage every time its path changes — a browser plugin needs one.
+MAX_ASSET_KEYS = 4
 MAX_PARAM_KEYS = 8
 MAX_RETURN_KEYS = 12
 #: Ceiling on any declared `maxLength`.
@@ -258,6 +261,15 @@ class SurfaceDecl:
     #: things across one manifest is a bug waiting for its first author.
     answers: Literal["conversation", "any"] = "conversation"
     wants: tuple[str, ...] = ()
+    #: State keys whose value is a path to one of this plugin's own files. When one changes, the
+    #: host reads the bytes and pushes them to the frame as an asset under the same name.
+    #:
+    #: **Declared rather than requested, and that is the point.** A frame has no verb that
+    #: reaches outside its own store — no fetch, no ask — which is what keeps every privileged
+    #: effect behind chrome Kith drew. A surface that could say "send me the bytes at this path"
+    #: would be the first crack in that. So the manifest says which keys are files, a person
+    #: sees it at the review, and the host pushes; the frame only ever receives.
+    assets: tuple[str, ...] = ()
 
     def problems(self) -> list[str]:
         found: list[str] = []
@@ -270,6 +282,14 @@ class SurfaceDecl:
         for want in self.wants:
             if want not in WANTS:
                 found.append(f"The {self.id!r} surface asks for {want!r}, which Kith does not offer.")
+        if len(self.assets) > MAX_ASSET_KEYS:
+            found.append(
+                f"The {self.id!r} surface declares {len(self.assets)} file keys and may declare "
+                f"{MAX_ASSET_KEYS}. Each one is bytes read and pushed every time it changes."
+            )
+        for key in self.assets:
+            if not re.match(r"^[a-z0-9][a-z0-9._-]{0,63}$", key):
+                found.append(f"{key!r} is not a state key, so it cannot name a file.")
         return found
 
 
@@ -521,6 +541,7 @@ class Plugin:
                     "instances": s.instances,
                     "answers": s.answers,
                     "wants": list(s.wants),
+                    "assets": list(s.assets),
                 }
                 for s in self.surfaces
             ],
@@ -550,7 +571,10 @@ class Plugin:
 # --------------------------------------------------------------------------- #
 
 _SERVER_KEYS = {"command", "args", "env", "reach"}
-_SURFACE_KEYS = {"id", "title", "icon", "minWidth", "minHeight", "entry", "instances", "answers", "wants"}
+_SURFACE_KEYS = {
+    "id", "title", "icon", "minWidth", "minHeight", "entry",
+    "instances", "answers", "wants", "assets",
+}  # fmt: skip
 _COMMAND_KEYS = {
     "name", "title", "description", "params", "required", "delivery", "surface",
     "does", "returns", "timeout_ms", "repeatable", "present", "model",
@@ -622,6 +646,7 @@ def parse(directory: Path) -> Plugin:
                 instances="many" if block.get("instances") == "many" else "single",
                 answers="any" if block.get("answers") == "any" else "conversation",
                 wants=tuple(_text(w, 32) for w in (block.get("wants") or [])),
+                assets=tuple(_text(a, 64) for a in (block.get("assets") or [])),
             )
         )
 

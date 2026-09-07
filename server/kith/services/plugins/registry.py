@@ -336,6 +336,7 @@ def surfaces(config_db: Path) -> list[dict]:
                     "minHeight": surface.min_height,
                     "instances": surface.instances,
                     "answers": surface.answers,
+                    "assets": list(surface.assets),
                 }
             )
     return out

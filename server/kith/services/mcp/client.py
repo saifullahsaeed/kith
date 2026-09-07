@@ -63,6 +63,8 @@ class StdioServer:
         #: Decides whether the process is confined and whether its environment is constructed
         #: or inherited — see `start`.
         self._owner = owner
+        #: Where this server's stderr went, once it has started. Read by the Plugins screen.
+        self.log_path = None
         self._process: subprocess.Popen | None = None
         self._next_id = 0
         self._lock = threading.Lock()
@@ -79,11 +81,18 @@ class StdioServer:
                 argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                # Kept separate and drained nowhere: a server that logs chattily to stderr
-                # would otherwise fill a pipe buffer and deadlock mid-conversation. DEVNULL
-                # loses the logs, which is the right trade for a background process nobody
-                # is reading — a failure still surfaces as a dead pipe on the next call.
-                stderr=subprocess.DEVNULL,
+                # A file for a plugin's server, `DEVNULL` for one the person typed in.
+                #
+                # A pipe is what must not happen: nothing drains it, so a chatty server fills
+                # the buffer and deadlocks mid-conversation. That is why this was `DEVNULL` —
+                # and `DEVNULL` then silenced the one thing that could explain a server which
+                # will not start. A `the server closed its output` with the reason discarded
+                # cost real time on the first plugin that bundled one.
+                #
+                # A file has neither problem: no buffer to fill, and the reason is on disk in
+                # the plugin's own storage where the Plugins screen can show it. Truncated at
+                # each start, so it is about *this* run rather than every run since install.
+                stderr=self._log(),
                 env=env,
                 cwd=cwd,
                 text=True,
@@ -130,11 +139,38 @@ class StdioServer:
         home = confinement.home_for(self._owner)
         home.mkdir(parents=True, exist_ok=True)
         (home / "tmp").mkdir(exist_ok=True)
+        # **The plugin's own folder, not its storage.** A manifest saying
+        # `args: ["server/index.mjs"]` means the file in its own folder — that is the only
+        # sensible reading, and starting a program from anywhere else makes every relative path
+        # in it wrong. It cost a `the server closed its output` with nothing to diagnose it by,
+        # because node was looking for the script under `.home`.
+        #
+        # Readable but not writable, which is the right pair: a server reads its own code and
+        # its own assets from here, and writes to `HOME` and `TMPDIR`, both of which point into
+        # `.home`. And the cwd must be inside the allowed tree at all — Node's `uv_cwd` and
+        # Python's `sys.path[0]` both return EPERM otherwise, and the process dies before any of
+        # its own code runs.
         return (
             confinement.confine(argv, self._owner),
             confinement.environment(self._owner, self._env),
-            str(home),
+            str(confinement.folder_for(self._owner)),
         )
+
+    def _log(self):
+        """Where this server's complaints go. `DEVNULL` for a server the person configured
+        themselves — their process, their terminal — and a file for a plugin's, because nobody
+        is watching a subprocess an install started."""
+        if not self._owner:
+            return subprocess.DEVNULL
+        try:
+            from kith.infra import confinement
+
+            place = confinement.home_for(self._owner)
+            place.mkdir(parents=True, exist_ok=True)
+            self.log_path = place / "server.log"
+            return open(self.log_path, "wb")
+        except OSError:
+            return subprocess.DEVNULL
 
     def stop(self) -> None:
         process, self._process = self._process, None
@@ -191,6 +227,15 @@ class StdioServer:
             "content": _readable(answer.get("content") or []),
             "isError": bool(answer.get("isError")),
             **({"structured": answer["structuredContent"]} if "structuredContent" in answer else {}),
+            # `_kith_state` is the reserved key a *plugin's* server uses to say what it changed,
+            # and it has to survive this projection or the channel does not exist.
+            #
+            # It did not, and the failure was as quiet as they get: the tool call succeeded, the
+            # store stayed empty, the surface never updated, and nothing anywhere had an opinion
+            # about why. This function builds a fresh dict rather than passing the reply through,
+            # so a key nobody listed here is simply gone — which is the right default for
+            # everything a server might invent, and wrong for the one key we reserved ourselves.
+            **({"_kith_state": answer["_kith_state"]} if isinstance(answer.get("_kith_state"), dict) else {}),
         }
 
     # -- the wire ----------------------------------------------------------- #

@@ -1,0 +1,116 @@
+{
+  "manifest": 1,
+  "id": "browser",
+  "name": "Browser",
+  "version": "0.1.0",
+  "description": "A real browser he drives \u2014 you watch each step, and you can click into it when he is stuck.",
+  "publisher": "kith",
+  "license": "MIT",
+  "server": {
+    "command": "node",
+    "args": [
+      "server/index.mjs"
+    ],
+    "env": [
+      "PLAYWRIGHT_BROWSERS_PATH"
+    ],
+    "reach": {
+      "read": [
+        "~/Library/Caches/ms-playwright"
+      ],
+      "write": [
+        "plugin:state"
+      ],
+      "network": "any"
+    }
+  },
+  "surfaces": [
+    {
+      "id": "page",
+      "title": "Browser",
+      "icon": "layout-grid",
+      "minWidth": 420,
+      "minHeight": 320,
+      "entry": "ui/board.html",
+      "instances": "single",
+      "answers": "conversation",
+      "assets": [
+        "shot"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "where",
+      "title": "Ask the tab what it is showing",
+      "description": "Ask the Browser tab what is on screen and whether a click is queued for you. Needs the tab open \u2014 for what the page says, use the browser's own read tool instead.",
+      "params": {},
+      "required": [],
+      "delivery": "surface",
+      "surface": "page",
+      "returns": {
+        "url": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "showing": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "pendingClick": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999
+        }
+      },
+      "timeout_ms": 2500,
+      "repeatable": true,
+      "present": {
+        "in": "none"
+      },
+      "model": true
+    },
+    {
+      "name": "clear_click",
+      "title": "Clear the queued click",
+      "description": "Drop a click the person queued, once you have acted on it. Do this straight after clicking it, or you will act on it again next time you look.",
+      "params": {
+        "confirm": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "confirm"
+      ],
+      "delivery": "state",
+      "does": {
+        "set": [
+          "click"
+        ]
+      },
+      "present": {
+        "in": "none"
+      },
+      "model": true
+    }
+  ],
+  "state": {
+    "scope": "conversation",
+    "digest": {
+      "enabled": false,
+      "lead": "Browser",
+      "keys": [
+        "url",
+        "title"
+      ]
+    }
+  }
+}

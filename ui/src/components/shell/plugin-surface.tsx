@@ -8,7 +8,13 @@ import { canvasTokens } from "@/lib/canvas-bridge";
 import { paletteFor } from "@/lib/kith-palette";
 import { PROTOCOL, readPluginMessage } from "@/lib/plugin-bridge";
 import { indexSettled, pluginSurface } from "@/lib/plugin-index";
-import { fetchPluginState } from "@/lib/backend";
+import {
+  fetchPluginCalls,
+  fetchPluginFile,
+  fetchPluginState,
+  putSurfaceFile,
+  replyToPluginCall,
+} from "@/lib/backend";
 import { keys } from "@/lib/query-keys";
 import { useDarkMode } from "@/lib/theme";
 
@@ -132,6 +138,22 @@ export function PluginSurface({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ keys: message.keys }),
         }).catch(() => {});
+      } else if (message.type === "result") {
+        /* The surface answering a question core asked. Relayed, never acted on: the value is
+         * shaped against the command's declared `returns` here *and* again on the server — the
+         * duplication `prompt.py` insists on, because this check runs on the far side of an
+         * HTTP request anything local can make. */
+        const held = pending.current.get(message.call);
+        if (held) {
+          pending.current.delete(message.call);
+          window.clearTimeout(held.timer);
+          void replyToPluginCall(held.id, message.value, message.ok);
+        }
+      } else if (message.type === "file.put") {
+        /* Bytes the surface produced. Written into the plugin's own storage, and the path comes
+         * back — so the *model* can read it. Before this a surface could render something
+         * nobody was able to look at. */
+        void putSurfaceFile(ticket.current, message.name, message.mime, message.bytes);
       } else if (message.type === "ready") {
         /* **The frame saying its own script has run**, which `onLoad` does not tell you: the
          * document has loaded by then but nothing guarantees `window.kith.render(...)` has been
@@ -182,6 +204,74 @@ export function PluginSurface({
       "*",
     );
   }, [held, ready]);
+
+  /* Calls waiting for this surface to answer.
+   *
+   * Fetched on mount and on every `plugin_call` change — snapshot-then-subscribe, so a call
+   * survives a reload of this window rather than being lost with a push that already happened.
+   * Claimed per renderer, so two windows do not both deliver the same one and race to answer. */
+  const { data: waiting } = useQuery({
+    queryKey: keys.pluginCalls(conversationId),
+    queryFn: () => fetchPluginCalls(conversationId, client.current),
+    enabled: ready === "yes",
+  });
+
+  /* Deliver each one into the frame, and answer for it if it does not answer in time.
+   *
+   * **This clock is not redundant with the server's.** It covers a frame that is slow or hung;
+   * the server's twenty seconds covers *this window* being gone, where nobody is running this
+   * clock at all. A late reply is dropped rather than forwarded, because by then the model has
+   * already been told the surface did not answer. */
+  useEffect(() => {
+    const frameWindow = frame.current?.contentWindow;
+    if (ready !== "yes" || !frameWindow || !waiting?.length) return;
+    for (const call of waiting) {
+      if (pending.current.has(call.id)) continue;
+      const timer = window.setTimeout(() => {
+        pending.current.delete(call.id);
+        void replyToPluginCall(call.id, {}, false);
+      }, Math.max(250, call.timeoutMs));
+      pending.current.set(call.id, { id: call.id, timer });
+      frameWindow.postMessage(
+        { kith: 1, type: "command", call: call.id, name: call.command, args: call.args },
+        "*",
+      );
+    }
+  }, [waiting, ready]);
+
+  /* Files the surface declared, pushed in as bytes when their path changes.
+   *
+   * **The host decides to push; the frame never asks.** A surface with a verb for "send me the
+   * bytes at this path" would be the first crack in the rule that keeps every privileged effect
+   * behind chrome Kith drew — so the manifest names which state keys are files, a person sees
+   * that at the review, and this pushes. The frame only ever receives.
+   *
+   * Keyed on the path, so a store write that did not change the file does not re-read it. Without
+   * that, a surface writing to its own store would fetch the same PNG on every write, and each
+   * fetch's push would trigger the next.
+   */
+  const sent = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    const frameWindow = frame.current?.contentWindow;
+    const keys = declared?.assets ?? [];
+    if (ready !== "yes" || !frameWindow || !held || !keys.length) return;
+    for (const key of keys) {
+      const path = held.values?.[key];
+      if (typeof path !== "string" || !path) continue;
+      if (sent.current.get(key) === path) continue;
+      sent.current.set(key, path);
+      void fetchPluginFile(plugin, path).then((bytes) => {
+        if (!bytes) return;
+        // Transferred rather than copied: a screenshot is hundreds of kilobytes and this runs
+        // on every navigation.
+        frame.current?.contentWindow?.postMessage(
+          { kith: 1, type: "asset", key, mime: mimeOf(path), bytes },
+          "*",
+          [bytes],
+        );
+      });
+    }
+  }, [held, ready, plugin, declared]);
 
   /* Repainted rather than remounted when the theme changes — the frame keeps its scroll position
    * and anything half-typed, which a remount would throw away. */
@@ -261,5 +351,26 @@ function Absent({
         </Button>
       ) : null}
     </div>
+  );
+}
+
+
+/** The type a path implies, for the `blob:` the frame will make of it.
+ *
+ * By suffix rather than by sniffing the bytes: the server already refused anything not on a
+ * closed list before it wrote the file, so the suffix is a fact rather than a guess. */
+function mimeOf(path: string): string {
+  const at = path.lastIndexOf(".");
+  const suffix = at >= 0 ? path.slice(at).toLowerCase() : "";
+  return (
+    {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+      ".svg": "image/svg+xml",
+      ".pdf": "application/pdf",
+    }[suffix] ?? "application/octet-stream"
   );
 }

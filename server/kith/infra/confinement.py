@@ -119,6 +119,30 @@ class Resolved:
         }
 
 
+def _real(path: Path) -> Path:
+    """A path as the kernel will see it.
+
+    **Every path in a profile has to be resolved, and this is the third time that has bitten.**
+    A `subpath` rule is matched against the resolved path of whatever is being opened, so an
+    unresolved rule silently matches nothing — and a *deny* that matches nothing is harmless
+    while an *exception* that matches nothing removes the permission it was granting. So a
+    plugin whose data directory traverses a symlink loses access to its own folder, and the
+    failure arrives as `EPERM: uv_cwd` before any of its code runs.
+
+    Latent in production, where the data directory is `~/.kith` or `server/data` with no symlink
+    in it, and immediate anywhere under a temporary directory: macOS makes `/var` a symlink to
+    `/private/var`. Resolved here, once, so no caller has to remember.
+
+    `strict=False` because these are directories that may not exist yet — a plugin's storage is
+    created on first start, and a reach path is allowed to name somewhere the person has not
+    made yet.
+    """
+    try:
+        return path.resolve(strict=False)
+    except (OSError, ValueError):
+        return path
+
+
 def folder_for(plugin_id: str) -> Path:
     """Where the plugin itself is installed — its manifest, its surface, its server's code.
 
@@ -132,12 +156,12 @@ def folder_for(plugin_id: str) -> Path:
     plugin cannot rewrite its own code between restarts — which matters for the same reason the
     profile lives outside its write set.
     """
-    return settings.plugins_dir() / plugin_id
+    return _real(settings.plugins_dir() / plugin_id)
 
 
 def home_for(plugin_id: str) -> Path:
     """A plugin's own storage: its `HOME`, its working directory, the one place it may write."""
-    return settings.plugins_dir() / plugin_id / ".home"
+    return _real(settings.plugins_dir() / plugin_id / ".home")
 
 
 def resolve(reach, plugin_id: str, *, workspace_root: Path | None = None) -> Resolved:
@@ -290,16 +314,17 @@ def profile(resolved: Resolved, home: Path, runtime: str = "") -> str:
     never read it. Metadata only — `readdir` on `$HOME` still returns EPERM, which is the
     property that matters.
     """
-    real_home = Path.home().resolve()
-    data = settings.DATA_DIR.resolve()
+    real_home = _real(Path.home())
+    data = _real(settings.DATA_DIR)
 
     tree = runtime_root(runtime) if runtime else None
     # Everything this program may read, and everything it may write. The write set is a subset
     # of the read set by construction — a program that may write a file may look at it.
-    writable = [home, *resolved.write]
+    home = _real(home)
+    writable = [home, *(_real(one) for one in resolved.write)]
     # Its own installed folder is readable but **not** writable: a server has to be able to read
     # its own code, and must not be able to rewrite it between restarts.
-    readable = [*writable, folder_for(_plugin_of(home)), *resolved.read]
+    readable = [*writable, folder_for(_plugin_of(home)), *(_real(one) for one in resolved.read)]
     if tree is not None:
         readable.append(tree)
     # The roots the boundary closes. A granted path may sit inside any of them, which is

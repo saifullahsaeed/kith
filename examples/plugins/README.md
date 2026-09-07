@@ -114,3 +114,63 @@ variables onto them, which is the whole of its theming.
 **`window.kith` is the only channel out**, and it has no verb reaching past the plugin's own
 store. `flowpad/src/kith.d.ts` is the shape, hand-written because a plugin is a folder someone
 drops in — there is nothing to install.
+
+## browser — a browser he drives, that you can reach into
+
+The one that needs every mechanism at once, and the reason it is here.
+
+```sh
+cd browser && npm install && npx playwright install chromium
+```
+
+Install `examples/plugins/browser`, and when the review screen asks for
+`PLAYWRIGHT_BROWSERS_PATH`, give it `~/Library/Caches/ms-playwright`.
+
+```
+Open news.ycombinator.com, read the front page, and tell me the three
+most interesting titles and why. Open the Browser tab first so I can
+watch.
+```
+
+### What it is made of, and why each piece has to be where it is
+
+| | |
+| --- | --- |
+| **Chromium** | in the plugin's MCP **server** — a surface has `default-src 'none'`, so it could not load a page even if you asked it to |
+| **The picture** | a PNG in the plugin's own storage; the *path* goes to him, and `read_file` routes it to `read_image` so he genuinely sees it |
+| **The tab** | reads the path from the store, and the **host** pushes the bytes in as an asset, because a frame cannot fetch |
+| **Your click** | on the picture → a coordinate in the store → his skill tells him to check before his next step |
+| **`where`** | a `surface` command: he asks the tab what is on screen and waits for it |
+
+That split is the whole design in one plugin: **the subprocess does, the frame shows, and
+neither can do the other's job.**
+
+### The bit worth trying
+
+Ask him to sign in to something. He will get stuck, `ask` you, and stop. Click the button on
+the screenshot; tell him to carry on. He reads the coordinate out of the store and continues.
+Neither of you had to describe the page to the other.
+
+### What it costs
+
+| | |
+| --- | --- |
+| bundle (React, no graph library) | 192 KB |
+| added to every request | ~200 tokens (two command schemas) |
+| `read` on a page | a few hundred tokens |
+| `read_file` on a screenshot | a few thousand |
+
+The skill exists mostly to teach him that last row: **read the text, and reach for the picture
+only when layout is the question.** A browser plugin that screenshots everything is a browser
+plugin that empties a context window in six steps.
+
+### The boundary it runs inside
+
+Its manifest declares `reach.read: ["~/Library/Caches/ms-playwright"]` and nothing else, so the
+install screen says in as many words that it will be able to read your Playwright cache — and
+that the rest of your home folder is sealed from it. Verified: Chromium launches and screenshots
+inside that profile, and the subprocess cannot read `~/.ssh` or list `$HOME`.
+
+It has network access, and the review screen says so plainly: *it will be able to see those
+files, and could send them anywhere.* For a browser that is the entire point, which is exactly
+why the sentence is not conditional.

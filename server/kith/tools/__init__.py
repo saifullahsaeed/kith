@@ -285,8 +285,12 @@ def _absorb_state(config_db, label: str, answer: dict) -> None:
         if not registry.owner_of_label(config_db, label):
             return
         state.write(live.AGENT_DB_PATH, label, held, writer="server")
-    except Exception:
-        pass
+    except Exception as exc:
+        # Swallowed, because bookkeeping must never fail the call it describes — but **said**,
+        # because a silent swallow here is a plugin whose surface never updates and nothing
+        # anywhere explaining why. That cost real time on the first plugin that used this: the
+        # store stayed empty, the tool call succeeded, and there was no thread to pull.
+        print(f"[kith] plugins: {label} tried to record state and could not ({exc})")
 
 
 def _plugin_named(config_db, label: str) -> str:

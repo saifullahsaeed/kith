@@ -26,6 +26,10 @@ export interface PluginSurface {
   minHeight: number;
   instances: "single" | "many";
   answers: "conversation" | "any";
+  /** State keys holding a path to one of the plugin's own files. When one changes the host
+   *  reads the bytes and pushes them in as an asset — declared, never requested, because a
+   *  frame has no verb that reaches outside its own store. */
+  assets?: string[];
 }
 
 let surfaces: PluginSurface[] = read();

@@ -1,0 +1,119 @@
+/* On top of the token stylesheet the host injects, so what is here is only what this surface
+   adds. `--kith-*` throughout: the person can flip the theme with the tab open and the host
+   repaints those without remounting the frame. */
+
+#root {
+  height: 100%;
+}
+
+.browser-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.browser-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--kith-line);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.browser-title {
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.browser-url {
+  color: var(--kith-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Not `direction: rtl`, which was the first attempt at eliding the *start* of a long URL so
+     the page you are on stays readable. It works on the middle of a string and mangles the
+     ends: `https://example.com/` rendered as `/https://example.com`, because the trailing
+     slash is punctuation and bidi reordering moved it to the front. A plain end-ellipsis is
+     honest, and the whole address is in the element's `title` anyway. */
+  unicode-bidi: plaintext;
+}
+
+.browser-pending {
+  flex: 0 0 auto;
+  font-size: 11px;
+  border-color: var(--kith-accent);
+  background: var(--kith-accent-soft);
+}
+
+.browser-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--kith-muted);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10px;
+}
+
+.browser-page img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--kith-line);
+  border-radius: 6px;
+  /* A pointer, because it is clickable — and that is the only affordance saying so, since a
+     screenshot otherwise looks like a picture rather than a thing you can reach into. */
+  cursor: crosshair;
+  background: var(--kith-bg);
+}
+
+.browser-empty {
+  margin: auto;
+  padding: 0 28px;
+  text-align: center;
+  color: var(--kith-dim);
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 34em;
+}
+
+.browser-steps {
+  flex: 0 0 auto;
+  max-height: 27%;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 10px;
+  list-style: none;
+  border-top: 1px solid var(--kith-line);
+  font-size: 11px;
+}
+
+.browser-steps li {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.browser-step-note {
+  color: var(--kith-text);
+  white-space: nowrap;
+}
+
+.browser-step-title {
+  color: var(--kith-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

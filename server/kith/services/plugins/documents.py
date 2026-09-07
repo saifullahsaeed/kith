@@ -404,6 +404,17 @@ def mount(
         _mounts[entry.ticket] = entry
         while len(_mounts) > MAX_MOUNTS:
             _mounts.pop(next(iter(_mounts)))
+
+    # A fresh mount is a fresh chance to answer. `calls` gives up on a surface after three
+    # timeouts and tells the person to reload it from its tab — so a reload has to actually
+    # clear that, or the message is advice that does not work and the surface is finished for
+    # the life of the process.
+    try:
+        from kith.services.plugins import calls
+
+        calls.forget_misses(plugin, view, instance)
+    except Exception:  # pragma: no cover - a mount must not fail over bookkeeping
+        pass
     return entry
 
 
