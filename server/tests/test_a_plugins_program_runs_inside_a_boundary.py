@@ -47,7 +47,12 @@ class Reach:
 def confined(tmp_path: Path, monkeypatch):
     """A plugin whose boundary is built and compiled, ready to run something inside."""
     monkeypatch.setenv("KITH_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("KITH_PLUGINS_DIR", str(tmp_path / "plugins"))
+    # **Under the data directory, the way production lays it out.** `plugins_dir()` defaults to
+    # `DATA_DIR / "plugins"` and the profile closes `DATA_DIR` — so a plugin's folder is inside
+    # a denied root and is readable only through the exception. A fixture that put it elsewhere
+    # would place it outside every deny, and the write test below would pass by testing nothing,
+    # which is exactly what it did first time round.
+    monkeypatch.setenv("KITH_PLUGINS_DIR", str(tmp_path / "data" / "plugins"))
     monkeypatch.setattr("kith.settings.DATA_DIR", tmp_path / "data")
 
     readable = tmp_path / "readable"
@@ -190,6 +195,41 @@ def test_it_can_write_its_own_storage(confined):
 
     assert answer.returncode == 0
     assert (home / "state" / "x.txt").read_text().strip() == "kept"
+
+
+def test_a_server_can_read_its_own_code(confined, tmp_path: Path):
+    """**A program that cannot read itself cannot run**, and this was broken.
+
+    The profile denies the whole data directory, and a plugin's server script lives inside it —
+    so `node server/index.mjs` could not read `server/index.mjs`. It arrived as a
+    module-resolution error naming a file that is plainly there, and it never surfaced until a
+    plugin actually bundled a server, because the examples before it ran no program at all.
+    """
+    confined()
+    folder = confinement.folder_for("probe")
+    (folder / "server").mkdir(parents=True, exist_ok=True)
+    (folder / "server" / "index.mjs").write_text("console.log('server ok')")
+
+    answer = under(["/bin/cat", str(folder / "server" / "index.mjs")])
+
+    assert answer.returncode == 0, answer.stderr
+    assert "server ok" in answer.stdout
+
+
+def test_but_a_server_cannot_rewrite_its_own_code(confined):
+    """Read, not write. A plugin that can edit its own program between restarts is a plugin
+    whose reviewed code and running code are different things — the same argument as the
+    profile living outside the write set."""
+    confined()
+    folder = confinement.folder_for("probe")
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / "kith.plugin.json"
+    target.write_text('{"manifest": 1}')
+
+    answer = under(["/bin/sh", "-c", f'echo tampered > "{target}"'])
+
+    assert answer.returncode != 0
+    assert target.read_text() == '{"manifest": 1}'
 
 
 def test_it_cannot_rewrite_its_own_cage(confined):

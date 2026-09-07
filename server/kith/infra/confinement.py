@@ -119,8 +119,24 @@ class Resolved:
         }
 
 
+def folder_for(plugin_id: str) -> Path:
+    """Where the plugin itself is installed — its manifest, its surface, its server's code.
+
+    **Readable, and it has to be.** The profile denies the whole data directory, and a plugin's
+    server script lives inside it: without this exception `node server/index.mjs` cannot read
+    `server/index.mjs`, and the failure arrives as a module-resolution error naming a file that
+    is plainly there. Never surfaced until a plugin actually bundled a server, because the two
+    examples before it ran no program at all.
+
+    Read only. The write set is `home_for` below plus whatever the manifest declared, so a
+    plugin cannot rewrite its own code between restarts — which matters for the same reason the
+    profile lives outside its write set.
+    """
+    return settings.plugins_dir() / plugin_id
+
+
 def home_for(plugin_id: str) -> Path:
-    """A plugin's own directory: its `HOME`, its working directory, its writable storage."""
+    """A plugin's own storage: its `HOME`, its working directory, the one place it may write."""
     return settings.plugins_dir() / plugin_id / ".home"
 
 
@@ -236,6 +252,13 @@ def runtime_root(command: str) -> Path | None:
     return None if root in (home, home.parent, Path("/")) else root
 
 
+def _plugin_of(home: Path) -> str:
+    """The plugin id, from its own storage path. `home_for` is `<plugins>/<id>/.home`, so the
+    id is its grandparent's name — derived rather than passed so `profile` keeps one argument
+    for the thing it is building a boundary around."""
+    return home.parent.name
+
+
 def profile(resolved: Resolved, home: Path, runtime: str = "") -> str:
     """The `sandbox-exec` profile for one boundary.
 
@@ -274,7 +297,11 @@ def profile(resolved: Resolved, home: Path, runtime: str = "") -> str:
     # Everything this program may read, and everything it may write. The write set is a subset
     # of the read set by construction — a program that may write a file may look at it.
     writable = [home, *resolved.write]
-    readable = [*writable, *resolved.read] + ([tree] if tree is not None else [])
+    # Its own installed folder is readable but **not** writable: a server has to be able to read
+    # its own code, and must not be able to rewrite it between restarts.
+    readable = [*writable, folder_for(_plugin_of(home)), *resolved.read]
+    if tree is not None:
+        readable.append(tree)
     # The roots the boundary closes. A granted path may sit inside any of them, which is
     # exactly why each deny carries its exceptions rather than being followed by an allow.
     closed = [real_home, data, Path("/Volumes")]
