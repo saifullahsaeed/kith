@@ -5,6 +5,13 @@
  * mapping React Flow's own variables onto them means the graph follows the app with nothing to
  * keep in step by hand. */
 
+/* The host stylesheet already gives a single root child `height: 100%`, at zero specificity so
+   a surface can opt out. This says it anyway: a layout that only works because of a floor
+   somebody else provides is a layout that breaks when the root gains a sibling. */
+#root {
+  height: 100%;
+}
+
 .flow-shell {
   display: flex;
   flex-direction: column;
@@ -50,7 +57,9 @@
   --xy-controls-button-background-color: var(--kith-muted);
   --xy-controls-button-color: var(--kith-text);
   --xy-controls-button-border-color: var(--kith-line);
-  --xy-minimap-background-color: var(--kith-muted);
+  --xy-minimap-background-color: var(--kith-bg);
+  --xy-minimap-mask-background-color-props: var(--kith-line);
+  --xy-minimap-node-background-color-props: var(--kith-dim);
   --xy-node-color: var(--kith-text);
   --xy-node-border: 1px solid var(--kith-line);
   --xy-node-background-color: var(--kith-bg);
@@ -90,4 +99,48 @@
   background: transparent;
   color: var(--kith-dim);
   font-size: 11px;
+}
+
+
+/* The minimap, which looked like a bug before it was styled: React Flow's default mask and node
+   colours are tuned for its own palette, so against the app's they came out as a washed grey
+   slab sitting on top of a node. A border and the host's own tokens make it read as chrome. */
+.react-flow__minimap {
+  border: 1px solid var(--kith-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.react-flow__minimap-mask {
+  fill: var(--kith-line);
+  fill-opacity: 0.35;
+}
+
+.react-flow__minimap-node {
+  fill: var(--kith-dim);
+  stroke: none;
+}
+
+.react-flow__controls {
+  border: 1px solid var(--kith-line);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.react-flow__controls-button {
+  border-bottom: 1px solid var(--kith-line);
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.react-flow__edge-text {
+  font-size: 10px;
+  fill: var(--kith-dim);
+}
+
+.react-flow__edge-textbg {
+  fill: var(--kith-bg);
 }

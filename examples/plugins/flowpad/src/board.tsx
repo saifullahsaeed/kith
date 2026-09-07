@@ -5,6 +5,7 @@ import {
   Controls,
   MiniMap,
   ReactFlow,
+  Position,
   applyNodeChanges,
   type Edge,
   type Node,
@@ -120,10 +121,15 @@ function Board() {
               id,
               label: String(args.label ?? id),
               kind: String(args.kind ?? "step"),
-              // Laid out in a column by default, so a diagram he builds without giving
-              // positions is still readable rather than a pile at the origin.
-              x: Number(args.x ?? 40 + (held.length % 3) * 260),
-              y: Number(args.y ?? 40 + Math.floor(held.length / 3) * 130),
+              /* Laid out left to right, wrapping every fourth node, when he gives no
+               * position — which he usually does not.
+               *
+               * A grid three wide with a sequential chain through it produces long diagonal
+               * edges crossing the whole canvas, which reads as spaghetti however correct it
+               * is. Four across with a tighter vertical gap keeps each hop short, and a flow
+               * described as "left to right" comes out reading left to right. */
+              x: Number(args.x ?? 30 + (held.length % 4) * 210),
+              y: Number(args.y ?? 30 + Math.floor(held.length / 4) * 105),
             }),
           );
         } else if (record.command === "edge") {
@@ -205,6 +211,9 @@ function Board() {
           edges={edges}
           onNodesChange={onNodesChange}
           fitView
+          // Room around the graph, so the outermost nodes are not flush against the pane edge
+          // and the zoom controls do not sit on top of one.
+          fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
           // No `colorMode` prop: the host repaints `--kith-*` on a theme change without
           // remounting, and `board.css` maps React Flow's own variables onto those — so the
@@ -214,7 +223,9 @@ function Board() {
         >
           <Background gap={20} size={1} />
           <Controls showInteractive={false} />
-          {nodes.length > 6 ? <MiniMap pannable zoomable /> : null}
+          {/* Only once the graph is big enough to get lost in. On eight nodes it is chrome
+              covering content, which is what it was doing at thirteen before it was styled. */}
+          {nodes.length > 14 ? <MiniMap pannable zoomable /> : null}
         </ReactFlow>
       )}
     </div>
@@ -241,6 +252,15 @@ function toNode(held: StoredNode): Node {
     position: { x: Number(held.x) || 0, y: Number(held.y) || 0 },
     data: { label: held.label, kind: held.kind },
     className: KINDS[held.kind] ?? KINDS.step,
+    /* Handles on the sides, because the layout runs left to right.
+     *
+     * React Flow defaults to top and bottom, so every edge in a horizontal chain left its
+     * source downwards, ran along under the row and came back up into the next node — a little
+     * rounded loop under each box that reads as a mistake. Sides make each hop a straight
+     * line. The one edge that wraps to the next row still loops, which is honest: that is a
+     * step backwards across the diagram and it should look like one. */
+    sourcePosition: Position.Right,
+    targetPosition: Position.Left,
   };
 }
 
@@ -251,6 +271,10 @@ function toEdge(held: StoredEdge): Edge {
     target: held.to,
     label: held.label || undefined,
     animated: false,
+    /* Orthogonal rather than the default bezier. A flow chart is read as a sequence of steps,
+     * and a bezier between two boxes in a grid sweeps across everything between them; a
+     * smoothstep hugs the gap and stays legible when a dozen of them overlap. */
+    type: "smoothstep",
   };
 }
 

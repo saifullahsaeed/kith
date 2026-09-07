@@ -248,6 +248,20 @@ def _groundwork(palette: dict) -> str:
 }}
 * {{ box-sizing: border-box; }}
 html, body {{ margin: 0; height: 100%; }}
+/* A surface's own root fills the frame.
+ *
+ * Measured in Chromium, because reasoning about it is how this went unnoticed: without this the
+ * React example rendered its header at 45px and its graph at **zero** — thirteen nodes present
+ * in the DOM, no space to draw them in, and a blank pane with nothing anywhere saying why. The
+ * chain is ordinary CSS and ordinary CSS is the problem: `body` is 100% tall, a mounting div is
+ * `height: auto`, and a percentage height inside an auto-height parent behaves as auto — so a
+ * `flex: 1` child has nothing to grow into.
+ *
+ * Every full-height surface wants this and each one would hit it separately, which is what a
+ * host stylesheet is for: the same argument as the colour tokens, which exist so a surface that
+ * sets nothing still belongs on the screen. `:where()` keeps the specificity at zero, so a
+ * plugin that wants a short, content-sized root just says so and wins. */
+:where(body > div:only-of-type) {{ height: 100%; }}
 body {{
   background: var(--kith-bg);
   color: var(--kith-text);

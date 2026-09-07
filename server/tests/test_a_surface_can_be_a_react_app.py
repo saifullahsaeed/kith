@@ -129,6 +129,29 @@ def test_it_costs_prompt_tokens_only_for_its_commands(flowpad):
     assert flowpad.prompt_tokens() < 800
 
 
+def test_a_surfaces_own_root_is_given_the_full_frame(flowpad):
+    """**The bug that produced a blank pane with thirteen nodes in the DOM.**
+
+    Measured in Chromium, because reasoning about it is exactly how it went unnoticed: the header
+    laid out at 45px and the graph at **zero**. The chain is ordinary CSS, which is the problem —
+    `body` is 100% tall, a mounting div is `height: auto`, and a percentage height inside an
+    auto-height parent behaves as auto, so a `flex: 1` child has nothing to grow into.
+
+    Every full-height surface wants this and each one would lose an afternoon to it separately,
+    which is what a host stylesheet is for. `:where()` keeps the specificity at zero so a surface
+    that wants a short, content-sized root just says so and wins.
+
+    Asserted on the text rather than on a rendered box because there is no layout engine in this
+    suite — `ui/scripts/look-at-a-plugin.mjs` is the thing that actually measures it, and this is
+    the guard that the rule does not quietly get deleted.
+    """
+    document = sealed(flowpad)
+
+    assert ":where(body > div:only-of-type) { height: 100%; }" in document
+    # And the frame itself is full height, or the rule above has nothing to resolve against.
+    assert "html, body { margin: 0; height: 100%; }" in document
+
+
 # --------------------------------------------------------------------------- #
 # The two ways an asset can silently fail to arrive
 # --------------------------------------------------------------------------- #
