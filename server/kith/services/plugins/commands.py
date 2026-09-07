@@ -145,22 +145,47 @@ def _write_state(agent_db: Path, plugin: Plugin, command: CommandDecl, args: dic
     return {"ok": True, "result": {"from": plugin.id, "changed": values, "slot": written["slot"]}}
 
 
-def _collect(agent_db: Path, plugin: Plugin, key: str, record: dict) -> dict:
-    """Write one call's whole record under `key`, with a sequence number on it.
+#: How many un-drained records a collected key may hold.
+#:
+#: Generous against any real burst — he drew seventeen shapes in one turn and that is the most
+#: anyone has done — and bounded so a surface that never drains cannot grow the slot until the
+#: byte cap refuses an unrelated write.
+MAX_QUEUED = 64
 
-    The sequence is read back and incremented rather than generated, so two calls in one round
-    cannot land on the same number — which is what a surface uses to know whether it has already
-    folded a record into its own list.
+
+def _collect(agent_db: Path, plugin: Plugin, key: str, record: dict) -> dict:
+    """Append one call's whole record to `key`, with a sequence number on it.
+
+    **A queue, not a slot, and that distinction was a real bug.** This wrote `{**record, seq}`
+    over the key, so each call replaced the last. A surface only folds a record when the host
+    pushes the store to it — so seventeen `draw` calls produced *one* shape: the frame was told
+    once, saw only the newest record, folded that, and the other sixteen had already been
+    overwritten by the calls that followed them. Measured exactly that way: a title that was
+    right, and "1 shape".
+
+    Appending makes the fold independent of whether anything is listening. The tab can be shut
+    for the whole turn and still show every shape when it opens, which is the property a store
+    is *for* — and the `seq` a surface tracks turns "what is new" into a comparison rather than
+    a guess about timing.
     """
     from kith.services.plugins import state
 
     try:
         held = state.read(agent_db, plugin.id, [key])["values"].get(key)
-        seq = int(held.get("seq", 0)) + 1 if isinstance(held, dict) else 1
-        written = state.write(agent_db, plugin.id, {key: {**record, "seq": seq}}, writer="host")
+        queued = list(held) if isinstance(held, list) else []
+        # A dict is what the previous shape of this function wrote. Carried over rather than
+        # discarded, so a plugin installed before this change keeps whatever it was holding.
+        if isinstance(held, dict):
+            queued = [held]
+        seq = max((int(one.get("seq", 0)) for one in queued if isinstance(one, dict)), default=0) + 1
+        queued.append({**record, "seq": seq})
+        written = state.write(agent_db, plugin.id, {key: queued[-MAX_QUEUED:]}, writer="host")
     except state.PluginStateError as refused:
         return {"ok": False, "error": str(refused)}
-    return {"ok": True, "result": {"from": plugin.id, "queued": record, "slot": written["slot"]}}
+    return {
+        "ok": True,
+        "result": {"from": plugin.id, "queued": record, "at": seq, "slot": written["slot"]},
+    }
 
 
 def _ask_renderer(plugin: Plugin, command: CommandDecl, args: dict) -> dict:

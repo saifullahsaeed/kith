@@ -7,6 +7,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { BookOpenText, Check, Copy, Radar } from "lucide-react";
 
+import { PluginOutcome, splitPluginTool } from "@/components/assistant-ui/plugin-outcome";
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/files";
 import { useMedia } from "@/components/files/media";
@@ -1323,6 +1324,18 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
           {message}
         </div>
       );
+    }
+
+    /* A plugin command, which is the one result whose *point* is somewhere else.
+     *
+     * He calls `plugin__sketchpad__draw` seventeen times and the useful thing is not seventeen
+     * key/value cards — it is the board. Without this the output of a plugin was a blob you had
+     * to read to work out that a tab existed, and then find the tab. One click instead, keyed
+     * on the namespace rather than on any plugin knowing about this file.
+     */
+    if (name.startsWith("plugin__")) {
+      const [plugin, command] = splitPluginTool(name);
+      if (plugin) return <PluginOutcome plugin={plugin} command={command} result={result} />;
     }
 
     // Shell first: it is the only tool whose result is a command's whole world, and the exit

@@ -61,6 +61,24 @@ def never_the_real_database(tmp_path_factory, monkeypatch):
     for name, module in list(sys.modules.items()):
         if name.startswith("kith.") and hasattr(module, "AGENT_DB_PATH"):
             monkeypatch.setattr(module, "AGENT_DB_PATH", safe, raising=False)
+
+    # And the *config* database, for a reason that arrived with plugins and is the mirror image
+    # of the trap above.
+    #
+    # `skills.roots()` asks which plugins are enabled, and it reads `settings.CONFIG_DB_PATH` as
+    # a live attribute precisely so a patch is seen. Which means an unpatched suite reads the
+    # **real** one: install a plugin in the app, and every test that touches the skills index
+    # suddenly sees that plugin's skills. `TestReadingASkill` duly started failing on a skill
+    # nobody in the suite had written, and it passed in isolation, which is the worst shape a
+    # leak can have.
+    #
+    # A fresh, seeded config database, patched everywhere the value is held. Nothing a test does
+    # can reach what is actually installed on this machine.
+    settings_safe = tmp_path_factory.mktemp("never-real-config") / "config.db"
+    config_store.init(settings_safe)
+    for name, module in list(sys.modules.items()):
+        if name.startswith("kith.") and hasattr(module, "CONFIG_DB_PATH"):
+            monkeypatch.setattr(module, "CONFIG_DB_PATH", settings_safe, raising=False)
     yield safe
 
 

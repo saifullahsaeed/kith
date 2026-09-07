@@ -91,11 +91,16 @@
     var titleEl = document.getElementById("title");
     var countEl = document.getElementById("count");
 
-    /* What is on the board, and the last queued record we folded in.
+    /* What is on the board, and how far through the queue we have got.
      *
-     * `seen` is why a re-render is idempotent: core pushes the whole store on every change, so
-     * without it every push would fold the same `pending` record again and the sketch would
-     * grow a duplicate shape per repaint. */
+     * **`seen` lives in the store, not in this variable, and that was a real bug.** A pane
+     * renders only its active tab, so switching tabs unmounts this frame and mounting it again
+     * runs this script from the top — with `seen` back at 0 while the queue is still in the
+     * store. So every record got folded a second time and the board grew a duplicate of every
+     * shape on each visit. Reported as "changing tabs keeps adding empty nodes".
+     *
+     * A high-water mark is state, and state belongs in the store with everything else. The
+     * variable below is only the working copy of what was read back. */
     var shapes = [];
     var seen = 0;
     var title = "Sketchpad";
@@ -137,7 +142,8 @@
         rect.setAttribute("stroke", stroke);
         rect.setAttribute("stroke-width", "2");
         group.appendChild(rect);
-        if (shape.label) group.appendChild(text(shape, stroke));
+        var inside = text(shape, stroke);
+        if (inside) group.appendChild(inside);
       } else if (shape.shape === "circle") {
         var circle = document.createElementNS(NS, "circle");
         circle.setAttribute("cx", shape.x);
@@ -147,10 +153,12 @@
         circle.setAttribute("stroke", stroke);
         circle.setAttribute("stroke-width", "2");
         group.appendChild(circle);
-        if (shape.label) {
-          var mid = { x: shape.x - (shape.w || 40), y: shape.y - 6, w: (shape.w || 40) * 2, label: shape.label };
-          group.appendChild(text(mid, stroke));
-        }
+        var caption = text(
+          { x: Number(shape.x) - (shape.w || 40), y: Number(shape.y) - (shape.w || 40),
+            w: (shape.w || 40) * 2, h: (shape.w || 40) * 2, label: shape.label },
+          stroke,
+        );
+        if (caption) group.appendChild(caption);
       } else if (shape.shape === "line") {
         var line = document.createElementNS(NS, "line");
         line.setAttribute("x1", shape.x);
@@ -162,20 +170,84 @@
         line.setAttribute("stroke-linecap", "round");
         group.appendChild(line);
       } else {
-        group.appendChild(text(shape, stroke));
+        // Bare text: no box to fit inside, so it gets its own line box at the point given.
+        var loose = text({ shape: shape.shape, x: shape.x, y: shape.y, label: shape.label, colour: shape.colour, w: shape.w || 300, h: shape.h || 40 }, stroke);
+        if (loose) group.appendChild(loose);
       }
       board.appendChild(group);
     }
 
+    /* A label that fits its box.
+     *
+     * **This is what made the board look broken.** The label was one `<text>` at a fixed 20px,
+     * so "Review writes NOTHING — trying is not saving" ran straight out through both walls of
+     * a 180-wide rect. He writes sentences, not words, and a diagram whose labels overflow
+     * their shapes reads as a bug however correct the geometry is.
+     *
+     * Wrapped to the box and shrunk until it fits, with a floor: past that the honest answer is
+     * a wider shape, not four-point type. No measuring API is needed — an average glyph in this
+     * face is close enough to 0.55em that a character count is a better estimate than anything
+     * that would justify a reflow pass.
+     */
     function text(shape, stroke) {
-      var label = document.createElementNS(NS, "text");
-      label.setAttribute("x", Number(shape.x) + Number(shape.w || 180) / 2);
-      label.setAttribute("y", Number(shape.y) + Number(shape.h || 60) / 2 + 6);
-      label.setAttribute("text-anchor", "middle");
-      label.setAttribute("fill", stroke);
-      label.setAttribute("font-size", "20");
-      label.textContent = shape.label || "";
-      return label;
+      var words = String(shape.label || "").split(/\s+/).filter(Boolean);
+      if (!words.length) return null;
+
+      var width = Number(shape.w || 180);
+      var height = Number(shape.h || 60);
+      var size = 20;
+      var lines = [];
+
+      while (size >= 9) {
+        lines = wrap(words, Math.max(1, Math.floor(width / (size * 0.55)) - 1));
+        if (lines.length * size * 1.25 <= height - 8) break;
+        size -= 2;
+      }
+
+      var block = document.createElementNS(NS, "text");
+      block.setAttribute("x", Number(shape.x) + width / 2);
+      block.setAttribute("text-anchor", "middle");
+      block.setAttribute("fill", stroke);
+      block.setAttribute("font-size", String(size));
+      // Centred as a block: the first line sits half the block's height above the middle, so
+      // two lines straddle the centre rather than starting at it.
+      var top = Number(shape.y) + height / 2 - ((lines.length - 1) * size * 1.25) / 2 + size / 3;
+      for (var i = 0; i < lines.length; i++) {
+        var line = document.createElementNS(NS, "tspan");
+        line.setAttribute("x", String(Number(shape.x) + width / 2));
+        line.setAttribute("y", String(top + i * size * 1.25));
+        line.textContent = lines[i];
+        block.appendChild(line);
+      }
+      return block;
+    }
+
+    /** Greedy wrap by character budget. A long single word is broken rather than left to
+     *  overflow, because one unbreakable word is exactly the case that looks worst. */
+    function wrap(words, budget) {
+      var lines = [];
+      var line = "";
+      for (var i = 0; i < words.length; i++) {
+        var word = words[i];
+        while (word.length > budget) {
+          if (line) {
+            lines.push(line);
+            line = "";
+          }
+          lines.push(word.slice(0, budget));
+          word = word.slice(budget);
+        }
+        if (!line) line = word;
+        else if ((line + " " + word).length <= budget) line += " " + word;
+        else {
+          lines.push(line);
+          line = word;
+        }
+      }
+      if (line) lines.push(line);
+      // Four lines in a box is already dense; past that the shape is the wrong size and
+      // silently dropping the rest is better than a wall of type spilling out of it.
+      return lines.slice(0, 4);
     }
 
     /* Dragging, which is the half he cannot see happen.
@@ -234,6 +306,10 @@
         shapes: shapes,
         note: note,
         title: title,
+        // Written with the shapes it accounts for, in one message, so the two cannot disagree.
+        // A `seen` that survived without its shapes would silently drop a record; shapes that
+        // survived without their `seen` would duplicate every one of them.
+        seen: seen,
       });
     }
 
@@ -245,24 +321,50 @@
     window.kith.render(function (state) {
       if (Array.isArray(state.shapes)) shapes = state.shapes.slice();
       if (typeof state.title === "string" && state.title) title = state.title;
+      // Read back before folding, so a remount picks up where the last one left off rather
+      // than at zero. `Math.max` because a push can arrive while a write is still in flight,
+      // and going backwards here would re-fold what we just folded.
+      if (typeof state.seen === "number") seen = Math.max(seen, state.seen);
 
-      var queued = state.pending;
-      if (queued && typeof queued === "object" && Number(queued.seq || 0) > seen) {
-        seen = Number(queued.seq);
-        if (queued.command === "clear") {
+      /* `pending` is a queue, and every record newer than `seen` is folded in order.
+       *
+       * It was one slot for a while, which lost sixteen of seventeen shapes: each call
+       * overwrote the last, and this page is only told when the host pushes — so it saw the
+       * newest record and nothing before it. A queue plus a high-water mark means the tab can
+       * be shut for a whole turn and still be right when it opens. */
+      var queued = Array.isArray(state.pending) ? state.pending : [];
+      var folded = null;
+      for (var q = 0; q < queued.length; q++) {
+        var record = queued[q];
+        if (!record || typeof record !== "object" || Number(record.seq || 0) <= seen) continue;
+        seen = Number(record.seq);
+        folded = record;
+        if (record.command === "clear") {
           shapes = [];
-        } else if (queued.command === "draw" && queued.args) {
-          shapes.push({
-            shape: queued.args.shape,
-            x: queued.args.x,
-            y: queued.args.y,
-            w: queued.args.w,
-            h: queued.args.h,
-            label: queued.args.label,
-            colour: queued.args.colour,
-          });
+        } else if (record.command === "draw" && record.args) {
+          var drawn = {
+            shape: record.args.shape,
+            x: record.args.x,
+            y: record.args.y,
+            w: record.args.w,
+            h: record.args.h,
+            label: record.args.label,
+            colour: record.args.colour,
+          };
+          // A record with no shape and no label is not a node, and drawing one produces the
+          // stray empty box that made this look broken even once the duplication was fixed.
+          if (drawn.shape || drawn.label) shapes.push(drawn);
         }
-        commit(queued.command === "clear" ? "cleared" : "drew " + (queued.args.label || queued.args.shape));
+      }
+      /* One write for the whole batch rather than one per record — seventeen draws in a turn
+       * would otherwise be seventeen round trips, each one invalidating the query that pushed
+       * the next. */
+      if (folded) {
+        commit(
+          folded.command === "clear"
+            ? "cleared"
+            : "drew " + (folded.args.label || folded.args.shape),
+        );
       }
       draw();
     });

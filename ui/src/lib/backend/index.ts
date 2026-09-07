@@ -59,7 +59,9 @@ export type {
   PluginTrouble,
   PluginsSnapshot,
 } from "./plugins";
+export type { PluginStateRead } from "./plugins";
 export {
+  fetchPluginState,
   fetchPluginSurfaces,
   fetchPlugins,
   installPlugin,

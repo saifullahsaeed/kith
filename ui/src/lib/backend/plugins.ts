@@ -151,3 +151,24 @@ export async function removePlugin(id: string, deleteData = false): Promise<Plug
   if (!response.ok) throw new Error(body.error || `could not remove (${response.status})`);
   return body as PluginsSnapshot;
 }
+
+export interface PluginStateRead {
+  values: Record<string, unknown>;
+  revisions: Record<string, number>;
+  slot: { keys: number; bytes: number; limit: number };
+}
+
+/** What a plugin is holding, for its surface to render from.
+ *
+ * Scoped to a conversation because that is how most plugins key their state; the server
+ * verifies the scope against the plugin's own declaration rather than trusting this. */
+export async function fetchPluginState(
+  plugin: string,
+  conversation: string,
+): Promise<PluginStateRead> {
+  const response = await fetch(
+    `/api/plugins/${plugin}/state?conversation=${encodeURIComponent(conversation)}`,
+  );
+  if (!response.ok) throw new Error(`could not read ${plugin}'s state (${response.status})`);
+  return (await response.json()) as PluginStateRead;
+}

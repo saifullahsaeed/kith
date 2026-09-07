@@ -104,20 +104,63 @@ def test_he_draws_and_it_lands_in_the_store(db: Path):
             db,
         )
         assert answer["ok"] is True
-        held = state.read(db, "sketchpad")["values"]["pending"]
+        queued = state.read(db, "sketchpad")["values"]["pending"]
 
-    assert held["command"] == "draw"
-    assert held["args"]["label"] == "Intake"
+    # A queue, not a slot. See `test_every_draw_survives_a_tab_that_is_not_listening`.
+    assert [one["command"] for one in queued] == ["draw"]
+    assert queued[0]["args"]["label"] == "Intake"
     # Sequenced, so a surface can tell a new record from one it has already folded in — without
     # it, every repaint would add the same shape again.
-    assert held["seq"] == 1
+    assert queued[0]["seq"] == 1
 
 
 def test_two_calls_in_one_round_get_different_sequences(db: Path):
     with in_a_conversation():
         for x in (100, 400):
             tools.run_tool("plugin__sketchpad__draw", {"shape": "circle", "x": x, "y": 200}, db)
-        assert state.read(db, "sketchpad")["values"]["pending"]["seq"] == 2
+        queued = state.read(db, "sketchpad")["values"]["pending"]
+
+    assert [one["seq"] for one in queued] == [1, 2]
+
+
+def test_every_draw_survives_a_tab_that_is_not_listening(db: Path):
+    """**The bug this file exists to have caught, and did not.**
+
+    He drew seventeen shapes and the board showed one. `collect` wrote a single slot that each
+    call overwrote, and a surface only folds a record when the host pushes the store to it — so
+    the frame was told once, saw the newest record, folded that, and the sixteen before it had
+    already been replaced by the calls that followed them.
+
+    A queue makes the fold independent of whether anything is listening, which is the property a
+    store is *for*: the tab can be shut for the whole turn and still be right when it opens.
+    """
+    with in_a_conversation():
+        for n in range(17):
+            answer = tools.run_tool(
+                "plugin__sketchpad__draw",
+                {"shape": "rect", "x": 10 * n, "y": 20, "label": f"step {n}"},
+                db,
+            )
+            assert answer["ok"] is True
+        queued = state.read(db, "sketchpad")["values"]["pending"]
+
+    assert len(queued) == 17
+    assert [one["seq"] for one in queued] == list(range(1, 18))
+    assert [one["args"]["label"] for one in queued] == [f"step {n}" for n in range(17)]
+
+
+def test_the_queue_is_bounded(db: Path):
+    """A surface that never drains must not grow the slot until the byte cap refuses an
+    unrelated write. The newest are kept, because what is on screen now is what matters."""
+    from kith.services.plugins import commands as plugin_commands
+
+    with in_a_conversation():
+        for n in range(plugin_commands.MAX_QUEUED + 12):
+            tools.run_tool("plugin__sketchpad__draw", {"shape": "circle", "x": n, "y": 1}, db)
+        queued = state.read(db, "sketchpad")["values"]["pending"]
+
+    assert len(queued) == plugin_commands.MAX_QUEUED
+    assert queued[-1]["seq"] == plugin_commands.MAX_QUEUED + 12
 
 
 def test_arguments_are_coerced_to_the_declared_shape(db: Path):
@@ -128,7 +171,7 @@ def test_arguments_are_coerced_to_the_declared_shape(db: Path):
             {"shape": "rect", "x": "50", "y": 9_999, "colour": "accent"},
             db,
         )
-        args = state.read(db, "sketchpad")["values"]["pending"]["args"]
+        args = state.read(db, "sketchpad")["values"]["pending"][-1]["args"]
 
     assert args["x"] == 50
     assert args["y"] == 1000

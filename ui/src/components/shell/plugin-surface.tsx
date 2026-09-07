@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { PlugZap, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { FRAME_SANDBOX } from "@/lib/canvas";
 import { canvasTokens } from "@/lib/canvas-bridge";
 import { paletteFor } from "@/lib/kith-palette";
-import { readPluginMessage } from "@/lib/plugin-bridge";
+import { PROTOCOL, readPluginMessage } from "@/lib/plugin-bridge";
 import { indexSettled, pluginSurface } from "@/lib/plugin-index";
+import { fetchPluginState } from "@/lib/backend";
+import { keys } from "@/lib/query-keys";
 import { useDarkMode } from "@/lib/theme";
 
 /**
@@ -46,6 +49,9 @@ export function PluginSurface({
   const [failure, setFailure] = useState("");
   /** Bumped to remount the frame — the one recovery this offers, and only on request. */
   const [attempt, setAttempt] = useState(0);
+  /** Whether the frame has said its own script is running. Pushing before that is a message
+   *  delivered to a page with no handler registered, which is silently dropped. */
+  const [ready, setReady] = useState<"no" | "yes" | "mismatch">("no");
   // `installApiToken` patches `window.fetch` for `/api/` paths, so a plain fetch is
   // authenticated and a second helper would be a second place to forget the header.
   const dark = useDarkMode();
@@ -87,9 +93,10 @@ export function PluginSurface({
     return () => {
       // Released rather than left to expire. The ticket table *is* the liveness table, so a
       // stale entry is what a call would park on and then time out against.
-      const held = ticket.current;
+      const open = ticket.current;
       ticket.current = "";
-      if (held) void fetch(`/api/plugins/frame/${held}`, { method: "DELETE" }).catch(() => {});
+      setReady("no");
+      if (open) void fetch(`/api/plugins/frame/${open}`, { method: "DELETE" }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plugin, view, instance, conversationId, attempt, !!declared]);
@@ -118,32 +125,56 @@ export function PluginSurface({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ keys: message.keys }),
         }).catch(() => {});
+      } else if (message.type === "ready") {
+        /* **The frame saying its own script has run**, which `onLoad` does not tell you: the
+         * document has loaded by then but nothing guarantees `window.kith.render(...)` has been
+         * called, so a push racing it lands on a frame with no handler registered and is
+         * silently dropped. This is what the message is for and it used to be ignored.
+         *
+         * A protocol number we do not speak means a plugin built against a different Kith. Said
+         * out loud rather than dropped, because a third party ships against this and a silently
+         * inert tab is the worst way to find out. */
+        setReady(message.protocol === PROTOCOL ? "yes" : "mismatch");
       }
-      /* `ready` and `size` are facts the frame states about itself and need no reply. `size` is
-       * ignored for a pane surface, which is sized by the layout — a plugin does not get to
-       * resize the person's window arrangement. */
+      /* `size` is ignored for a pane surface, which the layout sizes — a plugin does not get to
+       * rearrange the person's window. */
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
-  /** Push the plugin's state in, so the surface renders from one source rather than two. */
-  const push = useCallback(async () => {
-    const here = frame.current?.contentWindow;
-    if (!here) return;
-    try {
-      const answer = await fetch(
-        `/api/plugins/${plugin}/state?conversation=${encodeURIComponent(conversationId)}`,
-      );
-      const body = await answer.json();
-      here.postMessage(
-        { kith: 1, type: "render", rev: Date.now(), state: body?.values ?? {}, host: {} },
-        "*",
-      );
-    } catch {
-      /* A surface with no state renders its empty case, which is a state it has to have anyway. */
-    }
-  }, [conversationId, plugin]);
+  /* What the plugin is holding, as a subscription rather than a fetch on load.
+   *
+   * **This is the bug this component shipped with.** `push()` was called from the iframe's
+   * `onLoad` and from nowhere else, so the frame saw the store exactly once — as it was at
+   * mount. He then drew seventeen shapes, every one of them landed in the store, and the tab
+   * went on rendering its own empty state, because nothing ever told it. `changes.publish
+   * ("plugin_state")` and `STALE_ON.plugin_state` were both already wired; the component simply
+   * never subscribed to them, which is the one arrangement where all the plumbing is correct and
+   * none of it does anything.
+   *
+   * `STALE_ON.plugin_state` invalidates `["plugins", "state"]`, a prefix of this key, so a write
+   * from any source — him, the person dragging something, the plugin's own server — arrives here
+   * as fresh data. */
+  const { data: held } = useQuery({
+    queryKey: keys.pluginState(plugin, conversationId),
+    queryFn: () => fetchPluginState(plugin, conversationId),
+    enabled: !!declared && ready === "yes",
+  });
+
+  /* One inbound data path, and every push goes through it.
+   *
+   * `rev` is the sum of the store's revisions rather than a clock: two pushes carrying identical
+   * state get the same number, which is what lets a surface tell "something changed" from "the
+   * host repainted me". `Date.now()` would have made every repaint look like a change. */
+  useEffect(() => {
+    if (ready !== "yes" || !held) return;
+    const rev = Object.values(held.revisions ?? {}).reduce((sum, one) => sum + one, 0);
+    frame.current?.contentWindow?.postMessage(
+      { kith: 1, type: "render", rev, state: held.values ?? {}, host: {} },
+      "*",
+    );
+  }, [held, ready]);
 
   /* Repainted rather than remounted when the theme changes — the frame keeps its scroll position
    * and anything half-typed, which a remount would throw away. */
@@ -167,6 +198,14 @@ export function PluginSurface({
     );
   }
 
+  if (ready === "mismatch")
+    return (
+      <Absent
+        title={declared.title}
+        detail={`${plugin} was built for a different version of Kith, so this tab cannot talk to it.`}
+      />
+    );
+
   if (failure) return <Absent title={declared.title} detail={failure} onRetry={() => setAttempt((n) => n + 1)} />;
 
   return (
@@ -177,7 +216,6 @@ export function PluginSurface({
           ref={frame}
           src={url}
           title={declared.title}
-          onLoad={() => void push()}
           // The seal, unchanged and unwidened. `allow-scripts` and nothing else: with
           // `allow-same-origin` beside it the frame would share this app's origin and could
           // reach the backend with the session it already trusts, which is the entire thing

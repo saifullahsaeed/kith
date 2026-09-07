@@ -33,7 +33,10 @@ export const keys = {
   /** Only the tabs, which is what the layout needs and is a much smaller answer. */
   pluginSurfaces: () => ["plugins", "surfaces"] as const,
   /** What one plugin is holding. Invalidated by `plugin_state` and nothing else. */
-  pluginState: (plugin: string) => ["plugins", "state", plugin] as const,
+  /** What one plugin is holding, in one conversation. Keyed by both, because a plugin scoped
+   *  per-conversation genuinely holds different things in each and one key must mean one shape. */
+  pluginState: (plugin: string, conversation: string) =>
+    ["plugins", "state", plugin, conversation] as const,
   /** One project's roadmap graph. */
   roadmap: (projectId: number) => ["roadmap", projectId] as const,
   /** One task, in the detail panel. */
