@@ -36,12 +36,13 @@ describe("the waterfall", () => {
     expect(choice).toEqual({ paneId: "work-pane", beside: false });
   });
 
-  it("falls through when the pane it named is gone", () => {
+  it("falls to the policy when the pane it named is gone", () => {
+    /* Pinned to the section rule: no settings pane anywhere, so a section of its own. */
     const choice = choosePane(arrangement(), settings, { ...base, paneId: "closed-yesterday" });
-    expect(choice).toEqual({ paneId: "sidebar", beside: false });
+    expect(choice).toEqual({ paneId: null, beside: true });
   });
 
-  it("splits when the surface prefers a pane of its own", () => {
+  it("splits every time when told to always take a new pane", () => {
     const choice = choosePane(arrangement(), settings, {
       ...base,
       placements: { settings: "beside" },
@@ -60,7 +61,8 @@ describe("the waterfall", () => {
     expect(choice).toEqual({ paneId: "work-pane", beside: false });
   });
 
-  it("groups a chat with its kind, which is the whole point of tabs", () => {
+  it("adds a chat to the list the chat pane already keeps", () => {
+    /* The section exists and can show another chat: into its strip, not a second section. */
     const choice = choosePane(arrangement(), chat("c-2"), { ...base, focused: "work-pane" });
     expect(choice).toEqual({ paneId: "chats", beside: false });
   });
@@ -71,31 +73,39 @@ describe("the waterfall", () => {
     expect(choice).toEqual({ paneId: "two", beside: false });
   });
 
-  it("will not open a wide surface into a pane the yielding rule collapsed", () => {
-    /* The chat pane was railed — 36px measured; the sidebar has focus. The old paneFor put the
-     * chat into the rail, technically open and practically invisible. The focused pane takes
-     * it instead, which you can see and argue with. */
-    const choice = choosePane(arrangement(), chat("c-2"), {
-      widths: { chats: 36 },
-      placements: {},
-      focused: "sidebar",
-    });
-    expect(choice).toEqual({ paneId: "sidebar", beside: false });
+  it("raises a section of its own when the kind has no pane", () => {
+    /* The default, and the whole point of own: settings has no pane, so it gets one beside
+     * where you are — not absorbed into the 240px sidebar you happened to be clicking in,
+     * which is how a 420px surface used to open into a column it could not live in. */
+    const choice = choosePane(arrangement(), settings, { ...base, focused: "sidebar" });
+    expect(choice).toEqual({ paneId: null, beside: true });
   });
 
-  it("keeps a group together when nothing anywhere fits", () => {
-    /* Every pane undersized: between two bad answers, "with its kind" is still the one you can
-     * find again afterwards. */
+  it("raises a new section rather than opening into one the yielding rule collapsed", () => {
+    /* The chat pane was railed — 36px measured. paneFor opened the chat into it: technically
+     * open, practically invisible. Own declines the unfit pane and raises a section instead,
+     * because between "with its kind" and "visible", visible wins. */
     const choice = choosePane(arrangement(), chat("c-2"), {
       widths: { chats: 36, sidebar: 240, "work-pane": 300 },
       placements: {},
+      focused: "sidebar",
+    });
+    expect(choice).toEqual({ paneId: null, beside: true });
+  });
+
+  it("keeps a grouped surface with its kind even when nothing anywhere fits", () => {
+    /* Grouped is the older habit kept on purpose: between two bad answers, "with its kind" is
+     * still the one you can find again afterwards. */
+    const choice = choosePane(arrangement(), chat("c-2"), {
+      widths: { chats: 36, sidebar: 240, "work-pane": 300 },
+      placements: { chat: "grouped" },
     });
     expect(choice).toEqual({ paneId: "chats", beside: false });
   });
 
   it("gives an unmeasured pane the benefit of the doubt", () => {
     /* Placement runs before the first measurement arrives. Treating an unknown width as zero
-     * would route every early open to the fallback — the app misbehaving worst exactly when
+     * would raise a new section for every early open — the app misbehaving worst exactly when
      * it is starting up. */
     const choice = choosePane(arrangement(), chat("c-2"), { ...base });
     expect(choice).toEqual({ paneId: "chats", beside: false });
@@ -108,29 +118,42 @@ describe("the waterfall", () => {
     const secondFace = choosePane(tree, sketchErase, { ...base, focused: "one" });
     expect(secondFace).toEqual({ paneId: "two", beside: false });
 
-    // A different plugin is a different kind that happens to share a union member.
+    // A different plugin is a different kind that happens to share a union member — under the
+    // section rule it earns a section of its own.
     const stranger = choosePane(tree, browserTab, { ...base, focused: "one" });
-    expect(stranger).toEqual({ paneId: "one", beside: false });
+    expect(stranger).toEqual({ paneId: null, beside: true });
+
+    // And the older habit keeps a stranger out of another plugin's pane the same way.
+    const absorbed = choosePane(tree, browserTab, {
+      ...base,
+      focused: "one",
+      placements: { plugin: "grouped" },
+    });
+    expect(absorbed).toEqual({ paneId: "one", beside: false });
   });
 
-  it("opens into the pane that is there, even an empty one", () => {
-    /* An "empty tree" is still a pane — invariant 5 — so the empty pane is a real answer,
-     * and the only one: paneId null is beside's answer, not this rung's. */
+  it("opens into the pane that is there, even an empty one, when told to group", () => {
+    /* An "empty tree" is still a pane — invariant 5. Under the section rule it would raise a
+     * pane; grouped absorbs instead, which is what grouped is for. */
     const empty = pane([]);
-    const choice = choosePane(empty, settings, { ...base });
+    const choice = choosePane(empty, settings, {
+      widths: {},
+      placements: { settings: "grouped" },
+    });
     expect(choice.paneId, "the empty pane is the only pane").toBe(empty.id);
     expect(choice.beside).toBe(false);
   });
 });
 
 describe("the modes themselves", () => {
-  it("defaults to grouped, everywhere", () => {
-    expect(DEFAULT_PLACEMENT).toBe("grouped");
-    expect(modeFor({}, "chat")).toBe("grouped");
-    expect(modeFor({ chat: "focused" }, "chat")).toBe("focused");
+  it("defaults to own — the section rule — everywhere", () => {
+    expect(DEFAULT_PLACEMENT).toBe("own");
+    expect(modeFor({}, "chat")).toBe("own");
+    expect(modeFor({ chat: "grouped" }, "chat")).toBe("grouped");
   });
 
   it("refuses to trust a mode this build does not know", () => {
+    expect(isPlacementMode("own")).toBe(true);
     expect(isPlacementMode("beside")).toBe(true);
     expect(isPlacementMode("wherever")).toBe(false);
     expect(isPlacementMode(42)).toBe(false);

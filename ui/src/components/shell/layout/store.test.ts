@@ -201,3 +201,44 @@ describe("where surfaces prefer to open", () => {
     }
   });
 });
+
+describe("the default is the section rule", () => {
+  it("raises a pane for a kind that has none, and focuses it", () => {
+    useLayout.setState({ tree: pane([{ surface: "work" }]), focused: "" });
+    const was = useLayout.getState().placements;
+    try {
+      useLayout.setState({ placements: {} });
+      useLayout.getState().open({ surface: "settings" });
+
+      const tree = useLayout.getState().tree;
+      expect(tree.kind, "a section was raised").toBe("split");
+      const made = panes(tree)[1];
+      expect(made.tabs.map(tabKey)).toEqual(["settings"]);
+      expect(useLayout.getState().focused, "the pane you asked for is where you are").toBe(
+        made.id,
+      );
+    } finally {
+      useLayout.setState({ placements: was });
+    }
+  });
+
+  it("adds to the list a kind already keeps, without raising anything", () => {
+    useLayout.setState({
+      tree: split("row", [
+        pane([{ surface: "chat", conversationId: "c-1" }], 0, "a"),
+        pane([{ surface: "work" }], 0, "b"),
+      ]),
+      focused: "",
+    });
+
+    useLayout.getState().open({ surface: "chat", conversationId: "c-2" });
+
+    const tree = useLayout.getState().tree;
+    expect(tree.kind, "nothing was raised").toBe("split");
+    expect(panes(tree).find((one) => one.id === "a")!.tabs.map(tabKey)).toEqual([
+      "chat:c-1",
+      "chat:c-2",
+    ]);
+    expect(panes(tree).find((one) => one.id === "b")!.tabs.map(tabKey)).toEqual(["work"]);
+  });
+});

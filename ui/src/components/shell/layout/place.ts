@@ -18,20 +18,20 @@ import { surfaceFor } from "./surfaces";
  * 1. A caller that names a pane gets that pane, while it exists. `open`'s callers know things
  *    no policy can — the plugin `open_surface` delivery, when it lands, should not have to
  *    re-derive "the pane the plugin already lives in" from the tree.
- * 2. `beside`, when the person has asked for it: a pane of its own, split off where you are.
- *    Deliberately never the default — see `openBeside` — because an open that rearranges the
- *    window on its own initiative is the app working against the arrangement already on screen.
- * 3. `focused`, when asked: always the pane you are looking at, grouping be damned. Some
+ * 2. `beside`, when the surface has been told "always a new pane": a pane of its own, split
+ *    off where you are, every time.
+ * 3. `focused`, when told "always here": the pane you are looking at, grouping be damned. Some
  *    surfaces are visits, not collections.
- * 4. `grouped`, the default: a pane already holding this kind of tab — but only one wide
- *    enough to show it. This is the part `paneFor` had exactly backwards: it preferred the
- *    grouped pane *even when that pane had been railed down to 36px*, so a conversation clicked
- *    from the sidebar opened into a pane that was one icon tall. Between "with its kind" and
- *    "visible", visible wins; between two unfit panes, its kind still wins.
- * 5. The focused pane, fitting or not. Predictability beats cleverness here: "where I am
- *    looking" is an answer you can argue with, "wherever was widest" is one you cannot.
- * 6. The first pane. The rule `paneFor` already held — "open the roadmap" must never be
- *    answered with nothing happening — kept, as the last resort rather than the second guess.
+ * 4. `own` and `grouped` together run the section rule — the default — in two flavours. Both
+ *    open beside a pane already keeping this kind (the chats with the chats, a plugin beside
+ *    its own plugin), and both prefer a pane wide enough to show what it would take. `own`,
+ *    the default, answers "no such pane" by raising one — a section of the surface's own, the
+ *    way conversations and work each hold their column in the arrangement the app opens as.
+ *    `grouped` answers "no such pane" by absorbing into where you are, which is the older
+ *    habit and the right one for surfaces you would rather not spend a column on.
+ * 5. Whatever is left of the older habit for `grouped`: the focused pane, fitting or not, then
+ *    the unfit pane of its own kind, then the first pane. Predictability beats cleverness —
+ *    "where I am looking" is an answer you can argue with, "wherever was widest" is not.
  *
  * Widths are *measured* ones, live in the store, never stored: a pane's real width is what the
  * yielding rule left it with, not what any saved size says. A pane with no measurement yet is
@@ -41,15 +41,20 @@ import { surfaceFor } from "./surfaces";
 
 /** How a surface prefers to open, as set from its tab's menu.
  *
- * `grouped` is what the layout has always done — chats collect in the chat pane, work in the
- * work pane. `focused` and `beside` exist because "where to open it" is a preference, not
- * only a heuristic: the person, not the code, is the one who knows that settings always goes in
- * the wide pane, or that a plugin's board is worth a pane of its own. */
-export type PlacementMode = "grouped" | "focused" | "beside";
+ * `own` is the default and the section rule: with its kind while a pane keeps it, a pane of
+ * its own the moment none does. The other three are the overrides a person reaches for when
+ * the rule is wrong for one surface — absorb into the room (`grouped`), follow the eye
+ * (`focused`), or always claim a fresh pane (`beside`). */
+export type PlacementMode = "own" | "grouped" | "focused" | "beside";
 
-export const PLACEMENT_MODES: readonly PlacementMode[] = ["grouped", "focused", "beside"];
+export const PLACEMENT_MODES: readonly PlacementMode[] = [
+  "own",
+  "grouped",
+  "focused",
+  "beside",
+];
 
-export const DEFAULT_PLACEMENT: PlacementMode = "grouped";
+export const DEFAULT_PLACEMENT: PlacementMode = "own";
 
 /** Read a placement out of storage. Junk from a build that named a mode differently, or a
  *  surface since renamed, is ignored rather than trusted — the same rule the tree's structural
@@ -77,11 +82,11 @@ export type PlacementContext = {
   paneId?: string;
   /** Measured pane widths in px, keyed by pane id. Live state, never persisted. */
   widths: Record<string, number>;
-  /** Per-surface placement, as set from a tab's menu; everything unspecified is `grouped`. */
+  /** Per-surface placement, as set from a tab's menu; everything unspecified is `own`. */
   placements: Partial<Record<SurfaceId, PlacementMode>>;
 };
 
-/** Do two tabs belong in the same strip? The question `grouped` asks of every pane.
+/** Do two tabs belong in the same strip? The question the section rule asks of every pane.
  *
  * For everything but plugins this is "same surface", and chats are the reason the answer is a
  * function and not an equality: every conversation is its own tab and they all belong together.
@@ -114,11 +119,19 @@ export function choosePane(root: Node, ref: TabRef, ctx: PlacementContext): Plac
   };
 
   /* With its kind — the focused one first, so "open a chat" from a chat pane keeps using it
-   * rather than jumping to the first chat pane in render order, then any other. */
+   * rather than jumping to the first chat pane in render order, then any other. Unfit panes
+   * are skipped here and re-read below: between "with its kind" and "visible", visible wins,
+   * which is the lesson the railed chat pane taught the first version of this. */
   const grouped = all.filter((one) => one.tabs.some((tab) => sameKind(ref, tab)));
   const preferred = grouped.filter((one) => one.id === ctx.focused).concat(grouped);
   const fitting = preferred.find((one) => fits(one.id));
   if (fitting) return { paneId: fitting.id, beside: false };
+
+  /* The section rule, and the rung `own` exists for: the kind has no pane that shows it, so
+   * it gets one — not absorbed into whatever you were clicking, which is how a conversation
+   * used to open into a 240px sidebar and a Work panel into the chat. The pane it raises goes
+   * beside where you are, so "open the board" from the chat is still one gesture. */
+  if (mode === "own") return { paneId: null, beside: true };
 
   if (alive(ctx.focused)) return { paneId: ctx.focused, beside: false };
   if (preferred[0]) return { paneId: preferred[0].id, beside: false };

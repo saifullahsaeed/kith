@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  Columns2,
   Focus,
   Layers,
   SplitSquareHorizontal,
@@ -394,12 +395,14 @@ function PaneView({
 
 /* The placement choices, as the menu names them.
  *
- * The words do the work: "grouped" is jargon for "next to the ones like it", and the person
- * reading this menu is mid-click, not reading a manual. */
+ * The words do the work: "own" is jargon for "a section that keeps this kind — and raises one
+ * when there is none", which is the default; the others are the overrides for when the rule is
+ * wrong for one surface. The person reading this menu is mid-click, not reading a manual. */
 const PLACEMENT_CHOICES: { mode: PlacementMode; label: string; icon: LucideIcon }[] = [
-  { mode: "grouped", label: "With their own kind", icon: Layers },
-  { mode: "focused", label: "In the pane I am in", icon: Focus },
-  { mode: "beside", label: "In a pane of its own", icon: SplitSquareHorizontal },
+  { mode: "own", label: "With their kind, or a new pane", icon: Columns2 },
+  { mode: "grouped", label: "With their kind, else here", icon: Layers },
+  { mode: "focused", label: "Always where I am", icon: Focus },
+  { mode: "beside", label: "Always a new pane", icon: SplitSquareHorizontal },
 ];
 
 function TabButton({
@@ -555,7 +558,9 @@ function TabButton({
           <ContextMenuSubTrigger icon={<Layers className="size-3.5" />}>
             Where new ones open
           </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
+          {/* Wide enough for the labels that name the difference — "or a new pane" is the
+              whole of what own means, and a truncated menu cannot say it. */}
+          <ContextMenuSubContent className="w-64">
             {PLACEMENT_CHOICES.map((one) => (
               <ContextMenuItem
                 key={one.mode}
