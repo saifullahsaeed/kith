@@ -7,7 +7,7 @@
  * a highlight that strobes because crossing into a child counts as leaving, and a tab strip
  * that cannot be dragged from at all.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { LayoutView } from "./layout-view";
@@ -121,3 +121,89 @@ describe("an empty pane", () => {
     expect(screen.getByText(/Nothing open here/)).toBeInTheDocument();
   });
 });
+
+describe("the strip", () => {
+  it("reorders tabs when a drop lands between two of them", () => {
+    useLayout.setState({
+      tree: pane([{ surface: "work" }, { surface: "board" }, { surface: "settings" }], 0),
+      focused: "",
+    });
+    const { container } = render(<LayoutView render={body} />);
+    measure(container);
+
+    /* The dragged first tab, aimed into the left half of the third: past the second, before
+     * the third — a position only real coordinates can name, which is why the event is built
+     * by hand below. */
+    fireEvent(container.querySelectorAll("[data-tab]")[0]!, dropEvent("work", 240));
+
+    expect(panes(useLayout.getState().tree)[0].tabs.map(tabKey)).toEqual([
+      "board",
+      "work",
+      "settings",
+    ]);
+  });
+
+  it("inserts into another pane's strip where it was aimed, not at the end", () => {
+    useLayout.setState({
+      tree: split("row", [
+        pane([{ surface: "work" }, { surface: "board" }], 0, "left"),
+        pane([{ surface: "settings" }], 0, "right"),
+      ]),
+      focused: "",
+    });
+    const { container } = render(<LayoutView render={body} />);
+    measure(container, "left");
+    measure(container, "right");
+
+    // The left half of the first tab of the other pane: "before work", not "after everything".
+    fireEvent(
+      container.querySelectorAll('[data-pane="left"] [data-tab]')[0]!,
+      dropEvent("settings", 40),
+    );
+
+    const tabs = panes(useLayout.getState().tree).find((one) => one.id === "left")!.tabs.map(
+      tabKey,
+    );
+    expect(tabs).toEqual(["settings", "work", "board"]);
+  });
+});
+
+/** A drop the way a browser delivers it.
+ *
+ * jsdom has no DragEvent with coordinates — fireEvent.drop builds one without clientX, and a
+ * drop without a pointer position reads as "past the last tab", which would make every caret
+ * assertion accidentally about nothing. Built by hand, with the position that matters. */
+function dropEvent(key: string, clientX: number): Event {
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.assign(event, { clientX, clientY: 5, dataTransfer: transfer(key) });
+  return event;
+}
+
+/** jsdom gives every element a zero rect, which reads as "past the last tab" — so the tests put
+ *  real rectangles on the buttons, the one fact the caret arithmetic is about. */
+function rect(left: number, right: number): DOMRect {
+  return {
+    left,
+    right,
+    top: 0,
+    bottom: 24,
+    width: right - left,
+    height: 24,
+    x: left,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
+/** Give the tab buttons of one pane real rectangles, laid out left to right. */
+function measure(container: HTMLElement, paneId?: string): void {
+  const scope = paneId
+    ? container.querySelectorAll('[data-pane="' + paneId + '"] [data-tab]')
+    : container.querySelectorAll("[data-tab]");
+  let at = 0;
+  for (const node of scope) {
+    const el = node as HTMLElement;
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue(rect(at, at + 100));
+    at += 100;
+  }
+}

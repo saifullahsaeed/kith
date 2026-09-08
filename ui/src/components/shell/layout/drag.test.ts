@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { carriesTab, edgeAt, highlightFor, TAB_MIME } from "./drag";
+import { carriesTab, edgeAt, highlightFor, insertIndexAt, landingIndex, TAB_MIME } from "./drag";
 
 /** A 400x200 pane at the origin, so the arithmetic in each case is readable. */
 const rect = { left: 0, top: 0, width: 400, height: 200, right: 400, bottom: 200 } as DOMRect;
@@ -79,5 +79,43 @@ describe("the highlight", () => {
       width: "100%",
       height: "100%",
     });
+  });
+});
+
+describe("which gap a strip drop is", () => {
+  /** Three 100px tabs at 0, 101 and 201, the one-pixel gaps left in for realism. */
+  const tabs = [
+    { left: 0, right: 100 },
+    { left: 101, right: 200 },
+    { left: 201, right: 300 },
+  ];
+
+  it("is before the tab whose half the pointer is in", () => {
+    expect(insertIndexAt(tabs, 40)).toBe(0);
+    expect(insertIndexAt(tabs, 60), "the right half is the next gap").toBe(1);
+    expect(insertIndexAt(tabs, 150)).toBe(1);
+    expect(insertIndexAt(tabs, 250)).toBe(2);
+  });
+
+  it("is the end past the last tab", () => {
+    expect(insertIndexAt(tabs, 350)).toBe(3);
+  });
+
+  it("is the start on an empty strip", () => {
+    expect(insertIndexAt([], 10)).toBe(0);
+  });
+});
+
+describe("where a caret drop lands", () => {
+  it("shifts a drop past the dragged tab back by one", () => {
+    /* The caret is drawn in the strip as it is on screen; the tab leaves it on the way down,
+     * and every tab after it slides left one place. */
+    expect(landingIndex(0, 2)).toBe(1);
+    expect(landingIndex(1, 2)).toBe(1);
+  });
+
+  it("keeps a drop before the dragged tab where it is", () => {
+    expect(landingIndex(2, 1)).toBe(1);
+    expect(landingIndex(2, 2), "its own left edge is a no-op").toBe(2);
   });
 });

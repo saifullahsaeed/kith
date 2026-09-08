@@ -1,14 +1,16 @@
 import { create } from "zustand";
 
+import { choosePane, isPlacementMode, type PlacementMode } from "./place";
 import { SURFACES } from "./surfaces";
 import {
   activateTab,
   closeTab,
   dockTab,
   ids,
+  moveTab,
+  openBeside,
   openTab,
   pane,
-  paneFor,
   renameTab,
   panes,
   resizeSplit,
@@ -16,6 +18,7 @@ import {
   tabKey,
   type Edge,
   type Node,
+  type SurfaceId,
   type TabRef,
 } from "./tree";
 
@@ -139,6 +142,40 @@ function writeStored(tree: Node): void {
   }
 }
 
+/* Where each surface prefers to open, as set from a tab's menu — its own storage, not the
+ * layout's.
+ *
+ * The layout blob is versioned, and a version bump throws every stored arrangement away: the
+ * placement is one preference and the layout is an arrangement, and losing the second to ship
+ * the first is exactly the trade this module exists to refuse. Separate key, no version — the
+ * reader validates every entry against what this build knows and ignores the rest, which is the
+ * same structural-check move the tree gets on read. */
+const PLACEMENTS_KEY = "kith-layout-placements";
+
+export function readPlacements(): Partial<Record<SurfaceId, PlacementMode>> {
+  try {
+    const raw = localStorage.getItem(PLACEMENTS_KEY);
+    if (!raw) return {};
+    const held = JSON.parse(raw) as Record<string, unknown>;
+    const out: Partial<Record<SurfaceId, PlacementMode>> = {};
+    for (const [surface, mode] of Object.entries(held)) {
+      if (surface in SURFACES && isPlacementMode(mode)) out[surface as SurfaceId] = mode;
+    }
+    return out;
+  } catch {
+    /* not JSON, private mode, no storage — defaults are a correct answer */
+    return {};
+  }
+}
+
+function writePlacements(placements: Partial<Record<SurfaceId, PlacementMode>>): void {
+  try {
+    localStorage.setItem(PLACEMENTS_KEY, JSON.stringify(placements));
+  } catch {
+    /* storage full or unavailable — the preference is a convenience, not the work */
+  }
+}
+
 export type LayoutState = {
   tree: Node;
   /** The pane a new tab lands in. Follows what you last clicked, so "open the roadmap" puts it
@@ -151,10 +188,28 @@ export type LayoutState = {
    * is position, and collapsing the leftmost pane because it is leftmost is arbitrary in a way
    * you feel immediately. */
   order: string[];
-  open: (ref: TabRef) => void;
+  /** Open a surface as a tab. Where it goes is the placement policy (place.ts); opts.paneId is
+   *  the caller's overrule, honoured while the pane exists — the hook for a future plugin
+   *  open_surface delivery that knows which pane the plugin lives in. */
+  open: (ref: TabRef, opts?: { paneId?: string }) => void;
   close: (key: string) => void;
   dock: (key: string, paneId: string, edge: Edge) => void;
   activate: (paneId: string, index: number) => void;
+  /** Move a tab to a final position in a pane's strip — a reorder inside its pane, or into
+   *  another pane's strip where the drop was aimed. The strip is where tab order lives; without
+   *  this a drop on it could only append. */
+  move: (key: string, paneId: string, index: number) => void;
+  /** Where each surface prefers to open, as set from its tab's menu. Per surface rather than
+   *  per pane, because the preference is about the kind of thing — "settings goes in the wide
+   *  pane" — and it must survive panes, which are closed and rebuilt, but not outlive a
+   *  decision to change it. */
+  placements: Partial<Record<SurfaceId, PlacementMode>>;
+  setPlacement: (surface: SurfaceId, mode: PlacementMode) => void;
+  /** How wide each pane is, measured, in px. Live state — never stored, and pruned by commit.
+   *  Placement reads it so an open stops landing in a pane the yielding rule has already
+   *  collapsed to a rail; nothing else may care, which is why it is not persisted. */
+  widths: Record<string, number>;
+  trackWidth: (paneId: string, width: number) => void;
   /** Re-key a tab in place — a new chat learning its conversation id. */
   rename: (key: string, ref: TabRef) => void;
   focus: (paneId: string) => void;
@@ -178,8 +233,15 @@ export const useLayout = create<LayoutState>((set, get) => {
     const alive = new Set(panesNow.map((one) => one.id));
     const wanted = focused ?? get().focused;
     const now = alive.has(wanted) ? wanted : firstPaneId(tree);
+    // Measured widths of panes that are gone are gone with them: the map never answers for
+    // a pane that no longer exists, and never grows without bound.
+    const widths: Record<string, number> = {};
+    for (const [id, width] of Object.entries(get().widths)) {
+      if (alive.has(id)) widths[id] = width;
+    }
     set({
       tree,
+      widths,
       // A focused pane that has just been closed would leave new tabs opening into nothing.
       focused: now,
       // Closed panes drop out; panes that appeared (a split) join at the back, so a pane you
@@ -196,16 +258,36 @@ export const useLayout = create<LayoutState>((set, get) => {
     tree: initial,
     focused: firstPaneId(initial),
     order: panes(initial).map((one) => one.id),
+    placements: readPlacements(),
+    widths: {},
 
-    open: (ref) => {
-      const { tree, focused } = get();
-      const result = openTab(tree, ref, paneFor(tree, ref.surface, focused));
+    /* The placement policy decides; the caller may overrule it by naming a pane. Beside is a
+     * split, and the pane it makes is where focus goes — an open you asked for in a new pane
+     * should not leave you staring at the old one. */
+    open: (ref, opts) => {
+      const { tree, focused, widths, placements } = get();
+      const chosen = choosePane(tree, ref, {
+        focused,
+        paneId: opts?.paneId,
+        widths,
+        placements,
+      });
+      if (chosen.beside) {
+        const made = openBeside(tree, ref, focused);
+        commit(made.tree, made.paneId);
+        return;
+      }
+      const result = openTab(tree, ref, chosen.paneId ?? undefined);
       commit(result.tree, result.paneId);
     },
 
     close: (key) => commit(closeTab(get().tree, key)),
 
     dock: (key, paneId, edge) => commit(dockTab(get().tree, key, paneId, edge)),
+
+    // The pane the tab moved into is where focus goes, whether it is a reorder — already
+    // focused by the mousedown that started the drag — or a move into a neighbour.
+    move: (key, paneId, index) => commit(moveTab(get().tree, key, paneId, index), paneId),
 
     activate: (paneId, index) => commit(activateTab(get().tree, paneId, index), paneId),
 
@@ -219,6 +301,23 @@ export const useLayout = create<LayoutState>((set, get) => {
 
     resize: (splitId, sizes) => commit(resizeSplit(get().tree, splitId, sizes)),
 
+    setPlacement: (surface, mode) => {
+      const placements = { ...get().placements, [surface]: mode };
+      writePlacements(placements);
+      set({ placements });
+    },
+
+    trackWidth: (paneId, width) => {
+      const rounded = Math.round(width);
+      /* The observer fires on subpixel jitter as well as on real layout, and every set is a
+       * pass over every subscriber — so whole pixels and real changes only. Zero is a pane
+       * measured before its first layout; recording it would make placement believe nothing
+       * fits anywhere, and every open after that would be a guess. */
+      const widths = get().widths;
+      if (rounded <= 0 || widths[paneId] === rounded) return;
+      set({ widths: { ...widths, [paneId]: rounded } });
+    },
+
     reset: () => {
       const tree = defaultLayout();
       commit(tree, firstPaneId(tree));
@@ -230,4 +329,5 @@ export const useLayout = create<LayoutState>((set, get) => {
 /** For tests and for "reset layout" from outside a component. */
 export const layoutKey = KEY;
 export const layoutVersion = VERSION;
+export const placementsKey = PLACEMENTS_KEY;
 export { tabKey };

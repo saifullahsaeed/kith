@@ -330,6 +330,93 @@ export function dockTab(root: Node, key: string, targetPaneId: string, edge: Edg
   return tree ?? without;
 }
 
+/** Move a tab to a final position in a pane's strip — a reorder, or a move into another pane.
+ *
+ * One operation for the two things a drop on a tab strip can mean. Dropping on the *pane* was
+ * already docking; dropping on the *strip* used to be a no-op on its own pane and an append on
+ * every other, which is why tabs could not be sorted: the strip is where the order lives, and
+ * it accepted nothing but "go to the end".
+ *
+ * `to` is where the tab should end up counting the strip as it should look *after* the move,
+ * clamped into range — not "insert before the tab now at index `to`", which is what the caret
+ * shows. Removing the dragged tab shifts every later tab left by one, so the caller translates
+ * the caret (`landingIndex` in `drag.ts`); an operation that took the caret position
+ * directly would drag every later drop one slot toward the front, exactly as far as it is
+ * subtle.
+ *
+ * A move that ends where it started returns the tree unchanged, for the same reason a no-op
+ * dock does: a drag there and back must not renumber `active` and look like a reorder. */
+export function moveTab(root: Node, key: string, paneId: string, to: number): Node {
+  const found = findTab(root, key);
+  if (!found) return root;
+
+  if (found.pane.id === paneId) {
+    const from = found.index;
+    const at = Math.max(0, Math.min(to, found.pane.tabs.length - 1));
+    if (at === from) return root;
+    return (
+      replacePane(root, paneId, (one) => {
+        const tabs = one.tabs.slice();
+        const [moved] = tabs.splice(from, 1);
+        tabs.splice(at, 0, moved);
+        /* The pane keeps showing what it was showing. The active tab is found again by `uid`
+         * after the move — its index changed, its identity did not — the rule `closeTab`
+         * already paid for: a background tab dragged across the strip must not change what the
+         * pane is showing, and dragging the active one must not take focus somewhere else. */
+        const wasActive = one.tabs[one.active];
+        const active = tabs.findIndex((tab) => tab.uid === wasActive?.uid);
+        return { ...one, tabs, active: active >= 0 ? active : clampActive(tabs, one.active) };
+      }) ?? root
+    );
+  }
+
+  /* Another pane's strip. Close it out of where it is — which may collapse its pane — then put
+   * it where the pointer was rather than at the end, which is the whole point of aiming. The
+   * moved tab activates, as it does when it docks or opens: you aimed it at that pane. */
+  const without = closeTab(root, key);
+  const stillThere = panes(without).some((one) => one.id === paneId);
+  if (!stillThere) {
+    // The target was the source and it went away with the last tab. Nothing to move onto, so
+    // the move is a no-op rather than a lost tab — the same answer `dockTab` gives.
+    return root;
+  }
+  const ref = found.pane.tabs[found.index];
+  return (
+    replacePane(without, paneId, (one) => {
+      const at = Math.max(0, Math.min(to, one.tabs.length));
+      const tabs = one.tabs.slice();
+      tabs.splice(at, 0, withUid(ref));
+      return { ...one, tabs, active: at };
+    }) ?? without
+  );
+}
+
+/** Open a tab in a pane of its own, split off an anchor.
+ *
+ * The placement answer when the person has *asked* for a new pane — the `beside` placement —
+ * and never the app's own initiative: an open that rearranges the layout on its own is the app
+ * working against the arrangement already on screen. A missing or unknown anchor falls back to
+ * the first pane, and a tree with no panes at all becomes the pane — "open it" must never be
+ * answered with nothing happening, the same rule `openTab` holds. */
+export function openBeside(
+  root: Node,
+  ref: TabRef,
+  anchorId: string,
+  edge: Exclude<Edge, "center"> = "right",
+): { tree: Node; paneId: string } {
+  // Built outside the closure so the caller can have its id: the pane is what focus moves to.
+  const made = pane([ref]);
+  const all = panes(root);
+  const anchor = all.find((one) => one.id === anchorId) ?? all[0];
+  if (!anchor) return { tree: made, paneId: made.id };
+  const direction = edge === "left" || edge === "right" ? "row" : "column";
+  const before = edge === "left" || edge === "top";
+  const tree = replacePane(root, anchor.id, (one) =>
+    split(direction, before ? [made, one] : [one, made]),
+  );
+  return { tree: tree ?? made, paneId: made.id };
+}
+
 /** Focus a tab within its pane. */
 export function activateTab(root: Node, paneId: string, index: number): Node {
   return replacePane(root, paneId, (one) => ({ ...one, active: clampActive(one.tabs, index) })) ?? root;
@@ -375,24 +462,6 @@ export function renameTab(root: Node, key: string, ref: TabRef): Node {
       ),
     })) ?? root
   );
-}
-
-/** Where a new tab of this kind belongs.
- *
- * A pane that already holds this surface wins, and for chats that is the whole point of tabs:
- * clicking a conversation focuses the *sidebar* pane it was clicked in, so "open it where you
- * are looking" put the chat in a 240px column beside the list it came from. Grouping by kind
- * means the second conversation opens next to the first, as a tab, which is what was asked for.
- *
- * Falls back to the focused pane, then to the first — "open the roadmap" must never be answered
- * with nothing happening.
- */
-export function paneFor(root: Node, surface: SurfaceId, focused?: string): string {
-  const all = panes(root);
-  const alongside = all.find((one) => one.tabs.some((tab) => tab.surface === surface));
-  if (alongside) return alongside.id;
-  const here = all.find((one) => one.id === focused);
-  return (here ?? all[0])?.id ?? "";
 }
 
 /** Is this tab anywhere in the layout? */

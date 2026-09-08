@@ -1,5 +1,16 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { SplitSquareHorizontal, SplitSquareVertical, X, XCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Focus,
+  Layers,
+  SplitSquareHorizontal,
+  SplitSquareVertical,
+  X,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 
 import {
@@ -8,14 +19,32 @@ import {
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 
-import { carriesTab, edgeAt, highlightFor, TAB_MIME } from "./drag";
+import {
+  carriesTab,
+  edgeAt,
+  highlightFor,
+  insertIndexAt,
+  landingIndex,
+  TAB_MIME,
+} from "./drag";
+import { DEFAULT_PLACEMENT, type PlacementMode } from "./place";
 import { useLayout } from "./store";
 import { MIN_HEIGHT, paneMinWidth, surfaceFor, tabTitle } from "./surfaces";
-import { panes as panesOf, tabKey, type Edge, type Node, type PaneNode, type TabRef } from "./tree";
+import {
+  panes as panesOf,
+  tabKey,
+  type Edge,
+  type Node,
+  type PaneNode,
+  type TabRef,
+} from "./tree";
 
 /**
  * The layout tree, drawn.
@@ -201,9 +230,46 @@ function PaneView({
   const activate = useLayout((s) => s.activate);
   const close = useLayout((s) => s.close);
   const focus = useLayout((s) => s.focus);
+  const move = useLayout((s) => s.move);
+  const trackWidth = useLayout((s) => s.trackWidth);
   const focused = useLayout((s) => s.focused === pane.id);
   const [over, setOver] = useState<Edge | null>(null);
+  /* Where a strip drop would land — the index the caret sits before. Null while the drag is
+   * over the pane body, where the question is an edge and not a position. */
+  const [caret, setCaret] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement | null>(null);
+  const strip = useRef<HTMLDivElement | null>(null);
   const active = pane.tabs[pane.active];
+
+  /* Placement reads this pane's real width — what the yielding rule left it with — and here is
+   * where it is measured. Live state, never stored: a width is a fact about right now, and a
+   * stored one would answer for a pane that has since been railed, resized, or re-homed by a
+   * reload. Unmeasured is allowed for: placement runs before layout has had its turn, and a
+   * wrong first open corrects itself on the next one. */
+  useEffect(() => {
+    const element = box.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width;
+      if (width) trackWidth(pane.id, width);
+    });
+    watch.observe(element);
+    return () => watch.disconnect();
+  }, [pane.id, trackWidth]);
+
+  /** The gap the pointer is over, read off the tab buttons as they are laid out.
+   *
+   * Rects come from the buttons and not the strip, so variable-width titles put the caret
+   * where the tabs actually are — and a strip scrolled to its end measures buttons by their
+   * on-screen position, which is the one the pointer can point at. */
+  const caretAt = (event: React.DragEvent<HTMLDivElement>): number | null => {
+    const element = strip.current;
+    if (!element) return null;
+    const rects = Array.from(element.querySelectorAll<HTMLElement>("[data-tab]")).map((one) =>
+      one.getBoundingClientRect(),
+    );
+    return insertIndexAt(rects, event.clientX);
+  };
 
   const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     if (!carriesTab(event.dataTransfer)) return;
@@ -218,6 +284,7 @@ function PaneView({
 
   return (
     <div
+      ref={box}
       data-pane={pane.id}
       onMouseDownCapture={() => focus(pane.id)}
       onDragOver={onDragOver}
@@ -242,7 +309,42 @@ function PaneView({
         focused && "ring-kith/20 ring-1 ring-inset",
       )}
     >
-      <div className="border-border/60 flex shrink-0 items-center gap-px overflow-x-auto border-b">
+      {/* The strip is a drop target of its own, which is what makes tabs sortable: the pane
+       * body answers "which edge", the strip answers "which gap". Both see dragover for the
+       * same pointer — the strip stops propagation, or the pane under it lights up too and the
+       * two answers fight over one highlight. */}
+      <div
+        ref={strip}
+        className="border-border/60 flex shrink-0 items-center gap-px overflow-x-auto border-b"
+        onDragOver={(event) => {
+          if (!carriesTab(event.dataTransfer)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "move";
+          setOver(null);
+          setCaret(caretAt(event));
+        }}
+        onDragLeave={(event) => {
+          // As at the pane: leaving into a child is crossing your own border, not leaving.
+          if (event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) return;
+          setCaret(null);
+        }}
+        onDrop={(event) => {
+          if (!carriesTab(event.dataTransfer)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const key = event.dataTransfer.getData(TAB_MIME);
+          const before = caretAt(event);
+          setOver(null);
+          setCaret(null);
+          if (!key || before === null) return;
+          /* The caret counts the strip as it is on screen, dragged tab still in it; a move
+           * counts the strip without it. Same-pane drops translate, cross-pane ones do not —
+           * removing from the source never shifts the target. */
+          const from = pane.tabs.findIndex((one) => tabKey(one) === key);
+          move(key, pane.id, from >= 0 ? landingIndex(from, before) : before);
+        }}
+      >
         {pane.tabs.map((tab, index) => (
           <TabButton
             key={tab.uid ?? tabKey(tab)}
@@ -253,6 +355,15 @@ function PaneView({
             onClose={() => close(tabKey(tab))}
             others={pane.tabs.filter((one) => one.uid !== tab.uid).map(tabKey)}
             paneId={pane.id}
+            index={index}
+            count={pane.tabs.length}
+            caret={
+              caret === index
+                ? "before"
+                : caret !== null && caret === pane.tabs.length && index === pane.tabs.length - 1
+                  ? "after"
+                  : null
+            }
           />
         ))}
       </div>
@@ -281,6 +392,16 @@ function PaneView({
   );
 }
 
+/* The placement choices, as the menu names them.
+ *
+ * The words do the work: "grouped" is jargon for "next to the ones like it", and the person
+ * reading this menu is mid-click, not reading a manual. */
+const PLACEMENT_CHOICES: { mode: PlacementMode; label: string; icon: LucideIcon }[] = [
+  { mode: "grouped", label: "With their own kind", icon: Layers },
+  { mode: "focused", label: "In the pane I am in", icon: Focus },
+  { mode: "beside", label: "In a pane of its own", icon: SplitSquareHorizontal },
+];
+
 function TabButton({
   tab,
   title,
@@ -289,6 +410,9 @@ function TabButton({
   onClose,
   others,
   paneId,
+  index,
+  count,
+  caret,
 }: {
   tab: TabRef;
   title: string;
@@ -298,10 +422,22 @@ function TabButton({
   /** The keys of the other tabs in this pane, for "close the rest". */
   others: string[];
   paneId: string;
+  /** This tab's position and the strip's length: the move menu greys itself out at the ends,
+   *  where there is nothing to move toward. */
+  index: number;
+  count: number;
+  /** Which side of this tab a pending strip drop would land on, while the drag is over the
+   *  strip; null the rest of the time, when there is nothing to draw. */
+  caret: "before" | "after" | null;
 }) {
   const Icon = surfaceFor(tab).icon;
   const close = useLayout((s) => s.close);
   const dock = useLayout((s) => s.dock);
+  const move = useLayout((s) => s.move);
+  const setPlacement = useLayout((s) => s.setPlacement);
+  /* Unset reads as the default: the checkmark has to sit on the mode that will actually run,
+   * not on a field that happens to be empty. */
+  const placement = useLayout((s) => s.placements[tab.surface]) ?? DEFAULT_PLACEMENT;
   const key = tabKey(tab);
 
   /* Right-click on a tab.
@@ -316,6 +452,7 @@ function TabButton({
    * `event.defaultPrevented`, so the two cannot both open. */
   const body = (
     <div
+      data-tab={key}
       draggable
       onDragStart={(event) => {
         event.dataTransfer.setData(TAB_MIME, tabKey(tab));
@@ -323,12 +460,21 @@ function TabButton({
       }}
       onClick={onSelect}
       className={cn(
-        "group flex max-w-[220px] shrink-0 cursor-default items-center gap-1.5 px-3 py-1.5 text-xs transition-colors",
+        "group relative flex max-w-[220px] shrink-0 cursor-default items-center gap-1.5 px-3 py-1.5 text-xs transition-colors",
         active
           ? "bg-background text-foreground border-kith border-b-2"
           : "text-muted-foreground hover:text-foreground border-b-2 border-transparent",
       )}
     >
+      {/* The insertion point of a pending strip drop, on the tab it would land before — or on
+          the last one, after. A span and not a border, so showing it never shifts the strip the
+          caret was measured against. */}
+      {caret === "before" ? (
+        <span aria-hidden className="bg-kith pointer-events-none absolute inset-y-0 left-0 z-10 w-0.5" />
+      ) : null}
+      {caret === "after" ? (
+        <span aria-hidden className="bg-kith pointer-events-none absolute inset-y-0 right-0 z-10 w-0.5" />
+      ) : null}
       <Icon className="size-3.5 shrink-0 opacity-70" />
       <span className="truncate">{title}</span>
       <button
@@ -383,6 +529,50 @@ function TabButton({
         >
           Split below
         </ContextMenuItem>
+        <ContextMenuSeparator />
+        {/* Sorting, for anyone in a hurry: drag is discoverable by accident or not at all, and
+            two items that always work cost nothing. Greyed at the ends rather than hidden, for
+            the same reason Split is greyed on a lone tab — disabled is honest, missing is not. */}
+        <ContextMenuItem
+          icon={<ArrowLeft className="size-3.5" />}
+          disabled={index === 0}
+          onSelect={() => move(key, paneId, index - 1)}
+        >
+          Move left
+        </ContextMenuItem>
+        <ContextMenuItem
+          icon={<ArrowRight className="size-3.5" />}
+          disabled={index === count - 1}
+          onSelect={() => move(key, paneId, index + 1)}
+        >
+          Move right
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {/* Where the next tab of this surface opens — the preference the placement policy
+            honours, set on the tab because that is where the question "where do these live?"
+            gets asked. It survives panes, which come and go; it is a choice, not a layout. */}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger icon={<Layers className="size-3.5" />}>
+            Where new ones open
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {PLACEMENT_CHOICES.map((one) => (
+              <ContextMenuItem
+                key={one.mode}
+                icon={
+                  placement === one.mode ? (
+                    <Check className="size-3.5" />
+                  ) : (
+                    <one.icon className="size-3.5" />
+                  )
+                }
+                onSelect={() => setPlacement(tab.surface, one.mode)}
+              >
+                {one.label}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -414,9 +604,31 @@ function Rail({
   titleFor?: (ref: TabRef) => string | undefined;
   onOpen: (paneId: string) => void;
 }) {
+  const trackWidth = useLayout((s) => s.trackWidth);
+  const box = useRef<HTMLDivElement | null>(null);
   const tabs = panesOf(node).flatMap((one) => one.tabs.map((tab) => ({ tab, pane: one.id })));
+
+  /* A railed pane is 36px of icons, and placement should know it: without this the pane keeps
+   * reporting the width it had when it was last a real pane, and a wide surface keeps opening
+   * into a rail — open, and invisible. Every pane under the rail reports the rail's width,
+   * because that is how much of each of them there is. */
+  useEffect(() => {
+    const element = box.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width;
+      if (!width) return;
+      for (const one of panesOf(node)) trackWidth(one.id, width);
+    });
+    watch.observe(element);
+    return () => watch.disconnect();
+  }, [node, trackWidth]);
+
   return (
-    <div className="border-border/60 bg-background flex h-full w-full flex-col items-center gap-1 border-e py-2">
+    <div
+      ref={box}
+      className="border-border/60 bg-background flex h-full w-full flex-col items-center gap-1 border-e py-2"
+    >
       {tabs.map(({ tab, pane }) => {
         const Icon = surfaceFor(tab).icon;
         return (

@@ -10,7 +10,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defaultLayout, layoutKey, layoutVersion, looksLikeLayout, readStored } from "./store";
+import {
+  defaultLayout,
+  layoutKey,
+  layoutVersion,
+  looksLikeLayout,
+  placementsKey,
+  readPlacements,
+  readStored,
+  useLayout,
+} from "./store";
 import { pane, panes, split, tabKey } from "./tree";
 
 beforeEach(() => {
@@ -134,5 +143,61 @@ describe("what counts as a layout", () => {
 
   it("accepts a pane with no tabs, which is what the last close leaves", () => {
     expect(looksLikeLayout({ kind: "pane", id: "p", active: 0, tabs: [] })).toBe(true);
+  });
+});
+
+describe("where surfaces prefer to open", () => {
+  it("remembers a placement and writes it where it can be read back", () => {
+    const was = useLayout.getState().placements;
+    try {
+      useLayout.getState().setPlacement("settings", "beside");
+
+      expect(useLayout.getState().placements.settings).toBe("beside");
+      expect(JSON.parse(localStorage.getItem(placementsKey) ?? "{}").settings).toBe("beside");
+      expect(readPlacements().settings).toBe("beside");
+    } finally {
+      useLayout.setState({ placements: was });
+    }
+  });
+
+  it("ignores what this build cannot make sense of", () => {
+    localStorage.setItem(
+      placementsKey,
+      JSON.stringify({
+        settings: "beside",
+        board: "somewhere-else",
+        chat: 42,
+        inbox: "focused",
+      }),
+    );
+
+    const read = readPlacements();
+    expect(read.settings).toBe("beside");
+    expect(read.inbox).toBe("focused");
+    expect(read.board).toBeUndefined();
+    expect(read.chat).toBeUndefined();
+  });
+
+  it("is empty when storage has nothing to say", () => {
+    expect(readPlacements()).toEqual({});
+  });
+
+  it("splits a new pane when the surface prefers beside, and focuses it", () => {
+    useLayout.setState({ tree: pane([{ surface: "work" }]), focused: "" });
+    const was = useLayout.getState().placements;
+    try {
+      useLayout.getState().setPlacement("settings", "beside");
+      useLayout.getState().open({ surface: "settings" });
+
+      const tree = useLayout.getState().tree;
+      expect(tree.kind).toBe("split");
+      const made = panes(tree)[1];
+      expect(made.tabs.map(tabKey)).toEqual(["settings"]);
+      expect(useLayout.getState().focused, "the pane you asked for is where you are").toBe(
+        made.id,
+      );
+    } finally {
+      useLayout.setState({ placements: was });
+    }
   });
 });

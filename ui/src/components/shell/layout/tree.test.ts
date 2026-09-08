@@ -19,6 +19,8 @@ import {
   dockTab,
   findTab,
   hasTab,
+  moveTab,
+  openBeside,
   openTab,
   pane,
   renameTab,
@@ -292,5 +294,125 @@ describe("focus and sizes", () => {
 
     expect((after as { sizes: number[] }).sizes).toEqual([50, 50]);
     isSound(after);
+  });
+});
+
+describe("moving and sorting tabs", () => {
+  it("reorders a tab within its pane", () => {
+    const one = pane([work, roadmap, files], 0);
+    const after = moveTab(one, "work", one.id, 2);
+
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["board", "settings", "work"]);
+    isSound(after);
+  });
+
+  it("keeps the pane showing what it was showing while a background tab moves", () => {
+    /* The strip renumbered; what the pane is showing is identity, not position — found again
+     * by uid, the rule closeTab already paid for. Board was active and stays active. */
+    const one = pane([work, roadmap, files], 1);
+    const after = moveTab(one, "work", one.id, 2);
+
+    expect(panes(after)[0].active).toBe(0);
+    isSound(after);
+  });
+
+  it("moves the active tab without taking focus anywhere else", () => {
+    const one = pane([work, roadmap], 0);
+    const after = moveTab(one, "work", one.id, 1);
+
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["board", "work"]);
+    expect(panes(after)[0].active).toBe(1);
+    isSound(after);
+  });
+
+  it("is a no-op when the move ends where it started", () => {
+    const one = pane([work, roadmap], 1);
+    expect(moveTab(one, "work", one.id, 0)).toBe(one);
+  });
+
+  it("clamps a position past the end to the end", () => {
+    const one = pane([work, roadmap], 0);
+    const after = moveTab(one, "work", one.id, 9);
+
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["board", "work"]);
+    isSound(after);
+  });
+
+  it("moves into another pane's strip where it was aimed, not at the end", () => {
+    const left = pane([work, roadmap]);
+    const right = pane([files]);
+    const tree = split("row", [left, right]);
+
+    const after = moveTab(tree, "settings", left.id, 1);
+
+    const mine = panes(after).find((p) => p.id === left.id)!;
+    expect(mine.tabs.map(tabKey)).toEqual(["work", "settings", "board"]);
+    expect(mine.active, "the moved tab activates").toBe(1);
+    isSound(after);
+  });
+
+  it("collapses the pane it emptied, and still lands the tab", () => {
+    const left = pane([work]);
+    const right = pane([roadmap]);
+    const tree = split("row", [left, right]);
+
+    const after = moveTab(tree, "work", right.id, 0);
+
+    expect(after.kind, "the emptied source pane went with the move").toBe("pane");
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["work", "board"]);
+    isSound(after);
+  });
+
+  it("does nothing for a tab that is not there, or a pane that is not there", () => {
+    const one = pane([work]);
+    expect(moveTab(one, "board", one.id, 0)).toBe(one);
+    expect(moveTab(one, "work", "a-pane-that-was-closed", 0)).toBe(one);
+  });
+});
+
+describe("opening beside", () => {
+  it("splits a pane of its own off the anchor", () => {
+    const left = pane([work]);
+    const tree = split("row", [left, pane([roadmap])]);
+
+    const { tree: after, paneId } = openBeside(tree, files, left.id);
+
+    expect(after.kind).toBe("split");
+    expect(findTab(after, "settings")!.pane.id).toBe(paneId);
+    // Right of the anchor: work, settings, board.
+    expect(panes(after).map((p) => p.tabs.map(tabKey))).toEqual([
+      ["work"],
+      ["settings"],
+      ["board"],
+    ]);
+    isSound(after);
+  });
+
+  it("splits below when asked, which is how a column gets built", () => {
+    const one = pane([work]);
+    const { tree: after } = openBeside(one, roadmap, one.id, "bottom");
+
+    expect(after.kind).toBe("split");
+    expect((after as { direction: string }).direction).toBe("column");
+    isSound(after);
+  });
+
+  it("falls back to the first pane when the anchor is gone", () => {
+    const tree = split("row", [pane([work]), pane([roadmap])]);
+
+    const { tree: after, paneId } = openBeside(tree, files, "a-pane-that-was-closed");
+
+    expect(findTab(after, "settings")!.pane.id).toBe(paneId);
+    isSound(after);
+  });
+
+  it("falls back to the first pane even when it is an empty one", () => {
+    /* A root is always a pane — invariant 5 — so "nothing to split" never happens; the anchor
+     * being unknown falls to the first pane, empty or not, and splits it. */
+    const { tree, paneId } = openBeside(pane([]), files, "a-pane-that-was-closed");
+
+    expect(tree.kind).toBe("split");
+    expect(findTab(tree, "settings")!.pane.id).toBe(paneId);
+    isSound(tree);
   });
 });

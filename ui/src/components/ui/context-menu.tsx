@@ -1,4 +1,5 @@
 import { ContextMenu as Primitive } from "radix-ui";
+import { ChevronRight } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
@@ -72,5 +73,52 @@ export function ContextMenuLabel({ className, ...props }: ComponentProps<typeof 
       className={cn("text-muted-foreground/70 truncate px-2.5 py-1.5 text-[11px]", className)}
       {...props}
     />
+  );
+}
+
+/** A menu inside a menu.
+ *
+ * The tab strip needs one for a question with several answers of its own — where new tabs of a
+ * surface open. Flat, it would have cost four rows pressed against Close; nested, it costs one
+ * hover. Same primitives, so focus capture and type-ahead behave like the rest of the menu. */
+export const ContextMenuSub = Primitive.Sub;
+
+export function ContextMenuSubTrigger({
+  className,
+  icon,
+  children,
+  ...props
+}: ComponentProps<typeof Primitive.SubTrigger> & { icon?: ReactNode }) {
+  return (
+    <Primitive.SubTrigger
+      className={cn(
+        "flex cursor-default items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none",
+        "data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
+        "data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+        className,
+      )}
+      {...props}
+    >
+      {icon ? <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span> : null}
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      <ChevronRight className="text-muted-foreground/70 size-3.5 shrink-0" />
+    </Primitive.SubTrigger>
+  );
+}
+
+export function ContextMenuSubContent({
+  className,
+  ...props
+}: ComponentProps<typeof Primitive.SubContent>) {
+  return (
+    <Primitive.Portal>
+      <Primitive.SubContent
+        className={cn(
+          "animate-in fade-in-0 zoom-in-95 z-50 min-w-52 overflow-hidden rounded-xl border border-border/70 bg-popover/95 p-1 text-popover-foreground shadow-xl backdrop-blur-xl duration-100",
+          className,
+        )}
+        {...props}
+      />
+    </Primitive.Portal>
   );
 }

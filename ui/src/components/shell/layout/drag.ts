@@ -40,6 +40,34 @@ export function edgeAt(rect: DOMRect, x: number, y: number): Edge {
   return nearest[1] < EDGE ? nearest[0] : "center";
 }
 
+/** Which gap in a strip of tabs the pointer is over, as an "insert before" index.
+ *
+ * The pane body answers "which edge"; this answers the question the *strip* is asked, which is
+ * not an edge at all but a position in an order — the drop that sorts tabs instead of the drop
+ * that only ever appended. The rule is the one every editor tab strip uses: the left half of a
+ * tab means "before it", the right half "after it", and past the last tab means the end, so the
+ * pointer rests between two tabs rather than snapping to whichever tab it happens to cover.
+ *
+ * Takes the tabs' rectangles in order rather than an element, so it is arithmetic and testable
+ * without a live strip; the caller reads `getBoundingClientRect` off each tab button. */
+export function insertIndexAt(tabs: { left: number; right: number }[], x: number): number {
+  for (let index = 0; index < tabs.length; index++) {
+    if (x < (tabs[index].left + tabs[index].right) / 2) return index;
+  }
+  return tabs.length;
+}
+
+/** Where a tab dragged from `from` lands when dropped before `before`.
+ *
+ * The caret is drawn between the tabs *as they are on screen*, before the move; removing the
+ * dragged tab shifts every tab after it left by one, so a caret on the dragged tab's right half
+ * — or anywhere past it — lands one earlier than the caret says. A caret at the tab's own left
+ * edge, which is where "before itself" points, lands where it started: a no-op drop, which is
+ * the honest answer for a drag that did not go anywhere. */
+export function landingIndex(from: number, before: number): number {
+  return from < before ? before - 1 : before;
+}
+
 /** The MIME-ish key the drag carries.
  *
  * A custom type rather than `text/plain`: a tab dragged out of the window and into a text
