@@ -177,15 +177,42 @@ class Manager:
         language = outline.language_for(path)
         return _FAMILY.get(language or "", "")
 
+    def family_of(self, name: str) -> str:
+        """A language name or a family name, as a family name.
+
+        **The distinction this exists to stop being silent.** `CANDIDATES` is keyed by *family*
+        — one entry serves `.ts`, `.tsx` and `.js`, because one `typescript-language-server`
+        does. `outline.language_for` answers with a *language*: `tsx` and `javascript` are
+        separate answers there and neither is a key here.
+
+        `_FAMILY` was written for exactly this and was used in one place, `family_for`, which
+        starts from a file path. Anything starting from a *language name* — the settings screen
+        asking what this project is written in — indexed `CANDIDATES` with it directly, got
+        nothing back, and reported no server available for TSX and JavaScript while reporting
+        one for TypeScript. Installing then ran the same npm package that was already there and
+        changed nothing, so the row said the same thing afterwards. Forever.
+
+        Idempotent, because a family maps to itself — so normalising a caller that was already
+        correct cannot break it.
+        """
+        wanted = str(name or "").strip().lower()
+        return _FAMILY.get(wanted, wanted)
+
     def find_binary(self, family: str, root: Path) -> tuple[Candidate, str] | None:
         """The best available server for this family, looked for in the project first.
 
         Four places, in this order, and the order is the priority. The project's own binaries
         win because they are the version it pins. What we installed comes next — chosen by
         someone, for this. Then Kith's environment, then `PATH`.
+
+        Takes a language name as well as a family name — see `family_of`. Normalising here
+        rather than at each caller is deliberate: five callers reach this, two of them start
+        from a language, and the failure of getting it wrong is an empty candidate list, which
+        is indistinguishable from "nothing installed".
         """
         from kith.engine.code.lsp import install
 
+        family = self.family_of(family)
         ours = install.prefix()
         for candidate in CANDIDATES.get(family, ()):
             for folder in _PROJECT_BINS:

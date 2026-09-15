@@ -7,13 +7,16 @@ import { HeaderControls } from "@/components/shell/header-controls";
 import { PresenceOrb } from "@/components/shell/presence";
 import { cn } from "@/lib/utils";
 import { UpdatePill } from "@/components/shell/update-notice";
+import { LayoutsMenu } from "@/components/shell/layout/layouts-menu";
 
 /** The presence bar: Kith as a living thing (orb + what he's doing right
  * now), then his inbox, work, panel, and settings. */
 export function AppHeader({
   working,
   elsewhere = [],
+  drafting = [],
   onGoToWorking,
+  onGoToDraft,
   status,
   model,
   effort = "",
@@ -48,6 +51,12 @@ export function AppHeader({
   onOpenSettings: () => void;
   /** Conversations other than this one with a turn running. */
   elsewhere?: string[];
+  /** Conversations holding something typed and not sent. Ids, like `elsewhere`, and for the same
+   *  reason: "one of them is waiting" and "*that* one is waiting" are different sentences and the
+   *  second is the one that can be clicked. */
+  drafting?: string[];
+  /** Go to the one holding unsent text, or open the list when several are. */
+  onGoToDraft?: (conversationId: string) => void;
   /** Go to the one that is working, or open the list when several are. */
   onGoToWorking?: (conversationId: string) => void;
 }) {
@@ -118,6 +127,36 @@ export function AppHeader({
           <span className="relative flex items-center justify-center">
             <span className="bg-roam absolute size-4 animate-ping rounded-full opacity-20" />
             <span className="font-mono text-[11px] tabular-nums">{elsewhere.length}</span>
+          </span>
+        </TooltipIconButton>
+      ) : null}
+      {/* Unsent text, waiting in a chat.
+          The same argument one row down from the one above, and it is here for the same reason a
+          count of running turns is: the tab mark and the conversations dot are both drawn on
+          surfaces that can be *gone*. Zoom a pane and no other strip renders at all; collapse the
+          conversations panel and its dots go with it. This header does not go anywhere, so it is
+          the one place a draft cannot hide — which matters more for a draft than for a turn,
+          because a turn finishes whether you find it or not.
+
+          Still and hollow where that one pings, keeping the vocabulary the marks already use: a
+          ring rather than a fill, no animation, and the muted foreground rather than a fourth
+          colour the palette does not have. */}
+      {drafting.length > 0 ? (
+        <TooltipIconButton
+          tooltip={
+            drafting.length === 1
+              ? "Unsent text in another conversation — go to it"
+              : `Unsent text in ${drafting.length} conversations`
+          }
+          side="bottom"
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground hover:bg-accent/60 size-7 shrink-0"
+          onClick={() => onGoToDraft?.(drafting.length === 1 ? (drafting[0] ?? "") : "")}
+        >
+          <span className="relative flex items-center justify-center">
+            <span className="border-muted-foreground/50 absolute size-4 rounded-full border" />
+            <span className="font-mono text-[11px] tabular-nums">{drafting.length}</span>
           </span>
         </TooltipIconButton>
       ) : null}
@@ -219,6 +258,9 @@ export function AppHeader({
           in the same run as Work and Panel, so a labelled destination and an unlabelled toggle
           read as two members of one confused set. */}
       <span className="bg-border/60 mx-1 h-4 w-px" aria-hidden />
+      {/* Saved arrangements. In this run rather than beside Work and Panel because it acts on
+          the window rather than taking you somewhere in it. */}
+      <LayoutsMenu />
       <Button
         variant="ghost"
         size="icon-sm"

@@ -47,6 +47,15 @@ def somewhere_to_install(tmp_path: Path, config_db: Path, monkeypatch):
     permissions.revoke_all()
 
 
+A_COMMAND = {
+    "name": "file_it",
+    "title": "File it",
+    "delivery": "state",
+    "does": {"set": ["last"]},
+    "model": True,
+}
+
+
 def a_plugin(tmp_path: Path, **overrides) -> Path:
     """A plugin folder on disk, ready to install from."""
     source = tmp_path / "source" / str(overrides.get("id", MANIFEST["id"]))
@@ -316,6 +325,40 @@ def test_you_cannot_take_a_plugins_label(tmp_path: Path, config_db: Path):
         manager.save(config_db, [MCPServer(label="circulars", command="npx")])
 
 
+def test_a_settings_save_survives_a_plugin_that_ships_a_server(tmp_path: Path, config_db: Path):
+    """**The two guards that were both load-bearing, and the one that was being defeated.**
+
+    The settings page PUTs the whole list, and `GET /api/mcp` shows it a plugin's server, so it
+    echoed one back. `save` guards against that with `if not s.owner` — a filter that only works
+    if the field survives the round trip. The client's `MCPServer` type dropped `owner`, so an
+    echoed row arrived looking like the person's own, slipped past the filter, and hit the label
+    check instead: a 400 that failed the *whole* save, including the row they were actually
+    editing. Latent until a plugin shipped a server, and unmissable once one did.
+
+    Fixed in the client, which no longer sends them. This is the second answer, here: a row
+    carrying its owner is dropped rather than refused, so an older window that still echoes one
+    saves the person's changes instead of losing them.
+    """
+    from dataclasses import replace as _replace
+
+    from kith.domain.mcp import MCPServer
+    from kith.services.mcp import manager
+
+    installer.install(config_db, a_plugin(tmp_path, server={"command": "npx", "args": ["x@1.0.0"]}))
+    theirs = next(s for s in manager.configured(config_db) if s.label == "circulars")
+
+    # What the page holds after a GET: the person's row and the plugin's, saved together.
+    manager.save(config_db, [MCPServer(label="mine", command="npx"), theirs])
+
+    assert [s.label for s in manager._stored_rows(config_db)] == ["mine"]
+    # And the plugin's is still offered, from its own store rather than the person's.
+    assert "circulars" in [s.label for s in manager.configured(config_db)]
+    # The label check still refuses a person genuinely trying to take the name — that refusal is
+    # correct, and it is what the echo was being mistaken for.
+    with pytest.raises(ValueError, match="is the 'circulars' plugin's server"):
+        manager.save(config_db, [_replace(theirs, owner="")])
+
+
 def test_an_ungranted_server_is_not_offered_at_all(tmp_path: Path, config_db: Path):
     installer.install(config_db, a_plugin(tmp_path, server={"command": "npx", "args": ["x@1.0.0"]}))
     plugin = registry.get(config_db, "circulars")
@@ -398,6 +441,64 @@ def test_removing_a_plugin_revokes_what_let_it_run(tmp_path: Path, config_db: Pa
     assert not permissions.granted("plugin:circulars:*")
 
 
+def test_an_upgrade_does_not_leave_the_old_permission_behind(tmp_path: Path, config_db: Path):
+    """**Three grants for a plugin with no program, which is how this was found.**
+
+    A spawn signature covers the resolved reach, the seal and the command line, so any change to
+    what gets spawned produces a different signature — deliberately, so a widened boundary
+    re-asks rather than inheriting consent. Nothing collected the previous one, so a plugin
+    upgraded three times held three grants and the Permissions pane listed all of them.
+    """
+    installer.install(config_db, a_plugin(tmp_path, server={"command": "npx", "args": ["x@1.0.0"]}))
+    first = permissions.plugin_spawn_grants("circulars")
+    assert len(first) == 1
+
+    # A different command line is a different boundary, so a different signature.
+    installer.install(config_db, a_plugin(tmp_path, server={"command": "npx", "args": ["x@2.0.0"]}))
+
+    now = permissions.plugin_spawn_grants("circulars")
+    assert len(now) == 1
+    assert now != first
+
+
+def test_a_plugin_that_drops_its_program_drops_the_permission(tmp_path: Path, config_db: Path):
+    """The sharper half. The browser plugin stopped shipping a subprocess and kept two standing
+    grants saying one could run — for a plugin that no longer had one at all."""
+    installer.install(
+        config_db,
+        a_plugin(tmp_path, server={"command": "npx", "args": ["x@1.0.0"]}, commands=[A_COMMAND]),
+    )
+    assert permissions.plugin_spawn_grants("circulars")
+
+    # The same plugin, now with no program of its own.
+    installer.install(config_db, a_plugin(tmp_path, commands=[A_COMMAND]))
+
+    assert permissions.plugin_spawn_grants("circulars") == []
+    # Its commands are still granted — that is a separate decision and a separate namespace.
+    assert permissions.granted("plugin:circulars:*")
+
+
+def test_a_command_grant_never_lets_a_program_run(tmp_path: Path, config_db: Path):
+    """The invariant the settings screen was misreporting.
+
+    `plugin:<id>:*` grants the plugin's declared *commands*; `plugin:<id>:<seal>:<hash>` grants
+    its program the right to run. The grants list read the seal out of the wrong segment and
+    described a command grant as "its program may run, with your full access" — for plugins that
+    ship no program. False, and alarming in the one place a person goes to check.
+    """
+    installer.install(
+        config_db,
+        a_plugin(tmp_path, server={"command": "npx", "args": ["x@1.0.0"]}, commands=[A_COMMAND]),
+    )
+    spawn = permissions.plugin_spawn_grants("circulars")[0]
+    permissions.revoke(spawn)
+
+    # The command grant survives and covers commands...
+    assert permissions.granted("plugin:circulars:*")
+    # ...and does not answer for the program. Segment-wise, so a sibling id cannot either.
+    assert not permissions.granted(spawn)
+
+
 def test_removing_a_plugin_keeps_its_data_for_a_while(tmp_path: Path, config_db: Path):
     installer.install(config_db, a_plugin(tmp_path))
 
@@ -414,3 +515,63 @@ def test_asking_to_delete_the_data_deletes_the_row(tmp_path: Path, config_db: Pa
     installer.uninstall(config_db, "circulars", delete_state=True)
 
     assert "circulars" not in registry.rows(config_db)
+
+
+def test_deleting_a_plugins_data_forgets_what_its_browser_remembered(
+    tmp_path: Path, config_db: Path, monkeypatch
+):
+    """**The privacy hole this closes.** A `web` surface has a session partition in the desktop
+    app's own storage — cookies, local storage, live logins — and nothing cleared it. So
+    "remove this plugin and delete its data" left signed-in accounts on disk indefinitely, and
+    reinstalling the plugin silently inherited them.
+
+    It has to be a request to the shell: the session lives in the other process and this one
+    cannot reach it.
+    """
+    from kith.infra import renderer
+
+    wiped: list[str] = []
+    monkeypatch.setattr(renderer, "forget_plugin_browser", lambda one: wiped.append(one) or True)
+    installer.install(config_db, a_plugin(tmp_path))
+
+    installer.uninstall(config_db, "circulars", delete_state=True)
+
+    assert wiped == ["circulars"]
+
+
+def test_removing_a_plugin_closes_its_browser_but_keeps_the_logins(
+    tmp_path: Path, config_db: Path, monkeypatch
+):
+    """Two acts, and the difference is the person's data.
+
+    Removing a plugin stops its program, so a renderer process still holding its pages is waste.
+    What the browser *remembers* is the same bytes as its stored state, which uninstall marks
+    rather than deletes — so it follows the same thirty-day rule instead of going here.
+    """
+    from kith.infra import renderer
+
+    closed: list[str] = []
+    wiped: list[str] = []
+    monkeypatch.setattr(renderer, "close_plugin_browser", lambda one: closed.append(one))
+    monkeypatch.setattr(renderer, "forget_plugin_browser", lambda one: wiped.append(one) or True)
+    installer.install(config_db, a_plugin(tmp_path))
+
+    installer.uninstall(config_db, "circulars")
+
+    assert closed == ["circulars"]
+    assert wiped == []
+
+
+def test_switching_a_plugin_off_stops_its_browser_too(tmp_path: Path, config_db: Path, monkeypatch):
+    """`_reconnect` stops the plugin's program; nothing stopped its browser. A disabled plugin
+    holding a live renderer process — and a tab still painting over the app — was the one part
+    of it that went on running after being switched off."""
+    from kith.infra import renderer
+
+    closed: list[str] = []
+    monkeypatch.setattr(renderer, "close_plugin_browser", lambda one: closed.append(one))
+    installer.install(config_db, a_plugin(tmp_path))
+
+    installer.set_enabled(config_db, "circulars", False)
+
+    assert closed == ["circulars"]

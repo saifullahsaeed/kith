@@ -147,7 +147,20 @@ function Grant({
   const isPlugin = signature.startsWith("plugin:");
   const parts = signature.split(":");
   const owner = isPlugin ? (parts[1] ?? "").replace(/^user-/, "") : "";
-  const sealed = isPlugin && parts[2] === "sealed";
+  /* **Two shapes, and conflating them was a lie about access.**
+   *
+   * `plugin:<id>:*` is three segments and grants the plugin's declared *commands*.
+   * `plugin:<id>:<seal>:<hash>` is four and grants its program the right to run.
+   *
+   * This only knew the second, so it read `parts[2]` for the seal — which on a command grant is
+   * `*`, not `sealed`, and fell through to "with your program may run, with your full access".
+   * A plugin that ships no program at all was therefore described as having a program running
+   * with full access to the machine. Alarming, and false in both halves.
+   *
+   * `permissions._plugin_covers` is where the distinction is enforced: it requires three
+   * segments on both sides, so a command grant structurally cannot cover a spawn one. */
+  const isSpawn = isPlugin && parts.length === 4;
+  const sealed = isSpawn && parts[2] === "sealed";
   const body = isPlugin ? owner : signature.slice(signature.indexOf(":") + 1);
   const Icon = isPath ? FolderOpen : isPlugin ? Puzzle : TerminalSquare;
   return (
@@ -158,11 +171,13 @@ function Grant({
         <p className="text-muted-foreground/70 mt-0.5 text-[11px]">
           {isPath
             ? "This and anything inside it"
-            : isPlugin
+            : isSpawn
               ? sealed
                 ? "Its program may run, inside the boundary you approved"
-                : "Its program may run, with your full access"
-              : "This command, whenever he runs it"}
+                : "Its program may run, with nothing confining it"
+              : isPlugin
+                ? "Its commands may be called without asking you each time"
+                : "This command, whenever he runs it"}
         </p>
       </div>
       <button

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ArrowLeft, ArrowRight, RotateCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, Expand, RotateCw } from "lucide-react";
 
 import { Absent } from "@/components/shell/plugin-surface";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,10 @@ interface ViewStatus {
   canGoBack: boolean;
   canGoForward: boolean;
   failure: string;
+  /** The size the page is being laid out at, when the model set one and it is not the pane.
+   *  Kith letterboxes the page inside the pane, so without this the pane would look broken —
+   *  a smaller page floating on the background — with nothing saying it was chosen. */
+  viewport: { width: number; height: number } | null;
 }
 
 /** What the preload exposes in the desktop shell, and nothing outside it. */
@@ -57,20 +61,62 @@ const EMPTY: ViewStatus = {
   canGoBack: false,
   canGoForward: false,
   failure: "",
+  viewport: null,
 };
+
+/**
+ * Is something drawn on top of this pane?
+ *
+ * Asked of the document rather than of a list of things that might cover it. A `WebContentsView`
+ * is composited by the main process **over** the whole window, so anything Kith draws above the
+ * pane — a dialog, a dropdown, the control panel, a drag preview, a screen not written yet —
+ * appears underneath the browser instead of over it. Keeping a list of those would mean every
+ * future overlay has to remember to tell the browser about itself, and the first one that forgets
+ * is a bug that looks exactly like the app having come apart.
+ *
+ * `elementFromPoint` asks who is actually on top. Five points rather than one, because a panel
+ * that covers most of the pane still hides most of the page, and a single centre sample would
+ * call that uncovered.
+ */
+function covered(hole: HTMLElement, box: DOMRect): boolean {
+  const inset = 4;
+  const points: [number, number][] = [
+    [box.left + box.width / 2, box.top + box.height / 2],
+    [box.left + inset, box.top + inset],
+    [box.right - inset, box.top + inset],
+    [box.left + inset, box.bottom - inset],
+    [box.right - inset, box.bottom - inset],
+  ];
+  for (const [x, y] of points) {
+    const top = document.elementFromPoint(x, y);
+    // Outside the viewport answers null — that is the pane being scrolled off, which `place`
+    // already handles by its rectangle, so it does not count as buried.
+    if (!top) continue;
+    if (top === hole || hole.contains(top)) return false;
+  }
+  return true;
+}
 
 export function PluginWebView({
   plugin,
   view,
+  conversationId,
   visible = true,
 }: {
   plugin: string;
   view: string;
+  /** Which conversation this pane belongs to. Becomes the view's `owner` when the surface
+   *  declares `answers: "conversation"`, which is what gives each conversation its own browser
+   *  instead of all of them sharing one page. */
+  conversationId: string;
   /** False while another tab is in front. The view has to be taken off the screen, not merely
    *  left where it is — it would paint over whatever replaced it. */
   visible?: boolean;
 }) {
   const declared = pluginSurface(plugin, view);
+  /* Empty for a surface that answers for the app rather than per conversation — the same rule
+   * the server applies when the model calls in, so both sides address the same view. */
+  const owner = declared?.answers === "conversation" ? conversationId : "";
   const hole = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<ViewStatus>(EMPTY);
   const [typed, setTyped] = useState("");
@@ -84,10 +130,10 @@ export function PluginWebView({
   const ask = useCallback(
     async (verb: string, extra: Record<string, unknown> = {}) => {
       if (!bridge) return;
-      const answer = await bridge.ask({ verb, plugin, view, ...extra });
+      const answer = await bridge.ask({ verb, plugin, view, owner, ...extra });
       if (answer && typeof answer.url === "string") setStatus(answer as unknown as ViewStatus);
     },
-    [bridge, plugin, view],
+    [bridge, plugin, view, owner],
   );
 
   /* Status, pushed rather than polled. The main process knows when the page moved; asking it
@@ -95,7 +141,10 @@ export function PluginWebView({
   useEffect(() => {
     if (!bridge) return;
     return bridge.onStatus((raw) => {
-      if (raw.plugin !== plugin || raw.view !== view) return;
+      // Status is broadcast to the window, so every browser pane hears every browser's — and
+      // with a view per conversation there are several. Without the owner check, one
+      // conversation's address bar would follow another conversation's page.
+      if (raw.plugin !== plugin || raw.view !== view || raw.owner !== owner) return;
       const next = raw as unknown as ViewStatus;
       setStatus(next);
       if (next.url !== shown.current) {
@@ -103,7 +152,7 @@ export function PluginWebView({
         setTyped(next.url);
       }
     });
-  }, [bridge, plugin, view]);
+  }, [bridge, plugin, view, owner]);
 
   /* Keep the view over the hole.
    *
@@ -122,8 +171,8 @@ export function PluginWebView({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         const box = element.getBoundingClientRect();
-        if (!visible || box.width < 1 || box.height < 1) {
-          void bridge.ask({ verb: "hide", plugin, view });
+        if (!visible || box.width < 1 || box.height < 1 || covered(element, box)) {
+          void bridge.ask({ verb: "hide", plugin, view, owner });
           return;
         }
         void bridge
@@ -131,6 +180,7 @@ export function PluginWebView({
             verb: "place",
             plugin,
             view,
+            owner,
             rect: { x: box.left, y: box.top, width: box.width, height: box.height },
             home: declared?.home ?? "",
           })
@@ -153,16 +203,35 @@ export function PluginWebView({
     // Capture, because the scroll happens on an ancestor and does not bubble.
     window.addEventListener("scroll", measure, true);
 
+    /* Re-measure whenever anything is drawn over the app.
+     *
+     * **This is the one that was missing, and it showed.** The control panel opens as a
+     * full-window overlay while the pane underneath stays mounted — same rectangle, no resize,
+     * no scroll — so nothing re-ran and a browser went on painting over the panel, with the
+     * panel's own text visibly cut off behind it. A resize observer cannot see this: the pane
+     * has not moved or changed size, it has been *buried*.
+     *
+     * A mutation observer on the body catches the overlay appearing, whatever draws it — a
+     * dialog, a menu, a route, something not written yet. `covered()` does the deciding. */
+    const overlays = new MutationObserver(measure);
+    overlays.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-state", "aria-hidden", "style", "class"],
+    });
+
     return () => {
       cancelAnimationFrame(frame);
       watcher.disconnect();
+      overlays.disconnect();
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
       // Off the screen on the way out. A view left behind is a browser painted over whichever
       // tab replaced this one, with nothing on screen explaining where it came from.
-      void bridge.ask({ verb: "hide", plugin, view });
+      void bridge.ask({ verb: "hide", plugin, view, owner });
     };
-  }, [bridge, plugin, view, visible, declared?.home]);
+  }, [bridge, plugin, view, owner, visible, declared?.home]);
 
   if (!declared) return <Absent title={view || "Browser"} detail="This plugin is not installed." />;
 
@@ -233,6 +302,23 @@ export function PluginWebView({
             className="bg-muted focus:bg-background focus:ring-ring/40 min-w-0 flex-1 rounded-full px-2.5 py-1 text-xs outline-none focus:ring-1"
           />
         </form>
+
+        {/* The viewport chip. Shown only when a size is in force, because chrome for a default
+            state is noise. Clicking it is a person's hand putting the page back — the same class
+            of act as back and reload, which is why it rides the same fixed channel rather than
+            anything the model gates. */}
+        {status.viewport ? (
+          <button
+            type="button"
+            onClick={() => void ask("resize", { preset: "reset" })}
+            title="Back to the full pane"
+            aria-label="Back to the full pane"
+            className="border-border/60 text-muted-foreground hover:bg-muted ml-1 flex flex-none items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
+          >
+            {status.viewport.width} × {status.viewport.height}
+            <Expand className="size-3" />
+          </button>
+        ) : null}
       </header>
 
       {/* The hole. Nothing renders here — the shell paints the page over this rectangle. The

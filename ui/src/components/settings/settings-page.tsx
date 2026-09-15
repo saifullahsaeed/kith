@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { Cpu, FileText, Loader2, MessageSquare, PlugZap, Puzzle, Settings2, SlidersHorizontal, Wrench, X } from "lucide-react";
+import {
+  Cpu,
+  FileText,
+  Loader2,
+  MessageSquare,
+  PlugZap,
+  Puzzle,
+  Settings2,
+  ShieldCheck,
+  SlidersHorizontal,
+  Wrench,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { AdvancedTab } from "@/components/settings/advanced-tab";
@@ -7,6 +19,7 @@ import { ChatTab } from "@/components/settings/chat-tab";
 import { ModelTab } from "@/components/settings/model-tab";
 import { ToolsTab } from "@/components/settings/tools-tab";
 import { fetchSetup, type ServerConfig, type SetupSnapshot } from "@/lib/backend";
+import { PermissionsTab } from "@/components/settings/permissions-tab";
 import { PersonaTab } from "@/components/settings/persona-tab";
 import { PluginsTab } from "@/components/settings/plugins-tab";
 import { SkillsTab } from "@/components/settings/skills-tab";
@@ -39,31 +52,67 @@ import { UpdateFooter } from "@/components/shell/update-notice";
  *   fill    — the whole pane, no padding, no measure; the tab is `h-full` and scrolls its
  *             own regions. Editors, which need to know how tall they are.
  */
+/**
+ * The three questions a person arrives with.
+ *
+ * **Grouped by whose decision a thing is**, which is the axis that stopped working when plugins
+ * arrived. Eight panes in a flat list is a list you read rather than scan, and the old order
+ * put Conversation — how he talks — between Tools and Advanced, as if it were about what he can
+ * reach.
+ *
+ * `him` is what he is: the model, the persona, how he replies. `use` is what he has to work
+ * with, and it is the group a plugin lands in. `limits` is what you allow and what you have
+ * tuned. Order within a group is deliberate: the thing you change most often is first.
+ */
+const GROUPS = [
+  { key: "him", label: "Him" },
+  { key: "use", label: "What he can use" },
+  { key: "limits", label: "Limits" },
+] as const;
+
+type Group = (typeof GROUPS)[number]["key"];
+
 const TABS: {
   id: SettingsTab;
   label: string;
   hint: string;
   icon: typeof Cpu;
+  group: Group;
   /** Omitted means the reading measure. */
   layout?: "reading" | "wide" | "fill";
 }[] = [
-  { id: "model", label: "Model", hint: "where he thinks", icon: Cpu, layout: "wide" },
+  { id: "model", label: "Model", hint: "where he thinks", icon: Cpu, group: "him", layout: "wide" },
   {
     id: "persona",
     label: "Persona",
     hint: "who he is, in his own files",
     icon: FileText,
+    group: "him",
     layout: "fill",
   },
-  { id: "skills", label: "Skills", hint: "what he knows how to do", icon: Puzzle },
-  { id: "plugins", label: "Plugins", hint: "what other people built", icon: PlugZap },
-  { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench },
-  { id: "chat", label: "Conversation", hint: "reply length and reasoning", icon: MessageSquare },
+  {
+    id: "chat",
+    label: "Conversation",
+    hint: "reply length and reasoning",
+    icon: MessageSquare,
+    group: "him",
+  },
+  { id: "skills", label: "Skills", hint: "what he knows how to do", icon: Puzzle, group: "use" },
+  { id: "plugins", label: "Plugins", hint: "what other people built", icon: PlugZap, group: "use" },
+  { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench, group: "use" },
+  {
+    id: "permissions",
+    label: "Permissions",
+    hint: "what he may do without asking",
+    icon: ShieldCheck,
+    group: "limits",
+  },
   {
     id: "advanced",
     label: "Advanced",
     hint: "his pace, limits and addresses",
     icon: SlidersHorizontal,
+    group: "limits",
     // A form, so `reading` looks like the right call and is not. A row here is a label and its
     // help on the left and a number on the right, and the measure was being applied to the
     // *row* — so on a wide window the pane drew itself 768px and put the rest of the screen
@@ -138,9 +187,21 @@ export function SettingsPage({
   const filling = layout === "fill" && !error && snapshot !== null;
 
   return (
+    /* **Deliberately a takeover, not a pane.** This was converted to `h-full w-full` alongside the
+       board and Context, and reverted the same day: at the pane widths its own `minWidth` permits
+       (420), Settings does not fit. Its body was left 217px for content that needs 240px, and a
+       nested `max-h-[32rem]` scroller was left 167px for 358px — the rows are built from a hard
+       `w-32` and `shrink-0` buttons. Because `overflow-y-auto` computes `overflow-x` to `auto`,
+       each shortfall appeared as a horizontal scrollbar rather than as a squeeze.
+       Tuning the width does not fix it: the layout is proportional, so the pane sometimes gets
+       *narrower* as the window grows, and a `minWidth` wide enough to fit (~640) exceeds the
+       window beside the chat's 560. Fitting this inside a pane is responsive work on Settings'
+       own layout — eight tabs, each with its own idea of width — not a constant. */
     <div className="bg-background text-foreground fixed inset-0 z-30 flex flex-col">
-      {/* Ambient wash so the page feels like the same warm room as the rest of the app. */}
-      <div className="kith-ambient opacity-70" />
+      {/* Ambient wash so the page feels like the same warm room as the rest of the app.
+          `fixed inset-0` because `.kith-ambient` no longer positions itself, and this surface is
+          window-scoped. */}
+      <div className="kith-ambient fixed inset-0 opacity-70" />
 
       {/* This covers the app header, so it owns the top of the window and reserves
           the window-control space itself. */}
@@ -151,7 +212,7 @@ export function SettingsPage({
         <div className="min-w-0 leading-tight">
           <div className="text-sm font-semibold tracking-tight">Settings</div>
           <div className="text-muted-foreground hidden text-[11px] sm:block">
-            where he thinks, what he can reach, and who he is
+            him, what he can use, and what he may do
           </div>
         </div>
         <div className="flex-1" />
@@ -168,30 +229,45 @@ export function SettingsPage({
 
       <div className="relative z-10 flex min-h-0 flex-1">
         <nav className="w-56 shrink-0 overflow-y-auto border-r border-border/60 bg-sidebar/40 px-3 py-4 backdrop-blur-sm">
-          <div className="space-y-0.5">
-            {TABS.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                onClick={() => onSelectTab(entry.id)}
-                className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                  tab === entry.id
-                    ? "bg-kith-soft text-foreground"
-                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
-                }`}
-              >
-                <entry.icon
-                  className={`mt-0.5 size-4 shrink-0 ${tab === entry.id ? "text-kith" : ""}`}
-                />
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium">{entry.label}</span>
-                  <span className="text-muted-foreground/80 block text-[11px] leading-snug">
-                    {entry.hint}
-                  </span>
-                </span>
-              </button>
-            ))}
-          </div>
+          {/* Grouped, and the groups are derived from the panes rather than listed twice.
+              A second list would be a second thing to keep in step, and the failure would be a
+              pane that quietly stops appearing in the sidebar while still being reachable by
+              its URL. */}
+          {GROUPS.map((group) => {
+            const inside = TABS.filter((entry) => entry.group === group.key);
+            if (!inside.length) return null;
+            return (
+              <div key={group.key} className="mb-4 last:mb-0">
+                <h2 className="text-muted-foreground/60 px-2.5 pb-1 text-[10px] font-semibold tracking-wider uppercase">
+                  {group.label}
+                </h2>
+                <div className="space-y-0.5">
+                  {inside.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      onClick={() => onSelectTab(entry.id)}
+                      className={`flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                        tab === entry.id
+                          ? "bg-kith-soft text-foreground"
+                          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                      }`}
+                    >
+                      <entry.icon
+                        className={`mt-0.5 size-4 shrink-0 ${tab === entry.id ? "text-kith" : ""}`}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-medium">{entry.label}</span>
+                        <span className="text-muted-foreground/80 block text-[11px] leading-snug">
+                          {entry.hint}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
 
           {/* Under the nav, so it is on every tab. What is running, and whether there is
               something newer — the version being visible whenever settings are open is the
@@ -252,6 +328,8 @@ export function SettingsPage({
               <PersonaTab connection={snapshot.connection} />
             ) : tab === "chat" ? (
               <ChatTab config={config} connection={snapshot.connection} onSave={onSaveConfig} />
+            ) : tab === "permissions" ? (
+              <PermissionsTab />
             ) : (
               <AdvancedTab />
             )}

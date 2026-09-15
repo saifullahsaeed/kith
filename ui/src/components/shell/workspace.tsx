@@ -7,6 +7,7 @@ import { AppHeader } from "@/components/shell/app-header";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 import { PluginSurface } from "@/components/shell/plugin-surface";
 import { PluginWebView } from "@/components/shell/plugin-web-view";
+import { useHostEffects } from "@/components/shell/use-host-effects";
 
 import { ChatPane } from "@/components/chat/chat-pane";
 import { WorkPanel } from "@/components/chat/work-panel";
@@ -14,6 +15,7 @@ import { HistoryPanel } from "@/components/chat/history-panel";
 import { LayoutView } from "@/components/shell/layout/layout-view";
 import { useLayout } from "@/components/shell/layout/store";
 import { useCanAttach } from "@/lib/active-composer";
+import { useDrafts, useDraftedTabs } from "@/lib/drafts";
 import {
   hasTab as treeHasTab,
   panes as panesOf,
@@ -250,6 +252,10 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.conversationId]);
 
+  /* Effects a plugin asks Kith to perform — opening its own tab, so far. See `use-host-effects`
+   * for why this is the renderer's job and the dead end it closes. */
+  useHostEffects(conversationId, openSurface);
+
   const activity = useActivity();
   const inbox = useMessages();
 
@@ -340,6 +346,51 @@ export function Workspace({
   }, [plugins]);
   const working = conversationId !== "" && live.includes(conversationId);
   const elsewhere = live.filter((id) => id !== conversationId);
+
+  /* Which chats are holding something you typed and did not send.
+   *
+   * The third per-chat signal, and it lives beside the other two so one module ranks them all.
+   * Unlike them it never touches the server: a draft is local by nature, so nothing on a
+   * conversation row from the API could ever carry it — which is why the strip is handed a
+   * function and the conversations list reads the store itself.
+   *
+   * Shallow-compared inside `useDraftedTabs`, and that matters here: this component renders the
+   * whole window, and a subscription that moved on every keystroke would re-render it per
+   * character. */
+  const drafted = useDraftedTabs();
+  const markForTab = useCallback(
+    (ref: TabRef) => (ref.uid && ref.uid in drafted ? ("draft" as const) : undefined),
+    [drafted],
+  );
+  /* Which *conversations* are holding one, for the header.
+   *
+   * Deduplicated, because two tabs on one chat are two drafts and one row — and `""` dropped,
+   * because a chat that has never been spoken to has no conversation to go to. The tab mark is
+   * that one's whole answer. */
+  const drafting = useMemo(
+    () => [...new Set(Object.values(drafted).filter(Boolean))],
+    [drafted],
+  );
+
+  /* Let go of drafts whose tab is gone.
+   *
+   * Keyed on the tab, a draft has to end when the tab does — otherwise a closed tab leaves a mark
+   * on a conversation with nowhere to put the text back. Driven off the tree rather than hooked
+   * onto each way a tab can close (the X, "close the others", a pane closing, a reset, a loaded
+   * layout), because "does this tab still exist" has one answer and five ways to ask it. Running
+   * on mount is deliberate too: it closes the window in which a draft could outlive its tab
+   * across a reload.
+   *
+   * Here and not in the layout store's `commit` beside the `widths` prune, which is the obvious
+   * place and the wrong one: widths are the layout's own measured facts, and `layout/` is the
+   * module that refuses to know what a surface holds. */
+  useEffect(() => {
+    const tabs = new Set<string>();
+    for (const pane of panesOf(layoutTree)) {
+      for (const tab of pane.tabs) if (tab.surface === "chat" && tab.uid) tabs.add(tab.uid);
+    }
+    useDrafts.getState().keep(tabs);
+  }, [layoutTree]);
   // The room glows green while he is working, and is otherwise his own amber.
   const wash = working ? "var(--roam)" : "var(--kith)";
 
@@ -381,6 +432,9 @@ export function Workspace({
               conversationId={ref.conversationId ?? ""}
               initialProject={ref.conversationId ? null : draftProject.current}
               active={(ref.conversationId ?? "") === conversationId}
+              /* Where this tab's unsent text is kept, so it survives the tab being switched
+                 away from — which unmounts this pane. See `lib/drafts`. */
+              uid={ref.uid}
             />
           );
 
@@ -446,7 +500,11 @@ export function Workspace({
           return (
             <ErrorBoundary where={`${ref.plugin}/${ref.view}`} compact>
               {pluginSurface(ref.plugin, ref.view)?.kind === "web" ? (
-                <PluginWebView plugin={ref.plugin} view={ref.view} />
+                <PluginWebView
+                  plugin={ref.plugin}
+                  view={ref.view}
+                  conversationId={conversationId}
+                />
               ) : (
                 <PluginSurface
                   plugin={ref.plugin}
@@ -531,9 +589,15 @@ export function Workspace({
           which is what lets two conversations stream at once. */}
       <>
         <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
-          {/* Ambient wash — leans green while he works, amber while he's here. */}
+          {/* Ambient wash — leans green while he works, amber while he's here. `fixed inset-0`
+              because `.kith-ambient` no longer carries its own positioning, and this one really is
+              window-scoped.
+              `fixed` rather than `absolute` is load-bearing: `kith-drift` scales the element to
+              1.05, and a scaled *absolute* box contributes its overflow to this shell's scroll
+              width (13px, measured) where a fixed one contributes nothing. Both paint the room
+              identically — one of them was just inflating a scroll width nothing can reach. */}
           <div
-            className="kith-ambient"
+            className="kith-ambient fixed inset-0"
             style={{ ["--wash" as string]: wash }}
           />
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
@@ -555,6 +619,14 @@ export function Workspace({
               onOpenHistory={() => toggleSurface("conversations")}
               onNewConversation={() => newConversation()}
               elsewhere={elsewhere}
+              /* The chats holding unsent text, excluding the one in front of you — whose draft is
+                 already on screen, in the box it is sitting in. Same split as `elsewhere`, and for
+                 the same reason: this control is for finding the ones you cannot see. */
+              drafting={drafting.filter((id) => id !== conversationId)}
+              onGoToDraft={(id) => {
+                if (id) void openConversation(id);
+                else openSurface({ surface: "conversations" });
+              }}
               onGoToWorking={(id) => {
                 // One: go straight to it, which is the whole point of knowing where. Several: open
                 // the list, because picking is the question and the panel is where it is answered.
@@ -575,7 +647,7 @@ export function Workspace({
               }}
               onOpenSettings={() => navigate(pathForSettings())}
             />
-            <LayoutView render={renderSurface} titleFor={titleForTab} />
+            <LayoutView render={renderSurface} titleFor={titleForTab} markFor={markForTab} />
           </div>
         </div>
         {/* Drop a file anywhere in the window and it lands on the composer. Disabled — but
@@ -603,11 +675,19 @@ export function Workspace({
 
 /** The moment between opening a screen and its chunk arriving.
  *
- * A full-bleed backdrop rather than a spinner in the corner: these screens cover the app, so
- * anything smaller reads as the click having missed. On a warm cache it is one frame. */
-function ScreenLoading() {
+ * A full-bleed backdrop rather than a spinner in the corner: anything smaller reads as the click
+ * having missed. On a warm cache it is one frame.
+ *
+ * Full-bleed *inside its pane*, though — `absolute`, not `fixed`. This used to say "these screens
+ * cover the app", which was true when they were route-level takeovers; they are tabs in panes now,
+ * so the fallback for one lazy chunk dimmed the app header, every tab strip and all three panes.
+ * Its containing block is the pane body — the `role="tabpanel"` div in `layout-view.tsx`, already
+ * `relative` — which is exactly the box it should blank.
+ *
+ * Exported for `pane-surfaces.test.tsx`, along with the surface roots; see the invariant there. */
+export function ScreenLoading() {
   return (
-    <div className="bg-background/80 fixed inset-0 z-40 backdrop-blur-[2px]" role="status">
+    <div className="bg-background/80 absolute inset-0 z-40 backdrop-blur-[2px]" role="status">
       <span className="sr-only">Loading</span>
     </div>
   );

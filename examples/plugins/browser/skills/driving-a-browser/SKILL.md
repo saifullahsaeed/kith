@@ -36,11 +36,31 @@ To fill a field: `type(text: "…", into: "Work email")`, then `press(key: "Ente
 the button by name. `type` is a paste rather than keystrokes, so it survives fields that
 reformat as you go.
 
+## Set the viewport before you judge a layout
+
+`resize` lays the page out at a size you name — the real thing, not a scaled picture: media
+queries and every breakpoint see exactly that width. Use it when the question is "what does
+this look like on a phone", and to check the layout they are building.
+
+- A named size is usually the right call: `resize(preset: "phone")` for a phone, `"tablet"`
+  for a tablet, `"laptop"` or `"desktop"` for the sizes a page is designed at. `"square"` is
+  there for a feed or a canvas that should hold up at 1:1.
+- `resize(width: 320)` is the precise version — an odd width from a design file, a screenshot
+  spec. Width and height are independent: give only the one you mean to change.
+- **Read or look afterwards.** Resizing changes nothing a person would call content; the
+  answer tells you the size that now holds, and `read` or `look` is how you see what it did
+  to the page. A `look` at a phone viewport is the cheap way to answer "does the nav
+  collapse?".
+- **Put it back.** `resize(preset: "reset")` — or a bare `resize()` — returns the page to the
+  full tab when you are done. The person sees a smaller page centred in their tab otherwise,
+  and the chip in the tab's header clears it with one click if you forget.
+
 ## When you are stuck, hand the wheel back
 
 A login, a captcha, two-factor, a cookie wall that will not dismiss. Do not grind at these.
 
-**Just ask them to do it.** The tab is right there and it is the same page:
+**Call `show`, then ask them.** The tab comes to the front and it is the same page they are
+looking at:
 
 > "There's a login on this page — could you sign in? I'll carry on from where you leave it."
 
@@ -60,8 +80,10 @@ into here.
 - **Opening, reading, clicking and typing all work with the tab shut.** The page is live whether
   or not anybody is looking at it, so you can do a whole errand and only then ask them to look.
 - **`look` is the exception** — a screenshot needs the tab open, because there is no picture of a
-  page that is not on screen. The call says so and tells you to use `read` instead, which works
-  either way. Prefer `read` regardless; see the top of this skill.
+  page that is not on screen. Call `show` first and it will be. Prefer `read` regardless; see the
+  top of this skill.
+- **`show` puts the tab on screen yourself.** Use it before a screenshot, and use it when you
+  want them to *look* — "I've put it in the tab, have a scroll" beats describing a page.
 - **One page.** No tabs, so `back` is how you retrace, and a link that would open a new window
   opens in this one instead.
 - **The person can see everything you do.** Every navigation, every click. That is a feature —

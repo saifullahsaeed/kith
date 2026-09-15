@@ -238,9 +238,23 @@ export function ControlPanel({
   const props = { snap, query, refresh: load, remove, relevel, create, update };
 
   return (
+    /* **Deliberately a takeover, not a pane.** This was converted to `h-full w-full` alongside
+       Settings and Context, and reverted the same day: at the pane widths its own `minWidth`
+       permits (380), the eight-section board does not fit. The content column was left 217px
+       against 247px of content, and because `overflow-y-auto` computes `overflow-x` to `auto`,
+       the shortfall showed up as a horizontal scrollbar rather than as a squeeze.
+       It cannot be fixed by tuning the width — the layout is proportional, so the pane sometimes
+       gets *narrower* as the window grows, and widening `minWidth` far enough to fit would make
+       the board's minimum exceed the window beside the chat's 560. Fitting this inside a pane is
+       responsive work on the board's own layout (stack the nav, let the rows shrink and wrap),
+       not a constant. Until that exists it covers the window, which is the shape it was designed
+       for. `ContextDetailScreen` did convert — it has one scrolling column and measured clean at
+       every width. */
     <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
-      {/* Ambient wash so the panel feels like the same warm room as the rest of the app. */}
-      <div className="kith-ambient opacity-70" />
+      {/* Ambient wash so the panel feels like the same warm room as the rest of the app.
+          `fixed inset-0` because `.kith-ambient` no longer positions itself, and this surface is
+          window-scoped. */}
+      <div className="kith-ambient fixed inset-0 opacity-70" />
 
       {/* This panel covers the app header, so it owns the top of the window and
           has to reserve the window-control space itself. */}

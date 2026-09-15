@@ -245,7 +245,7 @@ export function PluginSurface({
    * Claimed per renderer, so two windows do not both deliver the same one and race to answer. */
   const { data: waiting } = useQuery({
     queryKey: keys.pluginCalls(conversationId),
-    queryFn: () => fetchPluginCalls(conversationId, client.current),
+    queryFn: () => fetchPluginCalls(conversationId, client.current, "surface"),
     enabled: ready === "yes",
   });
 

@@ -2,7 +2,7 @@
   "manifest": 1,
   "id": "browser",
   "name": "Browser",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A browser in a Kith tab. You use it with your hands; he drives the same page.",
   "publisher": "Kith",
   "license": "MIT",
@@ -15,14 +15,14 @@
       "minWidth": 480,
       "minHeight": 360,
       "instances": "single",
-      "answers": "any"
+      "answers": "conversation"
     }
   ],
   "commands": [
     {
       "name": "open",
       "title": "Open a page",
-      "description": "Go to an address in the Browser tab. Waits until the page has settled, and answers with its title and where it ended up after any redirects.",
+      "description": "Go to an address. Waits until the page settles, and answers with its title and where it ended up after redirects.",
       "delivery": "view",
       "surface": "page",
       "does": {
@@ -79,7 +79,7 @@
     {
       "name": "click",
       "title": "Click something",
-      "description": "Click by what it says \u2014 click(text: \"Sign in\"). A CSS selector works too, for an icon with no label. If nothing matches, the answer lists what is clickable so you can pick without taking a screenshot.",
+      "description": "Click by what it says \u2014 click(text: \"Sign in\"). A selector works for an icon with no label. If nothing matches, the answer lists what is clickable.",
       "delivery": "view",
       "surface": "page",
       "does": {
@@ -117,7 +117,7 @@
     {
       "name": "type",
       "title": "Type into the page",
-      "description": "Type into whatever is focused, or name a field with `into` to click it first. This is a paste rather than keystrokes, so it survives fields that reformat as you go.",
+      "description": "Type into whatever is focused, or name a field with `into` to click it first. A paste, so it survives fields that reformat as you go.",
       "delivery": "view",
       "surface": "page",
       "does": {
@@ -212,27 +212,6 @@
       "model": true
     },
     {
-      "name": "back",
-      "title": "Go back",
-      "description": "Back one page, the way the button does.",
-      "delivery": "view",
-      "surface": "page",
-      "does": {
-        "act": "back"
-      },
-      "params": {},
-      "returns": {
-        "url": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        }
-      },
-      "timeout_ms": 40000,
-      "model": true
-    },
-    {
       "name": "look",
       "title": "Look at the page",
       "description": "A screenshot, written to a file. Costs almost nothing until you read it \u2014 and reading one costs a few thousand tokens, so only look when layout is the question or they asked what it looks like.",
@@ -254,6 +233,78 @@
         }
       },
       "timeout_ms": 40000,
+      "model": true
+    },
+    {
+      "name": "resize",
+      "title": "Resize the page",
+      "description": "Lay the page out at another size; read or look afterwards. Preset \"reset\" puts it back to the full tab.",
+      "delivery": "view",
+      "surface": "page",
+      "does": {
+        "act": "resize"
+      },
+      "params": {
+        "preset": {
+          "type": "string",
+          "enum": [
+            "reset",
+            "phone",
+            "phone-landscape",
+            "tablet",
+            "tablet-landscape",
+            "laptop",
+            "desktop",
+            "square"
+          ],
+          "description": "phone 390\u00d7844, tablet 820\u00d71180, laptop 1280\u00d7800, desktop 1920\u00d71080, square 900\u00d7900."
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 3840,
+          "description": "Width in pixels; alone, keeps the height."
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 2160,
+          "description": "Height in pixels; alone, keeps the width."
+        }
+      },
+      "returns": {
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "timeout_ms": 10000,
+      "model": true
+    },
+    {
+      "name": "show",
+      "title": "Open the Browser tab",
+      "description": "Put the Browser tab on screen \u2014 before a screenshot, or so they can look and click it themselves.",
+      "delivery": "host",
+      "surface": "page",
+      "does": {
+        "host": "open_surface"
+      },
+      "params": {},
+      "returns": {
+        "opened": {
+          "type": "boolean"
+        }
+      },
+      "timeout_ms": 8000,
       "model": true
     }
   ]

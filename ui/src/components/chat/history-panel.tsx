@@ -26,6 +26,7 @@ import {
 import { fetchProjects, type Project } from "@/lib/backend/brain";
 import { dayLabel, time } from "@/lib/dates";
 import { keys } from "@/lib/query-keys";
+import { useDraftedTabs } from "@/lib/drafts";
 import { openOnHost } from "@/lib/files";
 import { pathForTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -88,6 +89,18 @@ export function HistoryPanel({
   const cache = useQueryClient();
   const prompt = usePrompt();
   const layer = useLayer(Layer.Panel);
+  /* Which conversations are holding something unsent.
+   *
+   * Read from the store rather than handed down, because a draft never reaches the server — so
+   * unlike `working` and `waiting` it could not arrive on a conversation row however the panel
+   * asked for it. Shallow-compared inside `useDraftedTabs`, so typing does not re-render this
+   * list; `""` is dropped because a chat with no conversation yet has no row here to mark, and
+   * its tab is the whole answer. */
+  const drafted = useDraftedTabs();
+  const drafting = useMemo(
+    () => new Set(Object.values(drafted).filter(Boolean)),
+    [drafted],
+  );
   const [limit, setLimit] = useState(PAGE);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<TranscriptHit[] | null>(null);
@@ -659,6 +672,24 @@ export function HistoryPanel({
                                 <span
                                   className="bg-roam mt-1.5 size-1.5 shrink-0 animate-pulse rounded-full"
                                   title="Still working in this conversation"
+                                />
+                              ) : drafting.has(item.id) ? (
+                                /* Something you typed here and did not send.
+                                 *
+                                 * Last of the three, and not arbitrarily: the other two are about
+                                 * him and are time-critical — one needs you now, the other will
+                                 * finish without you — while a draft, once it is actually being
+                                 * held, is not going anywhere. If a chat is both working and
+                                 * holding your half-finished reply, the turn is the thing you
+                                 * need to know about.
+                                 *
+                                 * Hollow and still against their solid pulse, which is the whole
+                                 * of how it reads as a different kind of fact. It takes no colour
+                                 * for the same reason: amber is already "waiting on you" and
+                                 * green is "running", and this is neither. */
+                                <span
+                                  className="border-muted-foreground/70 mt-1.5 size-1.5 shrink-0 rounded-full border"
+                                  title="You typed something here and did not send it"
                                 />
                               ) : null}
                               <span

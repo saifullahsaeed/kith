@@ -25,9 +25,23 @@ import type { AttachmentAdapter, CompleteAttachment, PendingAttachment } from "@
 export class AnyFileAttachmentAdapter implements AttachmentAdapter {
   accept = "*";
 
+  /** How many have been added in this session, ever. Static rather than per-instance: there is one
+   *  adapter per chat pane, and an id only has to be unique within the composer it is in — but a
+   *  counter that resets when a pane remounts is exactly the one that collides. */
+  private static added = 0;
+
   async add({ file }: { file: File }): Promise<PendingAttachment> {
     return {
-      id: `${Date.now()}-${file.name}`,
+      /* Unique per attachment, not per millisecond.
+       *
+       * This was `${Date.now()}-${file.name}`, and the library upserts by id: two attachments
+       * that agree on it are one attachment, the second silently replacing the first. Same name
+       * inside the same millisecond is not a corner — `paste.ts` names every oversized paste
+       * `pasted-N.txt` from a counter that resets with the composer, and restoring a held draft
+       * adds its files back in one tight loop, so two `pasted-1.txt`s went in together and one
+       * came out. The counter is what makes the id actually identify something; the clock stays
+       * because it is the only part anyone reading a log would find useful. */
+      id: `${Date.now()}-${++AnyFileAttachmentAdapter.added}-${file.name}`,
       type: file.type.startsWith("image/") ? "image" : "file",
       name: file.name,
       contentType: file.type || "application/octet-stream",

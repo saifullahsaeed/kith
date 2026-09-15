@@ -323,9 +323,16 @@ def command_signature(plugin_id: str, command: str) -> str:
     return f"plugin:{plugin_id}:{command}"
 
 
-def skill_roots(config_db: Path) -> list[tuple[str, Path]]:
-    """(owner, directory) for every enabled plugin that ships skills."""
-    return [(p.id, p.path / "skills") for p in enabled(config_db) if p.skills]
+def imported_skills(config_db: Path) -> dict[str, str]:
+    """Skill name -> the plugin that put it in the person's folder.
+
+    Replaces `skill_roots`, which handed `skills.roots()` a directory *inside* each plugin to
+    read in place. Skills are copied at install now — see `install._import_skills` — so there is
+    no second root to compose, and what is left to answer is provenance: which of the person's
+    skills arrived with a plugin. That is what the collision check needs, so an upgrade does not
+    refuse a plugin for clashing with the copy it made itself last time.
+    """
+    return {name: row.id for row in installed(config_db) for name in (row.skills or ())}
 
 
 def owner_of_label(config_db: Path, label: str) -> str:

@@ -431,6 +431,7 @@ def list_plugin_calls():
             "calls": calls.pending(
                 str(request.args.get("conversation") or ""),
                 str(request.args.get("client") or ""),
+                str(request.args.get("kind") or ""),
             )
         }
     )

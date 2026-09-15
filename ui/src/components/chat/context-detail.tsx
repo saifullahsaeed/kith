@@ -80,10 +80,15 @@ export function ContextDetailScreen({
   const repeated = detail ? detail.items.filter((item) => item.wasted > 0) : [];
 
   return (
-    <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
-      <div className="kith-ambient opacity-70" />
+    /* A pane, not a window. This was `fixed inset-0 z-30`, which covered the app header and every
+       other pane, and its header reserved the traffic-light gap for a window it no longer is.
+       Both are the takeover-era shape; `history-panel.tsx` and `work-panel.tsx` are the pane one. */
+    <div className="bg-background flex h-full min-h-0 w-full flex-col">
+      {/* `absolute inset-0` because `.kith-ambient` no longer positions itself — left `fixed` it
+          paints over the whole window from inside the pane, which is the same bug as the root. */}
+      <div className="kith-ambient absolute inset-0 opacity-70" />
 
-      <header className="window-drag-region window-controls-gap relative z-10 flex items-center gap-3 border-b border-border/60 bg-background/70 px-4 py-2.5 backdrop-blur-xl">
+      <header className="relative z-10 flex items-center gap-3 border-b border-border/60 bg-background/70 px-4 py-2.5 backdrop-blur-xl">
         <span className="bg-kith-soft text-kith ring-kith/20 relative flex size-8 shrink-0 items-center justify-center rounded-xl ring-1">
           <Layers className="size-4" />
         </span>
@@ -123,11 +128,11 @@ export function ContextDetailScreen({
       </header>
 
       {detail === null ? (
-        <div className="relative z-10 flex-1 overflow-y-auto px-6 py-8 xl:px-10">
+        <div className="relative z-10 min-h-0 flex-1 overflow-y-auto px-6 py-8 xl:px-10">
           <Waiting />
         </div>
       ) : !detail.reading ? (
-        <div className="relative z-10 flex-1 overflow-y-auto px-6 py-8 xl:px-10">
+        <div className="relative z-10 min-h-0 flex-1 overflow-y-auto px-6 py-8 xl:px-10">
           <NothingMeasuredYet items={detail.items} />
         </div>
       ) : (

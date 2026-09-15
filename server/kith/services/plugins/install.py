@@ -102,10 +102,17 @@ def _collision_faults(plugin: Plugin, config_db: Path) -> list[str]:
 
     if plugin.skills:
         mine = {name for name in plugin.skills}
+        # Which of the person's skills arrived with a plugin, and which plugin. Skills are copied
+        # into their folder at install, so a plugin's own previous copy now looks exactly like a
+        # skill they wrote — and without this every upgrade would be refused for clashing with
+        # itself.
+        imported = registry.imported_skills(config_db)
         for skill in skills_service.installed():
-            # The person's own folder wins a collision, so this is a refusal at the door rather
+            # A skill the person wrote wins a collision, so this is a refusal at the door rather
             # than a plugin that installs and then silently contributes nothing.
-            if skill.name in mine and not getattr(skill, "owner", ""):
+            if imported.get(skill.name) == plugin.id:
+                continue
+            if skill.name in mine and not imported.get(skill.name):
                 faults.append(
                     f"You already have a skill called {skill.name!r}. Rename the plugin's copy "
                     f"or remove yours — a plugin cannot shadow a skill you wrote."
@@ -154,6 +161,17 @@ def install(
             )
 
         signature = registry.spawn_signature(plugin)
+        # **Every earlier one goes, whether or not this install has a new one to grant.**
+        #
+        # A spawn signature covers the reach, the seal and the command line, so an upgrade that
+        # changes any of those produces a different signature — deliberately, so a widened
+        # boundary re-asks. What nothing did was collect the old one, so a plugin upgraded three
+        # times held three grants, and a plugin that *dropped* its program kept the grant that
+        # let one run. The Permissions pane is what made this visible: three rows for a plugin
+        # with no program at all.
+        for stale in permissions.plugin_spawn_grants(plugin.id):
+            if stale != signature:
+                permissions.revoke(stale)
         if signature:
             permissions.grant_now(signature, standing=standing)
         if plugin.commands:
@@ -185,14 +203,129 @@ def install(
         "source": str(source),
     }
     held[plugin.id].pop("retiredAt", None)
+    # What its skills looked like when they were copied, so an upgrade can tell an untouched
+    # file from one the person has since edited. Written before `_reconnect`, so the very first
+    # prompt after an install already has them.
+    held[plugin.id]["skills"] = _import_skills(place / plugin.id, plugin.skills, previous.get("skills") or {})
     registry.write_rows(config_db, held)
     changes.publish("plugin")
     _reconnect(config_db)
     return parse(place / plugin.id)
 
 
+#: Skills are copied into the person's own folder at install rather than read in place.
+#:
+#: **This reverses an earlier design, and the reason is a boundary rather than a preference.** A
+#: plugin's skills used to live in the plugin's folder, with `skills.roots()` composing that
+#: directory in at read time — which is tidier: an upgrade needed no re-copy and an uninstall
+#: left no orphans. What made it wrong is that his instructions then lived somewhere a plugin's
+#: own program could write. On macOS the sandbox denied that; everywhere else there is no
+#: sandbox, so a plugin could rewrite what he knows how to do between restarts.
+#:
+#: Copied here, the plugin cannot reach them on any platform: a plugin's write set is its own
+#: storage plus whatever the manifest declared, and the skills folder is one of the paths
+#: `confinement._refuse_if_forbidden` will not grant however the manifest is written.
+def _import_skills(folder: Path, names: tuple[str, ...], previous: dict) -> dict:
+    """Copy a plugin's skills into the person's folder. Returns a digest per skill, for later.
+
+    Takes the *installed* folder rather than the parsed plugin: by the time this runs the staging
+    directory has been renamed into place, so a `Plugin` parsed before the rename points at a
+    path that no longer exists — which is how this failed the first time.
+
+    The digest is what lets an upgrade tell a file nobody has touched from one the person has
+    edited — see `_on_upgrade`.
+    """
+    from kith.services import skills as skills_service
+
+    if not names:
+        return {}
+    destination = skills_service.root()
+    kept: dict[str, str] = {}
+    for name in names:
+        source = folder / "skills" / name
+        target = destination / name
+        if target.exists():
+            verdict = _on_upgrade(target, source, str(previous.get(name) or ""))
+            if verdict != "replace":
+                # Left alone, and its digest carried forward unchanged so the next upgrade sees
+                # the same thing this one did rather than adopting the person's edit as the
+                # baseline.
+                kept[name] = str(previous.get(name) or "")
+                continue
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(source, target, copy_function=shutil.copy)
+        kept[name] = _digest_of(target)
+    return kept
+
+
+def _withdraw_skills(config_db: Path, plugin_id: str) -> None:
+    """Take a plugin's imported skills back out of the person's folder.
+
+    **A disabled plugin has to contribute nothing, and that only survived the move to copying
+    because of this.** While skills were read in place, `skill_roots` walked *enabled* plugins,
+    so switching one off removed its skills from the prompt for free. Copies do not disappear on
+    their own — and a skill left behind is worse than a missing one: it tells him how to use
+    tools that are no longer there.
+
+    Trashed rather than deleted, the way `skills.remove()` treats a skill folder, because by now
+    the person may have edited it. Recoverable beats tidy.
+    """
+    from kith.infra import workspace
+    from kith.services import skills as skills_service
+
+    row = registry.rows(config_db).get(plugin_id) or {}
+    for name in row.get("skills") or {}:
+        target = skills_service.root() / name
+        if not target.is_dir():
+            continue
+        try:
+            workspace.trash_path(target)
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+
+
+def _digest_of(skill: Path) -> str:
+    """One hash over every file in a skill folder, so an edit anywhere in it is visible."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for path in sorted(p for p in skill.rglob("*") if p.is_file()):
+        digest.update(path.relative_to(skill).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def _on_upgrade(existing: Path, incoming: Path, installed_digest: str) -> str:
+    """What happens to a skill already in the person's folder when a plugin ships a new one.
+
+    Return `"replace"` to overwrite it with the plugin's version, or `"keep"` to leave the
+    person's alone.
+
+    TODO(human)
+    """
+    return "replace"
+
+
 def set_enabled(config_db: Path, plugin_id: str, on: bool) -> dict:
     record = registry.patch_row(config_db, plugin_id, {"enabled": bool(on)})
+    if on:
+        # Back in. The digests it recorded still stand, so a skill the person edited while it was
+        # off is left alone by `_on_upgrade` exactly as it would be on an upgrade.
+        names = tuple((record.get("skills") or {}).keys())
+        if names:
+            registry.patch_row(
+                config_db,
+                plugin_id,
+                {"skills": _import_skills(registry.root() / plugin_id, names, record.get("skills") or {})},
+            )
+    else:
+        _withdraw_skills(config_db, plugin_id)
+        # `_reconnect` stops the plugin's *program*; nothing stopped its browser. A disabled
+        # plugin holding a live renderer process — and a tab that still paints over the app —
+        # is the one part of it that went on running after being switched off.
+        from kith.infra import renderer as shell
+
+        shell.close_plugin_browser(plugin_id)
     changes.publish("plugin")
     _reconnect(config_db)
     return record
@@ -248,6 +381,12 @@ def uninstall(config_db: Path, plugin_id: str, *, delete_state: bool = False) ->
     if signature:
         permissions.revoke(signature)
     permissions.revoke(f"plugin:{plugin_id}:*")
+    # Every spawn grant, not just the current signature: the ones a change of reach or command
+    # line left behind are exactly the ones a plain revoke misses.
+    for stale in permissions.plugin_spawn_grants(plugin_id):
+        permissions.revoke(stale)
+    # Before the row goes, since that is where the list of what was imported lives.
+    _withdraw_skills(config_db, plugin_id)
     # The profile goes with the grant. Its *storage* does not — that is the person's data, and
     # it follows the same thirty-day rule as the plugin's state.
     confinement.forget(plugin_id)
@@ -263,6 +402,12 @@ def uninstall(config_db: Path, plugin_id: str, *, delete_state: bool = False) ->
 
     if delete_state:
         _forget_state(plugin_id)
+    else:
+        # Its program has stopped, so a renderer process still holding its pages is waste. What
+        # the browser *remembers* stays, on the same thirty-day rule as its state.
+        from kith.infra import renderer as shell
+
+        shell.close_plugin_browser(plugin_id)
     changes.publish("plugin")
     _reconnect(config_db)
 
@@ -312,9 +457,20 @@ def _forget_state(plugin_id: str) -> None:
     # And the files, which are the other half of what it was holding. Nothing deleted these
     # before, because they used to live inside the code folder and went with it — which is the
     # same arrangement that destroyed them on every upgrade.
-    from kith.infra import confinement
+    from kith.infra import confinement, renderer
 
     shutil.rmtree(confinement.home_for(plugin_id), ignore_errors=True)
+
+    # And the third half: whatever its *browser* remembers. A `web` surface has a session
+    # partition in the desktop app's own storage — cookies and live logins — which this process
+    # cannot reach, so the shell is asked. Said out loud when it cannot be done, because a
+    # person who deleted a plugin's data and still has its logins on disk should hear about it
+    # rather than be told the data is gone.
+    if not renderer.forget_plugin_browser(plugin_id):
+        print(
+            f"[kith] plugins: {plugin_id}'s browser session is still on disk — the app was not "
+            f"running to clear it. It will be cleared next time this runs with Kith open."
+        )
 
 
 def _reconnect(config_db: Path) -> None:

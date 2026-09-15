@@ -292,27 +292,16 @@ def _resources(directory: Path) -> tuple[str, ...]:
 def roots() -> list[tuple[str, Path]]:
     """(owner, directory) for every place a skill can come from.
 
-    **The person's own folder is first, so it wins a collision.** A plugin cannot shadow a skill
-    someone wrote — the same rule as "a built-in always wins by construction", one layer out.
-    Order is the whole mechanism; there is no precedence table.
+    **One directory now, and that is the point.** This used to compose a second root per plugin,
+    pointing inside the plugin's own folder — which meant his instructions lived somewhere a
+    plugin's program could write, and only macOS's sandbox stopped it. Plugins copy their skills
+    into the person's folder at install instead, so there is nothing here to compose and nothing
+    for a plugin to reach on any platform.
 
-    A plugin fault must never cost the person their own skills, so the plugin half is wrapped:
-    the worst case is a skills list missing a plugin's contributions, not a prompt with no skill
-    index in it at all.
+    The owner of a skill is a question about provenance rather than location now, and
+    `registry.imported_skills` answers it.
     """
-    found = [("", root())]
-    try:
-        from kith import settings as live
-        from kith.services.plugins import registry as plugins
-
-        # `settings.CONFIG_DB_PATH` read as an attribute, never `from … import CONFIG_DB_PATH`.
-        # That form copies the value at import, which is the exact trap `tests/conftest.py`
-        # documents at length — thirteen modules did it with the agent database and patching
-        # `kith.settings` alone did nothing for any of them.
-        found += plugins.skill_roots(live.CONFIG_DB_PATH)
-    except Exception as exc:  # pragma: no cover - a plugin fault is not a skills outage
-        print(f"[kith] skills: could not read plugin skills ({exc})")
-    return found
+    return [("", root())]
 
 
 def installed() -> list[Skill]:
@@ -328,6 +317,27 @@ def installed() -> list[Skill]:
     """
     found: list[Skill] = []
     seen: set[str] = set()
+    # Which of these arrived with a plugin.
+    #
+    # Provenance used to come from *where* a skill was read: one root per plugin, and the owner
+    # was whichever root it came out of. Skills are copied into the person's folder now, so
+    # location says nothing and the row is the only thing that knows. It is still worth knowing
+    # — the skills screen says a skill came from a plugin, and refuses to delete one while that
+    # plugin is installed, since the next enable would silently put it back.
+    #
+    # A plugin fault must never cost the person their own skills, so this is wrapped: the worst
+    # case is a list missing attribution, not a prompt with no skill index in it at all.
+    imported: dict[str, str] = {}
+    try:
+        from kith import settings as live
+        from kith.services.plugins import registry as plugins
+
+        # `settings.CONFIG_DB_PATH` as an attribute, never `from … import CONFIG_DB_PATH`: that
+        # form copies the value at import, the trap `tests/conftest.py` documents at length.
+        imported = plugins.imported_skills(live.CONFIG_DB_PATH)
+    except Exception as exc:  # pragma: no cover - a plugin fault is not a skills outage
+        print(f"[kith] skills: could not read which skills came from plugins ({exc})")
+
     for owner, place in roots():
         if not place.is_dir():
             continue
@@ -342,12 +352,13 @@ def installed() -> list[Skill]:
             if resolved != base and base not in resolved.parents:
                 continue
             try:
-                skill = replace(parse(directory), owner=owner)
+                found_owner = owner or imported.get(directory.name, "")
+                skill = replace(parse(directory), owner=found_owner)
             except SkillError as exc:
                 print(f"[kith] skipping skill {directory.name}: {exc}")
                 continue
             if skill.name in seen:
-                print(f"[kith] skipping duplicate skill {skill.name} from {owner or 'your folder'}")
+                print(f"[kith] skipping duplicate skill {skill.name} from {skill.owner or 'your folder'}")
                 continue
             seen.add(skill.name)
             found.append(skill)

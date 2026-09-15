@@ -66,6 +66,19 @@ export function MCPServers() {
     [load],
   );
 
+  /* The rows this screen is allowed to save.
+   *
+   * **A plugin's server is not the person's to configure, so it must never travel in the
+   * whole-list PUT.** It arrives in `GET /api/mcp` because this screen shows it; echoing it
+   * back merges two stores that are deliberately separate. `manager.save` guards against
+   * exactly that with `if not s.owner` — and that guard depended on a field this client used to
+   * drop, so an echoed row looked like the person's own, slipped past it, and hit the label
+   * check instead: a 400 that failed the whole save the moment any plugin shipped a server.
+   *
+   * Filtered here rather than fixed there, because the server's refusal is *correct* for the
+   * case it was written for — a person choosing a label a plugin already has. */
+  const mine = (all: MCPServer[]): MCPServer[] => all.filter((one) => !one.owner);
+
   const asInput = (server: MCPServer): MCPServerInput => ({
     label: server.label,
     command: server.command,
@@ -79,7 +92,9 @@ export function MCPServers() {
   async function toggle(server: MCPServer) {
     if (!servers) return;
     await commit(
-      servers.map((s) => (s.label === server.label ? { ...asInput(s), enabled: !s.enabled } : asInput(s))),
+      mine(servers).map((s) =>
+        s.label === server.label ? { ...asInput(s), enabled: !s.enabled } : asInput(s),
+      ),
     );
   }
 
@@ -91,7 +106,7 @@ export function MCPServers() {
       description: "Its tools stop being offered to him. The program itself is not touched.",
       confirmLabel: "Remove",
     });
-    if (ok) await commit(servers.filter((s) => s.label !== server.label).map(asInput));
+    if (ok) await commit(mine(servers).filter((s) => s.label !== server.label).map(asInput));
   }
 
   async function reconnect() {
@@ -160,7 +175,7 @@ export function MCPServers() {
           taken={(servers ?? []).map((s) => s.label)}
           onCancel={() => setAdding(false)}
           onAdd={async (server) => {
-            await commit([...(servers ?? []).map(asInput), server]);
+            await commit([...mine(servers ?? []).map(asInput), server]);
             setAdding(false);
           }}
         />

@@ -60,8 +60,10 @@ const NAVIGATION_GRACE_MS = 1_200;
  *  a predictable size, and a model reading a page does not need the eight-thousand-and-first
  *  character to know what the page says. */
 const MAX_TEXT_CHARS = 8_000;
-/** A bound on how many live browsers the app will hold. Each is a renderer process. */
-const MAX_VIEWS = 4;
+/** A bound on how many live browsers the app will hold. Each is a renderer process, so this is
+ *  memory rather than bookkeeping — six because a view per conversation means several open at
+ *  once, and four made working on three things at a time evict one of them. */
+const MAX_VIEWS = 6;
 /**
  * The size a view has before its pane has ever told it one.
  *
@@ -119,6 +121,9 @@ export interface Rect {
 export interface ViewStatus {
   plugin: string;
   view: string;
+  /** Which conversation's browser this is, or empty for an app-wide one. The pane checks it:
+   *  status is broadcast to the window, and two conversations' panes both hear all of it. */
+  owner: string;
   url: string;
   title: string;
   loading: boolean;
@@ -126,22 +131,110 @@ export interface ViewStatus {
   canGoForward: boolean;
   /** Set when the last navigation failed, so the pane can say so rather than sitting blank. */
   failure: string;
+  /** The viewport the page is being laid out at, when the model or the person has set one and
+   *  it is not simply the pane. The chrome shows it, so the pane never looks broken without
+   *  saying why — and the person can clear it from there in one click. */
+  viewport: { width: number; height: number } | null;
+}
+
+/** The named sizes `resize` accepts, and the reason they are named rather than invented: the
+ *  model should not have to remember what a phone's width is, and a closed list is the
+ *  difference between "check it at a phone size" and a call that guesses. Exported so the test
+ *  can hold this table against the sizes the browser plugin's manifest declares — the two
+ *  lists drifting apart is the failure mode where the manifest offers a size nobody knows. */
+export const VIEWPORT_PRESETS: Record<string, { width: number; height: number }> = {
+  phone: { width: 390, height: 844 },
+  "phone-landscape": { width: 844, height: 390 },
+  tablet: { width: 820, height: 1180 },
+  "tablet-landscape": { width: 1180, height: 820 },
+  laptop: { width: 1280, height: 800 },
+  desktop: { width: 1920, height: 1080 },
+  square: { width: 900, height: 900 },
+};
+
+/** How small or large a hand-set viewport may be. Wide enough for every real device and every
+ *  pane this app is likely to have; narrow enough that a fat-fingered call cannot ask the page
+ *  to lay itself out at ten pixels and read nothing back from it. */
+const VIEWPORT_RANGE = { width: [200, 3840], height: [200, 2160] } as const;
+
+/** Clamp one dimension to its range. Applied to whatever arrives — the manifest coerces, but
+ *  this end also answers to the person's own chrome, and neither should trust the other. */
+function clampDimension(value: number, [low, high]: readonly [number, number]): number {
+  return Math.min(high, Math.max(low, Math.round(value)));
+}
+
+/**
+ * Where the page sits inside its pane when a viewport is set: **centred, never clipped**.
+ *
+ * The point of a viewport is that the page lays out at that exact size — media queries, JS
+ * width checks, everything — so the view's own bounds must be the viewport and nothing else.
+ * Smaller than the pane, it is letterboxed on the pane's own background; a viewport the pane
+ * cannot hold is brought down to what fits, because a page painted past the pane's edge would
+ * cover Kith's chrome beside it, and a view painting where it should not is the one thing this
+ * file must never allow. Same shape for the no-viewport case, which is just "fill the pane".
+ */
+export function fitted(rect: Rect, viewport: { width: number; height: number } | null): Rect {
+  if (!viewport) return rect;
+  const width = Math.min(viewport.width, rect.width);
+  const height = Math.min(viewport.height, rect.height);
+  return {
+    x: rect.x + Math.round((rect.width - width) / 2),
+    y: rect.y + Math.round((rect.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+/**
+ * Which browser is being spoken about.
+ *
+ * **`owner` is the third of the three, and it is the whole reason this is an object.** A view
+ * used to be keyed by plugin and surface alone, so there was one browser for the entire app: a
+ * page opened while working on one thing was the same page as the one opened while working on
+ * another, and two errands running side by side fought over it — one navigating away under the
+ * other mid-read.
+ *
+ * `owner` is the conversation when the surface declares `answers: "conversation"`, and empty
+ * when it declares `answers: "any"`. So a plugin chooses between a tab per conversation and one
+ * browser for the app, in the manifest, where somebody reviewing it can see which.
+ *
+ * Cookies are *not* separated by owner — the session partition stays per plugin. Two
+ * conversations are two tabs of one browser profile, which is the familiar arrangement and the
+ * useful one: signing in once holds for the next conversation instead of every chat starting
+ * logged out. It also means a view evicted to make room loses its place on the page and not its
+ * login.
+ */
+export interface Target {
+  plugin: string;
+  view: string;
+  owner: string;
 }
 
 interface Held {
   plugin: string;
   view: string;
+  owner: string;
+  /** When this view was last spoken to. Only used to decide which to evict — see `MAX_VIEWS`. */
+  touched: number;
   contents: WebContentsView;
   attached: boolean;
   failure: string;
   /** Where the renderer last put it, so a re-show does not need a fresh measurement. */
   rect: Rect | null;
+  /** The viewport the page is laid out at, or null for "the whole pane". Kept on the held view
+   *  rather than in the pane's renderer because it outlives the pane: a `look` with the tab
+   *  shut must come back at the viewport the model asked for, not at whatever the pane was. */
+  viewport: { width: number; height: number } | null;
+  /** The bounds actually set last, so `place`'s hot path can skip a no-op `setBounds` even
+   *  when a viewport is in play — the letterboxed rect is not the pane rect, and comparing the
+   *  wrong pair would force a relayout on every scroll of the containing column. */
+  bounds: Rect | null;
 }
 
 const held = new Map<string, Held>();
 const listeners = new Set<(status: ViewStatus) => void>();
 
-const keyOf = (plugin: string, view: string): string => `${plugin}/${view}`;
+const keyOf = (at: Target): string => `${at.plugin}/${at.view}/${at.owner}`;
 
 /** Subscribe to status changes. The shell forwards these to the renderer, which draws the
  *  chrome — the address bar, the back button's enabled state, the spinner. */
@@ -159,9 +252,10 @@ export function onViewStatus(listener: (status: ViewStatus) => void): () => void
  * the page inside it and doing that sixty times a second while somebody drags a splitter is
  * visible as jank in the page, not in the frame.
  */
-export function place(plugin: string, view: string, rect: Rect, home = ""): ViewStatus {
-  const one = held.get(keyOf(plugin, view)) ?? create(plugin, view, home);
+export function place(at: Target, rect: Rect, home = ""): ViewStatus {
+  const one = touch(held.get(keyOf(at))) ?? create(at, home);
   const rounded = round(rect);
+  one.rect = rounded;
   if (!one.attached) {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) return statusOf(one);
@@ -169,15 +263,95 @@ export function place(plugin: string, view: string, rect: Rect, home = ""): View
     one.attached = true;
   }
   if (rounded.width < 1 || rounded.height < 1) {
-    hide(plugin, view);
+    hide(at);
     return statusOf(one);
   }
-  if (!same(one.rect, rounded)) {
-    one.contents.setBounds(rounded);
-    one.rect = rounded;
-  }
+  applyBounds(one, fitted(rounded, one.viewport));
   showNow(one);
   return statusOf(one);
+}
+
+/**
+ * Set the bounds a view paints at — the one place `setBounds` is called.
+ *
+ * One door rather than three: `place`, `resize` and `hide` all want the same two invariants —
+ * skip the call when nothing moved, and remember what was set — and inlining them was how the
+ * viewport work nearly grew a second bookkeeping half that agreed with the first only by luck.
+ */
+function applyBounds(one: Held, next: Rect): void {
+  if (same(one.bounds, next)) return;
+  one.contents.setBounds(next);
+  one.bounds = next;
+}
+
+/**
+ * Lay the page out at a viewport — a size, an aspect ratio, or back to the whole pane.
+ *
+ * This is the model's answer to "what does this look like on a phone": the view's own bounds
+ * become the viewport, so media queries, JS width checks and every breakpoint see the real
+ * size — emulation rather than a picture of it. It never touches Kith's window; the page is
+ * letterboxed inside the pane it already lives in (`fitted`), and with no pane showing it the
+ * resting bounds take the viewport instead, so a `look` with the tab shut comes back at the
+ * size that was asked for.
+ *
+ * `width` and `height` are independent on purpose: "make it 390 wide" with the height left
+ * alone is the call a model actually wants to make half the time. A preset fills both, and
+ * wins when both arrive — a named size nobody has to reconstruct beats a half-remembered
+ * number.
+ */
+export async function resize(
+  at: Target,
+  asked: { preset?: string | undefined; width?: number | undefined; height?: number | undefined },
+): Promise<{ width: number; height: number } & ViewStatus> {
+  const one = touch(held.get(keyOf(at))) ?? create(at, "");
+  const preset = String(asked.preset ?? "");
+  let viewport: { width: number; height: number } | null;
+  if (preset) {
+    if (preset === "reset") {
+      viewport = null;
+    } else {
+      const named = VIEWPORT_PRESETS[preset];
+      if (!named) {
+        const known = [...Object.keys(VIEWPORT_PRESETS), "reset"].join(", ");
+        throw new Error(`${preset} is not a size I know. The named sizes are: ${known}.`);
+      }
+      viewport = { ...named };
+    }
+  } else if (typeof asked.width === "number" || typeof asked.height === "number") {
+    const now = one.viewport ?? { width: DEFAULT_BOUNDS.width, height: DEFAULT_BOUNDS.height };
+    viewport = {
+      width: clampDimension(
+        typeof asked.width === "number" ? asked.width : now.width,
+        VIEWPORT_RANGE.width,
+      ),
+      height: clampDimension(
+        typeof asked.height === "number" ? asked.height : now.height,
+        VIEWPORT_RANGE.height,
+      ),
+    };
+  } else {
+    // Nothing asked for. "Resize" with no size is how a model says "put it back", and the
+    // answer says so rather than leaving him to wonder whether the call did anything.
+    viewport = null;
+  }
+
+  one.viewport = viewport;
+  if (one.rect && (one.rect.width >= 1 || one.rect.height >= 1)) {
+    applyBounds(one, fitted(one.rect, viewport));
+  } else {
+    // No pane is showing it — the resting rectangle is what a `look` will capture, so that is
+    // the rectangle that has to carry the viewport.
+    applyBounds(one, viewport ? { x: 0, y: 0, ...viewport } : DEFAULT_BOUNDS);
+  }
+  announce(one);
+  // The size that now holds, so the answer is a fact he can act on — "390×844" — rather than
+  // an ok he has to take on trust. A reset reports the size the page actually went back to.
+  const size =
+    viewport ??
+    (one.rect && one.rect.width >= 1 && one.rect.height >= 1
+      ? { width: one.rect.width, height: one.rect.height }
+      : { width: DEFAULT_BOUNDS.width, height: DEFAULT_BOUNDS.height });
+  return { width: size.width, height: size.height, ...statusOf(one) };
 }
 
 /**
@@ -188,24 +362,83 @@ export function place(plugin: string, view: string, rect: Rect, home = ""): View
  * back, with its scroll position, its form contents and its login intact. Destroying and
  * recreating would be a reload, and a reload is how you lose a half-filled form.
  */
-export function hide(plugin: string, view: string): void {
-  const one = held.get(keyOf(plugin, view));
+export function hide(at: Target): void {
+  const one = touch(held.get(keyOf(at)));
   if (!one) return;
-  // Back to the default rectangle as well as hidden, so a screenshot still works while nobody
-  // is looking — see `DEFAULT_BOUNDS`.
-  one.contents.setBounds(DEFAULT_BOUNDS);
+  // Back to the resting rectangle as well as hidden, so a screenshot still works while nobody
+  // is looking — see `DEFAULT_BOUNDS`. A viewport stays set when it is one: the resting bounds
+  // carry it, so a `look` answers at the size that was asked for.
+  applyBounds(one, restingBounds(one));
   hideNow(one);
   one.rect = null;
 }
 
+/** The rectangle a view sits at when no pane is showing it: in the window, sized, and hidden —
+ *  sized to the viewport when one is set, so the next `look` is a picture of the page at the
+ *  size the model asked about rather than a size nobody chose. */
+function restingBounds(one: Held): Rect {
+  return one.viewport ? { x: 0, y: 0, ...one.viewport } : DEFAULT_BOUNDS;
+}
+
 /** Destroy a view and everything in it. Only for a plugin being switched off or removed. */
-export function forget(plugin: string, view = ""): void {
+export function forget(plugin: string, view = "", owner = ""): void {
   for (const [key, one] of [...held.entries()]) {
-    if (one.plugin !== plugin || (view && one.view !== view)) continue;
-    detach(one);
-    if (!one.contents.webContents.isDestroyed()) one.contents.webContents.close();
-    held.delete(key);
+    if (one.plugin !== plugin) continue;
+    if (view && one.view !== view) continue;
+    if (owner && one.owner !== owner) continue;
+    forgetOne(key);
   }
+}
+
+/**
+ * Destroy a plugin's browser views **and everything its browser remembers**.
+ *
+ * Cookies, local storage, IndexedDB, the cache — the logged-in sessions somebody signed into
+ * that plugin's tab. Kept in `persist:kith-plugin-<id>`, which lives in the *app's* own userData
+ * and so is reachable from nowhere else in Kith: the Python server does the uninstalling and has
+ * no way to touch an Electron session, which is why this exists as a route rather than as a line
+ * in `install.py`.
+ *
+ * **Nothing cleared it, and that was a privacy bug rather than untidiness.** "Remove this plugin
+ * and delete its data" left a browser profile holding live logins on disk indefinitely, and
+ * reinstalling the plugin silently inherited them — so a plugin could come back already signed
+ * in to accounts somebody thought they had removed.
+ */
+export async function forgetSession(plugin: string): Promise<void> {
+  forget(plugin);
+  hardened.delete(plugin);
+  const target = session.fromPartition(partitionFor(plugin));
+  // Every storage type by name rather than the default set: the default omits cache, and a cache
+  // holding authenticated responses is the same problem in a different drawer.
+  await target.clearStorageData({
+    storages: [
+      "cookies",
+      "filesystem",
+      "indexdb",
+      "localstorage",
+      "shadercache",
+      "serviceworkers",
+      "cachestorage",
+    ],
+  });
+  await target.clearCache();
+  await target.clearAuthCache();
+}
+
+/** Every view belonging to one conversation. For a conversation being deleted — otherwise its
+ *  browser outlives it, holding a renderer process for a chat that no longer exists. */
+export function forgetOwner(owner: string): void {
+  for (const [key, one] of [...held.entries()]) {
+    if (one.owner === owner) forgetOne(key);
+  }
+}
+
+function forgetOne(key: string): void {
+  const one = held.get(key);
+  if (!one) return;
+  detach(one);
+  if (!one.contents.webContents.isDestroyed()) one.contents.webContents.close();
+  held.delete(key);
 }
 
 /** Every live view, for the shell to tidy on quit. */
@@ -217,8 +450,8 @@ export function forgetAll(): void {
   held.clear();
 }
 
-export function status(plugin: string, view: string): ViewStatus | null {
-  const one = held.get(keyOf(plugin, view));
+export function status(at: Target): ViewStatus | null {
+  const one = touch(held.get(keyOf(at)));
   return one ? statusOf(one) : null;
 }
 
@@ -237,13 +470,8 @@ export function status(plugin: string, view: string): ViewStatus | null {
  * the page, not an error in the caller — the model should be told the host does not exist, in a
  * sentence, and carry on.
  */
-export async function navigate(
-  plugin: string,
-  view: string,
-  url: string,
-  home = "",
-): Promise<ViewStatus> {
-  const one = held.get(keyOf(plugin, view)) ?? create(plugin, view, home);
+export async function navigate(at: Target, url: string, home = ""): Promise<ViewStatus> {
+  const one = touch(held.get(keyOf(at))) ?? create(at, home);
   const target = normalise(url);
   if (!target) return { ...statusOf(one), failure: `${url} is not an address I can open.` };
   one.failure = "";
@@ -258,29 +486,29 @@ export async function navigate(
   return statusOf(one);
 }
 
-export async function back(plugin: string, view: string): Promise<ViewStatus> {
-  return step(plugin, view, (contents) => {
+export async function back(at: Target): Promise<ViewStatus> {
+  return step(at, (contents) => {
     // `navigationHistory` is the API in this Electron; `webContents.goBack` still exists but is
     // the deprecated spelling and says nothing about whether it could.
     if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
   });
 }
 
-export async function forward(plugin: string, view: string): Promise<ViewStatus> {
-  return step(plugin, view, (contents) => {
+export async function forward(at: Target): Promise<ViewStatus> {
+  return step(at, (contents) => {
     if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
   });
 }
 
-export async function reload(plugin: string, view: string): Promise<ViewStatus> {
-  return step(plugin, view, (contents) => contents.reload());
+export async function reload(at: Target): Promise<ViewStatus> {
+  return step(at, (contents) => contents.reload());
 }
 
 /** What a person would read on the page. `innerText`, for the reason `render-service` gives:
  *  it respects layout, so it skips hidden nodes and keeps the line breaks that make the result
  *  legible instead of one run-on paragraph. */
-export async function read(plugin: string, view: string): Promise<{ text: string } & ViewStatus> {
-  const one = required(plugin, view);
+export async function read(at: Target): Promise<{ text: string } & ViewStatus> {
+  const one = required(at);
   await settle(one);
   const text = (await one.contents.webContents.executeJavaScript(
     "document.body ? document.body.innerText : ''",
@@ -306,8 +534,7 @@ export async function read(plugin: string, view: string): Promise<{ text: string
  * tell the model's click from theirs — which is the entire premise of one page with two drivers.
  */
 export async function click(
-  plugin: string,
-  view: string,
+  at: Target,
   where: {
     text?: string | undefined;
     selector?: string | undefined;
@@ -315,7 +542,7 @@ export async function click(
     y?: number | undefined;
   },
 ): Promise<{ clicked: string; options: string[] } & ViewStatus> {
-  const one = required(plugin, view);
+  const one = required(at);
   let point: { x: number; y: number } | null = null;
   let described = "";
   let options: string[] = [];
@@ -367,13 +594,12 @@ export async function click(
  * those are not text.
  */
 export async function type(
-  plugin: string,
-  view: string,
+  at: Target,
   text: string,
   into = "",
 ): Promise<ViewStatus> {
-  const one = required(plugin, view);
-  if (into) await click(plugin, view, { text: into, selector: into.startsWith("#") ? into : "" });
+  const one = required(at);
+  if (into) await click(at, { text: into, selector: into.startsWith("#") ? into : "" });
   // Set, then announced. Every form library listens for `input`; a value assigned without it is
   // one React overwrites on its next render, and one validation never sees.
   await one.contents.webContents.executeJavaScript(dispatchType(text), true);
@@ -382,8 +608,8 @@ export async function type(
 }
 
 /** A key that is an instruction rather than a character. */
-export async function press(plugin: string, view: string, key: string): Promise<ViewStatus> {
-  const one = required(plugin, view);
+export async function press(at: Target, key: string): Promise<ViewStatus> {
+  const one = required(at);
   const named = KEYS[key];
   if (!named) throw new Error(`${key} is not a key this can press.`);
   await one.contents.webContents.executeJavaScript(dispatchKey(named), true);
@@ -392,8 +618,8 @@ export async function press(plugin: string, view: string, key: string): Promise<
   return statusOf(one);
 }
 
-export async function scroll(plugin: string, view: string, by: number): Promise<ViewStatus> {
-  const one = required(plugin, view);
+export async function scroll(at: Target, by: number): Promise<ViewStatus> {
+  const one = required(at);
   await one.contents.webContents.executeJavaScript(
     `window.scrollBy({ top: ${Number(by) || 0}, behavior: "instant" }); 0`,
     true,
@@ -410,8 +636,8 @@ export async function scroll(plugin: string, view: string, by: number): Promise<
  * not currently watching. Returned as base64 because the caller is the Python server over
  * loopback JSON, and it writes the bytes to a file the model can read.
  */
-export async function shot(plugin: string, view: string): Promise<{ png: string } & ViewStatus> {
-  const one = required(plugin, view);
+export async function shot(at: Target): Promise<{ png: string } & ViewStatus> {
+  const one = required(at);
   await settle(one);
   const contents = one.contents.webContents;
 
@@ -451,8 +677,8 @@ export async function shot(plugin: string, view: string): Promise<{ png: string 
      * concludes the page is empty.
      */
     throw new Error(
-      "A screenshot needs the Browser tab open — ask them to open it, or use `read` for the " +
-        `page's text, which works either way. (${(error as Error).message})`,
+      "A screenshot needs the Browser tab open. Call `show` to open it, then look again — or " +
+        `use \`read\` for the page's text, which works either way. (${(error as Error).message})`,
     );
   }
 
@@ -463,21 +689,31 @@ export async function shot(plugin: string, view: string): Promise<{ png: string 
 // The plumbing
 // --------------------------------------------------------------------------- //
 
-function create(plugin: string, view: string, home: string): Held {
+function create(at: Target, home: string): Held {
   if (held.size >= MAX_VIEWS) {
-    // Oldest first. A bound that refuses the new view would leave a person staring at a pane
-    // that will not fill, with nothing saying why.
-    const [oldest] = held.keys();
-    if (oldest) {
-      const going = held.get(oldest);
-      if (going) forget(going.plugin, going.view);
+    /* Least recently spoken to, not oldest opened.
+     *
+     * It was insertion order, which is exactly wrong once there is a view per conversation: the
+     * browser you have had open all afternoon and are still using is the oldest one, so the
+     * cheapest thing to close was the thing most in use. Whatever nobody has touched for
+     * longest is the honest choice.
+     *
+     * Evicting loses the page's position, not its login — cookies live in the plugin's
+     * partition and outlive any one view. See `Target`.
+     */
+    let stale: [string, Held] | null = null;
+    for (const entry of held.entries()) {
+      if (!stale || entry[1].touched < stale[1].touched) stale = entry;
     }
+    if (stale) forgetOne(stale[0]);
   }
-  harden(plugin);
+  harden(at.plugin);
   const contents = new WebContentsView({
     webPreferences: {
       // The plugin's own session, never the person's and never Kith's. See the module comment.
-      partition: partitionFor(plugin),
+      // The plugin's, not the conversation's. Two conversations are two tabs of one profile —
+      // see `Target` for why cookies deliberately do not follow the owner.
+      partition: partitionFor(at.plugin),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -492,7 +728,18 @@ function create(plugin: string, view: string, home: string): Held {
       spellcheck: true,
     },
   });
-  const one: Held = { plugin, view, contents, attached: false, failure: "", rect: null };
+  const one: Held = {
+    plugin: at.plugin,
+    view: at.view,
+    owner: at.owner,
+    touched: Date.now(),
+    contents,
+    attached: false,
+    failure: "",
+    rect: null,
+    viewport: null,
+    bounds: null,
+  };
   /* In the window from the start, sized, and hidden.
    *
    * **A view that is not a child of anything has no compositor**, and without one Chromium has
@@ -509,11 +756,11 @@ function create(plugin: string, view: string, home: string): Held {
     window.contentView.addChildView(contents);
     one.attached = true;
   }
-  contents.setBounds(DEFAULT_BOUNDS);
+  applyBounds(one, DEFAULT_BOUNDS);
   hideNow(one);
-  held.set(keyOf(plugin, view), one);
+  held.set(keyOf(at), one);
   watch(one);
-  if (home) void navigate(plugin, view, home);
+  if (home) void navigate(at, home);
   return one;
 }
 
@@ -585,7 +832,7 @@ function watch(one: Held): void {
   // Every new window becomes a navigation in this one. There is a single pane and no tab strip,
   // so a popup would otherwise be a window with no chrome that the person cannot get back from.
   contents.setWindowOpenHandler(({ url }) => {
-    void navigate(one.plugin, one.view, url);
+    void navigate(ownerOf(one), url);
     return { action: "deny" };
   });
 }
@@ -601,42 +848,58 @@ function statusOf(one: Held): ViewStatus {
     return {
       plugin: one.plugin,
       view: one.view,
+      owner: one.owner,
       url: "",
       title: "",
       loading: false,
       canGoBack: false,
       canGoForward: false,
       failure: "this view is gone",
+      viewport: one.viewport,
     };
   }
   return {
     plugin: one.plugin,
     view: one.view,
+    owner: one.owner,
     url: contents.getURL(),
     title: contents.getTitle(),
     loading: contents.isLoading(),
     canGoBack: contents.navigationHistory.canGoBack(),
     canGoForward: contents.navigationHistory.canGoForward(),
     failure: one.failure,
+    viewport: one.viewport,
   };
 }
 
-function required(plugin: string, view: string): Held {
-  const one = held.get(keyOf(plugin, view));
+function required(at: Target): Held {
+  const one = touch(held.get(keyOf(at)));
   if (!one || one.contents.webContents.isDestroyed()) {
     throw new Error(
-      `${plugin}'s ${view} browser is not open. Its tab has to be open for this — ask them to open it.`,
+      `${at.plugin}'s ${at.view} browser is not open here. Call \`show\` to open its tab, then try again.`,
     );
   }
   return one;
 }
 
+/** Mark a view as spoken to, so eviction can tell it from one nobody is using. Returns what it
+ *  was given, so it can wrap a lookup rather than needing a line of its own at each one. */
+function touch(one: Held | undefined): Held | undefined {
+  if (one) one.touched = Date.now();
+  return one;
+}
+
+/** The target a held view answers to. For the places that have the view and need its address —
+ *  a popup being turned into a navigation, for one. */
+function ownerOf(one: Held): Target {
+  return { plugin: one.plugin, view: one.view, owner: one.owner };
+}
+
 async function step(
-  plugin: string,
-  view: string,
+  at: Target,
   act: (contents: Electron.WebContents) => void,
 ): Promise<ViewStatus> {
-  const one = required(plugin, view);
+  const one = required(at);
   act(one.contents.webContents);
   await settle(one);
   announce(one);

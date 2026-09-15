@@ -40,6 +40,9 @@ export const keys = {
   /** What a surface is being asked. Keyed by conversation only — a renderer delivers every
    *  pending call for the chat it is showing, whichever plugin asked. */
   pluginCalls: (conversation: string) => ["plugins", "calls", conversation] as const,
+  /** Separate from `pluginCalls` so the frame's collector and the app's do not share a cache
+   *  entry — they ask the same route for different kinds and claim what they are handed. */
+  pluginHostCalls: (conversation: string) => ["plugins", "calls", "host", conversation] as const,
   /** One project's roadmap graph. */
   roadmap: (projectId: number) => ["roadmap", projectId] as const,
   /** One task, in the detail panel. */
@@ -81,6 +84,25 @@ export const keys = {
 type Prefix = readonly (string | number | null)[];
 
 /**
+ * One thing a change makes stale.
+ *
+ * A bare prefix is the whole family: every conversation's transcript, every project's board. A
+ * `{ scoped }` prefix is one whose *next* segment is a conversation id, and it says so because a
+ * change carries the conversation it happened in — so the one that moved can be invalidated
+ * without touching the rest.
+ *
+ * The distinction was missing and it was expensive. `turn` listed `["conversation"]`, and a turn
+ * fires two of them (one when it starts, one when it ends), so any reply in any chat marked
+ * **every** chat's stored transcript stale. With the default 60s `staleTime` on top, a chat you
+ * opened a minute ago was always refetched — measured at 4.5MB and 3,000 parts for a forty-turn
+ * conversation, on every visit.
+ *
+ * Scoped entries fall back to the bare prefix when the change names no conversation, which is the
+ * honest answer for a change about the machine rather than about one chat.
+ */
+export type Stale = Prefix | { scoped: Prefix };
+
+/**
  * Which keys a kind of change makes stale.
  *
  * Written as prefixes and deliberately generous. A `project` event invalidates the history list
@@ -93,7 +115,7 @@ type Prefix = readonly (string | number | null)[];
  * `use-live.test.ts` asserts it: a kind with no entry is a change nothing responds to, which reads
  * from the interface as a feature that is merely quiet.
  */
-export const STALE_ON: Record<ChangeKind, Prefix[]> = {
+export const STALE_ON: Record<ChangeKind, Stale[]> = {
   // A turn starting or finishing changes what he is doing and what he is working through.
   turn: [
     ["activity", "status"],
@@ -101,8 +123,10 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
     ["turns", "live"],
     ["conversations"],
     // The stored transcript grows by a turn, so a conversation opened from cache after one
-    // finished would be missing the reply.
-    ["conversation"],
+    // finished would be missing the reply — but only *that* conversation's. Scoped, because a
+    // bare prefix here made every open chat refetch its whole transcript every time any chat
+    // said anything, which is the single most expensive thing this table can do.
+    { scoped: ["conversation"] },
   ],
   // Tasks are on the board, in the roadmap, in the detail panel and in the working-on card.
   task: [["brain"], ["task"], ["roadmap"], ["workingOn"], ["timeline"]],
@@ -110,17 +134,17 @@ export const STALE_ON: Record<ChangeKind, Prefix[]> = {
   project: [["brain"], ["projects"], ["roadmap"], ["conversations"], ["timeline"]],
   // The inbox badge, and the board's own count of what is waiting on you.
   message: [["messages"], ["brain"], ["timeline"]],
-  process: [["processes"]],
+  process: [{ scoped: ["processes"] }],
   workspace: [["workspace"]],
   // The panel marks which conversation is blocked on you, so a question opening or being answered
   // changes the list as much as it changes the card.
-  question: [["question"], ["conversations"]],
+  question: [{ scoped: ["question"] }, ["conversations"]],
   permission: [["permissions"]],
   // A standing job moving its next-fire time. The Work panel counts down to it, so a countdown
   // nobody refreshed would sit on "due" from the moment it rolled over.
   schedule: [["brain"], ["schedules"]],
   // Queued, delivered, or taken back — all three change what the thread is showing.
-  steer: [["steers"]],
+  steer: [{ scoped: ["steers"] }],
   // Install, enable, disable, upgrade, uninstall — a plugin can change what tabs exist, what
   // tools exist and what skills exist at once, so this invalidates all three. Deliberately
   // coarse *and* deliberately rare, which is why state writes get their own key below rather

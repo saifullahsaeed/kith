@@ -14,7 +14,6 @@ import { useConfirm } from "@/components/ui/confirm";
 import { numericInputClass as inputClass } from "@/components/ui/input";
 import { openOnHost } from "@/lib/files";
 import { cn } from "@/lib/utils";
-import { StandingGrants } from "./standing-grants";
 import {
   fetchTuning,
   pickFolder,
@@ -422,7 +421,7 @@ export function AdvancedTab() {
         </section>
       ) : null}
 
-      {onMachine ? <StandingGrants /> : null}
+
 
       {error ? <p className="text-destructive text-sm">{error}</p> : null}
 

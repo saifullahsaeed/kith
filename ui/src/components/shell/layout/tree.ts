@@ -23,6 +23,13 @@
  * 6. Every tab's `surface` is a key of `SURFACES`. Unstated while the union was one-to-one with
  *    that record; written down now that `"plugin"` covers many surfaces, because a rule enforced
  *    only by a union type stops being enforced the moment the union opens.
+ * 7. Pinned tabs occupy a prefix of every pane's `tabs`. Held by `orderPinned`, which the store
+ *    runs from `commit` — this module knows nothing of which tabs are pinned, so the rule
+ *    arrives as a predicate rather than being clamped inside `moveTab`. Enforced in the array
+ *    and not at render, because the drag layer measures `[data-tab]` rects and assumes array
+ *    order is visual order.
+ * 8. A place names at most one pane. No operation here can break this — see `dedupePlaces` for
+ *    why, and for what happens to a tree that arrived already broken.
  */
 
 /** Everything that can be a tab. `chat` is the only one that repeats. */
@@ -87,7 +94,25 @@ export type TabRef =
       uid?: string;
     };
 
-export type PaneNode = { kind: "pane"; id: string; tabs: TabRef[]; active: number };
+export type PaneNode = {
+  kind: "pane";
+  id: string;
+  tabs: TabRef[];
+  active: number;
+  /** Which *place* this pane is, if anything has been pinned into it — durable identity, where
+   *  `id` is only an address.
+   *
+   * `id` cannot carry this. `nextId` mixes a per-load token in precisely so a new id can never
+   * look like a stored one, and a pane dies the moment its last tab closes. A pin pointing at
+   * an id would break in the one case somebody would notice: close the pinned tab, reopen it,
+   * land somewhere else. So a place is minted once, never re-minted, and survives the reminting
+   * that a loaded layout does to every `id` in the tree.
+   *
+   * Optional, which is what keeps `VERSION` at 2: `looksLikeLayout` asks a pane for `id`,
+   * `tabs` and `active`, so a tree stored before places existed reads as a tree with no
+   * places — correct, and a version bump would have thrown every stored arrangement away. */
+  place?: string;
+};
 export type SplitNode = {
   kind: "split";
   id: string;
@@ -150,8 +175,16 @@ export function ids(node: Node): string[] {
   return node.kind === "pane" ? [node.id] : [node.id, ...node.children.flatMap(ids)];
 }
 
-export function pane(tabs: TabRef[] = [], active = 0, id = nextId("pane")): PaneNode {
-  return { kind: "pane", id, tabs: tabs.map(withUid), active: clampActive(tabs, active) };
+export function pane(
+  tabs: TabRef[] = [],
+  active = 0,
+  id = nextId("pane"),
+  place?: string,
+): PaneNode {
+  const made: PaneNode = { kind: "pane", id, tabs: tabs.map(withUid), active: clampActive(tabs, active) };
+  // Set rather than always present, so a pane with no place serialises without the key and a
+  // stored tree round-trips byte-identical to one written before places existed.
+  return place ? { ...made, place } : made;
 }
 
 /** Give a tab its permanent identity if it does not have one — a layout stored before `uid`
@@ -467,4 +500,291 @@ export function renameTab(root: Node, key: string, ref: TabRef): Node {
 /** Is this tab anywhere in the layout? */
 export function hasTab(root: Node, key: string): boolean {
   return findTab(root, key) !== null;
+}
+
+/* ── Places ──────────────────────────────────────────────────────────────────────────────────
+ *
+ * A pane's durable identity, and the machinery a pin needs to find or rebuild one. Everything
+ * here is as pure as the rest of this module: the store owns which tabs are pinned, and passes
+ * that in as a predicate rather than letting the tree know about preferences.
+ */
+
+/** Where a pane sat, described well enough to put one back there.
+ *
+ * The pane's index among the *root* split's children, not an edge. "Left or right" cannot
+ * describe the default layout's middle column, which is the chat — the thing most likely to be
+ * pinned. A nested pane reports the index of its outermost ancestor that is a direct child of
+ * the root, because that is the column it visually belongs to.
+ *
+ * `direction` is only consulted when the root is a bare pane and a split has to be created to
+ * replay the slot at all. When the root is already a split, the slot is replayed into it as it
+ * is: matching a recorded direction against a root that has since been flipped would mean
+ * rebuilding the arrangement around one reopened tab. */
+export type Slot = { direction: "row" | "column"; index: number; size: number };
+
+/** Mint a place. Opaque, and minted through `nextId` so it carries the same per-load token that
+ *  makes a fresh id unable to collide with a stored one. */
+export function nextPlace(): string {
+  return nextId("place");
+}
+
+/** The pane carrying a place, or null. The question a pin asks first. */
+export function paneWithPlace(root: Node, place: string): PaneNode | null {
+  return panes(root).find((one) => one.place === place) ?? null;
+}
+
+/** Rebuild the tree with `fn` applied to every pane. */
+function mapPanes(node: Node, fn: (one: PaneNode) => PaneNode): Node {
+  if (node.kind === "pane") return fn(node);
+  return { ...node, children: node.children.map((child) => mapPanes(child, fn)) };
+}
+
+/** Give a pane a place, taking it off any pane that already had it.
+ *
+ * Removing it elsewhere is the whole point: a place names one pane, and two panes claiming it
+ * is "which of these is the right column" with no answer. */
+export function stampPlace(root: Node, paneId: string, place: string): Node {
+  return mapPanes(root, (one) => {
+    if (one.id === paneId) return { ...one, place };
+    if (one.place !== place) return one;
+    const { place: _gone, ...rest } = one;
+    return rest;
+  });
+}
+
+/** Take a pane's place away. Called when the last pinned tab leaves it — a place nothing is
+ *  pinned to is a name nobody can reach, and it would be saved into every layout thereafter. */
+export function clearPlace(root: Node, paneId: string): Node {
+  return mapPanes(root, (one) => {
+    if (one.id !== paneId || one.place === undefined) return one;
+    const { place: _gone, ...rest } = one;
+    return rest;
+  });
+}
+
+/** Describe where a pane sits, for a pin to record. Null when the pane is not in this tree. */
+export function slotFor(root: Node, paneId: string): Slot | null {
+  if (root.kind === "pane") {
+    return root.id === paneId ? { direction: "row", index: 0, size: 100 } : null;
+  }
+  const index = root.children.findIndex((child) => panes(child).some((one) => one.id === paneId));
+  if (index < 0) return null;
+  return { direction: root.direction, index, size: root.sizes[index] ?? 100 / root.children.length };
+}
+
+/** How much of a split one child may claim when a slot is replayed. A slot recorded at 100 —
+ *  the whole window, because the root was a single pane — must not come back as a pane with no
+ *  room left for the one it split. */
+function slotShare(size: number): number {
+  return Math.max(10, Math.min(90, size));
+}
+
+/** Open a tab in a pane of its own, at a recorded slot, stamped with a place.
+ *
+ * The answer to "this tab is pinned somewhere that no longer exists". Unlike `openBeside`, which
+ * splits whatever you are looking at, this puts the pane back where the pin says it was — which
+ * is the difference between honouring a pin and merely noticing one. */
+export function openAtSlot(
+  root: Node,
+  ref: TabRef,
+  slot: Slot,
+  place: string,
+): { tree: Node; paneId: string } {
+  const made = pane([ref], 0, nextId("pane"), place);
+  const share = slotShare(slot.size);
+
+  if (root.kind === "pane") {
+    const others = 100 - share;
+    const children = slot.index <= 0 ? [made, root] : [root, made];
+    const sizes = slot.index <= 0 ? [share, others] : [others, share];
+    return { tree: { ...split(slot.direction, children, sizes) }, paneId: made.id };
+  }
+
+  const at = Math.max(0, Math.min(slot.index, root.children.length));
+  const children = root.children.slice();
+  children.splice(at, 0, made);
+
+  /* The new pane takes its recorded share and the existing children give it up in proportion
+   * to what they already had — not `normalise` over the lot, which would scale the recorded
+   * share down along with everything else and land the pane at a width the pin never said. */
+  const held = root.sizes.reduce((sum, one) => sum + one, 0) || 100;
+  const scale = (100 - share) / held;
+  const sizes = root.sizes.map((one) => one * scale);
+  sizes.splice(at, 0, share);
+
+  return {
+    tree: { ...root, children, sizes: normalise(sizes) },
+    paneId: made.id,
+  };
+}
+
+/** Invariant 7: pinned tabs occupy a prefix of every pane's `tabs`.
+ *
+ * A stable partition, so the relative order inside each group is whatever the person dragged it
+ * into. Run from the store's `commit` rather than clamped inside `moveTab`: this module knows
+ * nothing about preferences, and threading a predicate through `moveTab`, `dockTab` and every
+ * caller to enforce it there would spread one rule across five signatures.
+ *
+ * The pane keeps showing what it was showing — active is found again by `uid`, the rule
+ * `closeTab` and `moveTab` already pay for. */
+export function orderPinned(root: Node, isPinned: (key: string) => boolean): Node {
+  return mapPanes(root, (one) => {
+    const held = one.tabs.filter((tab) => isPinned(tabKey(tab)));
+    if (!held.length || held.length === one.tabs.length) return one;
+    const free = one.tabs.filter((tab) => !isPinned(tabKey(tab)));
+    const tabs = [...held, ...free];
+    if (tabs.every((tab, index) => tab === one.tabs[index])) return one;
+    const wasActive = one.tabs[one.active];
+    const active = tabs.findIndex((tab) => tab.uid === wasActive?.uid);
+    return { ...one, tabs, active: active >= 0 ? active : clampActive(tabs, one.active) };
+  });
+}
+
+/** Fresh ids for every node and every tab, places left exactly as they are.
+ *
+ * What makes a saved layout loadable. A stored tree comes back holding the ids it was written
+ * with, and loading one twice — or loading one whose ids overlap the live tree's — is the
+ * duplicate-id crash `nextId`'s comment describes: `react-resizable-panels` throws during
+ * render, below `LayoutView`, and `commit` has already written the colliding tree to storage.
+ *
+ * Places are the one thing that must *not* be re-minted. They are the identity a pin points at;
+ * reminting them would make every pin in a loaded layout homeless. */
+export function remintIds(node: Node): Node {
+  if (node.kind === "pane") {
+    return {
+      ...node,
+      id: nextId("pane"),
+      tabs: node.tabs.map((tab) => ({ ...tab, uid: nextId("tab") })),
+    };
+  }
+  return { ...node, id: nextId("split"), children: node.children.map(remintIds) };
+}
+
+/** One pane per place, enforced on a tree that came from outside.
+ *
+ * No operation in this module can duplicate a place — `dockTab` splits by building a *new* pane
+ * and keeping the original object, `replacePane` collapsing a one-child split returns that child
+ * untouched, and everything else spreads the pane it found. This is defence against a tree that
+ * did not come from those operations: hand-edited storage, or a saved layout stamped twice.
+ *
+ * The pane holding the most pinned tabs keeps the place, ties broken by render order. */
+export function dedupePlaces(root: Node, isPinned: (key: string) => boolean): Node {
+  const all = panes(root);
+  const winners = new Map<string, string>();
+  const contested = new Set<string>();
+  for (const one of all) {
+    if (!one.place) continue;
+    const held = winners.get(one.place);
+    if (held === undefined) {
+      winners.set(one.place, one.id);
+      continue;
+    }
+    contested.add(one.place);
+    const mine = one.tabs.filter((tab) => isPinned(tabKey(tab))).length;
+    const theirs =
+      all.find((other) => other.id === held)?.tabs.filter((tab) => isPinned(tabKey(tab))).length ??
+      0;
+    if (mine > theirs) winners.set(one.place, one.id);
+  }
+  if (!contested.size) return root;
+  return mapPanes(root, (one) => {
+    if (!one.place || !contested.has(one.place)) return one;
+    if (winners.get(one.place) === one.id) return one;
+    const { place: _gone, ...rest } = one;
+    return rest;
+  });
+}
+
+/* ── Restructuring ───────────────────────────────────────────────────────────────────────────
+ *
+ * The verbs a tiling layout is expected to have and this one did not: close a pane rather than
+ * its tabs one at a time, turn columns into rows, swap two of them round.
+ */
+
+/** Close a pane and everything in it.
+ *
+ * Invariant 5 still holds: the last pane stays, emptied, because something has to be on screen
+ * and an empty pane that says what to do is a better answer than a blank window. It keeps its
+ * `place` when it does — pins point at that place, and a pane emptied is not a place abandoned.
+ *
+ * Pinned tabs go with the rest. Closing a pane is a deliberate act aimed at the pane, not a
+ * mis-click on a 22px target, and the pins survive it: each one comes home the moment its tab
+ * is opened again. */
+export function closePane(root: Node, paneId: string): Node {
+  const all = panes(root);
+  const found = all.find((one) => one.id === paneId);
+  if (!found) return root;
+  if (all.length === 1) return pane([], 0, found.id, found.place);
+  return replacePane(root, paneId, () => null) ?? pane();
+}
+
+/** Turn a split's columns into rows, or back. Sizes ride across: the proportions were chosen,
+ *  the axis was not. */
+export function flipSplit(root: Node, splitId: string): Node {
+  const walk = (node: Node): Node => {
+    if (node.kind === "pane") return node;
+    const children = node.children.map(walk);
+    if (node.id !== splitId) return { ...node, children };
+    return { ...node, direction: node.direction === "row" ? "column" : "row", children };
+  };
+  return walk(root);
+}
+
+/** Reverse a split's children, sizes with them — the "put that column on the other side" move,
+ *  which is otherwise three drags and a resize. */
+export function rotateSplit(root: Node, splitId: string): Node {
+  const walk = (node: Node): Node => {
+    if (node.kind === "pane") return node;
+    const children = node.children.map(walk);
+    if (node.id !== splitId) return { ...node, children };
+    return { ...node, children: children.slice().reverse(), sizes: node.sizes.slice().reverse() };
+  };
+  return walk(root);
+}
+
+/** The split a pane hangs from, or null when the pane *is* the root. What "flip this pane's
+ *  split" has to resolve before it can do anything. */
+export function splitAbove(root: Node, paneId: string): SplitNode | null {
+  if (root.kind === "pane") return null;
+  for (const child of root.children) {
+    if (child.kind === "pane" && child.id === paneId) return root;
+  }
+  for (const child of root.children) {
+    const deeper = splitAbove(child, paneId);
+    if (deeper) return deeper;
+  }
+  return null;
+}
+
+/** The pane `delta` steps from this one in render order, clamped rather than wrapped.
+ *
+ * Clamped, because "throw this tab one pane to the right" arriving at the far left instead is
+ * the kind of surprise that makes people stop using a shortcut. Null when there is nowhere to
+ * go, so the caller does nothing rather than something arbitrary. */
+export function paneBeside(root: Node, paneId: string, delta: number): PaneNode | null {
+  const all = panes(root);
+  const at = all.findIndex((one) => one.id === paneId);
+  if (at < 0) return null;
+  const to = at + delta;
+  if (to < 0 || to >= all.length || to === at) return null;
+  return all[to];
+}
+
+/** The tree with every chat tab taken out, panes and places and sizes kept.
+ *
+ * What a saved layout is made of. A named layout captures a workspace *shape*, not a bookmark:
+ * a "reviewing" layout that reopens the same three conversations is archaeology within a month,
+ * and the conversations are the one part of an arrangement that genuinely goes stale.
+ *
+ * A pane that held only chats comes back empty, which is deliberate — it is a place ready to
+ * hold chats, and `choosePane` prefers an empty pane over raising a new one precisely so the
+ * next chat opened lands in it rather than splitting a column beside it. */
+export function stripChats(node: Node): Node {
+  return mapPanes(node, (one) => {
+    const tabs = one.tabs.filter((tab) => tab.surface !== "chat");
+    if (tabs.length === one.tabs.length) return one;
+    const wasActive = one.tabs[one.active];
+    const stillThere = tabs.findIndex((tab) => tab.uid === wasActive?.uid);
+    return { ...one, tabs, active: stillThere >= 0 ? stillThere : clampActive(tabs, 0) };
+  });
 }

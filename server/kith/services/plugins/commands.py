@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.domain.plugins import CommandDecl, Plugin, split_tool_name
+from kith.domain.plugins import BUILT_HOST_EFFECTS, CommandDecl, Plugin, split_tool_name
 from kith.kernel import session_context
 
 #: Every refusal a command call can produce, phrased so he reports it and carries on rather
@@ -256,7 +256,7 @@ def _ask_view(agent_db: Path, plugin: Plugin, command: CommandDecl, args: dict) 
     from kith.infra import renderer
 
     act = str(command.does.get("act") or "")
-    answer = renderer.browse(plugin.id, command.surface, act, **args)
+    answer = renderer.browse(plugin.id, command.surface, act, _owner(plugin, command.surface), **args)
     if answer is None:
         # No shell. Said in a sentence he can act on, the way `_ask_surface` does for a tab that
         # is shut: a scheduled turn at four in the morning has no window, and `None` is not
@@ -300,17 +300,68 @@ def _ask_view(agent_db: Path, plugin: Plugin, command: CommandDecl, args: dict) 
     return answer
 
 
-def _ask_renderer(plugin: Plugin, command: CommandDecl, args: dict) -> dict:
-    """`host` delivery — one of five effects, performed by the renderer.
+def _owner(plugin: Plugin, view: str) -> str:
+    """Whose browser this is — the conversation, or the app.
 
-    Not built in this tranche, and refused rather than silently succeeding. The effects run in
-    the renderer because the one that matters most, folding a conversation, has its whole
-    implementation inside a rank-5 route that a service cannot import; so this needs the
-    call-parking machinery that `surface` delivery needs, and both arrive together.
+    **The separation that makes parallel work possible.** A browser view used to be keyed by
+    plugin and surface alone, so there was one for the whole app: a page opened while working on
+    one thing was the same page as the one opened while working on another, and two errands
+    running side by side fought over it — one navigating away under the other mid-read.
+
+    Read from the surface's own `answers`, which already existed and which nothing consulted for
+    a `web` surface. So a plugin chooses in its manifest between a tab per conversation and one
+    browser for the app, and a person reviewing it can see which it asked for.
+
+    Cookies do not follow this. The session partition is per plugin, so two conversations are two
+    tabs of one profile: signing in once holds for the next conversation instead of every chat
+    starting logged out.
     """
+    declared = plugin.surface(view)
+    if declared is None or declared.answers != "conversation":
+        return ""
+    return session_context.current()
+
+
+def _ask_renderer(plugin: Plugin, command: CommandDecl, args: dict) -> dict:
+    """`host` delivery — an effect the app performs, rather than the plugin.
+
+    **Why the app and not a service.** These are things only the window can do: which tabs are
+    open, which conversation is in front. There is no endpoint for "put this tab on screen"
+    because the layout tree lives in the renderer and is the renderer's to change.
+
+    So it goes through the same parking machinery `surface` delivery uses — one queue, split by
+    who answers (see `Call.kind`) — and inherits all of its liveness for free: the deadline, the
+    per-window claim, the wake on stop, and the refusal before parking when nobody is watching.
+
+    `open_surface` is the one built. It exists because of a real dead end: the browser told him
+    to "ask them to open the Browser tab" for a screenshot, and he had no way to open it himself,
+    so the most common thing he needs to do with a surface was the one thing he could not do.
+    """
+    effect = str(command.does.get("host") or "")
+    # The domain refuses an unbuilt effect at install; this is the second answer, for a row that
+    # predates the check or a Kith that has since dropped one.
+    if effect not in BUILT_HOST_EFFECTS:
+        return _refuse("not_supported", plugin=plugin.name, command=command.name)
     if session_context.unattended():
         return _refuse("no_renderer")
-    return _refuse("not_supported", plugin=plugin.name, command=command.name)
+
+    from kith.services.plugins import calls
+
+    call = calls.new(
+        session_context.current(),
+        plugin.id,
+        command.name,
+        # The surface the effect is *about*, not the surface that answers it — the app answers.
+        str(command.surface or args.get("view") or ""),
+        args,
+        timeout_ms=command.timeout_ms,
+        repeatable=command.repeatable,
+        kind="host",
+    )
+    answer = calls.ask(call)
+    if answer.get("ok") is False:
+        return answer
+    return dict(answer.get("result", {}).get("value") or {})
 
 
 def _ask_surface(plugin: Plugin, command: CommandDecl, args: dict) -> dict:

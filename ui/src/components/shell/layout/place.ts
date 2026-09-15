@@ -1,4 +1,4 @@
-import { panes, type Node, type SurfaceId, type TabRef } from "./tree";
+import { panes, paneWithPlace, tabKey, type Node, type Slot, type SurfaceId, type TabRef } from "./tree";
 
 import { surfaceFor } from "./surfaces";
 
@@ -18,6 +18,10 @@ import { surfaceFor } from "./surfaces";
  * 1. A caller that names a pane gets that pane, while it exists. `open`'s callers know things
  *    no policy can — the plugin `open_surface` delivery, when it lands, should not have to
  *    re-derive "the pane the plugin already lives in" from the tree.
+ * 1b. A pin, if this exact tab has one: the pane carrying its place, or a pane rebuilt at the
+ *    slot the pin recorded. Below the caller's overrule and above every preference, because a
+ *    pin is about *this tab* where a placement mode is about a kind of thing — and because the
+ *    per-surface preference could not express it at all, which is why pins exist.
  * 2. `beside`, when the surface has been told "always a new pane": a pane of its own, split
  *    off where you are, every time.
  * 3. `focused`, when told "always here": the pane you are looking at, grouping be damned. Some
@@ -71,9 +75,25 @@ export function modeFor(
   return placements[surface] ?? DEFAULT_PLACEMENT;
 }
 
+/** A pin: this exact tab lives in that place, and here is where to rebuild the place if it is
+ *  gone.
+ *
+ * Keyed by `tabKey` in the store, so a specific conversation can be pinned as readily as a
+ * surface. `place` is the durable identity; `slot` is only the recipe for re-raising it. */
+export type Pin = { place: string; slot: Slot };
+
 /** What an open should do. `paneId` null with `beside` false means "no pane anywhere" —
- *  the empty tree, which `openTab` turns into a first pane rather than a shrug. */
-export type PlacementChoice = { paneId: string | null; beside: boolean };
+ *  the empty tree, which `openTab` turns into a first pane rather than a shrug.
+ *
+ * `raise` is set only for a pinned tab whose place no pane currently carries: build one at the
+ * recorded slot and stamp it. Carried as an optional field rather than turning this into a
+ * discriminated union — the union is the tidier type and would rewrite every `toEqual({ paneId,
+ * beside })` assertion in the tests for no behavioural gain. */
+export type PlacementChoice = {
+  paneId: string | null;
+  beside: boolean;
+  raise?: { slot: Slot; place: string };
+};
 
 export type PlacementContext = {
   /** The pane a click last landed in — the answer of last resort, and of `focused`. */
@@ -84,6 +104,8 @@ export type PlacementContext = {
   widths: Record<string, number>;
   /** Per-surface placement, as set from a tab's menu; everything unspecified is `own`. */
   placements: Partial<Record<SurfaceId, PlacementMode>>;
+  /** Pinned tabs, by `tabKey`. A pin outranks every rung below the caller's own overrule. */
+  pins?: Record<string, Pin>;
 };
 
 /** Do two tabs belong in the same strip? The question the section rule asks of every pane.
@@ -108,6 +130,23 @@ export function choosePane(root: Node, ref: TabRef, ctx: PlacementContext): Plac
 
   if (alive(ctx.paneId)) return { paneId: ctx.paneId, beside: false };
 
+  /* A pin, and it outranks every preference below it.
+   *
+   * **Deliberately not width-checked.** The `fits` test below exists so a *heuristic* does not
+   * open a 560px chat into a pane the yielding rule has railed to 36px. A pin is not a
+   * heuristic, it is an instruction, and a rail is one click from coming back — honouring it
+   * into a narrow pane is the answer the person asked for, where second-guessing it is how a
+   * preference gets silently ignored. */
+  const pin = ctx.pins?.[tabKey(ref)];
+  if (pin) {
+    const home = paneWithPlace(root, pin.place);
+    if (home) return { paneId: home.id, beside: false };
+    // The place is gone with its pane. Rebuild it where the pin says it was, rather than
+    // splitting whatever happens to be focused — which is the whole difference between
+    // honouring a pin and noticing one.
+    return { paneId: null, beside: false, raise: { slot: pin.slot, place: pin.place } };
+  }
+
   const mode = modeFor(ctx.placements, ref.surface);
   if (mode === "beside") return { paneId: null, beside: true };
   if (mode === "focused" && alive(ctx.focused)) return { paneId: ctx.focused, beside: false };
@@ -131,7 +170,19 @@ export function choosePane(root: Node, ref: TabRef, ctx: PlacementContext): Plac
    * it gets one — not absorbed into whatever you were clicking, which is how a conversation
    * used to open into a 240px sidebar and a Work panel into the chat. The pane it raises goes
    * beside where you are, so "open the board" from the chat is still one gesture. */
-  if (mode === "own") return { paneId: null, beside: true };
+  if (mode === "own") {
+    /* Before raising a section of its own: an empty pane already on screen *is* a section with
+     * nothing in it.
+     *
+     * Without this rung, opening a chat while a blank pane sits on screen splits a fourth
+     * column beside the empty third — the kind has no pane, so `own` raises one, and the pane
+     * that was asking to be filled stays empty. Visible today, and unavoidable once a saved
+     * layout deliberately comes back with a blank chat pane. Only for `own`: `grouped` means
+     * "absorb into where you are", and an empty pane somewhere else is not where you are. */
+    const empty = all.find((one) => !one.tabs.length && fits(one.id));
+    if (empty) return { paneId: empty.id, beside: false };
+    return { paneId: null, beside: true };
+  }
 
   if (alive(ctx.focused)) return { paneId: ctx.focused, beside: false };
   if (preferred[0]) return { paneId: preferred[0].id, beside: false };

@@ -98,6 +98,9 @@ export function isHolding(): boolean {
  */
 interface Held {
   text: string;
+  /** Which chat it is waiting in. Carried so that a pane going away can tell whether the thing
+   *  waiting is *its* — see `rescueHeld`. */
+  conversationId: string;
   deliver: (text: string) => void;
 }
 let held: Held | null = null;
@@ -105,6 +108,26 @@ let held: Held | null = null;
 /** What is waiting, for the composer to show. Empty when nothing is. */
 export function heldMessage(): string {
   return held?.text ?? "";
+}
+
+/**
+ * Take back what is waiting for this conversation, and stop waiting.
+ *
+ * Called when the pane holding it is about to stop existing, which is a case this module could
+ * not survive: `deliver` closes over that composer's own `setText` and `send`, so once the pane is
+ * unmounted the poll goes on running for up to twenty minutes and then hands the message to a
+ * runtime nobody is reading. It was sent nowhere, shown nowhere, and — because ⌘⏎ empties the box
+ * before it gets here — held nowhere either. The words simply stopped existing.
+ *
+ * So the pane takes them back on the way out and puts them where unsent text goes; see
+ * `KeepTheDraft`. Returns "" when nothing is waiting, or when what is waiting belongs to a
+ * different chat.
+ */
+export function rescueHeld(conversationId: string): string {
+  if (!held || held.conversationId !== conversationId) return "";
+  const said = held.text;
+  dropHeld();
+  return said;
 }
 
 /**
@@ -120,7 +143,7 @@ export async function holdUntilIdle(
 ): Promise<void> {
   // One at a time: a second ⌘⏎ replaces the first rather than queueing two turns behind each
   // other, which is a shape nobody asked for and every caller would have to reason about.
-  held = { text, deliver };
+  held = { text, conversationId, deliver };
   setHolding(true);
   try {
     await pollUntilIdle(conversationId);

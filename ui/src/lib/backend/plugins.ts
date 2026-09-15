@@ -196,8 +196,12 @@ export interface PluginCall {
 export async function fetchPluginCalls(
   conversation: string,
   client: string,
+  /** `surface` for a frame's own calls, `host` for effects the app performs. Both collectors
+   *  poll this route and the server claims what it hands out, so a collector that asked for
+   *  everything would take calls it cannot answer — see `Call.kind`. */
+  kind: "surface" | "host" = "surface",
 ): Promise<PluginCall[]> {
-  const query = new URLSearchParams({ conversation, client });
+  const query = new URLSearchParams({ conversation, client, kind });
   const response = await fetch(`/api/plugins/calls?${query}`);
   if (!response.ok) throw new Error(`could not read pending calls (${response.status})`);
   return ((await response.json()).calls ?? []) as PluginCall[];

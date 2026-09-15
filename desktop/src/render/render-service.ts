@@ -84,7 +84,7 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   };
 
   const route = (request.url ?? "").split("?")[0] ?? "";
-  const ROUTES = ["/render", "/notify", "/open-pane", "/pick-folder", "/browse"];
+  const ROUTES = ["/render", "/notify", "/open-pane", "/pick-folder", "/browse", "/forget-plugin"];
   if (request.method !== "POST" || !ROUTES.includes(route)) {
     return reply(404, { error: "not found" });
   }
@@ -97,6 +97,7 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   }
 
   if (route === "/browse") return browse(request, reply);
+  if (route === "/forget-plugin") return forgetPlugin(request, reply);
   if (route === "/notify") return notify(request, reply);
   if (route === "/open-pane") return openPane(request, reply);
   if (route === "/pick-folder") return pickFolder(request, reply);
@@ -149,17 +150,20 @@ async function browse(
   const view = String(asked.view ?? "");
   const act = String(asked.act ?? "");
   if (!plugin || !view) return reply(400, { error: "plugin and view are required" });
+  // Which conversation's browser. The Python side decides it from the surface's declared
+  // `answers` — per conversation, or one for the app — so this only carries it.
+  const at = { plugin, view, owner: String(asked.owner ?? "") };
 
   try {
     switch (act) {
       case "open":
-        return reply(200, await views.navigate(plugin, view, String(asked.url ?? ""), String(asked.home ?? "")));
+        return reply(200, await views.navigate(at, String(asked.url ?? ""), String(asked.home ?? "")));
       case "read":
-        return reply(200, await views.read(plugin, view));
+        return reply(200, await views.read(at));
       case "click":
         return reply(
           200,
-          await views.click(plugin, view, {
+          await views.click(at, {
             text: typeof asked.text === "string" ? asked.text : undefined,
             selector: typeof asked.selector === "string" ? asked.selector : undefined,
             x: typeof asked.x === "number" ? asked.x : undefined,
@@ -167,21 +171,30 @@ async function browse(
           }),
         );
       case "type":
-        return reply(200, await views.type(plugin, view, String(asked.text ?? ""), String(asked.into ?? "")));
+        return reply(200, await views.type(at, String(asked.text ?? ""), String(asked.into ?? "")));
       case "press":
-        return reply(200, await views.press(plugin, view, String(asked.key ?? "Enter")));
+        return reply(200, await views.press(at, String(asked.key ?? "Enter")));
       case "scroll":
-        return reply(200, await views.scroll(plugin, view, Number(asked.by ?? 600)));
+        return reply(200, await views.scroll(at, Number(asked.by ?? 600)));
       case "back":
-        return reply(200, await views.back(plugin, view));
+        return reply(200, await views.back(at));
       case "forward":
-        return reply(200, await views.forward(plugin, view));
+        return reply(200, await views.forward(at));
       case "reload":
-        return reply(200, await views.reload(plugin, view));
+        return reply(200, await views.reload(at));
+      case "resize":
+        return reply(
+          200,
+          await views.resize(at, {
+            preset: typeof asked.preset === "string" ? asked.preset : undefined,
+            width: typeof asked.width === "number" ? asked.width : undefined,
+            height: typeof asked.height === "number" ? asked.height : undefined,
+          }),
+        );
       case "look":
-        return reply(200, await views.shot(plugin, view));
+        return reply(200, await views.shot(at));
       case "status": {
-        const now = views.status(plugin, view);
+        const now = views.status(at);
         return now ? reply(200, now) : reply(409, { error: "that browser pane is not open" });
       }
       default:
@@ -191,6 +204,39 @@ async function browse(
     // 409 rather than 500: "its tab is not open" is a state the caller can act on, and the
     // model is told to ask the person to open it rather than to retry.
     reply(409, { error: (error as Error).message });
+  }
+}
+
+/**
+ * Throw away everything a plugin's browser remembers.
+ *
+ * Called by the Python server when a plugin's data is deleted. It has to be a route: the session
+ * lives in this process's userData and the uninstall happens in the other one.
+ */
+async function forgetPlugin(
+  request: http.IncomingMessage,
+  reply: (status: number, body: unknown) => void,
+): Promise<void> {
+  let plugin = "";
+  let wipe = false;
+  try {
+    const asked = JSON.parse(await readBody(request)) as { plugin?: unknown; wipe?: unknown };
+    plugin = String(asked.plugin ?? "");
+    wipe = asked.wipe === true;
+  } catch (error) {
+    return reply(400, { error: `bad request: ${(error as Error).message}` });
+  }
+  if (!/^[a-z0-9][a-z0-9-]{0,23}$/.test(plugin)) return reply(400, { error: "not a plugin id" });
+  try {
+    // Two different acts, and the difference is the person's data. Switching a plugin off or
+    // removing it closes its browser — a renderer process for a plugin that is not running is
+    // waste. *Deleting its data* additionally throws away what the browser remembers, which
+    // follows the same thirty-day rule as everything else it stored.
+    if (wipe) await views.forgetSession(plugin);
+    else views.forget(plugin);
+    reply(200, { forgotten: plugin });
+  } catch (error) {
+    reply(500, { error: (error as Error).message });
   }
 }
 

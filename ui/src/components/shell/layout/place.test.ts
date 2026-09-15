@@ -160,3 +160,108 @@ describe("the modes themselves", () => {
     expect(isPlacementMode(undefined)).toBe(false);
   });
 });
+
+/** The arrangement again, with the right-hand pane carrying a place. */
+function placed(): Node {
+  return split(
+    "row",
+    [
+      pane([work], 0, "sidebar"),
+      pane([chat("c-1")], 0, "chats"),
+      pane([board], 0, "work-pane", "place-side"),
+    ],
+    [18, 56, 26],
+  );
+}
+
+const side = { direction: "row" as const, index: 2, size: 26 };
+
+describe("a pin", () => {
+  it("goes to the pane carrying its place, whatever the surface preference says", () => {
+    /* `settings` at the default `own` would raise a pane of its own; pinned, it goes home. That
+     * is the point of pins: the per-surface preference could not express "this one, there". */
+    const choice = choosePane(placed(), settings, {
+      ...base,
+      pins: { settings: { place: "place-side", slot: side } },
+    });
+    expect(choice).toEqual({ paneId: "work-pane", beside: false });
+  });
+
+  it("rebuilds the place at the slot it recorded, when no pane carries it any more", () => {
+    const choice = choosePane(arrangement(), settings, {
+      ...base,
+      pins: { settings: { place: "place-side", slot: side } },
+    });
+    expect(choice).toEqual({
+      paneId: null,
+      beside: false,
+      raise: { slot: side, place: "place-side" },
+    });
+  });
+
+  it("is honoured into a pane too narrow to show it, because a pin is not a heuristic", () => {
+    /* A railed pane measures 36px, which is what the `fits` check exists to keep a 560px chat
+     * out of. A pin says otherwise, and a rail is one click from coming back. */
+    const choice = choosePane(placed(), chat("c-2"), {
+      ...base,
+      widths: { "work-pane": 36 },
+      pins: { "chat:c-2": { place: "place-side", slot: side } },
+    });
+    expect(choice).toEqual({ paneId: "work-pane", beside: false });
+  });
+
+  it("loses to a caller that names a live pane, which knows things no policy does", () => {
+    const choice = choosePane(placed(), settings, {
+      ...base,
+      paneId: "chats",
+      pins: { settings: { place: "place-side", slot: side } },
+    });
+    expect(choice).toEqual({ paneId: "chats", beside: false });
+  });
+
+  it("is about one tab: a pin on one chat does not move another", () => {
+    const choice = choosePane(placed(), chat("c-2"), {
+      ...base,
+      focused: "sidebar",
+      pins: { "chat:c-1": { place: "place-side", slot: side } },
+    });
+    expect(choice, "grouped with the chats, as it always was").toEqual({
+      paneId: "chats",
+      beside: false,
+    });
+  });
+});
+
+describe("an empty pane", () => {
+  /** sidebar | (empty) — what a saved layout deliberately comes back as. */
+  function withBlank(): Node {
+    return split("row", [pane([work], 0, "sidebar"), pane([], 0, "blank")], [30, 70]);
+  }
+
+  it("is filled before a new one is raised", () => {
+    /* Without this rung the kind has no pane, so `own` splits a *third* column beside the
+     * blank second one — the pane that was asking to be filled stays empty. */
+    const choice = choosePane(withBlank(), chat("c-1"), { ...base, focused: "sidebar" });
+    expect(choice).toEqual({ paneId: "blank", beside: false });
+  });
+
+  it("is skipped when it is too narrow for what is opening", () => {
+    const choice = choosePane(withBlank(), chat("c-1"), {
+      ...base,
+      focused: "sidebar",
+      widths: { blank: 200 },
+    });
+    expect(choice).toEqual({ paneId: null, beside: true });
+  });
+
+  it("does not outrank where you are when the surface is grouped", () => {
+    /* `grouped` means "absorb into the room you are in". An empty pane somewhere else is not
+     * the room you are in, so the older habit wins — which is what the mode was chosen for. */
+    const choice = choosePane(withBlank(), settings, {
+      ...base,
+      focused: "sidebar",
+      placements: { settings: "grouped" },
+    });
+    expect(choice).toEqual({ paneId: "sidebar", beside: false });
+  });
+});

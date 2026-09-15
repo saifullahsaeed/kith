@@ -131,6 +131,14 @@ export function ToolsTab({
   );
 }
 
+/** How a language name is worth showing, where its own name is not what you would look for. */
+const EXTENSIONS: Record<string, string> = {
+  typescript: ".ts",
+  tsx: ".tsx",
+  javascript: ".js",
+  python: ".py",
+};
+
 /**
  * Which languages this folder is written in, and what can answer questions about meaning.
  *
@@ -195,10 +203,17 @@ function CodeIntelligence() {
               {one.served ? <Check className="size-4" /> : <CircleDashed className="size-4" />}
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium capitalize">
-                {one.family}
+              <p className="text-sm font-medium">
+                <span className="capitalize">{one.family}</span>
                 <span className="text-muted-foreground ml-2 text-xs font-normal">
                   {one.files} file{one.files === 1 ? "" : "s"}
+                  {/* Which languages this one server accounts for. Named because the count is
+                      otherwise unexplainable: "Typescript · 79 files" in a folder whose .ts
+                      files number three reads as a bug until you know it covers .tsx and .js
+                      too. Only shown when it covers more than its own name. */}
+                  {one.languages.length > 1
+                    ? ` · ${one.languages.map((name) => EXTENSIONS[name] ?? name).join(", ")}`
+                    : ""}
                 </span>
               </p>
               <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">

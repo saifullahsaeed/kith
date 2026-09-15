@@ -103,9 +103,9 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
     if (el) el.scrollTop = 0; // newest first, keep the top in view
   }, [messages.length]);
 
-  // Escape closes it. It is a panel over the room you were in, and every other layer here
-  // already lets you back out that way — but only the topmost layer should answer, or
-  // cancelling the "clear everything?" dialog would take the panel down with it.
+  // Escape closes it, the way it closes the conversations pane and every other panel here — but
+  // only the topmost layer should answer, or cancelling the "clear everything?" dialog would take
+  // the panel down with it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -135,8 +135,13 @@ export function InboxPanel({ inbox, onClose }: { inbox: Messages; onClose: () =>
   }, [his, onlyWanting, wasUnread]);
 
   return (
+    /* A pane, not a window. This carried `fixed top-0 right-0 h-dvh w-[26rem] z-20 shadow-xl`
+       across from its life as a route-level overlay, and every one of those describes the
+       viewport: opened as a tab it welded a 416px panel to the right edge of the window, at
+       `z-20` over the other panes, ignoring the pane it had been given. `history-panel` and
+       `work-panel` are the shape. See `inbox-panel.test.tsx`. */
     <aside
-      className="bg-background fixed top-0 right-0 z-20 flex h-dvh w-[26rem] max-w-full flex-col border-s shadow-xl"
+      className="bg-background flex h-full min-h-0 w-full flex-col border-s"
       aria-label="Alerts"
     >
       <div className="flex items-center gap-2 border-b px-4 py-2.5">

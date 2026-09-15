@@ -24,6 +24,15 @@ export interface MCPServer {
   connected: boolean;
   /** What it is contributing, for the ones that are connected. */
   tools: MCPTool[];
+  /** The plugin this server belongs to, or "" for one the person configured.
+   *
+   * **Dropping this was a bug, not a simplification.** The server has always sent it, and
+   * `manager.save` defends itself with `if not s.owner` — a filter that only works if the field
+   * survives the round trip. Absent from this type, a plugin's row echoed back in the
+   * whole-list PUT arrived looking like the person's own, slipped past that filter, and hit the
+   * label check instead: `'circulars' is the 'circulars' plugin's server`, a 400 that failed
+   * the entire save. Latent until a plugin ships a server, and unmissable once one does. */
+  owner: string;
 }
 
 /** What you send back: the same shape plus the env values you are setting. */

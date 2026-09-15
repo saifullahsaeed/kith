@@ -15,10 +15,12 @@
  *
  * What keeps this narrow:
  *
- * * **A fixed verb list.** Place, hide, and the four things a person's own hand does to a
- *   browser. There is no generic `invoke`, nothing that names a file, and nothing that runs
- *   script in the page — the model's side of that goes over loopback with a token, where the
- *   Python server has already decided the caller is allowed.
+ * * **A fixed verb list.** Place, hide, and the things a person's own hand does to a browser —
+ *   including `resize`, because putting the page back to the full pane is exactly that: the
+ *   one-click escape hatch from a viewport the model set. There is no generic `invoke`, nothing
+ *   that names a file, and nothing that runs script in the page — the model's side of that goes
+ *   over loopback with a token, where the Python server has already decided the caller is
+ *   allowed.
  * * **A plugin id checked against what is installed.** The renderer says which plugin's view it
  *   is placing; the main process refuses anything that is not a `web` surface the person
  *   actually installed, so a compromised renderer cannot conjure a browser out of a name.
@@ -84,6 +86,12 @@ export function installWebViewChannel(): void {
     if (!allowed.has(`${plugin}/${view}`)) {
       return { error: `${plugin}/${view} is not an installed browser pane` };
     }
+    /* Which conversation's browser. Not checked against anything, and it does not need to be:
+     * it is a *key*, not a permission. Cookies live in the plugin's own partition regardless of
+     * owner, so naming somebody else's conversation reaches a page in the same profile the
+     * caller could have opened itself. What the owner buys is separation for parallel work, not
+     * a boundary. */
+    const at = { plugin, view, owner: String((raw as { owner?: unknown }).owner ?? "") };
 
     try {
       switch (verb) {
@@ -91,21 +99,29 @@ export function installWebViewChannel(): void {
           const rect = (raw as { rect?: views.Rect }).rect;
           const home = String((raw as { home?: unknown }).home ?? "");
           if (!rect) return { error: "place needs a rectangle" };
-          return views.place(plugin, view, rect, home);
+          return views.place(at, rect, home);
         }
         case "hide":
-          views.hide(plugin, view);
+          views.hide(at);
           return { ok: true };
         case "navigate":
-          return await views.navigate(plugin, view, String((raw as { url?: unknown }).url ?? ""));
+          return await views.navigate(at, String((raw as { url?: unknown }).url ?? ""));
         case "back":
-          return await views.back(plugin, view);
+          return await views.back(at);
         case "forward":
-          return await views.forward(plugin, view);
+          return await views.forward(at);
         case "reload":
-          return await views.reload(plugin, view);
+          return await views.reload(at);
+        case "resize": {
+          const asked = raw as { preset?: unknown; width?: unknown; height?: unknown };
+          return await views.resize(at, {
+            preset: typeof asked.preset === "string" ? asked.preset : undefined,
+            width: typeof asked.width === "number" ? asked.width : undefined,
+            height: typeof asked.height === "number" ? asked.height : undefined,
+          });
+        }
         case "status":
-          return views.status(plugin, view) ?? { error: "not open" };
+          return views.status(at) ?? { error: "not open" };
         default:
           return { error: `no such verb ${verb}` };
       }

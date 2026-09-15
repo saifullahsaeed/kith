@@ -75,6 +75,49 @@ class TestWhatItReports:
         assert [one["family"] for one in body["languages"]] == ["python"]
         assert body["languages"][0]["files"] == 3
 
+    def test_one_server_is_one_row_however_many_languages_it_covers(self, project, client):
+        """**One row per server, not per language.**
+
+        `languages_in` counts by language, and `tsx`, `javascript` and `typescript` are three
+        different answers — so a TypeScript project showed three rows, each offering the same
+        32 MB `typescript-language-server` download. Installing from any of them satisfied all
+        three at once, which read as the button having done nothing at all.
+        """
+        for i in range(4):
+            (project / f"a{i}.tsx").write_text("export const a = 1;\n")
+        for i in range(3):
+            (project / f"b{i}.js").write_text("export const b = 1;\n")
+        for i in range(2):
+            (project / f"c{i}.ts").write_text("export const c = 1;\n")
+
+        body = client.get("/api/language-servers").get_json()
+
+        assert [one["family"] for one in body["languages"]] == ["typescript"]
+        one = body["languages"][0]
+        # Every file the one server would answer for, counted once.
+        assert one["files"] == 9
+        # And it says which languages those are, because "9 files" in a folder with two .ts
+        # files is otherwise unexplainable.
+        assert sorted(one["languages"]) == ["javascript", "tsx", "typescript"]
+
+    def test_a_language_is_not_reported_unserved_because_of_its_own_name(self, project, client):
+        """**The bug that made Install look broken.**
+
+        `CANDIDATES` is keyed by family; `outline.language_for` answers with a language. The
+        settings route indexed the first with the second, got an empty candidate list, and
+        reported "no language server" — which is indistinguishable from nothing being
+        installed. So TypeScript showed a tick and TSX and JavaScript did not, on one machine,
+        for one server that serves all three.
+        """
+        from kith.engine.code.lsp.manager import CANDIDATES, manager
+
+        for language in ("tsx", "javascript", "typescript"):
+            family = manager.family_of(language)
+            assert CANDIDATES.get(family), f"{language!r} normalises to {family!r}, which serves nothing"
+        # Idempotent, so normalising a caller that already passed a family cannot break it.
+        assert manager.family_of("typescript") == "typescript"
+        assert manager.family_of("python") == "python"
+
     def test_it_says_which_folder_it_looked_at(self, project, client):
         """ "This needs pyright" is only useful next to which project."""
         (project / "a.py").write_text("def f(): pass\n")

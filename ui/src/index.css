@@ -290,9 +290,21 @@
   -webkit-app-region: no-drag;
 }
 
+/* The warm wash. **Positioning is deliberately not here** — each call site states `absolute
+   inset-0` itself, so the wash fills whichever box it was mounted in.
+ *
+ * It was `position: fixed; inset: 0`, which is a claim about the window. That was fine while the
+ * three surfaces rendering it (Board, Settings, Context) were full-window takeovers; as panes,
+ * every one of them painted this gradient over the app header and all three panes from inside its
+ * own pane. The app-root wash at `workspace.tsx` was already correct only by accident — its parent
+ * happens to be the window-sized shell.
+ *
+ * The declarations had to move rather than be overridden: this rule is unlayered, and unlayered CSS
+ * beats `@layer utilities`, so a Tailwind `absolute` on the element would have been dead while
+ * `position: fixed` sat here. Anything a utility cannot express — the two `color-mix` gradients and
+ * `kith-drift` — stays. A call site that forgets `absolute inset-0` now renders a wash with no size
+ * rather than one covering the screen, which is the failure that should be visible in review. */
 .kith-ambient {
-  position: fixed;
-  inset: 0;
   z-index: 0;
   pointer-events: none;
   background:

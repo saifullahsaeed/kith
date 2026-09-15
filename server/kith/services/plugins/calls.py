@@ -67,6 +67,13 @@ class Call:
     view: str
     instance: str
     args: dict
+    #: Who answers this. `surface` is a live frame; `host` is the app itself.
+    #:
+    #: **Both consumers poll the same route, and `pending` claims what it hands out** — so
+    #: without this a mounted frame would claim a host effect it has no way to perform, and the
+    #: call would sit until its deadline with the app never seeing it. The kind is what keeps
+    #: the two collectors out of each other's queue.
+    kind: str = "surface"
     #: Whether delivering this twice is safe. A reload that cannot prove a call ran reports
     #: uncertainty rather than repeating a side effect.
     repeatable: bool = False
@@ -85,6 +92,7 @@ class Call:
             "command": self.command,
             "view": self.view,
             "instance": self.instance,
+            "kind": self.kind,
             "args": self.args,
             "timeoutMs": self.timeout_ms,
             "repeatable": self.repeatable,
@@ -155,7 +163,7 @@ def ask(call: Call) -> dict:
         changes.publish("plugin_call", conversation=call.conversation_id)
 
 
-def pending(conversation_id: str = "", client: str = "") -> list[dict]:
+def pending(conversation_id: str = "", client: str = "", kind: str = "") -> list[dict]:
     """Calls waiting for a surface to answer.
 
     Claimed as they are handed out, so two windows on one backend do not both deliver the same
@@ -165,6 +173,8 @@ def pending(conversation_id: str = "", client: str = "") -> list[dict]:
     with _LOCK:
         out = []
         for call in _OPEN.values():
+            if kind and call.kind != kind:
+                continue
             if conversation_id and call.conversation_id != conversation_id:
                 continue
             if call.claimed_by and call.claimed_by != client:
@@ -255,6 +265,7 @@ def new(conversation_id: str, plugin: str, command: str, view: str, args: dict, 
         args=args,
         repeatable=bool(rest.get("repeatable", False)),
         timeout_ms=int(rest.get("timeout_ms", 3_000)),
+        kind=str(rest.get("kind") or "surface"),
     )
 
 

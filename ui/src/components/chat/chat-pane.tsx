@@ -19,6 +19,8 @@ import { toThreadMessages } from "@/components/chat/to-thread-messages";
 import { useServerEvent } from "@/hooks/use-live";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { clearActiveComposer, setActiveComposer } from "@/lib/active-composer";
+import { alreadyGoing, draftFor, useDrafts } from "@/lib/drafts";
+import { rescueHeld } from "@/lib/queued-send";
 import { useFocusedChat } from "@/lib/focused-chat";
 import { keys } from "@/lib/query-keys";
 import {
@@ -42,6 +44,11 @@ import {
  * runtime that only ever holds one conversation has nothing to swap. The composer clearing goes
  * with it, for the same reason — each pane has its own.
  *
+ * What a pane's composer does *not* own any more is the text in it. A pane is unmounted the
+ * moment its tab stops being the active one in its pane, and that took every half-written message
+ * with it; the words live in `lib/drafts`, keyed on the tab, and this pane borrows them — see
+ * `KeepTheDraft`.
+ *
  * What a pane still owns:
  *
  * * a page of the transcript, and the `before` cursor for the page above it;
@@ -58,10 +65,18 @@ export function ChatPane({
   initialProject = null,
   /** Whether this is the chat in front of you, which decides where a dropped file lands. */
   active = false,
+  /** This tab's permanent id, which is where its unsent text is kept.
+   *
+   * The pane is not the owner of anything that should outlive it, and this is how it hands the
+   * half-written message to something that does — see `lib/drafts`. Absent for a layout stored
+   * before `uid` existed, and then the pane holds nothing rather than falling back to a key every
+   * such tab would share. */
+  uid,
 }: {
   conversationId: string;
   initialProject?: number | null;
   active?: boolean;
+  uid?: string;
 }) {
   const cache = useQueryClient();
   const rename = useLayout((state) => state.rename);
@@ -72,8 +87,33 @@ export function ChatPane({
   const [id, setId] = useState(conversationId);
   const idRef = useRef(id);
   idRef.current = id;
-  const [projectId, setProjectId] = useState<number | null>(initialProject);
-  const pendingProject = useRef<number | null>(initialProject);
+  /* Whatever this tab was holding when it was last unmounted, read once.
+   *
+   * Read here rather than in `KeepTheDraft` because the only part of a draft this outer component
+   * needs is its *project*, and that has to be in place before anything can be sent. The words go
+   * back into the composer from inside the provider, where the composer is. */
+  const [heldOnMount] = useState(() => draftFor(uid ?? ""));
+  /* The project this pane opens against, which only ever means anything for a chat that has no
+   * conversation yet.
+   *
+   * Held first, `initialProject` second: `initialProject` comes from a ref the sidebar sets and
+   * only `openConversation` clears, so returning to a drafted tab still sees whichever project
+   * "New chat here" was last clicked on — while the draft records what *this* tab was actually
+   * set to, including a change made in its own session bar. The stale ref used to win and quietly
+   * revert it.
+   *
+   * And `null` outright once there is a conversation, because `pendingProject` below is a *bind*:
+   * a conversation's project is already on the server, and re-sending it on every remount is the
+   * write `workspace` withholds `initialProject` from named tabs specifically to prevent. */
+  const openedIn = conversationId ? null : (heldOnMount?.projectId ?? initialProject);
+  const [projectId, setProjectId] = useState<number | null>(openedIn);
+  /* The project the first turn will carry.
+   *
+   * Seeded from the draft and not only from `initialProject`, which is not tidiness: the most
+   * ordinary way to hit the draft bug at all is "New chat here" on a project, type, click another
+   * chat, come back. Restoring the words without this would come back with the words and no
+   * project, and send the one turn that says what the work is against nothing. */
+  const pendingProject = useRef<number | null>(openedIn);
 
   const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
   /* No `timeline` state.
@@ -121,9 +161,13 @@ export function ChatPane({
   /* The page this pane opens on.
    *
    * Through the cache, so a conversation you were just in comes back instantly and two panes
-   * showing the same one do not fetch it twice. A `turn` event invalidates the key, so one
-   * whose turn finished while you were elsewhere is refetched rather than restored without its
-   * reply. */
+   * showing the same one do not fetch it twice. A `turn` event invalidates the key, so a pane
+   * mounting after a turn it never saw fetches rather than restoring a page without its reply.
+   *
+   * That covers a *new* mount and nothing else, which is worth being plain about: this effect's
+   * deps are `[cache, conversationId]` and a pane's conversation never changes, so it runs once
+   * and an invalidation has no observer here to act on. A pane that is already mounted catches
+   * up through `catchUp` below instead. */
   useEffect(() => {
     if (!conversationId) {
       setLoading(false);
@@ -184,31 +228,90 @@ export function ChatPane({
     };
   }, []);
 
-  const rejoin = useCallback(() => {
-    if (!id) return;
-    const wanted = id;
-    void resumeTurn(wanted).then((attached) => {
-      if (!attached) return;
-      // `discard()`, never a bare return: the generator has not started, so letting it go
-      // leaves the response body open and a server thread writing into it.
-      if (idRef.current !== wanted) return attached.discard();
-      // And the same if the pane went away while the attach was in flight — closing a tab
-      // mid-rejoin otherwise left a held response on one of the browser's six sockets per
-      // origin, with a `live_turns.watch` generator blocked writing into it on the other end.
-      // A tab is closed at exactly the moment a turn is running, so this is not a rare path.
-      if (!alive.current) return attached.discard();
-      const state = runtime.thread.getState();
-      if (state.isRunning) return attached.discard();
-      runtime.thread.resumeRun({
-        parentId: state.messages.at(-1)?.id ?? null,
-        stream: () => attached.stream,
-      });
-    });
-  }, [id, runtime]);
+  /** Whether this pane is the one reading the turn running here.
+   *
+   *  What `isRunning` cannot answer after the fact. A `turn` event that finds nothing live means
+   *  a turn just *ended*, and by then the run is over either way — so the only remaining question
+   *  is whether this pane ever read it, and nothing but the pane itself knows. */
+  const reading = useRef(false);
 
-  useEffect(rejoin, [rejoin]);
-  // Not a query: there is nothing to refetch, there is a stream to attach to.
-  useServerEvent("turn", rejoin, id);
+  /* Fetch the transcript again and put it back on screen.
+   *
+   * The fallback under the live view, and the piece the pane did not have. Everything else about
+   * a turn survives nobody watching: it runs on its own thread, its output lives in `live_turns`
+   * rather than in a request, and `/attach` hands a latecomer the same stream as the first
+   * reader. The *reader*, though, is this component — and this component exists only while its
+   * tab is the active one in its pane (`layout-view` renders the active tab and an `EmptyPane`
+   * for the rest). So a turn Kith started himself — a background task finishing — could run and
+   * end with nobody having read a word of it, and then nothing would ever go and get it:
+   * `STALE_ON.turn` invalidates this key, and the comment on the mount fetch above claims that
+   * invalidation is what catches such a pane up, but an imperative `fetchQuery` has no observer,
+   * so invalidating it refetches nothing. Reloading the window was the only way to see the reply.
+   *
+   * `staleTime: 0` because this races the invalidation it is reacting to — `useLiveUpdates`
+   * coalesces on a 50ms timer, so the cached page from *before* the turn is very often still
+   * fresh at this moment, and without it this would carefully put the conversation back exactly
+   * as it was. */
+  const catchUp = useCallback(async () => {
+    const wanted = idRef.current;
+    if (!wanted) return;
+    const detail = await cache
+      .fetchQuery({
+        queryKey: keys.conversation(wanted),
+        queryFn: () => fetchConversation(wanted),
+        staleTime: 0,
+      })
+      .catch(() => null);
+    if (!detail || !alive.current || idRef.current !== wanted) return;
+    // Never over a run. `reset` mints new message ids, and a reply streaming into the old ones
+    // goes with them — the same reason the effect below it is guarded.
+    if (runtime.thread.getState().isRunning) return;
+    setWindowStart(detail.windowStart ?? 0);
+    setResumed(toThreadMessages(detail.timeline));
+  }, [cache, runtime]);
+
+  const rejoin = useCallback(
+    /** `missable` is true when a *turn event* prompted this, and false when the pane's own mount
+     *  did. Only the first can mean "a turn ended that I might not have read"; on mount there is
+     *  no turn to have missed, and treating it as one would refetch the page just fetched. */
+    (missable = false) => {
+      if (!id) return;
+      const wanted = id;
+      void resumeTurn(wanted).then((attached) => {
+        if (!attached) {
+          const missed = missable && !reading.current;
+          reading.current = false;
+          if (missed) void catchUp();
+          return;
+        }
+        // `discard()`, never a bare return: the generator has not started, so letting it go
+        // leaves the response body open and a server thread writing into it.
+        if (idRef.current !== wanted) return attached.discard();
+        // And the same if the pane went away while the attach was in flight — closing a tab
+        // mid-rejoin otherwise left a held response on one of the browser's six sockets per
+        // origin, with a `live_turns` reader blocked writing into it on the other end.
+        // A tab is closed at exactly the moment a turn is running, so this is not a rare path.
+        if (!alive.current) return attached.discard();
+        // Something in this pane is on this turn from here: either the run it already had, or
+        // the stream about to be attached below.
+        reading.current = true;
+        const state = runtime.thread.getState();
+        if (state.isRunning) return attached.discard();
+        runtime.thread.resumeRun({
+          parentId: state.messages.at(-1)?.id ?? null,
+          stream: () => attached.stream,
+        });
+      });
+    },
+    [id, runtime, catchUp],
+  );
+
+  useEffect(() => {
+    rejoin();
+  }, [rejoin]);
+  // Not a query: there is nothing to refetch, there is a stream to attach to — and when there is
+  // no stream to attach to, a turn just ended that this pane may never have read.
+  useServerEvent("turn", () => rejoin(true), id);
 
   /* Confirm the project against the conversation once it exists. It rides *with* the first turn
    * through the adapter — writing it afterwards was a turn too late, and that turn is the one
@@ -345,6 +448,7 @@ export function ChatPane({
     <AssistantRuntimeProvider runtime={runtime}>
       <ClaimTheDrop active={active} />
       <PublishToTheWorkPanel active={active} />
+      <KeepTheDraft uid={uid} conversationId={id} projectId={projectId} />
       <div ref={root} className="relative flex h-full min-h-0 flex-col">
         <SessionBar
           conversationId={id}
@@ -431,6 +535,113 @@ const SETTLE_MS = 600;
 /** Publishes this pane's composer while it is the focused chat, so a file dropped anywhere in
  *  the window knows which conversation it was meant for. Renders nothing; it exists to be
  *  *inside* the runtime provider, which is the only place the hook resolves. */
+/**
+ * Keeps this tab's unsent message somewhere that outlives the pane, and puts it back.
+ *
+ * Inside the provider for the same reason `ClaimTheDrop` is: `useComposerRuntime()` resolves
+ * nowhere else. **Not gated on `active`**, which is the one structural difference from both of
+ * its neighbours and the whole point of it — a draft has to be held for the chat you have just
+ * switched away from, which is exactly the chat that is no longer active.
+ *
+ * Restore, then subscribe, in that order: the subscription fires with whatever the composer holds
+ * now, and reversing the two would write an empty composer over the draft it was about to be
+ * given.
+ *
+ * **Nothing is written on unmount.** The mirror is one-directional and always current, so
+ * React's mount-before-unmount ordering — the hazard `clearActiveComposer` has to guard against —
+ * has nothing here to clobber, and there is no cleanup for a crash or a window close to miss.
+ */
+function KeepTheDraft({
+  uid,
+  conversationId,
+  projectId,
+}: {
+  uid?: string;
+  conversationId: string;
+  projectId: number | null;
+}) {
+  const composer = useComposerRuntime();
+  const hold = useDrafts((state) => state.hold);
+  const forget = useDrafts((state) => state.forget);
+  useEffect(() => {
+    if (!uid) return;
+    /** Set by the cleanup below, read by the attachment loop, which is the one thing here that
+     *  outlives the effect that started it. */
+    let gone = false;
+    const waiting = draftFor(uid);
+    const now = composer.getState();
+    /* Only into a composer with nothing in it.
+     *
+     * The guard is what makes this effect safe to re-run, and it re-runs twice in the ordinary
+     * life of a chat: once when the stream names it, once if the project is changed. It is also
+     * what stops a restore doubling attachments — `addAttachment` appends, it does not set. */
+    if (waiting && !now.text.trim() && now.attachments.length === 0) {
+      composer.setText(waiting.text);
+      if (waiting.quote) composer.setQuote(waiting.quote);
+      // Sequentially, because `addAttachment` is async and the order they come back in is the
+      // order they were pasted in — which is the order their names refer to. And abandoned if
+      // this effect is torn down part-way through, so a tab clicked twice quickly does not go on
+      // adding files to a composer nobody is looking at any more.
+      void (async () => {
+        for (const file of waiting.attachments) {
+          if (gone) return;
+          await composer.addAttachment(file).catch(() => {});
+        }
+      })();
+    }
+    const save = () => {
+      const state = composer.getState();
+      /* A message already on its way out is not a draft — see `alreadyGoing`.
+       *
+       * `forget` and not a bare return: the keystrokes before Enter already wrote an entry, and
+       * leaving that behind is the same bug with the whole message in it. A send that fails
+       * restores the text and notifies again once the flag clears, so the draft comes back on its
+       * own. */
+      if (alreadyGoing(state)) {
+        forget(uid);
+        return;
+      }
+      hold(uid, {
+        conversationId,
+        projectId,
+        text: state.text,
+        quote: state.quote,
+        // `file` is only on an attachment that has not been sent yet, which is all of these —
+        // a composer's attachments are by definition unsent.
+        attachments: state.attachments.flatMap((one) => (one.file ? [one.file] : [])),
+      });
+    };
+    // Once immediately, which is also what re-stamps the conversation id when a chat that had
+    // none is finally named. `hold` compares every field, so this is a write only if it says
+    // something new.
+    save();
+    const stop = composer.subscribe(save);
+    return () => {
+      gone = true;
+      stop();
+      /* A ⌘⏎ message still waiting on the turn belongs to this tab too.
+       *
+       * It is the one piece of unsent text this subscription never sees: ⌘⏎ empties the composer
+       * *before* handing the words to `holdUntilIdle`, so by the time they are waiting they are
+       * not in the box and not in the store. And what they are waiting on is a `deliver` closure
+       * over this composer's `send` — which stops working the moment this pane does. Left alone
+       * the poll ran its twenty minutes and then delivered into nothing: not sent, not shown, not
+       * held. Taken back here, it is simply a draft again, with the mark to say so. */
+      const waiting = uid ? rescueHeld(conversationId) : "";
+      if (waiting) {
+        hold(uid, {
+          conversationId,
+          projectId,
+          text: waiting,
+          quote: undefined,
+          attachments: [],
+        });
+      }
+    };
+  }, [composer, uid, conversationId, projectId, hold, forget]);
+  return null;
+}
+
 function ClaimTheDrop({ active }: { active: boolean }) {
   const composer = useComposerRuntime();
   useEffect(() => {

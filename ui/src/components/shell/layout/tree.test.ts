@@ -15,19 +15,34 @@ import { describe, expect, it } from "vitest";
 
 import {
   activateTab,
+  clearPlace,
+  closePane,
   closeTab,
+  dedupePlaces,
   dockTab,
   findTab,
+  flipSplit,
   hasTab,
+  ids,
   moveTab,
+  openAtSlot,
   openBeside,
   openTab,
+  orderPinned,
   pane,
+  paneBeside,
+  paneWithPlace,
   renameTab,
   panes,
   resizeSplit,
+  rotateSplit,
+  slotFor,
   split,
+  splitAbove,
+  stampPlace,
+  stripChats,
   tabKey,
+  remintIds,
   type Node,
 } from "./tree";
 
@@ -40,8 +55,15 @@ const files = { surface: "settings" as const };
  *  tree it produced is a legal one. */
 function isSound(node: Node): true {
   const seen = new Set<string>();
+  const places = new Set<string>();
   const walk = (one: Node): void => {
     if (one.kind === "pane") {
+      // Invariant 8. A place naming two panes is "which of these is the right column" with no
+      // answer, and every pin pointing at it inherits the ambiguity.
+      if (one.place !== undefined) {
+        expect(places.has(one.place), `${one.place} names two panes`).toBe(false);
+        places.add(one.place);
+      }
       expect(one.active).toBeGreaterThanOrEqual(0);
       if (one.tabs.length) expect(one.active).toBeLessThan(one.tabs.length);
       for (const tab of one.tabs) {
@@ -414,5 +436,246 @@ describe("opening beside", () => {
     expect(tree.kind).toBe("split");
     expect(findTab(tree, "settings")!.pane.id).toBe(paneId);
     isSound(tree);
+  });
+});
+
+describe("places", () => {
+  it("names one pane, and stamping a second takes it off the first", () => {
+    const tree = split("row", [pane([work], 0, "a", "side"), pane([roadmap], 0, "b")]);
+
+    const after = stampPlace(tree, "b", "side");
+
+    expect(paneWithPlace(after, "side")!.id).toBe("b");
+    isSound(after);
+  });
+
+  it("comes off a pane when asked, and leaves the key absent rather than undefined", () => {
+    const after = clearPlace(pane([work], 0, "a", "side"), "a");
+    expect("place" in after).toBe(false);
+  });
+
+  it("survives every operation that keeps the pane", () => {
+    /* The claim the design rests on: no operation here can lose or duplicate a place, because
+     * `dockTab` splits by building a *new* pane and keeping the original object, and everything
+     * else spreads the pane it found. */
+    let tree: Node = split("row", [
+      pane([work, roadmap], 0, "a", "side"),
+      pane([files], 0, "b"),
+    ]);
+    tree = dockTab(tree, "board", "b", "right");
+    tree = moveTab(tree, "settings", "b", 0);
+    tree = activateTab(tree, "a", 0);
+    tree = closeTab(tree, "board");
+
+    expect(paneWithPlace(tree, "side")!.tabs.map(tabKey)).toEqual(["work"]);
+    isSound(tree);
+  });
+
+  it("goes with the pane when the pane goes, which is what a homeless pin is for", () => {
+    const tree = split("row", [pane([work], 0, "a", "side"), pane([roadmap], 0, "b")]);
+    expect(paneWithPlace(closeTab(tree, "work"), "side")).toBeNull();
+  });
+
+  it("is kept by an emptied last pane, because a pane emptied is not a place abandoned", () => {
+    const after = closePane(pane([work], 0, "only", "side"), "only");
+    expect(after.kind === "pane" && after.place).toBe("side");
+    expect(panes(after)[0].tabs).toEqual([]);
+  });
+
+  it("keeps the winner with the most pins when a tree arrives already broken", () => {
+    /* Not reachable through the operations above — this is a hand-edited or twice-stamped tree,
+     * and the answer has to be deterministic rather than "whichever the walk saw last". */
+    const broken = split("row", [
+      pane([work], 0, "a", "side"),
+      pane([roadmap, files], 0, "b", "side"),
+    ]);
+
+    const fixed = dedupePlaces(broken, (key) => key === "board" || key === "settings");
+
+    expect(paneWithPlace(fixed, "side")!.id).toBe("b");
+    isSound(fixed);
+  });
+});
+
+describe("a slot", () => {
+  const three = () =>
+    split(
+      "row",
+      [pane([work], 0, "a"), pane([roadmap], 0, "b"), pane([files], 0, "c")],
+      [18, 56, 26],
+    );
+
+  it("is the pane's index among the root's children, middle columns included", () => {
+    expect(slotFor(three(), "b")).toEqual({ direction: "row", index: 1, size: 56 });
+  });
+
+  it("reports the column a nested pane visually belongs to", () => {
+    const nested = split(
+      "row",
+      [pane([work], 0, "a"), split("column", [pane([roadmap], 0, "b"), pane([files], 0, "c")])],
+      [30, 70],
+    );
+    expect(slotFor(nested, "c")).toEqual({ direction: "row", index: 1, size: 70 });
+  });
+
+  it("is the whole window when the root is the pane", () => {
+    expect(slotFor(pane([work], 0, "a"), "a")).toEqual({ direction: "row", index: 0, size: 100 });
+  });
+
+  it("is null for a pane that is not in the tree", () => {
+    expect(slotFor(three(), "gone")).toBeNull();
+  });
+
+  it("replays into the middle of a row, not at an edge", () => {
+    const { tree, paneId } = openAtSlot(three(), { surface: "inbox" }, slotFor(three(), "b")!, "mid");
+
+    const order = panes(tree).map((one) => one.tabs.map(tabKey));
+    expect(order).toEqual([["work"], ["inbox"], ["board"], ["settings"]]);
+    expect(paneWithPlace(tree, "mid")!.id).toBe(paneId);
+    isSound(tree);
+  });
+
+  it("clamps into a root that has since lost columns", () => {
+    const two = split("row", [pane([work], 0, "a"), pane([roadmap], 0, "b")], [40, 60]);
+    const { tree } = openAtSlot(two, { surface: "inbox" }, { direction: "row", index: 9, size: 20 }, "far");
+
+    expect(panes(tree).map((one) => one.tabs.map(tabKey))).toEqual([
+      ["work"],
+      ["board"],
+      ["inbox"],
+    ]);
+    isSound(tree);
+  });
+
+  it("splits a bare root, and does not claim the whole window doing it", () => {
+    const { tree } = openAtSlot(pane([work], 0, "a"), { surface: "inbox" }, { direction: "row", index: 0, size: 100 }, "p");
+
+    expect(tree.kind).toBe("split");
+    // A slot recorded at 100 — the root *was* one pane — clamped, or the pane it split has no
+    // room left at all.
+    expect(tree.kind === "split" && tree.sizes[0]).toBe(90);
+    isSound(tree);
+  });
+});
+
+describe("pinned tabs sitting at the front", () => {
+  it("moves them to the prefix, keeping the order inside each group", () => {
+    const tree = pane([work, roadmap, files, chat("c-1")], 0, "a");
+
+    const after = orderPinned(tree, (key) => key === "settings" || key === "chat:c-1");
+
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["settings", "chat:c-1", "work", "board"]);
+    isSound(after);
+  });
+
+  it("keeps the pane showing what it was showing", () => {
+    const tree = pane([work, roadmap, files], 1, "a");
+    const after = orderPinned(tree, (key) => key === "settings");
+    expect(panes(after)[0].tabs[panes(after)[0].active]).toMatchObject({ surface: "board" });
+  });
+
+  it("returns the same tree when there is nothing to do", () => {
+    const tree = pane([work, roadmap], 0, "a");
+    expect(orderPinned(tree, () => false)).toBe(tree);
+    expect(orderPinned(tree, () => true)).toBe(tree);
+  });
+});
+
+describe("reminting a layout", () => {
+  it("gives every node and tab a new id and touches no place", () => {
+    const saved = split("row", [pane([work], 0, "a", "side"), pane([roadmap], 0, "b")]);
+
+    const fresh = remintIds(saved);
+
+    expect(ids(fresh)).not.toEqual(ids(saved));
+    expect(new Set(ids(fresh)).size).toBe(ids(fresh).length);
+    expect(paneWithPlace(fresh, "side")).not.toBeNull();
+    isSound(fresh);
+  });
+
+  it("makes two copies of one layout able to coexist, which is the crash it exists for", () => {
+    const saved = split("row", [pane([work], 0, "a"), pane([roadmap], 0, "b")]);
+    const both = [...ids(remintIds(saved)), ...ids(remintIds(saved))];
+    expect(new Set(both).size).toBe(both.length);
+  });
+});
+
+describe("restructuring", () => {
+  const two = () => split("row", [pane([work], 0, "a"), pane([roadmap, files], 0, "b")], [40, 60]);
+
+  it("closes a pane and everything in it, collapsing the split", () => {
+    const after = closePane(two(), "b");
+    expect(after.kind).toBe("pane");
+    expect(panes(after)[0].tabs.map(tabKey)).toEqual(["work"]);
+    isSound(after);
+  });
+
+  it("empties the last pane rather than leaving nothing on screen", () => {
+    const after = closePane(pane([work], 0, "only"), "only");
+    expect(panes(after)).toHaveLength(1);
+    expect(panes(after)[0].tabs).toEqual([]);
+    isSound(after);
+  });
+
+  it("flips a split's axis and carries the proportions across", () => {
+    const before = two();
+    const after = flipSplit(before, before.id);
+    expect(after.kind === "split" && after.direction).toBe("column");
+    expect(after.kind === "split" && after.sizes).toEqual([40, 60]);
+    isSound(after);
+  });
+
+  it("reverses a split's children and their sizes together", () => {
+    const before = two();
+    const after = rotateSplit(before, before.id);
+    expect(panes(after).map((one) => one.id)).toEqual(["b", "a"]);
+    expect(after.kind === "split" && after.sizes).toEqual([60, 40]);
+    isSound(after);
+  });
+
+  it("finds the split a pane hangs from, and none for a pane that is the window", () => {
+    const before = two();
+    expect(splitAbove(before, "b")!.id).toBe(before.id);
+    expect(splitAbove(pane([work], 0, "a"), "a")).toBeNull();
+  });
+
+  it("finds the split above a nested pane rather than the root", () => {
+    const inner = split("column", [pane([roadmap], 0, "b"), pane([files], 0, "c")]);
+    const outer = split("row", [pane([work], 0, "a"), inner]);
+    expect(splitAbove(outer, "c")!.id).toBe(inner.id);
+  });
+
+  it("steps to the neighbouring pane, and stops rather than wrapping", () => {
+    const tree = two();
+    expect(paneBeside(tree, "a", 1)!.id).toBe("b");
+    expect(paneBeside(tree, "a", -1)).toBeNull();
+    expect(paneBeside(tree, "b", 1)).toBeNull();
+  });
+});
+
+describe("saving a layout", () => {
+  it("keeps the shape and drops the conversations", () => {
+    const tree = split("row", [
+      pane([{ surface: "conversations" as const }], 0, "a"),
+      pane([chat("c-1"), chat("c-2")], 1, "b", "chats"),
+      pane([work], 0, "c"),
+    ]);
+
+    const saved = stripChats(tree);
+
+    expect(panes(saved).map((one) => one.tabs.map(tabKey))).toEqual([
+      ["conversations"],
+      [],
+      ["work"],
+    ]);
+    expect(paneWithPlace(saved, "chats"), "the place is the point of the empty pane").not.toBeNull();
+    isSound(saved);
+  });
+
+  it("leaves a pane's own selection alone when the chats were not it", () => {
+    const tree = pane([work, chat("c-1"), roadmap], 2, "a");
+    expect(panes(stripChats(tree))[0].tabs[panes(stripChats(tree))[0].active]).toMatchObject({
+      surface: "board",
+    });
   });
 });

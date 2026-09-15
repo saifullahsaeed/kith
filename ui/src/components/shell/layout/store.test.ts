@@ -14,13 +14,17 @@ import {
   defaultLayout,
   layoutKey,
   layoutVersion,
+  layoutsKey,
   looksLikeLayout,
+  pinsKey,
   placementsKey,
+  readLayouts,
+  readPins,
   readPlacements,
   readStored,
   useLayout,
 } from "./store";
-import { pane, panes, split, tabKey } from "./tree";
+import { ids, pane, paneWithPlace, panes, split, tabKey } from "./tree";
 
 beforeEach(() => {
   localStorage.clear();
@@ -240,5 +244,306 @@ describe("the default is the section rule", () => {
       "chat:c-2",
     ]);
     expect(panes(tree).find((one) => one.id === "b")!.tabs.map(tabKey)).toEqual(["work"]);
+  });
+});
+
+describe("reading pins back", () => {
+  it("round-trips one", () => {
+    const pin = { place: "place-1", slot: { direction: "row" as const, index: 2, size: 26 } };
+    localStorage.setItem(pinsKey, JSON.stringify({ work: pin }));
+    expect(readPins()).toEqual({ work: pin });
+  });
+
+  it("drops the entries it cannot read and keeps the ones it can", () => {
+    /* One bad pin must not cost the set. The layout gets the same treatment as a whole; a pin
+     * is small enough to judge one at a time. */
+    localStorage.setItem(
+      pinsKey,
+      JSON.stringify({
+        work: { place: "p", slot: { direction: "row", index: 0, size: 20 } },
+        board: { place: "p" },
+        inbox: { place: "", slot: { direction: "row", index: 0, size: 20 } },
+        settings: { place: "p", slot: { direction: "sideways", index: 0, size: 20 } },
+        context: { place: "p", slot: { direction: "row", index: -1, size: 20 } },
+      }),
+    );
+    expect(Object.keys(readPins())).toEqual(["work"]);
+  });
+
+  it("answers with nothing at all rather than throwing", () => {
+    localStorage.setItem(pinsKey, "{ not json");
+    expect(readPins()).toEqual({});
+  });
+});
+
+describe("pinning", () => {
+  beforeEach(() => {
+    useLayout.setState({
+      tree: split(
+        "row",
+        [pane([{ surface: "conversations" }], 0, "left"), pane([{ surface: "work" }], 0, "right")],
+        [30, 70],
+      ),
+      focused: "right",
+      order: ["right", "left"],
+      pins: {},
+      zoomed: null,
+    });
+  });
+
+  it("mints the pane a place and records where it was", () => {
+    useLayout.getState().pin("work");
+
+    const { pins, tree } = useLayout.getState();
+    expect(pins.work.slot).toEqual({ direction: "row", index: 1, size: 70 });
+    expect(paneWithPlace(tree, pins.work.place)!.id).toBe("right");
+  });
+
+  it("puts a second pin on the same pane's existing place", () => {
+    useLayout.getState().pin("work");
+    useLayout.setState({ tree: useLayout.getState().tree });
+    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().pin("inbox");
+
+    const { pins } = useLayout.getState();
+    expect(pins.inbox.place).toBe(pins.work.place);
+  });
+
+  it("does not re-record a slot for a tab that is already pinned", () => {
+    useLayout.getState().pin("work");
+    const first = useLayout.getState().pins.work;
+    useLayout.getState().dock("work", "left", "center");
+    useLayout.getState().pin("work");
+    expect(useLayout.getState().pins.work).toEqual(first);
+  });
+
+  it("sends a closed pinned tab back to its place, not to the policy's answer", () => {
+    /* A second tab so the pane outlives the close — the whole point being that reopening lands
+     * in *that* pane rather than wherever `own` would have put it, which is a pane of its own
+     * beside whatever is focused. */
+    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().pin("work");
+    useLayout.getState().focus("left");
+    useLayout.getState().close("work");
+    useLayout.getState().open({ surface: "work" });
+
+    expect(
+      panes(useLayout.getState().tree).find((one) => one.id === "right")!.tabs.map(tabKey),
+    ).toEqual(["work", "inbox"]);
+  });
+
+  it("rebuilds the pane at the recorded slot when the whole pane went with the tab", () => {
+    useLayout.getState().pin("work");
+    const place = useLayout.getState().pins.work.place;
+    useLayout.getState().closePane("right");
+    expect(paneWithPlace(useLayout.getState().tree, place), "the place died with it").toBeNull();
+
+    useLayout.getState().open({ surface: "work" });
+
+    const tree = useLayout.getState().tree;
+    expect(panes(tree).map((one) => one.tabs.map(tabKey))).toEqual([["conversations"], ["work"]]);
+    expect(paneWithPlace(tree, place)).not.toBeNull();
+  });
+
+  it("keeps pinned tabs at the front of the strip however they are dropped", () => {
+    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().pin("inbox");
+    // Aim the unpinned tab at the very front of the strip. Invariant 7 sends it back.
+    useLayout.getState().move("work", "right", 0);
+
+    expect(panes(useLayout.getState().tree).find((one) => one.id === "right")!.tabs.map(tabKey))
+      .toEqual(["inbox", "work"]);
+  });
+
+  it("carries the pin across a rename, which is how a pinned draft chat survives its first turn", () => {
+    useLayout.getState().open({ surface: "chat", conversationId: "" }, { paneId: "right" });
+    useLayout.getState().pin("chat:");
+    const place = useLayout.getState().pins["chat:"].place;
+
+    useLayout.getState().rename("chat:", { surface: "chat", conversationId: "c-9" });
+
+    const { pins } = useLayout.getState();
+    expect(pins["chat:"]).toBeUndefined();
+    expect(pins["chat:c-9"]).toEqual({ place, slot: expect.anything() });
+  });
+
+  it("drops the place with the last pin on it, and not before", () => {
+    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().pin("work");
+    useLayout.getState().pin("inbox");
+    const place = useLayout.getState().pins.work.place;
+
+    useLayout.getState().unpin("work");
+    expect(paneWithPlace(useLayout.getState().tree, place), "inbox is still pinned there").not
+      .toBeNull();
+
+    useLayout.getState().unpin("inbox");
+    expect(paneWithPlace(useLayout.getState().tree, place)).toBeNull();
+  });
+
+  it("keeps a place while a pinned tab is closed, because it has somewhere to come back to", () => {
+    useLayout.getState().pin("work");
+    const place = useLayout.getState().pins.work.place;
+    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().close("work");
+    expect(paneWithPlace(useLayout.getState().tree, place)).not.toBeNull();
+  });
+
+  it("writes through to storage, so a pin outlives the window", () => {
+    useLayout.getState().pin("work");
+    expect(Object.keys(readPins())).toEqual(["work"]);
+  });
+});
+
+describe("zoom", () => {
+  beforeEach(() => {
+    useLayout.setState({
+      tree: split("row", [pane([{ surface: "work" }], 0, "a"), pane([{ surface: "inbox" }], 0, "b")]),
+      focused: "a",
+      order: ["a", "b"],
+      pins: {},
+      zoomed: null,
+    });
+  });
+
+  it("is not stored — a layout that came back zoomed would look like a layout with panes lost", () => {
+    // A real commit first, so there is a stored blob to compare against.
+    useLayout.getState().activate("a", 0);
+    const before = localStorage.getItem(layoutKey);
+    expect(before).not.toBeNull();
+
+    useLayout.getState().zoom("a");
+
+    expect(localStorage.getItem(layoutKey), "zooming wrote nothing").toBe(before);
+  });
+
+  it("focuses what it zooms, or the next tab opens into a pane you cannot see", () => {
+    useLayout.getState().zoom("b");
+    expect(useLayout.getState().focused).toBe("b");
+  });
+
+  it("clears itself when its pane is closed, rather than rendering nothing", () => {
+    useLayout.getState().zoom("b");
+    useLayout.getState().closePane("b");
+    expect(useLayout.getState().zoomed).toBeNull();
+  });
+
+  it("leaves the arrangement untouched, so coming out of it restores exactly", () => {
+    const before = useLayout.getState().tree;
+    useLayout.getState().zoom("a");
+    useLayout.getState().zoom(null);
+    expect(useLayout.getState().tree).toBe(before);
+  });
+});
+
+describe("saved arrangements", () => {
+  beforeEach(() => {
+    useLayout.setState({
+      tree: split(
+        "row",
+        [
+          pane([{ surface: "conversations" }], 0, "left"),
+          pane([{ surface: "chat", conversationId: "c-1" }], 0, "mid"),
+          pane([{ surface: "work" }], 0, "right"),
+        ],
+        [18, 56, 26],
+      ),
+      focused: "mid",
+      order: ["mid"],
+      pins: {},
+      layouts: [],
+      zoomed: null,
+    });
+  });
+
+  it("keeps the shape and leaves the conversations out", () => {
+    useLayout.getState().saveLayout("Writing");
+
+    const saved = readLayouts();
+    expect(saved.map((one) => one.name)).toEqual(["Writing"]);
+    expect(panes(saved[0].tree).map((one) => one.tabs.map(tabKey))).toEqual([
+      ["conversations"],
+      [],
+      ["work"],
+    ]);
+  });
+
+  it("replaces one of the same name rather than keeping two", () => {
+    useLayout.getState().saveLayout("Writing");
+    useLayout.getState().saveLayout("Writing");
+    expect(useLayout.getState().layouts).toHaveLength(1);
+  });
+
+  it("ignores a blank name", () => {
+    useLayout.getState().saveLayout("   ");
+    expect(useLayout.getState().layouts).toEqual([]);
+  });
+
+  it("loads with fresh ids, which is what lets one be loaded twice", () => {
+    useLayout.getState().saveLayout("Writing");
+    const stored = ids(useLayout.getState().layouts[0].tree);
+
+    useLayout.getState().loadLayout("Writing");
+    const first = ids(useLayout.getState().tree);
+    useLayout.getState().loadLayout("Writing");
+    const second = ids(useLayout.getState().tree);
+
+    expect(first).not.toEqual(stored);
+    expect(second).not.toEqual(first);
+    expect(new Set([...first, ...second]).size).toBe(first.length + second.length);
+  });
+
+  it("brings the places with it, so a global pin still has somewhere to land", () => {
+    useLayout.getState().pin("work");
+    const place = useLayout.getState().pins.work.place;
+    useLayout.getState().saveLayout("Writing");
+
+    useLayout.getState().reset();
+    expect(paneWithPlace(useLayout.getState().tree, place)).toBeNull();
+    useLayout.getState().loadLayout("Writing");
+
+    expect(paneWithPlace(useLayout.getState().tree, place)).not.toBeNull();
+  });
+
+  it("fills the blank chat pane on the next open instead of splitting beside it", () => {
+    useLayout.getState().saveLayout("Writing");
+    useLayout.getState().loadLayout("Writing");
+
+    useLayout.getState().open({ surface: "chat", conversationId: "c-2" });
+
+    expect(panes(useLayout.getState().tree).map((one) => one.tabs.map(tabKey))).toEqual([
+      ["conversations"],
+      ["chat:c-2"],
+      ["work"],
+    ]);
+  });
+
+  it("deletes one by name and leaves the rest", () => {
+    useLayout.getState().saveLayout("Writing");
+    useLayout.getState().saveLayout("Reviewing");
+    useLayout.getState().deleteLayout("Writing");
+    expect(useLayout.getState().layouts.map((one) => one.name)).toEqual(["Reviewing"]);
+    expect(readLayouts().map((one) => one.name)).toEqual(["Reviewing"]);
+  });
+
+  it("refuses an entry it cannot read, one at a time", () => {
+    localStorage.setItem(
+      layoutsKey,
+      JSON.stringify([
+        { name: "Good", tree: pane([{ surface: "work" }], 0, "a") },
+        { name: "", tree: pane([], 0, "b") },
+        { name: "No tree" },
+        { name: "Junk tree", tree: { kind: "banana" } },
+        /* Duplicate ids inside a saved entry are the crash `remintIds` exists to prevent, and
+         * this is the earlier lock: never offer it for loading in the first place. */
+        { name: "Doomed", tree: split("row", [pane([], 0, "same"), pane([], 0, "same")]) },
+      ]),
+    );
+    expect(readLayouts().map((one) => one.name)).toEqual(["Good"]);
+  });
+
+  it("answers with nothing at all rather than throwing", () => {
+    localStorage.setItem(layoutsKey, "[ not json");
+    expect(readLayouts()).toEqual([]);
   });
 });

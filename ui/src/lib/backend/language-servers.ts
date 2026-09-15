@@ -11,11 +11,19 @@
  * goes through the gate, because there the actor is him.
  */
 
-/** One language found in the folder, and what can serve it. */
+/** One *server* the folder needs, and the languages it would answer for. */
 export type LanguageServerState = {
-  /** The tree-sitter family name — "python", "typescript" — as the outline spells it. */
+  /** The family that answers — "python", "typescript". One server per family. */
   family: string;
-  /** How many files of it are here. Two is the floor; one stray file is not a language. */
+  /** The languages in this folder that this one server covers, most files first.
+   *
+   * **A row is a server, not a language**, and it used to be the other way round. `tsx`,
+   * `javascript` and `typescript` are three separate answers from the outline and one
+   * `typescript-language-server` serves all three — so a TypeScript project showed three rows
+   * each offering the same 32 MB download, and installing from any of them satisfied all three
+   * at once, which read as the button having done nothing. */
+  languages: string[];
+  /** How many files this server would cover, across all of them. */
   files: number;
   /** Whether something can already answer semantic questions about it. */
   served: boolean;

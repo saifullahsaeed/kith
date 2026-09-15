@@ -54,7 +54,16 @@ export function useLiveUpdates(): void {
   const cache = useQueryClient();
 
   useEffect(() => {
-    const kinds = new Set<ChangeKind>();
+    /* What changed, and *where*.
+     *
+     * A set of kinds was not enough. Every change has always carried the conversation it happened
+     * in and this dropped it on the floor, so a kind was invalidated as a whole family — and for
+     * `turn`, whose prefix is the stored transcript, that meant one reply in one chat marking
+     * every open chat's transcript stale. Twice per turn, since a turn announces both ends.
+     *
+     * The empty string is a real key and the common one for machine-wide changes; `STALE_ON`'s
+     * scoped entries fall back to their bare prefix for it. */
+    const kinds = new Map<ChangeKind, Set<string>>();
     let everything = false;
     let timer: number | null = null;
 
@@ -71,17 +80,32 @@ export function useLiveUpdates(): void {
       }
       const stale = [...kinds];
       kinds.clear();
-      for (const kind of stale) {
+      for (const [kind, conversations] of stale) {
         for (const prefix of STALE_ON[kind] ?? []) {
-          void cache.invalidateQueries({ queryKey: prefix });
+          if (Array.isArray(prefix)) {
+            void cache.invalidateQueries({ queryKey: prefix });
+            continue;
+          }
+          const { scoped } = prefix as { scoped: readonly (string | number | null)[] };
+          for (const conversation of conversations) {
+            // No conversation named means the change was about the machine, and the honest
+            // answer is the whole family — which is what this used to do for everything.
+            void cache.invalidateQueries({
+              queryKey: conversation ? [...scoped, conversation] : scoped,
+            });
+          }
         }
       }
     };
 
     const stop = subscribe((event: ServerEvent) => {
       if (event.type === "resync") everything = true;
-      else if (event.type === "changed") kinds.add((event.data as Change).kind);
-      else return; // `activity` is consumed by the feed itself; it invalidates nothing.
+      else if (event.type === "changed") {
+        const change = event.data as Change;
+        const where = kinds.get(change.kind) ?? new Set<string>();
+        where.add(change.conversation ?? "");
+        kinds.set(change.kind, where);
+      } else return; // `activity` is consumed by the feed itself; it invalidates nothing.
 
       if (timer === null) timer = window.setTimeout(flush, COALESCE_MS);
     });

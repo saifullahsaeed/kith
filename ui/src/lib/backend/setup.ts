@@ -374,6 +374,13 @@ export interface SkillSummary {
   bodyChars: number;
   resources: string[];
   path: string;
+  /** The plugin that put this skill in your folder, or "" for one you wrote.
+   *
+   * Skills a plugin ships are copied into the person's own folder at install, so location no
+   * longer says where a skill came from and this is the only thing that does. It is why the
+   * skills screen can say "from the Browser plugin" and why it refuses to delete one while
+   * that plugin is installed — the next enable would silently put it back. */
+  owner: string;
 }
 
 export interface SkillsSnapshot {

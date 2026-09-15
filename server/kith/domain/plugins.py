@@ -74,7 +74,13 @@ MAX_TITLE = 40
 MAX_DESCRIPTION = 240
 #: Per plugin. `model` defaults to false, so a command opts in to costing prompt tokens —
 #: the skills-index economics one layer out. Buttons are free; tools are not.
-MAX_MODEL_COMMANDS = 8
+#:
+#: Nine, not eight, and the ninth was earned: the browser plugin's `resize` joins open, read,
+#: click, type, press, scroll, back and look, and every one of those earns its schema. The cap
+#: is the guard against a manifest offering dozens of tiny verbs; the caps that actually bound
+#: the cost are the byte ones — `MAX_PROMPT_CHARS` here and `MAX_INSTALLED_PROMPT_CHARS` at
+#: install — and they did not move.
+MAX_MODEL_COMMANDS = 9
 MAX_COMMANDS = 32
 MAX_SURFACES = 4
 #: State keys one surface may declare as files. Small because each is bytes read from disk and
@@ -120,8 +126,28 @@ PRESENTED_IN = frozenset({"none", "surface", "toolbar"})
 #: page", because a plugin that could script the page would not need Kith's permission to do
 #: anything at all, and the whole point of the pane is that it is Kith's browser rather than
 #: the plugin's.
+#:
+#: `resize` is the one that needed thinking about, so the bound is worth stating: it sets the
+#: **viewport**, the rectangle the page lays out in — the thing a person does when they check a
+#: layout at a phone's width. It never moves or resizes Kith's own window, which would reach
+#: past the pane and touch everything around it; the shell letterboxes the page inside the pane
+#: it is already in. A closed list of named sizes and a width/height pair cannot express
+#: anything beyond that pane.
 VIEW_ACTS = frozenset(
-    {"open", "read", "click", "type", "press", "scroll", "back", "forward", "reload", "look", "status"}
+    {
+        "open",
+        "read",
+        "click",
+        "type",
+        "press",
+        "scroll",
+        "back",
+        "forward",
+        "reload",
+        "look",
+        "status",
+        "resize",
+    }
 )
 
 #: Effects a command may ask core to perform. A closed list, in the renderer, and the invariant
@@ -135,6 +161,13 @@ HOST_EFFECTS = (
     "fold_conversation",
     "focus_conversation",
 )
+
+#: Which of those the app actually performs. The rest are still only vocabulary.
+#:
+#: Kept beside the full list rather than in the service that dispatches them, because the check
+#: that matters happens at *install* — see `CommandDecl.problems`. `commands.BUILT_HOST_EFFECTS`
+#: is this same set, and the two must agree.
+BUILT_HOST_EFFECTS = frozenset({"open_surface"})
 
 #: The projections a surface may ask to be pushed. Each is something core owns and caps — never
 #: a raw endpoint payload.
@@ -324,6 +357,15 @@ class SurfaceDecl:
                 )
             if self.assets:
                 found.append(f"The {self.id!r} surface is a browser, so nothing pushes files into it.")
+            if self.instances == "many":
+                # Two panes of one browser would be two rectangles for one native view, each
+                # telling the shell to put it somewhere else — so they would fight, at whatever
+                # rate the panes happen to re-measure. A second *conversation* gets its own
+                # view, which is `answers` and is the thing anybody actually wants here.
+                found.append(
+                    f"The {self.id!r} surface is a browser, so it cannot have many instances in "
+                    f'one conversation. `answers: "conversation"` gives each conversation its own.'
+                )
             if self.home and not re.match(r"^https?://", self.home):
                 found.append(
                     f"The {self.id!r} surface starts at {self.home!r}, which is not an http(s) address."
@@ -424,6 +466,16 @@ class CommandDecl:
             if effect not in HOST_EFFECTS:
                 found.append(
                     f"{self.name!r} asks Kith to do {effect!r}, which is not something a plugin may ask for."
+                )
+            elif effect not in BUILT_HOST_EFFECTS:
+                # **Refused at install, not at the first call.** Four of the five effects are
+                # vocabulary with nothing behind them, so a plugin written against the schema
+                # installed cleanly, showed the command on the review screen, and then refused
+                # every call with `not_supported`. Somebody else's bug report is the wrong place
+                # to learn that a documented field does nothing.
+                found.append(
+                    f"{self.name!r} asks Kith to {effect!r}, which this Kith does not do yet. "
+                    f"It can {', '.join(sorted(BUILT_HOST_EFFECTS))}."
                 )
         if self.delivery == "state":
             keys = self.does.get("set")

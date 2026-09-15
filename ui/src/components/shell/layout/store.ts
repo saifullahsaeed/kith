@@ -1,20 +1,34 @@
 import { create } from "zustand";
 
-import { choosePane, isPlacementMode, type PlacementMode } from "./place";
+import { choosePane, isPlacementMode, type Pin, type PlacementMode } from "./place";
 import { SURFACES } from "./surfaces";
 import {
   activateTab,
+  clearPlace,
+  closePane as closePaneIn,
   closeTab,
+  dedupePlaces,
   dockTab,
+  findTab,
+  flipSplit as flipSplitIn,
   ids,
   moveTab,
+  nextPlace,
+  openAtSlot,
   openBeside,
   openTab,
+  orderPinned,
   pane,
+  paneWithPlace,
   renameTab,
   panes,
   resizeSplit,
+  rotateSplit as rotateSplitIn,
+  remintIds,
+  slotFor,
   split,
+  stampPlace,
+  stripChats,
   tabKey,
   type Edge,
   type Node,
@@ -176,6 +190,106 @@ function writePlacements(placements: Partial<Record<SurfaceId, PlacementMode>>):
   }
 }
 
+/* Pinned tabs and the places they live in — its own key, for the same reason placements have
+ * one. A pin is a preference about where one thing belongs; the layout blob is an arrangement,
+ * and a version bump to the arrangement must not be able to destroy the preference.
+ *
+ * Unversioned and validated per entry: junk, a tab key this build cannot parse, or a slot with
+ * a direction that is not a direction is dropped and the rest are kept — the same move the tree
+ * gets from `looksLikeLayout`, applied one pin at a time so one bad entry is not a lost set. */
+const PINS_KEY = "kith-layout-pins";
+
+function isPin(value: unknown): value is Pin {
+  if (!value || typeof value !== "object") return false;
+  const held = value as Partial<Pin> & { slot?: Partial<Pin["slot"]> };
+  if (typeof held.place !== "string" || !held.place) return false;
+  const slot = held.slot;
+  if (!slot || typeof slot !== "object") return false;
+  return (
+    (slot.direction === "row" || slot.direction === "column") &&
+    typeof slot.index === "number" &&
+    Number.isFinite(slot.index) &&
+    slot.index >= 0 &&
+    typeof slot.size === "number" &&
+    Number.isFinite(slot.size)
+  );
+}
+
+export function readPins(): Record<string, Pin> {
+  try {
+    const raw = localStorage.getItem(PINS_KEY);
+    if (!raw) return {};
+    const held = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, Pin> = {};
+    for (const [key, pin] of Object.entries(held)) {
+      if (key && isPin(pin)) out[key] = pin;
+    }
+    return out;
+  } catch {
+    /* not JSON, private mode, no storage — no pins is a correct answer */
+    return {};
+  }
+}
+
+function writePins(pins: Record<string, Pin>): void {
+  try {
+    localStorage.setItem(PINS_KEY, JSON.stringify(pins));
+  } catch {
+    /* storage full or unavailable — the pin is a convenience, not the work */
+  }
+}
+
+/* Named arrangements you switch between by hand.
+ *
+ * **This is not the thing the windowed-shell design turned down.** That rejected a layout *per
+ * project or per conversation*: "a layout you have to rebuild every time you switch projects is
+ * worse than not having one — the arranging becomes the work." The objection is to the app
+ * choosing an arrangement for you on every context switch, and it still stands. A named layout
+ * you pick deliberately is the opposite of that — arranging done once and recalled — and
+ * nothing here binds a layout to a project, a conversation, or anything else. Adding such a
+ * binding would re-create exactly what was refused.
+ *
+ * Own key and unversioned, validated per entry: one unreadable saved layout must not cost you
+ * the others, and none of them may cost you the live one. */
+const LAYOUTS_KEY = "kith-layouts";
+
+/** A saved arrangement. Chat tabs are already out of `tree` — see `stripChats`. */
+export type SavedLayout = { name: string; tree: Node };
+
+export function readLayouts(): SavedLayout[] {
+  try {
+    const raw = localStorage.getItem(LAYOUTS_KEY);
+    if (!raw) return [];
+    const held = JSON.parse(raw) as unknown;
+    if (!Array.isArray(held)) return [];
+    const out: SavedLayout[] = [];
+    for (const one of held) {
+      if (!one || typeof one !== "object") continue;
+      const entry = one as Partial<SavedLayout>;
+      if (typeof entry.name !== "string" || !entry.name.trim()) continue;
+      if (!looksLikeLayout(entry.tree)) continue;
+      // A saved layout's own ids are never trusted either: `loadLayout` remints, and a stored
+      // entry with duplicates inside it would be a crash waiting for someone to pick it.
+      const seen = ids(entry.tree);
+      if (new Set(seen).size !== seen.length) continue;
+      if (out.some((kept) => kept.name === entry.name)) continue;
+      out.push({ name: entry.name, tree: entry.tree });
+    }
+    return out;
+  } catch {
+    /* not JSON, private mode, no storage — no saved layouts is a correct answer */
+    return [];
+  }
+}
+
+function writeLayouts(layouts: SavedLayout[]): void {
+  try {
+    localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts));
+  } catch {
+    /* storage full or unavailable — a saved layout is a convenience, not the work */
+  }
+}
+
 export type LayoutState = {
   tree: Node;
   /** The pane a new tab lands in. Follows what you last clicked, so "open the roadmap" puts it
@@ -205,6 +319,33 @@ export type LayoutState = {
    *  decision to change it. */
   placements: Partial<Record<SurfaceId, PlacementMode>>;
   setPlacement: (surface: SurfaceId, mode: PlacementMode) => void;
+  /** Pinned tabs, by `tabKey`. Global rather than per saved layout: a pin names a place, and a
+   *  layout either has that place or the pin falls through to the per-surface policy. One set,
+   *  surviving a reset, is both less state and the more useful answer. */
+  pins: Record<string, Pin>;
+  /** Pin the tab to the pane it is in now, minting that pane a place if it has none. Idempotent:
+   *  pinning an already-pinned tab does not re-record its slot, so a pin keeps saying where the
+   *  tab was *pinned*, not wherever it was last dragged. */
+  pin: (key: string) => void;
+  /** Drop a pin, and the place with it once nothing is pinned there. */
+  unpin: (key: string) => void;
+  /** Which pane is filling the window, if any.
+   *
+   * Live state, never stored — the same treatment `widths` gets and for the same reason: it is
+   * a fact about right now, and a layout that came back from storage already zoomed would look
+   * like a layout that had lost two of its panes. Cleared by `commit` when its pane dies.
+   *
+   * Zoom does not touch the tree. Nothing is resized and nothing is moved, so leaving it
+   * restores the arrangement exactly rather than approximately. */
+  zoomed: string | null;
+  /** Fill the window with a pane, or stop. Passing the pane already zoomed is how you leave. */
+  zoom: (paneId: string | null) => void;
+  /** Close a pane and everything in it. The last pane stays, emptied — see `closePane`. */
+  closePane: (paneId: string) => void;
+  /** Turn a split's columns into rows, or back. */
+  flipSplit: (splitId: string) => void;
+  /** Reverse a split's children — "put that column on the other side". */
+  rotateSplit: (splitId: string) => void;
   /** How wide each pane is, measured, in px. Live state — never stored, and pruned by commit.
    *  Placement reads it so an open stops landing in a pane the yielding rule has already
    *  collapsed to a rail; nothing else may care, which is why it is not persisted. */
@@ -214,6 +355,15 @@ export type LayoutState = {
   rename: (key: string, ref: TabRef) => void;
   focus: (paneId: string) => void;
   resize: (splitId: string, sizes: number[]) => void;
+  /** Arrangements saved by name, newest last. */
+  layouts: SavedLayout[];
+  /** Snapshot the arrangement under a name, replacing one of the same name. Chat tabs are left
+   *  out; everything else — panes, sizes, places, non-chat tabs — is kept. */
+  saveLayout: (name: string) => void;
+  /** Replace the live arrangement with a saved one. Every node id is re-minted and every place
+   *  is kept, which is what makes a layout loadable twice. */
+  loadLayout: (name: string) => void;
+  deleteLayout: (name: string) => void;
   /** Put the layout back to the default. Reachable from an empty pane, which is exactly where
    *  somebody who has closed everything is standing. */
   reset: () => void;
@@ -226,13 +376,24 @@ function firstPaneId(tree: Node): string {
 export const useLayout = create<LayoutState>((set, get) => {
   const initial = readStored() ?? defaultLayout();
 
-  /** Every mutation goes through here, so persistence cannot be forgotten by one of them. */
-  const commit = (tree: Node, focused?: string) => {
-    writeStored(tree);
-    const panesNow = panes(tree);
+  /** Every mutation goes through here, so persistence cannot be forgotten by one of them.
+   *
+   * Also the one place that sees both the tree and the pins, which is why invariants 7 and 8
+   * are normalised here rather than clamped inside `moveTab`: `tree.ts` is pure and knows
+   * nothing of preferences, and enforcing the pinned prefix there would thread a predicate
+   * through `moveTab`, `dockTab` and every caller of both.
+   *
+   * `pinsNext` is for the two actions that change the pins and the tree together — without it
+   * they would have to `set` twice and the normalisation would run against the old pins. */
+  const commit = (tree: Node, focused?: string, pinsNext?: Record<string, Pin>) => {
+    const pins = pinsNext ?? get().pins;
+    const held = (key: string) => key in pins;
+    const normalised = orderPinned(dedupePlaces(tree, held), held);
+    writeStored(normalised);
+    const panesNow = panes(normalised);
     const alive = new Set(panesNow.map((one) => one.id));
     const wanted = focused ?? get().focused;
-    const now = alive.has(wanted) ? wanted : firstPaneId(tree);
+    const now = alive.has(wanted) ? wanted : firstPaneId(normalised);
     // Measured widths of panes that are gone are gone with them: the map never answers for
     // a pane that no longer exists, and never grows without bound.
     const widths: Record<string, number> = {};
@@ -240,8 +401,12 @@ export const useLayout = create<LayoutState>((set, get) => {
       if (alive.has(id)) widths[id] = width;
     }
     set({
-      tree,
+      tree: normalised,
       widths,
+      ...(pinsNext ? { pins: pinsNext } : {}),
+      // A zoom on a pane that has just been closed would render nothing at all — the one state
+      // `LayoutView` cannot draw its way out of.
+      zoomed: alive.has(get().zoomed ?? "") ? get().zoomed : null,
       // A focused pane that has just been closed would leave new tabs opening into nothing.
       focused: now,
       // Closed panes drop out; panes that appeared (a split) join at the back, so a pane you
@@ -259,19 +424,31 @@ export const useLayout = create<LayoutState>((set, get) => {
     focused: firstPaneId(initial),
     order: panes(initial).map((one) => one.id),
     placements: readPlacements(),
+    pins: readPins(),
+    layouts: readLayouts(),
+    zoomed: null,
     widths: {},
 
     /* The placement policy decides; the caller may overrule it by naming a pane. Beside is a
      * split, and the pane it makes is where focus goes — an open you asked for in a new pane
      * should not leave you staring at the old one. */
     open: (ref, opts) => {
-      const { tree, focused, widths, placements } = get();
+      const { tree, focused, widths, placements, pins } = get();
       const chosen = choosePane(tree, ref, {
         focused,
         paneId: opts?.paneId,
         widths,
         placements,
+        pins,
       });
+      /* A pin whose place no pane carries any more: rebuild the place, do not improvise. Checked
+       * before `beside`, because the two are different answers to different questions and a
+       * pinned tab never wants "split whatever I am looking at". */
+      if (chosen.raise) {
+        const made = openAtSlot(tree, ref, chosen.raise.slot, chosen.raise.place);
+        commit(made.tree, made.paneId);
+        return;
+      }
       if (chosen.beside) {
         const made = openBeside(tree, ref, focused);
         commit(made.tree, made.paneId);
@@ -291,7 +468,56 @@ export const useLayout = create<LayoutState>((set, get) => {
 
     activate: (paneId, index) => commit(activateTab(get().tree, paneId, index), paneId),
 
-    rename: (key, ref) => commit(renameTab(get().tree, key, ref)),
+    /* A rename carries the pin across with the tab.
+     *
+     * Same reason `renameTab` carries `uid` across rather than closing and reopening: it is the
+     * same tab. A draft chat pinned before its first turn came back would otherwise lose its
+     * pin the moment the server named it, which is the one moment nobody is watching the strip.
+     * A refused rename (`renameTab` returns the tree it was given) leaves the pin alone. */
+    rename: (key, ref) => {
+      const { tree, pins } = get();
+      const next = renameTab(tree, key, ref);
+      const pin = pins[key];
+      if (next === tree || !pin) {
+        commit(next);
+        return;
+      }
+      const moved = { ...pins };
+      delete moved[key];
+      moved[tabKey(ref)] = pin;
+      writePins(moved);
+      commit(next, undefined, moved);
+    },
+
+    pin: (key) => {
+      const { tree, pins } = get();
+      if (pins[key]) return;
+      const found = findTab(tree, key);
+      if (!found) return;
+      const slot = slotFor(tree, found.pane.id);
+      if (!slot) return;
+      // A pane that already has a place keeps it, so pinning a second tab into the right column
+      // pins it to the same place rather than renaming the column out from under the first.
+      const place = found.pane.place ?? nextPlace();
+      const next = { ...pins, [key]: { place, slot } };
+      writePins(next);
+      commit(stampPlace(tree, found.pane.id, place), found.pane.id, next);
+    },
+
+    unpin: (key) => {
+      const { tree, pins } = get();
+      const pin = pins[key];
+      if (!pin) return;
+      const next = { ...pins };
+      delete next[key];
+      writePins(next);
+      /* The place goes when the last pin on it goes — asked of the pins and not of the pane's
+       * tabs, because a pinned tab that has been *closed* still has a pin and still needs its
+       * place to come home to. */
+      const stillWanted = Object.values(next).some((one) => one.place === pin.place);
+      const home = paneWithPlace(tree, pin.place);
+      commit(home && !stillWanted ? clearPlace(tree, home.id) : tree, undefined, next);
+    },
 
     focus: (paneId) =>
       set((was) => ({
@@ -300,6 +526,22 @@ export const useLayout = create<LayoutState>((set, get) => {
       })),
 
     resize: (splitId, sizes) => commit(resizeSplit(get().tree, splitId, sizes)),
+
+    zoom: (paneId) =>
+      set((was) => ({
+        zoomed: paneId === null || was.zoomed === paneId ? null : paneId,
+        // Zooming a pane is looking at it, so it becomes the focused one — otherwise the next
+        // tab you open lands in a pane you cannot currently see.
+        ...(paneId && was.zoomed !== paneId
+          ? { focused: paneId, order: [paneId, ...was.order.filter((id) => id !== paneId)] }
+          : {}),
+      })),
+
+    closePane: (paneId) => commit(closePaneIn(get().tree, paneId)),
+
+    flipSplit: (splitId) => commit(flipSplitIn(get().tree, splitId)),
+
+    rotateSplit: (splitId) => commit(rotateSplitIn(get().tree, splitId)),
 
     setPlacement: (surface, mode) => {
       const placements = { ...get().placements, [surface]: mode };
@@ -318,6 +560,36 @@ export const useLayout = create<LayoutState>((set, get) => {
       set({ widths: { ...widths, [paneId]: rounded } });
     },
 
+    saveLayout: (name) => {
+      const clean = name.trim();
+      if (!clean) return;
+      const entry: SavedLayout = { name: clean, tree: stripChats(get().tree) };
+      const layouts = [...get().layouts.filter((one) => one.name !== clean), entry];
+      writeLayouts(layouts);
+      set({ layouts });
+    },
+
+    loadLayout: (name) => {
+      const found = get().layouts.find((one) => one.name === name);
+      if (!found) return;
+      /* Reminted, always.
+       *
+       * A saved tree comes back holding the ids it was written with. Loading one twice, or
+       * loading one whose ids overlap the live tree, is the duplicate-id crash `nextId`
+       * documents: `react-resizable-panels` throws during render below `LayoutView`, and
+       * `commit` has already written the colliding tree to storage, so reloading restores it.
+       * Places are the one thing reminting leaves alone — they are what the pins point at. */
+      const tree = remintIds(found.tree);
+      commit(tree, firstPaneId(tree));
+    },
+
+    deleteLayout: (name) => {
+      const layouts = get().layouts.filter((one) => one.name !== name);
+      if (layouts.length === get().layouts.length) return;
+      writeLayouts(layouts);
+      set({ layouts });
+    },
+
     reset: () => {
       const tree = defaultLayout();
       commit(tree, firstPaneId(tree));
@@ -330,4 +602,6 @@ export const useLayout = create<LayoutState>((set, get) => {
 export const layoutKey = KEY;
 export const layoutVersion = VERSION;
 export const placementsKey = PLACEMENTS_KEY;
+export const pinsKey = PINS_KEY;
+export const layoutsKey = LAYOUTS_KEY;
 export { tabKey };

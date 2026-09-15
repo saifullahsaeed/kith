@@ -195,7 +195,20 @@ export const RichComposerInput: FC<{
     self.current = editor;
   }, [editor]);
 
-  /** Text that arrived from somewhere other than typing. */
+  /** Text that arrived from somewhere other than typing.
+   *
+   * No selection handling here, and that is a deliberate non-change. It looks like it needs some:
+   * `setContent` replaces the whole document, so surely the caret ends up at the top and every
+   * `/skill` and every restored draft drops you in front of the words. It does not — ProseMirror
+   * maps the existing selection through the replacement's `ReplaceStep`, which lands it at the end
+   * of the inserted content. Measured: an empty editor given a 17-character draft ends at position
+   * 17 of 18, and a `setTextSelection(doc.content.size)` after it changes nothing.
+   *
+   * Worse than nothing, in fact, which is why the line that was here is gone. StarterKit's
+   * `TrailingNode` keeps an empty paragraph after any trailing block, so on a draft that ends in a
+   * list, a fenced block, a table or a quote, the document's true end is *inside that paragraph* —
+   * one line below the block. Forcing the caret there turned "- two" plus "three" into a new
+   * top-level paragraph instead of continuing the item. */
   useEffect(() => {
     if (!editor || value === pushed.current) return;
     pushed.current = value;

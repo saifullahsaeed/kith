@@ -466,6 +466,39 @@ def _plugin_covers(grant: str, signature: str) -> bool:
     return held[1] == want[1]
 
 
+def plugin_spawn_grants(plugin_id: str) -> list[str]:
+    """Every standing grant that lets this plugin's program run.
+
+    There should be at most one, and there were three for a plugin that had stopped shipping a
+    program at all. A spawn signature covers the resolved reach, the seal and the command line,
+    so **any** change to what gets spawned produces a different signature — which is the whole
+    point, and which also means an upgrade leaves the previous one behind. Nothing collected
+    them: install granted the new signature and uninstall revoked only the current one.
+
+    Four segments, matched on the id, for the reason `_plugin_covers` gives: splitting first is
+    what makes `plugin:work-evil:…` structurally unable to answer for `plugin:work`.
+    """
+    wanted = str(plugin_id or "").strip()
+    if not wanted:
+        return []
+    try:
+        held = always_grants()
+    except Exception:
+        # **A tidy-up must never fail the thing it is tidying up after.** This runs during an
+        # install, before the first write to the settings store — so on a database whose schema
+        # has not been created yet the read throws, and an install that would have succeeded
+        # dies on housekeeping. Nothing is granted by returning nothing: the worst case is a
+        # stale grant surviving one more install, which is the state this function exists to
+        # improve rather than to guarantee.
+        return []
+    found = []
+    for grant in held:
+        parts = grant.split(":")
+        if len(parts) == 4 and parts[0] == "plugin" and parts[1] == wanted:
+            found.append(grant)
+    return sorted(found)
+
+
 def _under(target: Path, roots: tuple[str, ...]) -> bool:
     """Is `target` one of these directories, or inside one?
 

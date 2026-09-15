@@ -199,7 +199,7 @@ def pick_folder(title: str = "", start: str = "") -> str | None:
 _BROWSE_TIMEOUT = 40
 
 
-def browse(plugin: str, view: str, act: str, **args) -> dict | None:
+def browse(plugin: str, view: str, act: str, owner: str = "", **args) -> dict | None:
     """Drive a plugin's browser pane. None when the desktop shell is not there.
 
     **The one path a model has to a browser it shares with the person.** A `web` surface is web
@@ -221,7 +221,7 @@ def browse(plugin: str, view: str, act: str, **args) -> dict | None:
     if endpoint is None:
         return None
 
-    payload = json.dumps({"plugin": plugin, "view": view, "act": act, **args}).encode()
+    payload = json.dumps({"plugin": plugin, "view": view, "act": act, "owner": owner, **args}).encode()
     request = urllib.request.Request(
         f"{endpoint.url}/browse",
         data=payload,
@@ -245,6 +245,32 @@ def browse(plugin: str, view: str, act: str, **args) -> dict | None:
     except ValueError:
         return {"error": "the browser pane said something unreadable"}
     return body if isinstance(body, dict) else {"error": "the browser pane said something unreadable"}
+
+
+def close_plugin_browser(plugin_id: str) -> None:
+    """Close a plugin's browser views, keeping what the browser remembers.
+
+    For a plugin being switched off or removed: its program has stopped, so a renderer process
+    still holding its pages is waste. The logins stay — `uninstall` marks state rather than
+    deleting it, and a browser session is the same bytes.
+    """
+    _ask("/forget-plugin", {"plugin": plugin_id, "wipe": False}, timeout=10)
+
+
+def forget_plugin_browser(plugin_id: str) -> bool:
+    """Throw away everything a plugin's browser remembers. True if the shell did it.
+
+    Cookies, local storage, the cache — the logged-in sessions somebody signed into that
+    plugin's tab. They live in the desktop app's own userData, which this process cannot reach,
+    so this is the only way to delete them.
+
+    **False is not harmless here.** If the app is not running there is nothing to clear, and the
+    session survives the plugin being removed — so the caller records it as unfinished rather
+    than reporting the data gone. Everything else on this path is a local file this process can
+    delete itself; this one thing needs the other process to be alive.
+    """
+    answer = _ask("/forget-plugin", {"plugin": plugin_id, "wipe": True}, timeout=20)
+    return bool(answer and answer.get("forgotten") == plugin_id)
 
 
 def _ask(route: str, payload: dict, timeout: float = 5) -> dict | None:

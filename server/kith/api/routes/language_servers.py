@@ -57,23 +57,41 @@ def language_servers_state():
     served = _served(root)
     counted = install.languages_in(root)
 
-    languages = []
-    for family, files in sorted(counted.items(), key=lambda pair: -pair[1]):
+    # One row per *server*, not per language.
+    #
+    # `languages_in` counts by language — `tsx`, `javascript` and `typescript` are three
+    # different answers — and this reported each of them separately. So a project written in
+    # TypeScript showed three rows, each offering a 32 MB download, for the one
+    # `typescript-language-server` that serves all three. Installing from any of them satisfied
+    # all three at once, which read as the button doing nothing.
+    #
+    # Grouped by the family that actually answers, with the languages it covers named so the
+    # row still says why it is there.
+    grouped: dict[str, dict] = {}
+    for language, files in sorted(counted.items(), key=lambda pair: -pair[1]):
         if files < install.MIN_FILES:
             continue  # one stray file is not what this project is written in
-        candidates = CANDIDATES.get(family, ())
-        languages.append(
-            {
+        family = manager.family_of(language)
+        entry = grouped.get(family)
+        if entry is None:
+            candidates = CANDIDATES.get(family, ())
+            entry = grouped[family] = {
                 "family": family,
-                "files": files,
+                "languages": [],
+                "files": 0,
                 "served": served(family),
-                "installable": bool(install.installable(family)),
-                "size": install.download_size(family),
+                # Asked of the *language* rather than the family: `install.PACKAGES` is keyed by
+                # language, and a family name is not always one of its keys.
+                "installable": bool(install.installable(language)),
+                "size": install.download_size(language),
                 # What to run by hand for the ones we do not install. The first candidate is
                 # the preferred one, and its own table already carries the command.
                 "manual": candidates[0].install if candidates else "",
             }
-        )
+        entry["languages"].append(language)
+        entry["files"] += files
+
+    languages = sorted(grouped.values(), key=lambda one: -one["files"])
     return jsonify({"root": str(root), "languages": languages})
 
 
