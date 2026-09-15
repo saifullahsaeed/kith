@@ -189,14 +189,41 @@ def fold_now(conversation_id: str):
 
 
 def _ndjson(lines) -> Response:
-    """A streaming response, with the two headers that make it stream.
+    """A streaming response: the two headers that make it stream, and a first byte that makes it
+    *answer*.
 
     `X-Accel-Buffering` is the one that matters and the easy one to forget: behind nginx without
     it the whole turn is buffered and delivered in a single lump at the end, which is a stream
     that is not a stream. Written once so the second caller cannot be written without it.
+
+    The opening newline is the same argument one layer down, and it was the half nobody had. A
+    WSGI server writes the status line and headers on the **first chunk the body yields**, so a
+    response whose generator is still blocked has not answered yet — the client's `fetch` is
+    pending, a connection is held waiting for it, and nothing on screen says the stream was
+    joined. `/attach` is exactly that shape: it hands back `live_turns.watch`, which yields the
+    backlog and then blocks, and at the moment `live_turns.begin` announces a turn the backlog is
+    empty. So rejoining — which fires on that very announcement — could not resolve before the
+    turn's first token, which is after the transcript is read, the prompt is built, and any fold
+    has made its own round trip to the model. Measured: against waitress, a generator silent for
+    four seconds answered at four seconds, and yielding an empty string first changed nothing,
+    because a WSGI server treats that as nothing written.
+
+    `/api/events` has sent `: open` from the day it shipped and says why in its own comment. This
+    is that byte, in this content type: a blank line, which `readEvents` drops along with every
+    other empty line, so it cannot be mistaken for something that happened in the turn.
+
+    The other caller does not need it — the chat POST yields its `conversation` event before
+    anything else — and gets it anyway, because "the second caller cannot be written without it"
+    is the whole reason this function exists.
     """
+
+    def opened():
+        # Answer first, then say whatever the turn says.
+        yield "\n"
+        yield from lines
+
     return Response(
-        lines,
+        opened(),
         mimetype="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -354,7 +381,11 @@ def attach_turn(conversation_id: str):
     live = live_turns.current(conversation_id)
     if live is None:
         return Response(status=204)
-    return _ndjson(live_turns.watch(live))
+    # Joined here, at request time, and not inside the generator handed to `_ndjson`. The response
+    # answers on its own opening byte now, so nothing pulls on that generator until the client
+    # reads again — and a turn that ends in the gap would have cleared its backlog with this
+    # reader not yet registered. See `live_turns.read`.
+    return _ndjson(live_turns.drain(live, live_turns.read(live)))
 
 
 def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
@@ -972,14 +1003,17 @@ def chat(payload):
         return client_history
 
     live = begin_turn(conversation_id, config, gather, latest)
+    # Just the first reader, joined the same way and at the same moment `/attach` joins for one
+    # arriving later — which is the point: there is no separate "resume" path to keep in step.
+    # Outside `generate` because a generator does not run until something pulls on it, and the
+    # turn is already running by now. See `live_turns.read`.
+    reader = live_turns.read(live)
 
     def generate():
         # Tell the client which conversation it is in before anything else, so a chat
         # started without an id can attach itself and reload into the same place.
         yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
-        # Just the first reader. Identical to what `/attach` does for one arriving later —
-        # which is the point: there is no separate "resume" path to keep in step.
-        yield from live_turns.watch(live)
+        yield from live_turns.drain(live, reader)
 
     return _ndjson(generate())
 

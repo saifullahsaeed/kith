@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass, field
 
 from kith.kernel import changes
@@ -126,22 +126,49 @@ def finish(turn: LiveTurn) -> None:
             del _LIVE[turn.conversation_id]
 
 
-def watch(turn: LiveTurn) -> Iterator[str]:
-    """Everything this turn has said, then everything it says next.
+@dataclass
+class Reader:
+    """A place in a turn's output: what it had already said, and where the rest will arrive."""
 
-    The registration and the backlog snapshot happen under one lock, so a line published
-    while a reader is attaching lands in exactly one of the two — never neither.
+    inbox: queue.Queue
+    #: Everything said before this reader joined. Handed over before anything new.
+    backlog: list[str]
+    #: The turn was already over when this reader arrived. There is nothing live to give it.
+    over: bool = False
+
+
+def read(turn: LiveTurn) -> Reader:
+    """Join a turn's output — now, not when something first pulls on a generator.
+
+    Registering the queue and snapshotting the backlog under **one** lock is what stops a line
+    published mid-attach landing in neither, and that was always true of `watch`. What was not
+    true is *when* it happened: a generator body does not run until something consumes it, so the
+    registration rode on the response's first pull. That was harmless only while the first pull
+    came immediately — and it stopped coming immediately the moment the response learned to answer
+    with an opening byte of its own, which left a window where the turn could finish with the
+    reader not yet registered and its backlog already cleared.
+
+    `kernel/events` had the same window and closed it the same way; see the note under
+    `call_on_close` in `api/routes/events.py`, which says in as many words that subscribing has to
+    happen at request time rather than in the generator's first line.
     """
     inbox: queue.Queue = queue.Queue()
     with turn.lock:
         if turn.done:
-            return
+            return Reader(inbox=inbox, backlog=[], over=True)
         backlog = list(turn.lines)
         turn.watchers.add(inbox)
+    return Reader(inbox=inbox, backlog=backlog)
+
+
+def drain(turn: LiveTurn, reader: Reader) -> Generator[str, None, None]:
+    """Everything the turn had said when `read` was called, then everything it says next."""
+    if reader.over:
+        return
     try:
-        yield from backlog
+        yield from reader.backlog
         while True:
-            item = inbox.get()
+            item = reader.inbox.get()
             if item is _END:
                 return
             yield item
@@ -149,4 +176,14 @@ def watch(turn: LiveTurn) -> Iterator[str]:
         # A reader that hangs up — closed the tab, switched away again — must not leave a queue
         # behind that `publish` goes on filling for the rest of the turn.
         with turn.lock:
-            turn.watchers.discard(inbox)
+            turn.watchers.discard(reader.inbox)
+
+
+def watch(turn: LiveTurn) -> Generator[str, None, None]:
+    """`read` and then `drain`, for a caller with no gap between the two.
+
+    Which is any caller that consumes immediately: the scheduler draining a turn it started, and
+    the one that sends an unread steer. A *response* is not one of those — it answers first and is
+    read afterwards — so the route takes the two halves itself.
+    """
+    return drain(turn, read(turn))

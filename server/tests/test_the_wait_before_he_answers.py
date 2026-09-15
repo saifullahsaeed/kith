@@ -43,6 +43,19 @@ def _chat(payload: dict):
         return route.chat()  # type: ignore[call-arg]  # @api.input supplies `payload`
 
 
+def _events(response) -> list[dict]:
+    """The stream's events, read the way the client reads them.
+
+    Empty lines are skipped, because `_ndjson` opens every stream with one — a WSGI server sends
+    no headers until the body yields something, so a response that opens with nothing has not
+    answered yet, and `/attach` used not to answer until the turn's first token. `readEvents` in
+    `ui/src/lib/backend/stream.ts` drops empty lines for the same reason, which is what makes the
+    opening byte invisible to everything above the socket. Parsing every line as JSON asserted a
+    wire format one line stricter than the one the app actually speaks.
+    """
+    return [json.loads(line) for line in response.response if line.strip()]
+
+
 @pytest.fixture(autouse=True)
 def _no_turn_thread_outlives_the_test():
     """Wait for the turn threads these tests start, before handing the process on.
@@ -115,8 +128,7 @@ class TestTheRequestThreadDoesNothingSlow:
                 f"the view took {took:.1f}s to return — it is still waiting on the fold, which is "
                 "the whole bug"
             )
-            first = next(iter(response.response))
-            assert json.loads(first)["type"] == "conversation"
+            assert _events(response)[0]["type"] == "conversation"
         finally:
             release.set()
 
@@ -129,7 +141,7 @@ class TestTheRequestThreadDoesNothingSlow:
 
         conv = conversations.start(db, "hi")["id"]
         response = _chat({"messages": [{"role": "user", "content": "go"}], "conversationId": conv})
-        kinds = [json.loads(line)["type"] for line in response.response]
+        kinds = [event["type"] for event in _events(response)]
 
         assert "compacting" in kinds, f"a fold happened and nothing said so: {kinds}"
 
@@ -140,7 +152,7 @@ class TestTheRequestThreadDoesNothingSlow:
 
         conv = conversations.start(db, "hi")["id"]
         response = _chat({"messages": [{"role": "user", "content": "go"}], "conversationId": conv})
-        kinds = [json.loads(line)["type"] for line in response.response]
+        kinds = [event["type"] for event in _events(response)]
 
         assert "compacting" not in kinds
 
@@ -179,7 +191,7 @@ class TestTheMeterTellsTheTruth:
         conversations.record(db, conv, "user", "the first thing")
         conversations.record(db, conv, "assistant", "the first answer")
         response = _chat({"messages": [{"role": "user", "content": "go"}], "conversationId": conv})
-        events = [json.loads(line) for line in response.response]
+        events = _events(response)
 
         folded = [e for e in events if e["type"] == "compacting"]
         assert folded, "no fold event"
