@@ -557,3 +557,26 @@ class TestTheWorkerCanReadTheNotesItWasBriefedOn:
         copy = worktrees.open_for("nonotes")
         assert copy is not None
         assert (copy / "kept.py").exists()
+
+    def test_build_output_under_the_notes_is_left_behind(self, repo: Path):
+        """`.kith` is not a folder of text.
+
+        He builds things in `.kith/work/`, and a thing he built has a `node_modules`. Measured
+        on one real project the day carrying notes shipped: 150 MB under `.kith`, of which
+        146 MB was two `node_modules` — copied per builder, so a round of three cost 440 MB and
+        the seconds to write it. Nothing in there is a brief.
+        """
+        notes = repo / ".kith" / "work" / "a-little-web-app"
+        (notes / "node_modules" / "left-pad").mkdir(parents=True)
+        (notes / "node_modules" / "left-pad" / "index.js").write_text("x" * 5000)
+        (notes / "dist").mkdir()
+        (notes / "dist" / "bundle.js").write_text("y" * 5000)
+        (notes / "PLAN.md").write_text("the actual note\n")
+
+        copy = worktrees.open_for("heavy")
+        assert copy is not None
+        carried = copy / ".kith" / "work" / "a-little-web-app"
+
+        assert (carried / "PLAN.md").read_text() == "the actual note\n"
+        assert not (carried / "node_modules").exists()
+        assert not (carried / "dist").exists()

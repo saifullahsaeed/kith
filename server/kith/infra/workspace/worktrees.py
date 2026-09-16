@@ -143,6 +143,24 @@ def open_for(worker_id: str) -> Path | None:
     return where
 
 
+#: What is under `.kith` but is not a note. Skipped when carrying it into a worker's copy.
+#:
+#: `scratch` is throwaway by definition. The rest is build output — he writes little web apps
+#: into `.kith/work/`, and they bring what a web app brings. See :func:`_carry_notes` for the
+#: 150 MB this was measured at before the list existed.
+_NOT_NOTES = (
+    "scratch",
+    "node_modules",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    "__pycache__",
+    ".next",
+    ".cache",
+)
+
+
 def _carry_notes(source: Path, copy: Path) -> None:
     """Copy `.kith` into the copy, because git will not.
 
@@ -152,8 +170,15 @@ def _carry_notes(source: Path, copy: Path) -> None:
     Copied rather than symlinked: a symlink would let a worker write into the real `.kith`,
     which is the main agent's own working memory and the one place it trusts completely.
 
-    `scratch` is left behind. It is by definition throwaway, it is the largest thing under
-    there, and nothing in it is a brief.
+    **Only the notes, and that qualifier is load-bearing.** `.kith` is not a folder of text: he
+    builds things in `.kith/work/`, and a thing he built has a `node_modules`. Measured on one
+    real project the day this shipped — 150 MB, of which 146 MB was two `node_modules` — and it
+    was being copied per builder, so a round of three cost 440 MB of disk and the seconds to
+    write it. Nothing in there is a brief.
+
+    So :data:`_NOT_NOTES` is skipped, and it is the same set `paths._LOOKUP_SKIP` prunes when
+    looking for a file someone clicked on, for the same reason: these are things a tool produced,
+    not things anyone wrote.
 
     Never raises. A worker without its notes is a worker that reports it could not find them,
     which is recoverable; a worker that could not start at all is not.
@@ -166,7 +191,7 @@ def _carry_notes(source: Path, copy: Path) -> None:
             notes,
             copy / ".kith",
             dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("scratch", "__pycache__"),
+            ignore=shutil.ignore_patterns(*_NOT_NOTES),
         )
     except Exception:
         pass
