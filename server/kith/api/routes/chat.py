@@ -425,7 +425,7 @@ def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
     return history
 
 
-def begin_turn(conversation_id: str, config, gather, opening: str = ""):
+def begin_turn(conversation_id: str, config, gather, opening: str = "", sent_from: str = ""):
     """Start a turn, supervised, and return the stream to watch. **The only way one begins.**
 
     There used to be two. A typed message came through here and got the whole apparatus — a
@@ -492,7 +492,7 @@ def begin_turn(conversation_id: str, config, gather, opening: str = ""):
             # every tool call in here believing it belonged to no conversation, which is silent
             # rather than loud: files still get written, and nothing records whose turn wrote
             # them. See `copy_context` below for the other half of that.
-            with session_context.working_in(conversation_id):
+            with session_context.working_in(conversation_id), session_context.arriving_from(sent_from):
                 # Reading the transcript and building the prompt happen *here*, not on the
                 # request path, because building it can fold — and a fold is a summarisation
                 # call to the model. On a long conversation it is a large one: measured on a
@@ -1026,7 +1026,10 @@ def chat(payload):
             return _history_for_turn(conversation_id, latest_message or {"role": "user", "content": latest})
         return client_history
 
-    live = begin_turn(conversation_id, config, gather, latest)
+    # Where the message was typed, when a terminal typed it. Informational only — see
+    # `session_context.arriving_from`, which is deliberately not the variable that grants
+    # access to a folder. A client saying where it is must never widen what he may touch.
+    live = begin_turn(conversation_id, config, gather, latest, sent_from=str(payload.get("cwd") or ""))
     # Just the first reader, joined the same way and at the same moment `/attach` joins for one
     # arriving later — which is the point: there is no separate "resume" path to keep in step.
     # Outside `generate` because a generator does not run until something pulls on it, and the

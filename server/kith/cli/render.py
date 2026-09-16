@@ -94,6 +94,7 @@ def passthrough(events: Iterator[tuple[str, dict]], out: TextIO | None = None) -
     stream: TextIO = out or sys.stdout
     conversation = ""
     code = 0
+    finished = False
     for raw, event in events:
         stream.write(raw)
         stream.flush()
@@ -102,6 +103,13 @@ def passthrough(events: Iterator[tuple[str, dict]], out: TextIO | None = None) -
             conversation = str(event.get("id") or "")
         elif kind == "error":
             code = 1
+        elif kind == "done":
+            finished = True
+    if not finished and code == 0:
+        # Same rule as `human`, and it matters more here: the caller is a program, the bytes
+        # it got are valid JSON either way, and the exit code is the only thing that can tell
+        # it the turn was cut off.
+        code = 1
     return code, conversation
 
 
@@ -124,6 +132,7 @@ def human(
     conversation = ""
     code = 0
     wrote_prose = False
+    finished = False
     in_reasoning = False
     tokens_in = tokens_out = 0
     tools = 0
@@ -230,10 +239,24 @@ def human(
             code = 1
 
         elif kind == "done":
+            finished = True
             break
 
     if in_reasoning:
         aside.write("\n")
+    if not finished and code == 0:
+        # The stream ended without saying it was done.
+        #
+        # Not the same as a turn that failed: nothing errored, and whatever arrived is real.
+        # It is the shape a *killed* turn has — the dev server's reloader restarting under a
+        # streaming response, a crash, a dropped connection. Found exactly that way, with the
+        # agent editing his own source while a turn was streaming: two turns stopped mid-word
+        # and this function returned 0, so nothing could tell a truncated answer from a
+        # complete one. For a command another agent reads the exit code of, reporting a
+        # half-answer as success is the worst failure available.
+        note(style.red("  ! the stream ended mid-turn — this answer is incomplete"))
+        note(style.dim("    the turn may still be running: kith attach"))
+        code = 1
     if wrote_prose:
         # The answer rarely ends in a newline and a shell prompt landing mid-sentence reads
         # as truncated output. Added here rather than by the server, which is streaming text

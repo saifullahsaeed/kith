@@ -171,7 +171,11 @@ def _stream(client: Client, args, body: dict, directory: Path | None) -> int:
 def _send(client: Client, args) -> int:
     message = _message_from(args)
     conversation, directory, project = _target(client, args, allow_new=True)
-    body: dict = {"messages": [{"role": "user", "content": message}]}
+    # Where this was typed. The CLI resolves which conversation to continue from the working
+    # directory and used to send nothing about it, so a question about "this repo" reached
+    # someone with no way to know which folder that was — measured once at a whole turn spent
+    # searching the disk for a path that was sitting in a local variable here.
+    body: dict = {"messages": [{"role": "user", "content": message}], "cwd": str(Path.cwd())}
     if conversation:
         body["conversationId"] = conversation
     elif project:

@@ -243,3 +243,49 @@ def test_every_documented_event_is_one_the_loop_actually_sends():
     handle something that will never arrive."""
     phantom = _documented_types() - _emitted_types()
     assert not phantom, f"/api/chat documents {sorted(phantom)}, which nothing sends"
+
+
+def test_a_stream_that_stops_mid_turn_is_not_reported_as_success():
+    """A killed turn and a finished turn must not have the same exit code.
+
+    Found in use, not in review. The agent was editing his own source while a turn streamed;
+    the dev server's reloader restarted under the open response and the turn stopped mid-word.
+    The renderer fell out of its loop and returned 0, so a half-written answer was
+    indistinguishable from a complete one — which for a command another agent reads the exit
+    code of is the worst shape a failure can take.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    code, _ = render.human(
+        _stream(
+            {"type": "delta", "role": "text", "text": "I got as far as"},
+            # and then nothing. No `done`.
+        ),
+        out=out,
+        err=err,
+    )
+    assert code == 1
+    assert "I got as far as" in out.getvalue(), "what did arrive is still the answer"
+    assert "incomplete" in err.getvalue()
+
+
+def test_json_mode_also_fails_on_a_truncated_stream():
+    """It matters more here: the caller is a program, every line it received is valid JSON
+    either way, and the exit code is the only thing that can tell it the turn was cut off."""
+    import json as _json
+
+    raw = ['{"type":"delta","role":"text","text":"half an ans"}\n']
+    out = io.StringIO()
+    code, _ = render.passthrough(((line, _json.loads(line)) for line in raw), out=out)
+    assert code == 1
+    assert out.getvalue() == "".join(raw), "the bytes are still passed through unchanged"
+
+
+def test_a_finished_turn_still_exits_zero():
+    out, err = io.StringIO(), io.StringIO()
+    code, _ = render.human(
+        _stream({"type": "delta", "role": "text", "text": "done."}, {"type": "done"}),
+        out=out,
+        err=err,
+    )
+    assert code == 0
+    assert "incomplete" not in err.getvalue()

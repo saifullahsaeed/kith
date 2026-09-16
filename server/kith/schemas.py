@@ -107,6 +107,17 @@ class ChatRequestSchema(Schema):
             "the stream's first frame reports the id that was created.",
         },
     )
+    cwd = String(
+        required=False,
+        metadata={
+            "description": "The directory the message was typed in, when a terminal typed it. "
+            "Purely informational: it is mentioned in the turn's ambient context alongside the "
+            "clock, and grants nothing — a client cannot widen what the agent may read or write "
+            "by saying where it is standing. Sent by the CLI, which picks which conversation to "
+            "continue from the working directory and would otherwise be the only one who knew "
+            "it. Omit it from the window, which has no directory to name.",
+        },
+    )
     projectId = Integer(
         required=False,
         allow_none=True,

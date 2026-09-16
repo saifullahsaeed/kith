@@ -76,18 +76,26 @@ export type CliStatus = {
   target: string;
 };
 
-export function cliStatus(): CliStatus {
-  const target = findBinary();
+/**
+ * The four states, decided from two facts: is there a binary to link, and what is at the
+ * link's path.
+ *
+ * Takes both as arguments rather than reading the module constants directly, so the branches
+ * can be tested without a /usr/local/bin and without an app bundle. They were previously
+ * asserted by reading the code, which is the level of confidence that produced the claim about
+ * ~/.local/bin being on PATH.
+ */
+export function statusFrom(target: string | null, link: string): CliStatus {
   const status: CliStatus = {
     available: target !== null,
     installed: false,
     stale: false,
-    link: LINK,
+    link,
     target: target ?? "",
   };
   let current: string;
   try {
-    current = fs.readlinkSync(LINK);
+    current = fs.readlinkSync(link);
   } catch {
     // No link, or a real file sitting there. Either way nothing of ours is installed, and a
     // real file is somebody else's `kith` that we must not quietly replace.
@@ -99,6 +107,10 @@ export function cliStatus(): CliStatus {
     status.stale = true;
   }
   return status;
+}
+
+export function cliStatus(): CliStatus {
+  return statusFrom(findBinary(), LINK);
 }
 
 export type InstallResult = {
@@ -122,6 +134,24 @@ export type InstallResult = {
  * and is absent on a clean one that has never had Homebrew or an installer touch it, and
  * discovering that *after* spending the password is a second prompt for one job.
  */
+/**
+ * The AppleScript that does the linking, built rather than inlined so the quoting can be
+ * tested.
+ *
+ * Two layers of escaping, and both are load-bearing. The paths are single-quoted for the
+ * *shell* that AppleScript will spawn, because an app installed at "/Applications/Kith 2.app"
+ * is ordinary and an unquoted path there links to a directory that does not exist. Then the
+ * whole command is escaped for the AppleScript string literal that carries it.
+ *
+ * `mkdir -p` is in the same elevated command deliberately: /usr/local/bin is absent on a clean
+ * Mac that has never had Homebrew or an installer touch it, and finding that out after
+ * spending the password is a second prompt for one job.
+ */
+export function linkScript(target: string, link: string): string {
+  const shell = `mkdir -p '${path.dirname(link)}' && ln -sf '${target}' '${link}'`;
+  return `do shell script "${shell.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" with administrator privileges`;
+}
+
 export async function installCli(): Promise<InstallResult> {
   const status = cliStatus();
   if (!status.available) {
@@ -139,8 +169,7 @@ export async function installCli(): Promise<InstallResult> {
   // Quoted for the shell *inside* the AppleScript string, then escaped for AppleScript. An
   // app installed at a path with a space in it — "/Applications/Kith 2.app" — is ordinary, and
   // an unquoted path there produces a link to a directory that does not exist.
-  const shell = `mkdir -p /usr/local/bin && ln -sf '${status.target}' '${LINK}'`;
-  const script = `do shell script "${shell.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" with administrator privileges`;
+  const script = linkScript(status.target, LINK);
 
   try {
     await run(`osascript -e ${JSON.stringify(script)}`);

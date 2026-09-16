@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
-from kith.kernel import clock
+from kith.kernel import clock, session_context
 from kith.services.local_time import clock_line
 
 
@@ -149,6 +149,15 @@ def presence_block(path: Path) -> str:
     this module is for.
     """
     lines = ["[Right now]", clock_line()]
+
+    # Where the message was typed, when it was typed in a terminal rather than the window.
+    # Here rather than in the message itself because it has the same lifetime as the clock: it
+    # is true of this turn and no other, and somebody who runs `kith send` from a different
+    # folder next time must not have the old one still in the transcript as something they
+    # said. See `session_context.arriving_from` for why it grants nothing.
+    typed_in = session_context.sent_from_directory()
+    if typed_in:
+        lines.append(f"This message was sent from a terminal, in {typed_in}.")
 
     last = repo.activity.last_activity_at(path)
     since = clock.humanize_since(last)

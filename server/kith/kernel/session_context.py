@@ -190,6 +190,50 @@ def isolated_mirror() -> tuple[str, str]:
     return _isolated.get()
 
 
+#: Where the request came from, when it came from a terminal. Informational only.
+_sent_from: ContextVar[str] = ContextVar("kith_sent_from", default="")
+
+
+def sent_from_directory() -> str:
+    """The directory the CLI was run in, or "" for a request from the window."""
+    return _sent_from.get()
+
+
+@contextmanager
+def arriving_from(directory: str | None) -> Iterator[None]:
+    """Record where a message was typed, for the turn to mention. **Grants nothing.**
+
+    The distinction from :func:`working_from` is the whole reason this exists rather than
+    reusing it, and getting it wrong would be a hole rather than a bug. `working_from` names a
+    folder he may *write in* — `permissions` reads it, because a worker inside its own worktree
+    has no one to ask and must not stop on a prompt. This names a folder somebody *was standing
+    in*, sent by a client, and a client must never be able to widen what he is allowed to touch
+    by saying where it was typed. So it is read by exactly one thing: the sentence in the
+    ambient block that tells him where the message came from.
+
+    It exists because the alternative was worse in a way that showed up the first hour the
+    command line was used. The CLI resolves which conversation to continue from the working
+    directory and then sent nothing about it, so he was asked a question about "your own repo"
+    with no way to know which folder that was — and spent an entire turn searching the disk for
+    a path the client had in a variable. The fact was known, and thrown away at the wire.
+
+    Not prepended to the message, which was the other option and is worse for a reason that
+    only shows up later: a line added to what somebody typed is indistinguishable from what
+    they typed, it is recorded in the transcript as their words, and every later turn reads a
+    sentence they never wrote. Ambient facts belong with the clock — rebuilt each turn, never
+    stored as speech.
+    """
+    text = str(directory or "").strip()
+    if not text:
+        yield
+        return
+    token = _sent_from.set(text)
+    try:
+        yield
+    finally:
+        _sent_from.reset(token)
+
+
 @contextmanager
 def working_from(directory: str | None, mirror_of: str | None = None) -> Iterator[None]:
     """Run a block with every relative path anchored in ``directory``.
