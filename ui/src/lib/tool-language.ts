@@ -165,8 +165,11 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   // his own tools and skills
   read_skill: { verb: "opened the skill", of: "name", group: "skills" },
   plugin_state: { verb: "read what the plugin is holding", of: "plugin", group: "skills" },
-  // sending someone else to look
+  plan_work: { verb: "laid out", of: "milestone", group: "tasks" },
+  // sending someone else to look, and someone else to build
   delegate_subtask: { verb: "sent someone to find out", of: "objective", group: "delegation" },
+  send_builder: { verb: "sent someone to change", of: "objective", group: "delegation" },
+  follow_up: { verb: "asked them one more thing", of: "ask", group: "delegation" },
 };
 
 /** What each plural argument used to be called, for reading back old tool calls. */
@@ -230,6 +233,40 @@ export function describeCall(name: string, args?: Record<string, unknown>): Desc
 /** The whole phrase for one call, for a tooltip or a title attribute. */
 export function callText(call: DescribedCall): string {
   return [call.verb, call.subject].filter(Boolean).join(" ");
+}
+
+/** Longest a one-line summary may be before it stops being one. Measured against the strip at
+ *  a comfortable pane width, where the label has roughly this much room before the elapsed time
+ *  and the chevron. */
+const SUMMARY_MAX = 72;
+
+/**
+ * One call's phrase, cut down to something that can sit on a single row.
+ *
+ * A shell call's subject is the command a person typed, which is routinely a heredoc, a `for`
+ * loop, or four chained `curl`s over a dozen lines. Whole, it is the right thing to show in the
+ * expanded row and the wrong thing to put in a heading — one such label came to about a thousand
+ * characters, which is not a summary of the work, it *is* the work.
+ *
+ * So: the first line only, whitespace collapsed, and an ellipsis past the limit. Returns "" when
+ * what is left would be too short to mean anything, which is the caller's signal to fall back to
+ * counting ("2 commands") rather than to show a stub.
+ */
+export function summaryLine(text: string): string {
+  /* The trailing `\\` is a line continuation, so keeping the first line alone leaves it pointing
+   * at nothing — "ran ./domaincheck.sh \\" reads as a rendering fault rather than an elision. */
+  const first = text
+    .split("\n", 1)[0]!
+    .replace(/\s+/g, " ")
+    .replace(/\s*\\$/, "")
+    .trim();
+  if (first.length < 3) return "";
+  if (first.length <= SUMMARY_MAX) return first;
+  // Cut at a word boundary where there is one near the end, so the ellipsis does not land
+  // mid-token on a path or a flag.
+  const cut = first.slice(0, SUMMARY_MAX);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > SUMMARY_MAX - 16 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 export interface SummarisedRun {

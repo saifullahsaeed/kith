@@ -45,15 +45,21 @@ def _shell(command: str) -> dict:
     "Nothing can answer a prompt either, so pass the flag that avoids the question "
     "(`-y`, `--yes`, `--no-input`) rather than hoping. "
     "\n\n"
-    "WRITE A SCRIPT INSTEAD OF PIPING ONE IN, whenever you are going to do the same kind of "
-    "thing more than once, or anything that CHANGES a live system — a database, an accounting "
-    "system, someone's account. Put it in `.kith/scratch/` and run it by name. "
-    "`python3 - <<'PY'` runs the moment you send it: there is nothing to read first, nothing "
-    "to check, and nothing to run again. A file can be looked at before it runs, fixed and "
-    "re-run, and shown to them. "
-    "Put the connection and credentials in that file ONCE and import it afterwards. Repeating "
-    "them in every command retypes the same setup over and over and writes the key into the "
-    "record every single time.",
+    "WRITE A SCRIPT INSTEAD OF PIPING ONE IN, whenever you will do the same kind of thing twice, "
+    "or anything that CHANGES a live system — a database, an accounting system, someone's "
+    "account. Put it in `.kith/scratch/` and run it by name: a heredoc runs the moment you send "
+    "it, so there is nothing to read first and nothing to run again, while a file can be checked, "
+    "fixed and shown to them. Put credentials in that file once and import it, rather than "
+    "writing the key into the record on every command."
+    "\n\n"
+    "SHELLING AROUND TO FIND OUT WHERE SOMETHING IS, is an errand. `find`, `ls -R`, a `grep` "
+    "across a tree you have not read, a script that counts what is in a package — that is "
+    "looking, and every line of output it prints stays in this conversation and is re-sent on "
+    "every round after it. `delegate_subtask` does the same looking somewhere that is thrown "
+    "away, and hands you back the answer. And when the job splits into parts that touch "
+    "different files — four packages, six call sites — `send_builder` does one part each, in "
+    "parallel, in its own copy of the repository, and hands you a patch. Decide the shape "
+    "first; do not walk it yourself one command at a time.",
     {"command": {**STR, "description": "The shell command to run."}},
     required=("command",),
 )
@@ -239,7 +245,9 @@ def _read_symbol(wanted: str, symbol: str, offset=None, limit=None) -> str:
     "Write (or overwrite) a file on your computer, creating parent folders as needed. For a "
     "file that already exists, use edit_files instead: rewriting a whole file to alter one "
     "line costs you the file again in output, silently loses anything you did not retype, "
-    "and flattens its formatting a little more each time.",
+    "and flattens its formatting a little more each time. Writing the same shape of file into "
+    "several places is an errand — send_builder does a group each, in parallel, and hands you "
+    "patches.",
     {"path": STR, "content": STR},
     required=("path", "content"),
 )
@@ -330,7 +338,9 @@ _EDIT = {
     "or pass replace_all. All or nothing — a batch that fails leaves every file untouched and "
     "names the edit that was wrong. Edits to the same file apply in the order given, so a later "
     "one can build on an earlier one. You get back a combined diff: read it, that is how you "
-    "check you changed what you intended.",
+    "check you changed what you intended. When the SAME edit has to land across files you have "
+    "not read — a rename in eleven places, one fix at six call sites — that is send_builder's "
+    "job, a group of files each and in parallel; this is for the changes you make yourself.",
     {
         "edits": {
             "type": "array",
