@@ -1,9 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ListChecks } from "lucide-react";
+import { Check, ChevronDown, ListChecks } from "lucide-react";
+
+import { useState } from "react";
 
 import { keys } from "@/lib/query-keys";
 import { pathForTask } from "@/lib/router";
 import { cn } from "@/lib/utils";
+
+/** How many steps show without asking. Four, the same as the task card in the thread — folding
+ *  two costs a click and a row of chrome to hide one line, and above four the arithmetic flips. */
+const INLINE_STEPS = 4;
 
 interface ChecklistItem {
   id: number;
@@ -55,12 +61,29 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
     enabled: Boolean(conversationId),
   });
 
+  /* Whether the list is showing, or `null` for "nobody has said" — which is most of the time, and
+   * then the length decides. Above the early return because it is a hook and hooks cannot be
+   * conditional: the first version of this sat below `if (!task)`, which crashed the panel every
+   * time no task was running. The test for a task with no checklist is what found it.
+   *
+   * Tri-state rather than a boolean seeded from the length, because the seed would be read once
+   * and this component outlives the task it is showing — ticking the fourth item off a five-step
+   * list would otherwise fold it under you. */
+  const [asked, setAsked] = useState<boolean | null>(null);
+
   if (!task) return null;
 
   const items = task.checklist ?? [];
   const done = items.filter((one) => Boolean(one.done)).length;
 
   const pct = items.length ? Math.round((done / items.length) * 100) : 0;
+  // Folded by default once there are more than a few, because this sits in a fixed-height column
+  // with four sections under it. `plan_work` writes a milestone's tasks with their whole
+  // checklists in one call, so nine steps here is now ordinary — and nine steps at this spacing
+  // pushed the errands, the context and the background work off the bottom of a panel that did
+  // not scroll past them. The count and the bar were always the part worth seeing anyway.
+  const open = asked ?? (items.length > 0 && items.length <= INLINE_STEPS);
+  const next = items.find((one) => !one.done);
 
   return (
     // Panel spacing, not composer spacing. This carried `mx-auto`, `max-w-(--thread-max-width)`
@@ -88,7 +111,18 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
           {/* The count sits with a bar rather than alone at the far right, where it was a
               number with nothing to compare itself to. Two glances become one. */}
           {items.length > 0 ? (
-            <span className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setAsked(!open)}
+              aria-expanded={open}
+              aria-label={open ? "Hide the checklist" : "Show the checklist"}
+              disabled={items.length <= INLINE_STEPS}
+              className={cn(
+                "-me-1 flex shrink-0 items-center gap-1.5 rounded px-1 py-0.5",
+                items.length > INLINE_STEPS &&
+                  "hover:bg-muted/60 cursor-pointer transition-colors",
+              )}
+            >
               <span className="bg-border/70 h-1 w-10 overflow-hidden rounded-full">
                 <span
                   className="bg-roam block h-full rounded-full transition-[width] duration-500"
@@ -98,12 +132,38 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
               <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
                 {done}/{items.length}
               </span>
-            </span>
+              {/* The count alone was the whole affordance, and nothing said it was a control.
+                  A chevron is the one glyph nobody has to be taught, and it doubles as the
+                  state: pointing down means there is more under here. */}
+              {items.length > INLINE_STEPS ? (
+                <ChevronDown
+                  className={cn(
+                    "text-muted-foreground/50 size-3 transition-transform",
+                    open && "rotate-180",
+                  )}
+                  aria-hidden
+                />
+              ) : null}
+            </button>
           ) : null}
         </div>
 
-        {items.length > 0 ? (
-          <ul className="mt-2.5 flex flex-col gap-2.5 ps-[22px]">
+        {/* What is next, when the list is folded. One line, and the only line that answers the
+            question you had when you glanced at this. */}
+        {!open && next ? (
+          <button
+            type="button"
+            onClick={() => setAsked(true)}
+            className="text-muted-foreground/60 hover:text-muted-foreground mt-1.5 block w-full cursor-pointer truncate ps-[22px] text-start text-[11px] transition-colors"
+          >
+            next · {next.text}
+          </button>
+        ) : null}
+
+        {open ? (
+          // Capped even when open. A task with thirty steps would otherwise do to the panel
+          // exactly what this is fixing, one click later.
+          <ul className="mt-2.5 flex max-h-56 flex-col gap-2.5 overflow-y-auto ps-[22px]">
             {items.map((item) => {
               const ticked = Boolean(item.done);
               return (

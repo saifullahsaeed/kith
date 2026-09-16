@@ -177,6 +177,8 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
         ? `${asked.length} questions`
         : short(String(one?.question ?? ""), 56);
     }
+    case "send_builder":
+    case "follow_up":
     case "delegate_subtask": {
       // Two halves, and neither works without the other. The brief tells the worker to answer
       // the objective in its first sentence, so the first sentence is the summary. The call
@@ -191,7 +193,18 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
         : 0;
       const first = short(s(r.findings).split(/(?<=[.!?])\s/)[0], 56);
       const cut = r.error ? "cut short" : "";
-      return [cut, total ? `${total} call${total === 1 ? "" : "s"}` : "", first]
+      // A builder's summary leads with the size of its patch, because that is the thing its
+      // prose cannot be trusted about: "I updated the ledger" and an empty diff look identical
+      // in words, and are the one failure downstream cannot catch.
+      const patch = typeof r.patch === "string" ? r.patch : "";
+      const changed = patch ? patch.split("\n").filter((l) => /^diff --git /.test(l)).length : 0;
+      const edits =
+        name === "send_builder" || patch
+          ? changed
+            ? `${changed} file${changed === 1 ? "" : "s"} changed`
+            : "no changes"
+          : "";
+      return [cut, edits, total ? `${total} call${total === 1 ? "" : "s"}` : "", first]
         .filter(Boolean)
         .join(" \u00b7 ");
     }
@@ -399,7 +412,8 @@ function looksLikeSkill(value: Record<string, unknown>): boolean {
   );
 }
 
-/** What a sub-agent came back with — `delegate_subtask`'s result.
+/** What a sub-agent came back with — the result of `delegate_subtask`, `send_builder` or
+ *  `follow_up`.
  *
  *  Its own card because its result is the one that is *deliberately* not a record of what
  *  happened. Everything the worker actually did — the greps, the files, the dead ends — was
@@ -407,6 +421,10 @@ function looksLikeSkill(value: Record<string, unknown>): boolean {
  *  Rendered as JSON it reads as machine output from a machine that did nothing, which is the
  *  opposite of true: `looked_at` is the only trace left of a whole second agent's work, and
  *  it is what tells you whether to believe the paragraph above it.
+ *
+ *  A builder adds `patch`, and it is shown *below* the prose rather than above it on purpose.
+ *  The report says what the worker meant to do and the patch says what it did, and those are
+ *  not always the same thing — reading the claim first is what makes the difference visible.
  */
 function looksLikeFindings(value: Record<string, unknown>): boolean {
   return typeof value.findings === "string";
@@ -419,6 +437,7 @@ const Findings: FC<{ value: Record<string, unknown>; objective: string }> = ({
   const findings = typeof value.findings === "string" ? value.findings : "";
   const lookedAt = typeof value.looked_at === "string" ? value.looked_at : "";
   const note = typeof value.note === "string" ? value.note : "";
+  const patch = typeof value.patch === "string" ? value.patch.trim() : "";
 
   return (
     <div className="flex flex-col gap-2 rounded-lg p-2.5 ring-1 ring-border/60">
@@ -436,6 +455,14 @@ const Findings: FC<{ value: Record<string, unknown>; objective: string }> = ({
       {findings ? (
         <div className="max-h-96 overflow-auto rounded-md bg-muted/30 p-2.5 ring-1 ring-border/40">
           <Prose text={findings} />
+        </div>
+      ) : null}
+      {patch ? (
+        <div className="flex flex-col gap-1">
+          <Label>patch</Label>
+          <div className="max-h-96 overflow-auto rounded-md ring-1 ring-border/40">
+            <Diff text={patch} />
+          </div>
         </div>
       ) : null}
       {lookedAt ? (
@@ -1127,6 +1154,90 @@ function looksLikeTask(value: Record<string, unknown>): boolean {
   return typeof value.goal === "string" && typeof value.status === "string" && "priority" in value;
 }
 
+/** How many steps are shown inline before the list folds.
+ *
+ *  Four, because folding two is worse than showing them: the fold costs a click and a line of
+ *  chrome to hide one line of content. Above that the arithmetic flips, and `plan_work` made it
+ *  flip often — it writes a milestone's tasks with their whole checklists in one call, so a
+ *  single result now routinely carries nine steps three times over, in a card with no scroll
+ *  container of its own inside a thread that has to scroll past all of it. */
+const STEPS_INLINE = 4;
+
+/** A task's checklist: the count always, the steps on request.
+ *
+ *  What you want at a glance is not the steps, it is **how far through** and **what is next** —
+ *  and both of those are one line each. The full list is for when you are actually working the
+ *  task, which is a decision you can make by clicking.
+ *
+ *  The next unchecked step is the preview rather than the first step or a truncation of the
+ *  list, because it is the only line that answers the question you had when you looked.
+ */
+const Checklist: FC<{ items: unknown[]; done: number }> = ({ items, done }) => {
+  const short = items.length <= STEPS_INLINE;
+  const [open, setOpen] = useState(short);
+  const rows = items.map((item) =>
+    item && typeof item === "object" ? (item as Record<string, unknown>) : {},
+  );
+  const next = rows.find((row) => !row.done);
+  const label = String(next?.text ?? next?.title ?? "");
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((was) => !was)}
+        aria-expanded={open}
+        disabled={short}
+        className={cn(
+          "flex w-full items-center gap-2 text-left",
+          !short && "cursor-pointer hover:opacity-80",
+        )}
+      >
+        <Label>
+          checklist · {done}/{items.length}
+        </Label>
+        {/* A bar rather than a percentage. Three tasks at 4/9, 0/7 and 7/7 are a shape you read
+            without counting, and reading without counting is the whole point of a glance. */}
+        <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
+          <span
+            className="block h-full rounded-full bg-teal-400/70"
+            style={{ width: `${items.length ? (done / items.length) * 100 : 0}%` }}
+          />
+        </span>
+        {!short ? (
+          <span className="text-[10px] text-muted-foreground/60">{open ? "hide" : "show"}</span>
+        ) : null}
+      </button>
+      {!open && label ? (
+        <span className="truncate text-xs text-muted-foreground/70">
+          <span className="font-mono text-[10px]">[ ]</span> {label}
+        </span>
+      ) : null}
+      {open ? (
+        // Capped and scrollable even when open. A task with forty steps would otherwise push
+        // everything said after it off the screen, which is the bug this is fixing, just later.
+        <ul className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
+          {rows.map((row, i) => {
+            const checked = Boolean(row.done);
+            return (
+              <li
+                key={i}
+                className={cn(
+                  "flex items-baseline gap-1.5 text-xs",
+                  checked && "text-muted-foreground/60 line-through",
+                )}
+              >
+                <span className="shrink-0 font-mono text-[10px]">{checked ? "[x]" : "[ ]"}</span>
+                <span className="min-w-0">{String(row.text ?? row.title ?? "")}</span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+};
+
 const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
   const status = String(value.status ?? "");
   const priority = String(value.priority ?? "");
@@ -1176,31 +1287,7 @@ const Task: FC<{ value: Record<string, unknown> }> = ({ value }) => {
       {description ? (
         <p className="text-xs leading-relaxed text-foreground/80">{description}</p>
       ) : null}
-      {checklist.length ? (
-        <div className="flex flex-col gap-1">
-          <Label>
-            checklist · {done}/{checklist.length}
-          </Label>
-          <ul className="flex flex-col gap-0.5">
-            {checklist.map((item, i) => {
-              const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
-              const checked = Boolean(row.done);
-              return (
-                <li
-                  key={i}
-                  className={cn(
-                    "flex items-baseline gap-1.5 text-xs",
-                    checked && "text-muted-foreground/60 line-through",
-                  )}
-                >
-                  <span className="shrink-0 font-mono text-[10px]">{checked ? "[x]" : "[ ]"}</span>
-                  <span className="min-w-0">{String(row.text ?? row.title ?? "")}</span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
+      {checklist.length ? <Checklist items={checklist} done={done} /> : null}
       {comments > 0 || deliverables > 0 ? (
         <div className="flex flex-wrap gap-x-3 text-[11px] text-muted-foreground/70">
           {comments > 0 ? (
@@ -1384,7 +1471,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     }
 
     if (
-      name === "delegate_subtask" &&
+      (name === "delegate_subtask" || name === "send_builder" || name === "follow_up") &&
       result &&
       typeof result === "object" &&
       looksLikeFindings(result as Record<string, unknown>)

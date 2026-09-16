@@ -57,7 +57,7 @@ export function WorkPanel({
     // would double the one already beside it.
     <aside className="flex h-full w-full flex-col bg-background/45 backdrop-blur-md">
       {/* header */}
-      <div className="flex items-center gap-2.5 border-b border-border/60 px-4 py-3">
+      <div className="flex shrink-0 items-center gap-2.5 border-b border-border/60 px-4 py-3">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-kith">
           <Activity className="size-4" />
         </span>
@@ -83,33 +83,43 @@ export function WorkPanel({
         </Button>
       </div>
 
-      {/* What he is on right now, and how far through it. It lived above the composer, which put
-          "what is he doing" in the middle of the thing you type into. */}
-      <WorkingOn conversationId={conversationId} />
+      {/* Everything between the header and the counters scrolls, and until now nothing did.
+          The column is `h-full` with five stacked sections in it, so whatever did not fit was
+          simply unreachable — one task with a nine-step checklist was enough to put the errands,
+          the context and the background work below the fold with no way to get to them.
 
-      {/* Who he has sent to find something out, and how far they have got. Directly under
-          what he is working on, because while an errand is out it *is* what is happening —
-          the thread shows one spinning row and nothing else until it comes back. */}
-      <Errands lines={lines} conversationId={conversationId} />
+          `min-h-0` is the half that is easy to leave out and the half that makes it work: a flex
+          child defaults to `min-height: auto`, which refuses to shrink below its content, so
+          `overflow-y-auto` on its own finds nothing to scroll and silently does nothing. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {/* What he is on right now, and how far through it. It lived above the composer, which put
+            "what is he doing" in the middle of the thing you type into. */}
+        <WorkingOn conversationId={conversationId} />
 
-      {/* What is in his head, itemised, and the Fold button. */}
-      <ContextSection conversationId={conversationId} />
+        {/* Who he has sent to find something out, and how far they have got. Directly under
+            what he is working on, because while an errand is out it *is* what is happening —
+            the thread shows one spinning row and nothing else until it comes back. */}
+        <Errands lines={lines} conversationId={conversationId} />
 
-      {/* What is running while he does something else. Renders nothing when there is nothing — a
-          header over an empty list is furniture. */}
-      <BackgroundTasks conversationId={conversationId} />
+        {/* What is in his head, itemised, and the Fold button. */}
+        <ContextSection conversationId={conversationId} />
 
-      {/* And what is going to start on its own. The same question as the one above asked about a
-          different clock — what will happen here that you did not just ask for — and until now
-          the only sign a standing schedule existed was it firing. */}
-      <StandingWork conversationId={conversationId} />
+        {/* What is running while he does something else. Renders nothing when there is nothing — a
+            header over an empty list is furniture. */}
+        <BackgroundTasks conversationId={conversationId} />
+
+        {/* And what is going to start on its own. The same question as the one above asked about a
+            different clock — what will happen here that you did not just ask for — and until now
+            the only sign a standing schedule existed was it firing. */}
+        <StandingWork conversationId={conversationId} />
+      </div>
 
       {/* The counters sit directly under the sections rather than being pushed to the bottom of the
           column. Stretching to fill drew a border a thousand pixels below the last real thing, which
           framed the emptiness instead of leaving it alone — and "a column of nothing" was half of
           what was wrong with the feed this replaced. */}
       {hasCounters ? (
-        <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
           <div className="flex-1" />
           <span
             className="text-[11px] tabular-nums text-muted-foreground"
