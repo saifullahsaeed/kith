@@ -45,7 +45,10 @@ _MIN_DONE_CHARS = 24
     "high for what matters most. Every task starts in 'planning' and nothing is pickable until "
     "your person has approved a plan for it — draft one with the planning-a-task skill, with the "
     "whole checklist written, then hand it over. There are no due dates: a date you set yourself "
-    "is not a deadline anyone agreed to.",
+    "is not a deadline anyone agreed to. Filing into a project that already has a roadmap? Name "
+    "the milestone this delivers, or you are handed the open ones to choose from. And if you are "
+    "about to file several tasks toward one step, plan_work writes the step, the tasks and every "
+    "checklist item in a single call instead of a dozen.",
     {
         "goal": {**STR, "description": "Short title — the outcome, not a verb like 'verify X'."},
         "description": {
@@ -94,6 +97,37 @@ def add_task(path: Path, args: dict):
                 "like 'verify' or 'inspect'. Then file it again."
             ),
         }
+
+    # A task filed into a project that HAS a roadmap, with no milestone named, is the shape of
+    # the complaint: tasks that land nowhere and a roadmap with no cohesion. It is not a
+    # judgement failure — `milestone_id` is a bare integer in the schema above, so placing one
+    # correctly means having already called `list_tasks`, held the ids, and recalled the right
+    # one at this moment. It was choosing blind, and an optional field with no candidates in
+    # front of it is a field that gets skipped.
+    #
+    # So the candidates are offered here, at the one moment the choice is actually being made.
+    # Not in the schema, which is where they belong in every other codebase: `tool_schemas` is
+    # part of the cached prefix, so a per-conversation enum of milestones would discard the whole
+    # prompt cache every time the board moved. A refusal costs one round and nothing else.
+    #
+    # Refused rather than warned, for the same reason the missing done-condition above is
+    # refused: a warning attached to a successful write is a warning nobody reads, and the row
+    # is already filed by the time it is read.
+    if project_id and not milestone_id:
+        open_milestones = [
+            one for one in repo.projects.list_milestones(path, int(project_id)) if one.get("status") != "done"
+        ]
+        if open_milestones:
+            return {
+                "ok": False,
+                "error": (
+                    "This project has a roadmap, so say which milestone this task delivers — a "
+                    "task filed beside the roadmap instead of under it is how a project stops "
+                    "adding up to anything. Pass `milestone_id`, or `add_milestone` first if "
+                    "this genuinely belongs to a step that is not there yet."
+                ),
+                "milestones": [{"id": one["id"], "title": one.get("title") or ""} for one in open_milestones],
+            }
 
     # Don't file a second copy of work already open. The 106≈110 / 107≈111 duplicates were the
     # loop re-decomposing the same stuck milestone; merge into the existing task rather than grow
@@ -278,8 +312,129 @@ def view_task(path: Path, args: dict):
 
 
 @tool(
+    "plan_work",
+    "Lay out one milestone's worth of work in a single call: the step to reach, the handful of "
+    "tasks that reach it, and each task's checklist. Use this INSTEAD of add_milestone followed "
+    "by add_task followed by add_checklist_item — it is the same writes, the same rules, and one "
+    "round rather than a dozen. Plan ONE milestone, shallowly: the next step and the two to five "
+    "tasks that finish it, not the whole roadmap. Every task needs a done-condition you could "
+    "check — a command that exits 0, a test that passes, a file that exists. Nothing here starts "
+    "pickable; it lands in planning for your person to approve.",
+    {
+        "project_id": {**INT, "description": "The project this belongs to."},
+        "milestone": {
+            **STR,
+            "description": (
+                "The step to reach, as an outcome. Leave out and pass `milestone_id` instead "
+                "when the step already exists."
+            ),
+        },
+        "milestone_id": {**INT, "description": "An existing milestone to hang these tasks on."},
+        "tasks": {
+            "type": "array",
+            "description": "Two to five tasks that together finish the milestone.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "goal": {**STR, "description": "The outcome, not a verb."},
+                    "description": {**STR, "description": "How you'll know it's done."},
+                    "priority": {**STR, "description": "low | normal | high."},
+                    "checklist": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The concrete steps, in order.",
+                    },
+                },
+                "required": ["goal", "description"],
+            },
+        },
+    },
+    required=("project_id", "tasks"),
+)
+def plan_work(path: Path, args: dict):
+    """One milestone, its tasks and their checklists, in one call.
+
+    **Why this exists, and it is not convenience.** Planning cost a dozen tool calls — a
+    milestone, then a task each, then every checklist item — and a tool that costs a dozen calls
+    competes, every round, with `shell`, which costs one and can do anything. Measured over two
+    sessions: told to plan, it plans well; left alone it does the work inline and files nothing.
+    That is the same economics that stopped it reaching for `delegate_subtask`, and it was fixed
+    there the same way — by making the cheap thing and the right thing the same thing.
+
+    **It writes nothing itself.** Every task goes through :func:`add_task` and every item through
+    :func:`add_checklist_item`, so the done-condition rule, the duplicate merge, the per-milestone
+    cap and the planning gate all apply exactly as they do to a task filed by hand. A second
+    write path would be a second place for those rules to be wrong, and the rules are the reason
+    the board is worth anything.
+
+    Partial results are returned rather than rolled back. Four tasks written and the fifth
+    refused for a missing done-condition is four tasks of real work plus one thing to fix; a
+    rollback would throw away the four and tell it to do all five again.
+    """
+    milestone_id = args.get("milestone_id")
+    title = str(args.get("milestone") or "").strip()
+    tasks = args.get("tasks")
+
+    # Checked rather than trusted. `required=` is a hint to the model, not a gate — the argument
+    # can arrive missing, as a string, or as null, and the type checker is right that an
+    # unvalidated one reaches `int()` and raises a TypeError the caller cannot read.
+    try:
+        project_id = int(args["project_id"])
+    except (KeyError, TypeError, ValueError):
+        return {"ok": False, "error": "Say which project this belongs to — `project_id` is its number."}
+
+    if not isinstance(tasks, list) or not tasks:
+        return {"ok": False, "error": "Say which tasks finish this milestone — at least one."}
+    if not milestone_id and not title:
+        return {
+            "ok": False,
+            "error": "Name the milestone these tasks deliver, or pass `milestone_id` for one that exists.",
+        }
+
+    if not milestone_id:
+        made = repo.projects.add_milestone(path, project_id, title)
+        milestone_id = made["id"]
+
+    written: list[dict] = []
+    refused: list[dict] = []
+    for one in tasks:
+        if not isinstance(one, dict):
+            continue
+        answer = add_task(
+            path,
+            {
+                "goal": one.get("goal"),
+                "description": one.get("description"),
+                "priority": one.get("priority"),
+                "project_id": project_id,
+                "milestone_id": milestone_id,
+            },
+        )
+        if not answer.get("ok", True) or not answer.get("id"):
+            refused.append({"goal": one.get("goal"), "why": answer.get("error")})
+            continue
+        task_id = answer["id"]
+        steps = one.get("checklist")
+        for step in steps if isinstance(steps, list) else []:
+            text = str(step or "").strip()
+            if text:
+                add_checklist_item(path, {"id": task_id, "text": text})
+        written.append({"id": task_id, "goal": one.get("goal"), "steps": len(steps or [])})
+
+    answer: dict = {"ok": bool(written), "milestone_id": milestone_id, "tasks": written}
+    if refused:
+        # Named individually. "3 of 5 filed" sends it back to re-read the board to work out
+        # which two; the two it has to fix are the only part it needs.
+        answer["refused"] = refused
+        answer["note"] = f"{len(written)} filed, {len(refused)} refused — fix those and file them again."
+    return answer
+
+
+@tool(
     "add_checklist_item",
-    "Add a sub-step to a task's checklist — break the work into concrete steps.",
+    "Add a sub-step to a task's checklist — break the work into concrete steps, as you learn "
+    "what they are. Writing a whole checklist for a task you are filing now? plan_work takes it "
+    "inline.",
     {"id": {**INT, "description": "The task id."}, "text": STR},
     required=("id", "text"),
 )

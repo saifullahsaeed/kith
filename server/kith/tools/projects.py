@@ -22,7 +22,8 @@ from kith.tools.registry import tool
     "milestones. Use this when work is more than a single task. If it involves code or "
     "files, give it a `directory`: that folder is where the work lives and where the "
     "project keeps what it learns about itself, in `.kith/memory.md`, which you are shown "
-    "every time you work there.",
+    "every time you work there. Then plan_work its first milestone — a roadmap with no tasks "
+    "under its open step has nothing to hand you when you come back to it.",
     {
         "name": STR,
         "description": {**STR, "description": "What the project is and what 'done' means."},
@@ -231,8 +232,12 @@ def update_project(path: Path, args: dict):
 
 @tool(
     "add_milestone",
-    "Add a milestone to a project's roadmap — a step to reach, optionally by a date. "
-    "Milestones are the timeline you follow.",
+    "Add a milestone to a project's roadmap — a step to reach, optionally by a date. Milestones "
+    "are the timeline you follow, and one is reached when the CODE is in a state you can check "
+    "('the ledger reconciles against the bank feed'), never when your own thinking is finished — "
+    "'architecture planned' completes, auto-completes the project, and nothing was built. When "
+    "you already know the tasks that reach it, plan_work writes the step and all of them in one "
+    "call.",
     {
         "project_id": INT,
         "title": STR,
