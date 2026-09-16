@@ -19,8 +19,9 @@ import { keys } from "@/lib/query-keys";
  * something it cannot.
  */
 
-/** Shared by both surfaces so a click in one is a fetch neither repeats. */
-function useUpdate() {
+/** Shared by every surface that shows it, so a click in one is a fetch none of the others
+ *  repeats: the header pill, the footer under the settings nav, and the Updates page. */
+export function useUpdate() {
   return useQuery({
     queryKey: keys.update(),
     queryFn: fetchUpdate,

@@ -2,10 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Cpu,
   FileText,
+  FolderOpen,
+  Gauge,
+  Layers,
   Loader2,
   MessageSquare,
   PlugZap,
   Puzzle,
+  Search,
+  Server,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -14,11 +19,20 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { AdvancedTab } from "@/components/settings/advanced-tab";
 import { ChatTab } from "@/components/settings/chat-tab";
+import { TuningPage } from "@/components/settings/tuning-page";
+import { FilesPage } from "@/components/settings/files-page";
+import { UpdatesPage } from "@/components/settings/updates-page";
+import { McpPage } from "@/components/settings/mcp-page";
 import { ModelTab } from "@/components/settings/model-tab";
 import { ToolsTab } from "@/components/settings/tools-tab";
-import { fetchSetup, type ServerConfig, type SetupSnapshot } from "@/lib/backend";
+import {
+  fetchSetup,
+  fetchTuning,
+  type ServerConfig,
+  type SetupSnapshot,
+  type TuningSnapshot,
+} from "@/lib/backend";
 import { PermissionsTab } from "@/components/settings/permissions-tab";
 import { PersonaTab } from "@/components/settings/persona-tab";
 import { PluginsTab } from "@/components/settings/plugins-tab";
@@ -68,9 +82,38 @@ const GROUPS = [
   { key: "him", label: "Him" },
   { key: "use", label: "What he can use" },
   { key: "limits", label: "Limits" },
+  { key: "machine", label: "This machine" },
 ] as const;
 
 type Group = (typeof GROUPS)[number]["key"];
+
+/**
+ * Which of the server's tunable groups each page shows.
+ *
+ * This table is what dissolved Advanced. The server sends seven groups and Advanced rendered
+ * all of them behind a nested tab strip; four pages here render the same groups under names
+ * that say what they are. Two of those nested tabs — `chat` and `context` — named a page that
+ * already existed in the sidebar, which is the clearest sign the division was right and the
+ * placement was not.
+ *
+ * A group the server adds that nobody has placed lands on `budget` rather than disappearing:
+ * the failure of a map like this is a setting that exists, is saved, affects him, and cannot be
+ * reached from anywhere in the app.
+ */
+const TUNING_PAGES: Partial<Record<SettingsTab, readonly string[]>> = {
+  /* Mapped on what each group *contains*, not on what it is called. The server's `chat` group
+   * is `max_rounds`, `history_keep_recent` and `max_answer_tokens` — pace and history, none of
+   * it the reply-length and notification settings the Conversation page already owns through a
+   * different endpoint. Putting it under Conversation because of its name would have been two
+   * pages disagreeing about who owns "how long an answer is". */
+  budget: ["limits", "chat", "connections"],
+  context: ["context", "stuck"],
+  files: ["machine"],
+  mcp: ["mcp"],
+};
+
+/** Everything the table above does not claim, so nothing the server sends is unreachable. */
+const PLACED = new Set(Object.values(TUNING_PAGES).flat());
 
 const TABS: {
   id: SettingsTab;
@@ -78,14 +121,24 @@ const TABS: {
   hint: string;
   icon: typeof Cpu;
   group: Group;
-  /** Omitted means the reading measure. */
+  /** The line under the page's own title. Longer than `hint`, which has a sidebar row to fit. */
+  blurb: string;
   layout?: "reading" | "wide" | "fill";
 }[] = [
-  { id: "model", label: "Model", hint: "where he thinks", icon: Cpu, group: "him", layout: "wide" },
+  {
+    id: "model",
+    label: "Model",
+    hint: "where he thinks",
+    blurb: "Change the model without touching the key; changing the provider clears it.",
+    icon: Cpu,
+    group: "him",
+    layout: "wide",
+  },
   {
     id: "persona",
     label: "Persona",
     hint: "who he is, in his own files",
+    blurb: "The folder stays the source of truth — edit here or in an editor, whichever you prefer.",
     icon: FileText,
     group: "him",
     layout: "fill",
@@ -93,53 +146,90 @@ const TABS: {
   {
     id: "chat",
     label: "Conversation",
-    hint: "reply length and reasoning",
+    hint: "how he replies",
+    blurb: "How he replies, and when he may interrupt you. These outlive a model.",
     icon: MessageSquare,
     group: "him",
   },
-  { id: "skills", label: "Skills", hint: "what he knows how to do", icon: Puzzle, group: "use" },
-  { id: "plugins", label: "Plugins", hint: "what other people built", icon: PlugZap, group: "use" },
-  { id: "tools", label: "Tools", hint: "what he can reach", icon: Wrench, group: "use" },
+  {
+    id: "tools",
+    label: "Tools",
+    hint: "what he can reach",
+    blurb: "Each one is checked when this page opens — a tool that is off is one he will not try.",
+    icon: Wrench,
+    group: "use",
+  },
+  {
+    id: "skills",
+    label: "Skills",
+    hint: "what he knows how to do",
+    blurb: "Instructions he reads when the work matches — they cost nothing until then.",
+    icon: Puzzle,
+    group: "use",
+  },
+  {
+    id: "plugins",
+    label: "Plugins",
+    hint: "what other people built",
+    blurb: "One folder with a kith.plugin.json in it. Their surfaces open beside a chat.",
+    icon: PlugZap,
+    group: "use",
+  },
+  {
+    id: "mcp",
+    label: "MCP servers",
+    hint: "tools from somewhere else",
+    blurb: "Servers he can call tools on. A server he uses is something he uses.",
+    icon: Server,
+    group: "use",
+    layout: "fill",
+  },
   {
     id: "permissions",
     label: "Permissions",
     hint: "what he may do without asking",
+    blurb: "The same control as the one in the title bar — this is where it is explained.",
     icon: ShieldCheck,
     group: "limits",
   },
   {
-    id: "advanced",
-    label: "Advanced",
-    hint: "his pace, limits and addresses",
-    icon: SlidersHorizontal,
+    id: "budget",
+    label: "Budget and pace",
+    hint: "where a session stops",
+    blurb: "Where a session stops on its own. These are the settings that cost money.",
+    icon: Gauge,
     group: "limits",
-    // A form, so `reading` looks like the right call and is not. A row here is a label and its
-    // help on the left and a number on the right, and the measure was being applied to the
-    // *row* — so on a wide window the pane drew itself 768px and put the rest of the screen
-    // in the margins, with thirty rows of two-line help stacking into a page you scroll for
-    // a long time. The measure belongs to the prose, which keeps it (`max-w-prose` on the two
-    // paragraphs in `Row`); the row wants the width, so the field it is about is beside it
-    // rather than a wrap away.
-    layout: "wide",
+    layout: "fill",
+  },
+  {
+    id: "context",
+    label: "Context",
+    hint: "what he carries",
+    blurb: "What he carries into each round, and when he puts some of it down.",
+    icon: Layers,
+    group: "limits",
+    layout: "fill",
+  },
+  {
+    id: "files",
+    label: "Folders and files",
+    hint: "where his things live",
+    blurb: "Where his things live on this machine.",
+    icon: FolderOpen,
+    group: "machine",
+    layout: "fill",
+  },
+  {
+    id: "updates",
+    label: "Updates",
+    hint: "what is running",
+    blurb: "What is running, and whether there is something newer.",
+    icon: SlidersHorizontal,
+    group: "machine",
+    layout: "fill",
   },
 ];
 
-/**
- * Settings as a page, not a dialog.
- *
- * It was a dialog with every field in one column and a single Save, which was fine
- * when it was four inputs. It now has to hold a provider choice, a live credential
- * check, a picker over hundreds of models, and a search decision — none of which fit
- * in a modal, and none of which should share a Save button with the others.
- *
- * Model and Tools are separate tabs because they are separate decisions with separate
- * consequences: one costs money per token, the other costs money per search or nothing
- * at all. Each tab saves only itself.
- *
- * The snapshot is re-read after any save, because the tabs are not independent even
- * though their saves are — which search providers exist depends on which model provider
- * is connected, and that would otherwise go stale in front of someone.
- */
 export function SettingsPage({
   tab,
   config,
@@ -157,12 +247,22 @@ export function SettingsPage({
 }) {
   const layer = useLayer(Layer.Overlay);
   const [snapshot, setSnapshot] = useState<SetupSnapshot | null>(null);
+  /* Fetched here rather than inside the pages that show it, for the sidebar: "how many settings
+   * on this page are away from their default" cannot be answered by a page that is not
+   * mounted, and it is the number that makes the badge worth having. */
+  const [tuning, setTuning] = useState<TuningSnapshot | null>(null);
+  const [query, setQuery] = useState("");
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
     fetchSetup()
       .then(setSnapshot)
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    // A failure here costs the badges and nothing else, so it does not reach `error`: a page
+    // that will not open is a worse answer than a page with no counts on it.
+    fetchTuning()
+      .then(setTuning)
+      .catch(() => setTuning(null));
   }, []);
 
   useEffect(load, [load]);
@@ -183,7 +283,32 @@ export function SettingsPage({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const layout = TABS.find((entry) => entry.id === tab)?.layout ?? "reading";
+  /** The server's groups for one page, in the order `TUNING_PAGES` lists them. Anything the
+   *  table does not claim rides along with Budget rather than becoming unreachable. */
+  const groupsFor = useCallback(
+    (id: SettingsTab) => {
+      if (!tuning) return [];
+      const wanted = TUNING_PAGES[id];
+      if (!wanted) return [];
+      const named = wanted
+        .map((key) => tuning.groups.find((group) => group.key === key))
+        .filter((group): group is NonNullable<typeof group> => Boolean(group));
+      const orphans = id === "budget" ? tuning.groups.filter((g) => !PLACED.has(g.key)) : [];
+      return [...named, ...orphans];
+    },
+    [tuning],
+  );
+
+  const changedOn = useCallback(
+    (id: SettingsTab) =>
+      groupsFor(id)
+        .flatMap((group) => group.settings)
+        .filter((knob) => !knob.isDefault).length,
+    [groupsFor],
+  );
+
+  const entry = TABS.find((one) => one.id === tab);
+  const layout = entry?.layout ?? "reading";
   const filling = layout === "fill" && !error && snapshot !== null;
 
   return (
@@ -228,13 +353,45 @@ export function SettingsPage({
       </header>
 
       <div className="relative z-10 flex min-h-0 flex-1">
-        <nav className="w-56 shrink-0 overflow-y-auto border-r border-border/60 bg-sidebar/40 px-3 py-4 backdrop-blur-sm">
+        <nav className="border-border/60 bg-sidebar/40 flex w-[264px] shrink-0 flex-col border-r backdrop-blur-sm">
+          {/* One search, over every page.
+              Advanced had its own, and nothing else did — so "where is the setting for X" had an
+              answer on one page out of eight and nowhere else. It filters the sidebar rather
+              than opening a results screen: the pages are the answer, and a page that holds no
+              match is the useful half of the reply. */}
+          <div className="relative shrink-0 p-3">
+            <Search className="text-muted-foreground/50 pointer-events-none absolute top-1/2 left-6 size-3.5 -translate-y-1/2" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search every setting"
+              aria-label="Search settings"
+              className="border-border/60 bg-background focus-visible:border-ring h-8 w-full rounded-[10px] border py-1 pr-3 pl-8 text-[12.5px] outline-none"
+            />
+          </div>
+          <div className="min-w-0 flex-1 overflow-y-auto px-3 pb-3">
           {/* Grouped, and the groups are derived from the panes rather than listed twice.
               A second list would be a second thing to keep in step, and the failure would be a
               pane that quietly stops appearing in the sidebar while still being reachable by
               its URL. */}
           {GROUPS.map((group) => {
-            const inside = TABS.filter((entry) => entry.group === group.key);
+            const needle = query.trim().toLowerCase();
+            const inside = TABS.filter(
+              (one) =>
+                one.group === group.key &&
+                (!needle ||
+                  one.label.toLowerCase().includes(needle) ||
+                  one.hint.toLowerCase().includes(needle) ||
+                  // The settings themselves, so searching "budget" or "timeout" finds the page
+                  // holding it rather than only the pages named after it.
+                  groupsFor(one.id).some((g) =>
+                    g.settings.some(
+                      (knob) =>
+                        knob.label.toLowerCase().includes(needle) ||
+                        knob.key.toLowerCase().includes(needle),
+                    ),
+                  )),
+            );
             if (!inside.length) return null;
             return (
               <div key={group.key} className="mb-4 last:mb-0">
@@ -256,12 +413,22 @@ export function SettingsPage({
                       <entry.icon
                         className={`mt-0.5 size-4 shrink-0 ${tab === entry.id ? "text-kith" : ""}`}
                       />
-                      <span className="min-w-0">
+                      <span className="min-w-0 flex-1">
                         <span className="block text-sm font-medium">{entry.label}</span>
                         <span className="text-muted-foreground/80 block text-[11px] leading-snug">
                           {entry.hint}
                         </span>
                       </span>
+                      {/* How many of this page's settings are away from their default. The
+                          question you arrive with, answerable on one page before this. */}
+                      {changedOn(entry.id) > 0 ? (
+                        <span
+                          title={`${changedOn(entry.id)} changed from default`}
+                          className="bg-kith-soft text-kith mt-0.5 shrink-0 rounded-full px-1.5 font-mono text-[10px]"
+                        >
+                          {changedOn(entry.id)}
+                        </span>
+                      ) : null}
                     </button>
                   ))}
                 </div>
@@ -273,66 +440,89 @@ export function SettingsPage({
               something newer — the version being visible whenever settings are open is the
               thing you want when writing a bug report, and an update notice needs somewhere
               that is not a seventh tab holding one paragraph. */}
+          </div>
           <UpdateFooter />
         </nav>
 
-        <div
-          className={cn("min-w-0 flex-1", filling ? "flex min-h-0" : "overflow-y-auto px-6 py-6")}
-        >
-          {/* A filling tab gets the pane bare and is trusted with it. Everything else keeps the
-              wrapper it had — including the two messages below, which is why `filling` is false
-              until there is a snapshot: a one-line "Reading his setup…" pinned to the very corner
-              of an unpadded pane is not a layout anyone chose.
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Every page opens the same way: its name, and one line on what it is for. The pages
+              each wrote their own heading before, in their own size, or none at all. */}
+          {entry && !error && snapshot ? (
+            <div className="shrink-0 px-8 pt-6 pb-3">
+              <h1 className="text-[19px] font-semibold tracking-tight">{entry.label}</h1>
+              <p className="text-muted-foreground mt-1 max-w-[62ch] text-[12.5px]">
+                {entry.blurb}
+              </p>
+            </div>
+          ) : null}
 
-              `flex-col` and not the row it was. A row lays its child out along the main axis, so
-              the tab became a flex item at `flex: 0 1 auto` and sized to its own content — about
-              900px of header text — leaving 600px of the pane empty and looking for all the world
-              like the measure was still being applied. A column stretches its children across the
-              cross axis, which is the width, which is what "fill" was supposed to mean. */}
           <div
             className={cn(
-              filling ? "flex min-h-0 flex-1 flex-col" : "mx-auto",
-              filling ? "" : layout === "wide" ? "max-w-none" : "max-w-3xl",
+              "min-w-0 flex-1",
+              filling ? "flex min-h-0 flex-col" : "overflow-y-auto px-8 pb-7",
             )}
           >
-            {error ? (
-              <p className="text-destructive text-sm">{error}</p>
-            ) : !snapshot ? (
-              <p className="text-muted-foreground flex items-center gap-2 text-sm">
-                <Loader2 className="size-4 animate-spin" /> Reading his setup…
-              </p>
-            ) : tab === "model" ? (
-              <ModelTab
-                connection={snapshot.connection}
-                providers={snapshot.providers}
-                onSaved={() => {
-                  load();
-                  onConnectionSaved();
-                }}
-              />
-            ) : tab === "skills" ? (
-              <SkillsTab />
-            ) : tab === "plugins" ? (
-              <PluginsTab />
-            ) : tab === "tools" ? (
-              <ToolsTab
-                search={snapshot.search.current}
-                options={snapshot.search.options}
-                checks={snapshot.checks}
-                onSaved={() => {
-                  load();
-                  onConnectionSaved();
-                }}
-              />
-            ) : tab === "persona" ? (
-              <PersonaTab connection={snapshot.connection} />
-            ) : tab === "chat" ? (
-              <ChatTab config={config} connection={snapshot.connection} onSave={onSaveConfig} />
-            ) : tab === "permissions" ? (
-              <PermissionsTab />
-            ) : (
-              <AdvancedTab />
-            )}
+            {/* One left edge, one measure.
+             *
+             * `reading` used to centre itself (`mx-auto max-w-3xl`), which put its content two
+             * hundred and seventy pixels right of where the tuning pages start theirs. Clicking
+             * down the sidebar moved the whole page sideways under you — eight pages, three
+             * different left edges, and nothing in the design asking for any of it. Left-aligned
+             * at one width, so only the content changes when you change page.
+             *
+             * And no cap: a section spans the content area, which is what the design does and
+             * what makes a row's control sit at the page's right edge rather than at an
+             * arbitrary one partway across it. */}
+            <div className={cn(filling ? "flex min-h-0 flex-1 flex-col" : "")}>
+              {error ? (
+                <p className="text-destructive text-sm">{error}</p>
+              ) : !snapshot ? (
+                <p className="text-muted-foreground flex items-center gap-2 text-sm">
+                  <Loader2 className="size-4 animate-spin" /> Reading his setup…
+                </p>
+              ) : tab === "model" ? (
+                <ModelTab
+                  connection={snapshot.connection}
+                  providers={snapshot.providers}
+                  onSaved={() => {
+                    load();
+                    onConnectionSaved();
+                  }}
+                />
+              ) : tab === "skills" ? (
+                <SkillsTab />
+              ) : tab === "plugins" ? (
+                <PluginsTab />
+              ) : tab === "tools" ? (
+                <ToolsTab
+                  search={snapshot.search.current}
+                  options={snapshot.search.options}
+                  checks={snapshot.checks}
+                  onSaved={() => {
+                    load();
+                    onConnectionSaved();
+                  }}
+                />
+              ) : tab === "persona" ? (
+                <PersonaTab connection={snapshot.connection} />
+              ) : tab === "chat" ? (
+                <ChatTab config={config} connection={snapshot.connection} onSave={onSaveConfig} />
+              ) : tab === "permissions" ? (
+                <PermissionsTab />
+              ) : tab === "updates" ? (
+                <UpdatesPage />
+              ) : tab === "files" ? (
+                <FilesPage
+                  paths={tuning?.paths ?? []}
+                  groups={groupsFor("files")}
+                  onSaved={load}
+                />
+              ) : tab === "mcp" ? (
+                <McpPage groups={groupsFor("mcp")} onSaved={load} />
+              ) : TUNING_PAGES[tab] ? (
+                <TuningPage groups={groupsFor(tab)} onSaved={load} />
+              ) : null}
+            </div>
           </div>
         </div>
       </div>

@@ -2,6 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { FolderOpen, Puzzle, ShieldCheck, TerminalSquare, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  SettingRow,
+  SettingRows,
+  SettingSection,
+} from "@/components/settings/setting-row";
 import { useConfirm } from "@/components/ui/confirm";
 import { fetchPermissions, revokeGrants, type PermissionState } from "@/lib/backend";
 
@@ -77,14 +82,11 @@ export function StandingGrants() {
   const { grants, sessionGrants } = state;
 
   return (
-    <section>
-      <div className="mb-3 flex items-baseline gap-3">
-        <h2 className="text-sm font-semibold">Allowed without asking</h2>
-        <p className="text-muted-foreground min-w-0 flex-1 text-xs">
-          Everything you answered “Always” to. He does these silently from now on, so this is the
-          list worth knowing — and any of it can be taken back.
-        </p>
-        {grants.length ? (
+    <SettingSection
+      title="Allowed without asking"
+      sub="Everything you answered “Always” to. He does these silently from now on, so this is the list worth knowing — and any of it can be taken back."
+      action={
+        grants.length ? (
           <Button
             variant="ghost"
             size="sm"
@@ -94,8 +96,9 @@ export function StandingGrants() {
           >
             Forget them
           </Button>
-        ) : null}
-      </div>
+        ) : null
+      }
+    >
 
       {grants.length === 0 ? (
         <div className="text-muted-foreground flex items-center gap-2 rounded-xl border border-dashed px-3 py-4 text-xs">
@@ -106,11 +109,11 @@ export function StandingGrants() {
           </span>
         </div>
       ) : (
-        <div className="divide-y rounded-xl border">
+        <SettingRows>
           {grants.map((grant) => (
             <Grant key={grant} signature={grant} onDrop={() => void drop(grant)} busy={busy} />
           ))}
-        </div>
+        </SettingRows>
       )}
 
       {sessionGrants.length > 0 ? (
@@ -121,7 +124,7 @@ export function StandingGrants() {
       ) : null}
 
       {error ? <p className="text-destructive mt-2 text-xs">{error}</p> : null}
-    </section>
+    </SettingSection>
   );
 }
 
@@ -164,22 +167,25 @@ function Grant({
   const body = isPlugin ? owner : signature.slice(signature.indexOf(":") + 1);
   const Icon = isPath ? FolderOpen : isPlugin ? Puzzle : TerminalSquare;
   return (
-    <div className="group flex items-start gap-2.5 px-3 py-2.5">
-      <Icon className="text-muted-foreground/60 mt-0.5 size-3.5 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <code className="block font-mono text-[11px] break-all">{body}</code>
-        <p className="text-muted-foreground/70 mt-0.5 text-[11px]">
-          {isPath
-            ? "This and anything inside it"
-            : isSpawn
-              ? sealed
-                ? "Its program may run, inside the boundary you approved"
-                : "Its program may run, with nothing confining it"
-              : isPlugin
-                ? "Its commands may be called without asking you each time"
-                : "This command, whenever he runs it"}
-        </p>
-      </div>
+    <SettingRow
+      label={
+        <span className="flex min-w-0 items-center gap-2">
+          <Icon className="text-muted-foreground/60 size-3.5 shrink-0" />
+          <code className="min-w-0 truncate font-mono text-[11.5px]">{body}</code>
+        </span>
+      }
+      help={
+        isPath
+          ? "This and anything inside it"
+          : isSpawn
+            ? sealed
+              ? "Its program may run, inside the boundary you approved"
+              : "Its program may run, with nothing confining it"
+            : isPlugin
+              ? "Its commands may be called without asking you each time"
+              : "This command, whenever he runs it"
+      }
+    >
       <button
         type="button"
         onClick={onDrop}
@@ -188,10 +194,10 @@ function Grant({
         aria-label={`Forget permission for ${body}`}
         // Shown on hover, but always reachable by keyboard: a control that only exists for
         // a mouse is not a control everyone has.
-        className="text-muted-foreground/40 hover:text-destructive focus-visible:text-destructive mt-0.5 shrink-0 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100"
+        className="text-muted-foreground/50 hover:text-destructive focus-visible:text-destructive shrink-0 transition"
       >
         <X className="size-3.5" />
       </button>
-    </div>
+    </SettingRow>
   );
 }

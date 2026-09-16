@@ -527,28 +527,28 @@ describe("a slot", () => {
   });
 
   it("replays into the middle of a row, not at an edge", () => {
-    const { tree, paneId } = openAtSlot(three(), { surface: "inbox" }, slotFor(three(), "b")!, "mid");
+    const { tree, paneId } = openAtSlot(three(), { surface: "context" }, slotFor(three(), "b")!, "mid");
 
     const order = panes(tree).map((one) => one.tabs.map(tabKey));
-    expect(order).toEqual([["work"], ["inbox"], ["board"], ["settings"]]);
+    expect(order).toEqual([["work"], ["context"], ["board"], ["settings"]]);
     expect(paneWithPlace(tree, "mid")!.id).toBe(paneId);
     isSound(tree);
   });
 
   it("clamps into a root that has since lost columns", () => {
     const two = split("row", [pane([work], 0, "a"), pane([roadmap], 0, "b")], [40, 60]);
-    const { tree } = openAtSlot(two, { surface: "inbox" }, { direction: "row", index: 9, size: 20 }, "far");
+    const { tree } = openAtSlot(two, { surface: "context" }, { direction: "row", index: 9, size: 20 }, "far");
 
     expect(panes(tree).map((one) => one.tabs.map(tabKey))).toEqual([
       ["work"],
       ["board"],
-      ["inbox"],
+      ["context"],
     ]);
     isSound(tree);
   });
 
   it("splits a bare root, and does not claim the whole window doing it", () => {
-    const { tree } = openAtSlot(pane([work], 0, "a"), { surface: "inbox" }, { direction: "row", index: 0, size: 100 }, "p");
+    const { tree } = openAtSlot(pane([work], 0, "a"), { surface: "context" }, { direction: "row", index: 0, size: 100 }, "p");
 
     expect(tree.kind).toBe("split");
     // A slot recorded at 100 — the root *was* one pane — clamped, or the pane it split has no
@@ -656,7 +656,7 @@ describe("restructuring", () => {
 describe("saving a layout", () => {
   it("keeps the shape and drops the conversations", () => {
     const tree = split("row", [
-      pane([{ surface: "conversations" as const }], 0, "a"),
+      pane([{ surface: "board" as const }], 0, "a"),
       pane([chat("c-1"), chat("c-2")], 1, "b", "chats"),
       pane([work], 0, "c"),
     ]);
@@ -664,7 +664,7 @@ describe("saving a layout", () => {
     const saved = stripChats(tree);
 
     expect(panes(saved).map((one) => one.tabs.map(tabKey))).toEqual([
-      ["conversations"],
+      ["board"],
       [],
       ["work"],
     ]);
@@ -677,5 +677,58 @@ describe("saving a layout", () => {
     expect(panes(stripChats(tree))[0].tabs[panes(stripChats(tree))[0].active]).toMatchObject({
       surface: "board",
     });
+  });
+});
+
+/**
+ * A surface that is about a conversation says so on its tab.
+ *
+ * The bug this exists to make impossible: Work took whichever chat was focused, so a click
+ * inside the Work pane re-elected a different conversation and the Fold button in that panel
+ * then folded it — appended to a transcript, with no unfold anywhere. Sticky focus narrowed
+ * that; naming the conversation on the tab removes the inference entirely.
+ */
+describe("surfaces bound to a conversation", () => {
+  it("makes Work for two chats two different tabs", () => {
+    const a = tabKey({ surface: "work", conversationId: "c-1" });
+    const b = tabKey({ surface: "work", conversationId: "c-2" });
+    expect(a).not.toBe(b);
+  });
+
+  it("keeps the same surface for the same chat a singleton", () => {
+    expect(tabKey({ surface: "work", conversationId: "c-1" })).toBe(
+      tabKey({ surface: "work", conversationId: "c-1" }),
+    );
+  });
+
+  /* Board and Settings are about Kith, not about a chat, so a conversation on one of them is
+   * not part of its identity — otherwise "open settings" from two chats would give you two
+   * Settings tabs showing the same thing. */
+  it("ignores a conversation on a surface that is not about one", () => {
+    expect(tabKey({ surface: "settings", conversationId: "c-1" })).toBe("settings");
+    expect(tabKey({ surface: "board", conversationId: "c-1" })).toBe("board");
+  });
+
+  it("binds a plugin surface too, alongside its instance", () => {
+    const one = tabKey({ surface: "plugin", plugin: "cma", view: "feed", conversationId: "c-1" });
+    const two = tabKey({ surface: "plugin", plugin: "cma", view: "feed", conversationId: "c-2" });
+    expect(one).not.toBe(two);
+    expect(one).toContain("plugin:cma/feed");
+  });
+
+  /* An unbound ref still keys the way it always did, which is what lets a tab stored before
+   * this change keep working instead of turning into a second, duplicate tab. */
+  it("keys an unbound surface the old way", () => {
+    expect(tabKey({ surface: "work" })).toBe("work");
+  });
+
+  it("lets both chats keep their own Work open at once — invariant 4 still holds", () => {
+    const tree = pane([
+      { surface: "work" as const, conversationId: "c-1" },
+      { surface: "work" as const, conversationId: "c-2" },
+    ]);
+    const keys = panes(tree)[0]!.tabs.map(tabKey);
+    expect(new Set(keys).size).toBe(2);
+    isSound(tree);
   });
 });

@@ -4,6 +4,7 @@ import { choosePane, isPlacementMode, type Pin, type PlacementMode } from "./pla
 import { SURFACES } from "./surfaces";
 import {
   activateTab,
+  BOUND,
   clearPlace,
   closePane as closePaneIn,
   closeTab,
@@ -26,7 +27,6 @@ import {
   rotateSplit as rotateSplitIn,
   remintIds,
   slotFor,
-  split,
   stampPlace,
   stripChats,
   tabKey,
@@ -54,20 +54,31 @@ const KEY = "kith-layout";
  * arrangement is worth remembering; it is not worth a white screen. */
 /* 2: tabs gained a permanent `uid`, so a stored v1 tab has none and every React key would be
  * undefined. `withUid` could fill them in on read, but the default layout is a correct answer
- * and a layout is a convenience — a migration for one field is more code to be wrong. */
-const VERSION = 2;
+ * and a layout is a convenience — a migration for one field is more code to be wrong.
+ *
+ * 3: `conversations` and `inbox` stopped being surfaces — the list is the window's own left
+ * rail, and alerts slide over the room the way `Layer.Panel` always said they did. So a stored
+ * v2 tree can hold a tab whose surface is no longer a key of `SURFACES` — which is invariant 6,
+ * and which `looksLikeLayout` does not check. Same call as above: discard and hand back the
+ * default rather than walk the tree stripping tabs out of it.
+ *
+ * 4: `work`, `context` and plugin surfaces name the conversation they are about, so `tabKey`
+ * answers differently for the same stored ref. A v3 tree is structurally fine and would load —
+ * it would just hold unbound tabs whose keys no longer match what the app now mints, which is
+ * the quiet kind of wrong. The default is one pane now; there is very little to lose. */
+const VERSION = 4;
 
 /** What the app opens as, and what "reset layout" restores.
  *
- * The same three columns the fixed layout had, so the first run after this ships looks like the
- * last run before it — the windowing is something you discover by dragging, not something the
- * app rearranges around you on upgrade. */
+ * One pane, full width. The three standing columns are gone in three steps: the conversation
+ * list became the window's rail, alerts slide over the room, and Work now opens as a tab in the
+ * pane you are looking at rather than claiming a column of its own — see `DEFAULT_PLACEMENT`.
+ *
+ * What is left is the thing the window is for: one surface with the whole width to read in. The
+ * tree is still a tree and splitting is still a drag to a pane's edge; it is only no longer
+ * something the app does to you before you ask. */
 export function defaultLayout(): Node {
-  return split(
-    "row",
-    [pane([{ surface: "conversations" }]), pane([{ surface: "chat", conversationId: "" }]), pane([{ surface: "work" }])],
-    [18, 56, 26],
-  );
+  return pane([{ surface: "chat", conversationId: "" }]);
 }
 
 /** Is this actually a layout? Cheap structural check, run on anything read from storage.
@@ -251,6 +262,57 @@ function writePins(pins: Record<string, Pin>): void {
  *
  * Own key and unversioned, validated per entry: one unreadable saved layout must not cost you
  * the others, and none of them may cost you the live one. */
+/**
+ * Surfaces attached *to a tab* rather than beside it, keyed by the host tab's key.
+ *
+ * A Work panel opened from a chat is about that chat and belongs with it — as a companion in
+ * the tab's own column, not as a sibling in the pane's strip. Binding the surface to the
+ * conversation made that possible; this is what makes it visible. Two chats side by side each
+ * carry their own Work, and neither shows in the other's strip.
+ *
+ * Keyed by `tabKey`, which for a chat is `chat:<conversation>` — so companions are really per
+ * conversation. Close the chat and reopen it a day later and its column comes back, which is
+ * the behaviour you would expect from something that is *about* that conversation.
+ *
+ * Its own storage key rather than a field on the tree: the tree is versioned and gets discarded
+ * whenever its shape changes, and losing which panels you keep open beside a chat because the
+ * *layout* format moved is a bad trade. Validated per entry like pins — one unparseable host
+ * drops that host, not the set.
+ */
+const COMPANIONS_KEY = "kith-companions";
+
+function isTabRef(value: unknown): value is TabRef {
+  if (!value || typeof value !== "object") return false;
+  const held = value as Partial<TabRef>;
+  return typeof held.surface === "string" && held.surface in SURFACES;
+}
+
+export function readCompanions(): Record<string, TabRef[]> {
+  try {
+    const raw = localStorage.getItem(COMPANIONS_KEY);
+    if (!raw) return {};
+    const held = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, TabRef[]> = {};
+    for (const [host, list] of Object.entries(held)) {
+      if (!host || !Array.isArray(list)) continue;
+      const kept = list.filter(isTabRef);
+      if (kept.length) out[host] = kept;
+    }
+    return out;
+  } catch {
+    /* not JSON, private mode, no storage — no companions is a correct answer */
+    return {};
+  }
+}
+
+function writeCompanions(companions: Record<string, TabRef[]>): void {
+  try {
+    localStorage.setItem(COMPANIONS_KEY, JSON.stringify(companions));
+  } catch {
+    /* storage full or unavailable — a companion is a convenience, not the work */
+  }
+}
+
 const LAYOUTS_KEY = "kith-layouts";
 
 /** A saved arrangement. Chat tabs are already out of `tree` — see `stripChats`. */
@@ -355,6 +417,14 @@ export type LayoutState = {
   rename: (key: string, ref: TabRef) => void;
   focus: (paneId: string) => void;
   resize: (splitId: string, sizes: number[]) => void;
+  /** Surfaces attached to a tab, keyed by that tab's key — see `COMPANIONS_KEY`. */
+  companions: Record<string, TabRef[]>;
+  /** Attach a surface to a tab's own column. Idempotent: attaching one that is already there
+   *  does nothing, so the button that opens it can be pressed twice without stacking two. */
+  attach: (hostKey: string, ref: TabRef) => void;
+  /** Take one back out of the column. */
+  detach: (hostKey: string, key: string) => void;
+
   /** Arrangements saved by name, newest last. */
   layouts: SavedLayout[];
   /** Snapshot the arrangement under a name, replacing one of the same name. Chat tabs are left
@@ -368,6 +438,18 @@ export type LayoutState = {
    *  somebody who has closed everything is standing. */
   reset: () => void;
 };
+
+/** The conversation in front of you, or "" — the focused pane's active tab when that is a chat.
+ *
+ * Deliberately *only* the focused pane's active tab, with no fallback to "the first chat
+ * anywhere". A companion column is a place things are put; guessing a host when none is in
+ * front of you is how a panel ends up attached to a conversation you were not looking at. With
+ * no answer here a bound surface opens as a tab, which is the honest one. */
+function focusedChat(tree: Node, focused: string): string {
+  const pane = panes(tree).find((one) => one.id === focused);
+  const active = pane?.tabs[pane.active];
+  return active?.surface === "chat" ? (active.conversationId ?? "") : "";
+}
 
 function firstPaneId(tree: Node): string {
   return panes(tree)[0]?.id ?? "";
@@ -425,6 +507,7 @@ export const useLayout = create<LayoutState>((set, get) => {
     order: panes(initial).map((one) => one.id),
     placements: readPlacements(),
     pins: readPins(),
+    companions: readCompanions(),
     layouts: readLayouts(),
     zoomed: null,
     widths: {},
@@ -434,7 +517,31 @@ export const useLayout = create<LayoutState>((set, get) => {
      * should not leave you staring at the old one. */
     open: (ref, opts) => {
       const { tree, focused, widths, placements, pins } = get();
-      const chosen = choosePane(tree, ref, {
+
+      /* A surface that is about a conversation joins that chat's column, not the tab strip.
+       *
+       * Routed here rather than at the four call sites that open one — the plugins tab, both
+       * ways into a plugin from a tool result, and `open_surface` when the model asks for it —
+       * because "where a bound surface goes" is one policy and four copies of it drift.
+       *
+       * Two separate things happen, and keeping them separate matters. *Stamping* the
+       * conversation onto the ref is about identity: a panel that arrived naming only a plugin
+       * and a view still has to know which chat it is showing, or it falls back to the focused
+       * one and we are back to the inference this replaced. *Attaching* is about placement, and
+       * a caller naming a pane overrules it — that is what naming a pane means, and the plugin
+       * delivery path relies on it. Conflating the two left a `paneId` open unbound. */
+      const chat = focusedChat(tree, focused);
+      const bound: TabRef =
+        BOUND.has(ref.surface) && chat && !ref.conversationId
+          ? ({ ...ref, conversationId: chat } as TabRef)
+          : ref;
+
+      if (!opts?.paneId && chat && BOUND.has(bound.surface)) {
+        get().attach(tabKey({ surface: "chat", conversationId: chat }), bound);
+        return;
+      }
+
+      const chosen = choosePane(tree, bound, {
         focused,
         paneId: opts?.paneId,
         widths,
@@ -445,16 +552,16 @@ export const useLayout = create<LayoutState>((set, get) => {
        * before `beside`, because the two are different answers to different questions and a
        * pinned tab never wants "split whatever I am looking at". */
       if (chosen.raise) {
-        const made = openAtSlot(tree, ref, chosen.raise.slot, chosen.raise.place);
+        const made = openAtSlot(tree, bound, chosen.raise.slot, chosen.raise.place);
         commit(made.tree, made.paneId);
         return;
       }
       if (chosen.beside) {
-        const made = openBeside(tree, ref, focused);
+        const made = openBeside(tree, bound, focused);
         commit(made.tree, made.paneId);
         return;
       }
-      const result = openTab(tree, ref, chosen.paneId ?? undefined);
+      const result = openTab(tree, bound, chosen.paneId ?? undefined);
       commit(result.tree, result.paneId);
     },
 
@@ -517,6 +624,36 @@ export const useLayout = create<LayoutState>((set, get) => {
       const stillWanted = Object.values(next).some((one) => one.place === pin.place);
       const home = paneWithPlace(tree, pin.place);
       commit(home && !stillWanted ? clearPlace(tree, home.id) : tree, undefined, next);
+    },
+
+    /* Companions do not touch the tree, so neither of these goes through `commit`.
+     *
+     * That is the point of them: a panel in a tab's own column is not a tab, has no pane, and
+     * cannot be dragged into a split — so none of the invariants `commit` exists to hold can be
+     * broken by attaching one. It is a list beside a tab, stored under its own key. */
+    attach: (hostKey, ref) => {
+      if (!hostKey) return;
+      const { companions } = get();
+      const held = companions[hostKey] ?? [];
+      // Idempotent, so the control that opens a panel is also safe to press twice.
+      if (held.some((one) => tabKey(one) === tabKey(ref))) return;
+      const next = { ...companions, [hostKey]: [...held, ref] };
+      writeCompanions(next);
+      set({ companions: next });
+    },
+
+    detach: (hostKey, key) => {
+      const { companions } = get();
+      const held = companions[hostKey];
+      if (!held) return;
+      const kept = held.filter((one) => tabKey(one) !== key);
+      const next = { ...companions };
+      // An empty column is no column: drop the host entirely rather than storing an empty list
+      // that would be indistinguishable from one on every later read.
+      if (kept.length) next[hostKey] = kept;
+      else delete next[hostKey];
+      writeCompanions(next);
+      set({ companions: next });
     },
 
     focus: (paneId) =>

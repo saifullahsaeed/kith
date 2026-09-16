@@ -37,7 +37,7 @@ import { copyText } from "@/lib/files";
 import { time, when } from "@/lib/dates";
 import { ERRAND_PART, STEER_PART, USAGE_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
-import { summariseRun } from "@/lib/tool-language";
+import { callText, describeCall, summariseRun, summaryLine } from "@/lib/tool-language";
 import { cn } from "@/lib/utils";
 import {
   ActionBarMorePrimitive,
@@ -1008,31 +1008,17 @@ const AssistantMessage: FC = () => {
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
-                // A rail, so the reply reads as prose and the machinery reads as a log beside
-                // it. Reasoning and tool rows used to sit at the same weight and indent as the
-                // writing, which left three kinds of thing competing for the same column and
-                // the least interesting of them — a collapsed disclosure — often winning.
-                return (
-                  <div
-                    data-slot="aui_chain-of-thought"
-                    // `border-foreground/10` rather than the token: `--border` is already only
-                    // 12% alpha, so the usual `border-border/50` computed to six percent and
-                    // the rail was there in the DOM and invisible on the screen. Neutral
-                    // rather than amber — the rail is a margin, and amber is the colour of
-                    // what he says.
-                    className="border-foreground/20 my-2 space-y-0.5 border-s ps-3.5"
-                  >
-                    {children}
-                  </div>
-                );
+                return <ActivityRun group={part}>{children}</ActivityRun>;
               case "group-tool":
                 if (ToolGroup) {
                   return <ToolGroup group={part}>{children}</ToolGroup>;
                 }
-                // A run of one is not a run. Wrapping a single call in "1 tool call ›" put a
-                // row that says nothing in front of the row that says what he did.
-                if (part.indices.length <= 1) return children;
-                return <ToolRun group={part}>{children}</ToolRun>;
+                /* Flat. The disclosure moved out to the chain that contains this run, so a
+                 * second one here would mean opening the strip only to find another closed
+                 * row inside it — two clicks to read one command. `ActivityRun` summarises
+                 * across the whole chain, which is the only level at which the summary is
+                 * true: a run is almost always length 1, because he thinks between calls. */
+                return children;
               case "group-reasoning": {
                 if (ReasoningGroup) {
                   return <ReasoningGroup group={part}>{children}</ReasoningGroup>;
@@ -1130,50 +1116,99 @@ const SteeredIn: FC<{ text: string }> = ({ text }) => (
 );
 
 /**
- * A run of tool calls, collapsed to one line that says what he touched.
+ * One run of work, as one line.
  *
- * The names are read off the message's own parts rather than passed in, because the group part
- * carries only the indices it spans.
+ * **Why the chain and not the tool run.** `ToolRun` already collapsed consecutive tool calls,
+ * and almost never fired: `groupBy` splits a chain into alternating `group-tool` and
+ * `group-reasoning`, and Kith thinks between calls, so nearly every tool run has length one and
+ * fell through to a bare row. A real transcript came out as twelve call rows interleaved with
+ * five rows reading only "Reasoning" — seventeen rows of apparatus around five sentences, and
+ * five of them carried no information at all. The grouping was not missing; it was applied one
+ * level too deep to ever have anything to group.
+ *
+ * So the unit is the chain: everything between two things he *said*. That is also the honest
+ * unit for a reader, who is asking "what did he do between these two paragraphs", not "how many
+ * calls were adjacent".
+ *
+ * Collapsed by default, and nothing is hidden — the calls, their output and the thinking are
+ * all one click away, drawn by the same components as before against the same rail.
  */
-const ToolRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, children }) => {
-  // Joined into one string rather than returned as an array: the state selector compares by
-  // identity, and a fresh array on every render is a render on every render.
+const ActivityRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, children }) => {
+  /* Joined into one string rather than an array, for the reason `ToolRun` gives: the state
+   * selector compares by identity, so a fresh array every render is a render every render. The
+   * reasoning marker rides in the same string to keep this to one subscription. */
   const joined = useAuiState((s) =>
     group.indices
       .map((index) => {
         const part = s.message.parts[index];
-        return part && part.type === "tool-call" ? part.toolName : "";
+        if (!part) return "";
+        if (part.type === "tool-call") return part.toolName;
+        return part.type === "reasoning" ? THOUGHT_MARK : "";
       })
       .join(RUN_SEPARATOR),
   );
-  const names = joined.split(RUN_SEPARATOR).filter(Boolean);
+
+  /* When the chain holds exactly one call, its own phrase — "ran ./domaincheck2.sh --test" —
+   * rather than the count. A count is only a summary when there is something to summarise;
+   * "1 command" is strictly less than the row it replaced, and this is the common case, since
+   * he usually says something between calls. Unconditional and self-contained so it stays one
+   * subscription returning a plain string: it answers "" whenever there is not exactly one. */
+  const sole = useAuiState((s) => {
+    const calls = group.indices
+      .map((index) => s.message.parts[index])
+      .filter((part) => part?.type === "tool-call");
+    if (calls.length !== 1) return "";
+    const call = calls[0] as { toolName: string; args?: Record<string, unknown> };
+    return summaryLine(callText(describeCall(call.toolName, call.args)));
+  });
+
+  const entries = joined.split(RUN_SEPARATOR).filter(Boolean);
+  const names = entries.filter((one) => one !== THOUGHT_MARK);
+  const thought = entries.length > names.length;
+  const running = group.status.type === "running";
   const run = summariseRun(names);
 
+  /* "3 commands · thought", or the single call's own phrase. No duration on the thinking:
+   * reasoning parts do not carry one here — `ReasoningTrigger` takes a `duration` prop that
+   * nothing in this thread supplies — and a number invented for the sake of the line would be
+   * the one part of this summary a reader could not check. */
+  const summary = [sole || run.text, thought ? "thought" : ""].filter(Boolean).join(" · ");
+
+  // Nothing to say and nothing to open. A chain that is only a brief thought is drawn inline by
+  // `ReasoningRun` already; wrapping that in "· thought ›" would put a disclosure in front of
+  // the one line it was hiding.
+  if (!names.length && !running) return <>{children}</>;
+
   return (
-    <>
+    <div data-slot="aui_chain-of-thought" className="my-2">
       <ToolGroupRoot variant="ghost">
         <ToolGroupTrigger
-          count={group.indices.length}
-          active={group.status.type === "running"}
-          summary={run.text}
+          count={names.length}
+          active={running}
+          summary={summary}
           icons={run.icons}
         />
-        <ToolGroupContent>{children}</ToolGroupContent>
+        <ToolGroupContent>
+          {/* The rail, kept — it is what makes the machinery read as a log beside the prose
+              rather than more prose. `border-foreground/20` rather than the token, because
+              `--border` is 12% alpha and `border-border/50` computed to six percent: present in
+              the DOM, invisible on the screen. */}
+          <div className="border-foreground/20 mt-1 space-y-0.5 border-s ps-3.5">{children}</div>
+        </ToolGroupContent>
       </ToolGroupRoot>
-      {/* A way into a plugin's tab, **outside** the collapse.
-        *
-        * It was inside, on each tool result, which is the same as not existing: seventeen
-        * `draw` calls collapse to one line reading "18 tools", so the button was two clicks
-        * and a guess away — expand the group, expand a row. Reported as it not appearing at
-        * all, which is the right way to describe a thing nobody would ever find.
-        *
-        * Here it is one card per plugin per run, at the level the run itself is at, which is
-        * the level the *result* of the run lives at: what he drew is the board, not the
-        * seventeen writes that produced it. */}
+
+      {/* A way into a plugin's tab, outside the collapse — one card per plugin per run, at the
+          level the *result* of the run lives at. It used to hang off `ToolRun`, which now
+          renders flat, so it moved up with the disclosure rather than being lost with it. */}
       <PluginRunOutcome names={names} />
-    </>
+    </div>
   );
 };
+
+/** Stands in for a reasoning part while the chain's contents are read as one joined string. A
+ *  unit separator already delimits entries, so this only has to be something no tool is named. */
+const THOUGHT_MARK = "\u0002thought";
+
 
 /** A unit separator: safe in a way a comma or a space is not, since tool names are joined and
  *  split back apart. */

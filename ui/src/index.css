@@ -815,3 +815,21 @@
   border: none;
   border-top: 1px solid color-mix(in oklab, currentColor 20%, transparent);
 }
+
+/* ── Motion that is only decoration ───────────────────────────────────────────────────────
+ *
+ * Every message enters with a fade and a slide. That is decoration: it says nothing the
+ * message does not already say by being there, and for someone who has asked their system for
+ * less motion it is a page that moves on every turn of a conversation.
+ *
+ * Deliberately not a blanket `* { animation: none }`. Most of the motion here is *doing* a
+ * job — the spinner on a running command, the pulse on a chat that is waiting for you, the
+ * breathing orb that means he is working — and switching those off would take away the only
+ * signal some of them carry. What is turned off is the set that exists to look nice. */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="aui_assistant-message-root"],
+  [data-slot="aui_user-message-root"],
+  [data-slot="aui_system-message"] {
+    animation: none;
+  }
+}

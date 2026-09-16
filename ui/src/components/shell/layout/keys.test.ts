@@ -125,7 +125,7 @@ describe("carrying a command out", () => {
     useLayout.setState({
       tree: split("row", [
         pane([{ surface: "work" }, { surface: "board" }], 0, "left"),
-        pane([{ surface: "inbox" }], 0, "right"),
+        pane([{ surface: "context" }], 0, "right"),
       ]),
       focused: "left",
       order: ["left", "right"],
@@ -149,7 +149,7 @@ describe("carrying a command out", () => {
   it("throws the active tab into the pane next door, into its strip and not as a split", () => {
     run({ kind: "throwTab", delta: 1 }, useLayout.getState());
     const tabs = panes(useLayout.getState().tree).map((one) => one.tabs.map(tabKey));
-    expect(tabs).toEqual([["board"], ["inbox", "work"]]);
+    expect(tabs).toEqual([["board"], ["context", "work"]]);
   });
 
   it("does nothing at the far edge, rather than something arbitrary", () => {
@@ -178,6 +178,6 @@ describe("carrying a command out", () => {
     run({ kind: "closePane" }, useLayout.getState());
     const tree = useLayout.getState().tree;
     expect(tree.kind, "the split collapsed to its surviving child").toBe("pane");
-    expect(panes(tree)[0].tabs.map(tabKey)).toEqual(["inbox"]);
+    expect(panes(tree)[0].tabs.map(tabKey)).toEqual(["context"]);
   });
 });

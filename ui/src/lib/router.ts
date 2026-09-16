@@ -45,17 +45,27 @@ function slugTab(slug: string): PanelTab | null {
   return (TABS as readonly string[]).includes(slug) ? (slug as PanelTab) : null;
 }
 
-/** Settings' tabs. Model and Tools are separate because they are separate decisions
- *  with separate costs — per token against per search — and each saves on its own. */
+/** Settings' pages. Model and Tools are separate because they are separate decisions with
+ *  separate costs — per token against per search — and each saves on its own.
+ *
+ * `advanced` is gone, and its thirty-one settings are here instead: `budget`, `context`,
+ * `files` and `mcp`. A page called Advanced is where a setting goes when nobody decided where
+ * it belongs, and it had grown a second tab strip of its own to cope — seven nested tabs, two
+ * of which (Chat, Context) named a page that already existed. The server still groups them the
+ * same way; `TUNING_PAGES` in `settings-page.tsx` is the map. */
 const SETTINGS_TABS = [
   "model",
   "persona",
   "chat",
+  "tools",
   "skills",
   "plugins",
-  "tools",
+  "mcp",
   "permissions",
-  "advanced",
+  "budget",
+  "context",
+  "files",
+  "updates",
 ] as const;
 
 export type SettingsTab = (typeof SETTINGS_TABS)[number];

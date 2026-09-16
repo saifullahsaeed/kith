@@ -74,17 +74,29 @@ const PROJECTS_SHOWN = 4;
  * the one you are working in is expanded, the rest are a name and a count until you ask, and
  * search is the way into anything older.
  */
+/** A conversation's title, ready to be read at the front of a row.
+ *
+ * The title is the message that started the conversation, verbatim — which is the right source
+ * (it is what *you* said, so it is what you will look for) and the wrong string. Paste a snippet
+ * to ask about it and the row opens with a code fence; start with a heading and it opens with
+ * hashes. It only began to matter when the title moved from a fallback to the first line of
+ * every row, so the cleanup lives here with the row rather than in the server's naming.
+ *
+ * Deliberately not a markdown parser. Three leading marks cover what people actually paste, and
+ * anything cleverer would start rewriting titles that were fine. */
+function rowTitle(title: string): string {
+  return title.replace(/^[\s`>#*-]+/, "").trim() || title.trim();
+}
+
 export function HistoryPanel({
   activeId,
   onOpen,
   onNew,
-  onClose,
 }: {
   activeId: string;
   onOpen: (id: string) => void;
   /** A fresh chat, optionally already bound to a project — see workspace's `pendingProject`. */
   onNew: (projectId?: number | null) => void;
-  onClose: () => void;
 }) {
   const cache = useQueryClient();
   const prompt = usePrompt();
@@ -177,12 +189,14 @@ export function HistoryPanel({
         )
       )
         return;
+      /* Clears the search, and stops there. It used to close the panel once the search was
+       * empty, which suited a tab you could reopen from its own strip. The rail is furniture:
+       * a stray Escape should not make the way you reach every conversation disappear. */
       if (query) setQuery("");
-      else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [query, onClose]);
+  }, [query]);
 
   // Grouped in the order the server sent them (most recent first), never re-sorted: the
   // listing's order is the answer to "what was I just doing", and a client that sorts it
@@ -269,37 +283,48 @@ export function HistoryPanel({
 
   return (
     <aside className="bg-sidebar/40 flex h-full min-h-0 w-full flex-col backdrop-blur-md">
-      {/* No title. The pane's tab is the title now, and a panel that repeats it spends a line
-          of a 240px column saying what the tab above it already said. What is left here is the
-          part a tab cannot carry: the thing you came to do. */}
-      <div className="border-border/60 flex items-center gap-2 border-b px-4 py-2.5">
-        <MessageSquare className="text-muted-foreground size-4" />
-        <div className="flex-1" />
-        <Button size="sm" variant="outline" onClick={() => onNew()}>
+      {/* No title, and no longer a lone speech-bubble icon either. The panel is the whole left
+          edge of the window now — nothing has to announce that it is the conversation list, and
+          the icon was spending a row saying so. What is left is the thing you came to do, at
+          the full width of the rail rather than tucked into a corner of it. */}
+      <div className="px-2.5 pt-2.5 pb-1.5">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onNew()}
+          className="h-8 w-full justify-center gap-1.5 text-[12.5px]"
+        >
           <Plus className="size-3.5" />
-          New
+          New chat
         </Button>
       </div>
 
-      <div className="border-border/60 relative border-b px-2.5 py-2">
-        <Search className="text-muted-foreground/50 pointer-events-none absolute top-1/2 left-4.5 size-3.5 -translate-y-1/2" />
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search everything said…"
-          aria-label="Search conversations"
-          className="border-border/60 bg-card/60 focus-visible:border-ring w-full rounded-lg border py-1.5 pr-7 pl-8 text-xs outline-none"
-        />
-        {query ? (
-          <button
-            type="button"
-            onClick={() => setQuery("")}
-            aria-label="Clear the search"
-            className="text-muted-foreground/50 hover:text-foreground absolute top-1/2 right-4 -translate-y-1/2"
-          >
-            <X className="size-3.5" />
-          </button>
-        ) : null}
+      <div className="px-2.5 pb-2">
+        {/* The box the marks are positioned against is the input's own, not the padded block
+            around it. `top-1/2` only means "centred on the field" while that block's padding is
+            symmetric — it was `py-2`, this is `pb-2`, and the icon sat 4px low the moment the
+            top half went. A wrapper that *is* the field cannot drift when the padding changes
+            again. */}
+        <div className="relative">
+          <Search className="text-muted-foreground/50 pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search everything said…"
+            aria-label="Search conversations"
+            className="border-border/60 bg-card/60 focus-visible:border-ring w-full rounded-lg border py-1.5 pr-7 pl-8 text-xs outline-none"
+          />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Clear the search"
+              className="text-muted-foreground/50 hover:text-foreground absolute top-1/2 right-1.5 -translate-y-1/2"
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {hits !== null ? (
@@ -637,18 +662,30 @@ export function HistoryPanel({
                                   className="bg-kith absolute inset-y-1 left-0 w-0.5 rounded-full"
                                 />
                               ) : null}
-                              {/* Where he left it, not how you opened it. Two lines, because one
-                                truncates every sentence at the verb; the title is the fallback
-                                only while he has yet to say anything. */}
-                              <span
-                                className={cn(
-                                  "min-w-0 flex-1 text-[12.5px] leading-[1.45]",
-                                  item.lastSaid
-                                    ? "line-clamp-2"
-                                    : "text-muted-foreground truncate italic",
-                                )}
-                              >
-                                {item.lastSaid || item.title}
+                              {/* What it is, then where he left it — one line each.
+
+                                  This showed `lastSaid` over two clamped lines with the title as
+                                  a fallback, on the reasoning that a history list is asked what
+                                  came of something. True, but it answered only that: every row
+                                  opened mid-sentence in his voice ("Right — the CI script. Let me
+                                  mirror the AWS one's…"), so the list read as a column of
+                                  fragments with no way to tell one afternoon from another, and
+                                  nothing in it matched the words you would search for.
+
+                                  Both facts fit. The title is what started it, in your words,
+                                  which is what makes a row identifiable and scannable; his last
+                                  line sits under it, quieter, which is what makes it current.
+                                  One line each, so a row cannot outgrow the heading that groups
+                                  it — the constraint the two-line version was written to keep. */}
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[12.5px] leading-[1.4]">
+                                  {rowTitle(item.title)}
+                                </span>
+                                {item.lastSaid ? (
+                                  <span className="text-muted-foreground/80 mt-0.5 block truncate text-[11px] leading-[1.35]">
+                                    {item.lastSaid}
+                                  </span>
+                                ) : null}
                               </span>
                               {/* Two states a row can be in that its text cannot say.
                                 *

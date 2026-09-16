@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { choosePane, DEFAULT_PLACEMENT, isPlacementMode, modeFor } from "./place";
-import { pane, split, type Node } from "./tree";
+import { choosePane, DEFAULT_PLACEMENT, isPlacementMode, modeFor, type PlacementMode } from "./place";
+import { pane, split, type Node, type SurfaceId } from "./tree";
 
 const chat = (id: string) => ({ surface: "chat" as const, conversationId: id });
 const work = { surface: "work" as const };
@@ -28,7 +28,23 @@ function arrangement(): Node {
   );
 }
 
-const base = { widths: {} as Record<string, number>, placements: {} };
+/* The section rule, asked for by name.
+ *
+ * These tests are about the waterfall's rungs, and most of them are about the `own` rung. They
+ * used to get it from an empty `placements` because `own` was the default; the default is
+ * `focused` now — one surface at a time, full width — so the rung under test has to be named or
+ * every one of them would be testing the new default instead. What the default *is* has its own
+ * test below. */
+const SECTION: Partial<Record<SurfaceId, PlacementMode>> = {
+  chat: "own",
+  work: "own",
+  board: "own",
+  settings: "own",
+  context: "own",
+  plugin: "own",
+};
+
+const base = { widths: {} as Record<string, number>, placements: SECTION };
 
 describe("the waterfall", () => {
   it("gives a caller that names a pane that pane, while it exists", () => {
@@ -87,7 +103,7 @@ describe("the waterfall", () => {
      * because between "with its kind" and "visible", visible wins. */
     const choice = choosePane(arrangement(), chat("c-2"), {
       widths: { chats: 36, sidebar: 240, "work-pane": 300 },
-      placements: {},
+      placements: SECTION,
       focused: "sidebar",
     });
     expect(choice).toEqual({ paneId: null, beside: true });
@@ -146,10 +162,23 @@ describe("the waterfall", () => {
 });
 
 describe("the modes themselves", () => {
-  it("defaults to own — the section rule — everywhere", () => {
-    expect(DEFAULT_PLACEMENT).toBe("own");
-    expect(modeFor({}, "chat")).toBe("own");
+  /* The default moved from `own` to `focused` when the window stopped opening as three
+   * standing columns. Under `own`, opening Work raised a column of its own and cut the thread
+   * down to make room for it; `focused` opens it as a tab in the pane you are already in, and
+   * splitting stays the deliberate gesture it always was — drag a tab to a pane's edge. */
+  it("defaults to focused — open where you are, split when you ask", () => {
+    expect(DEFAULT_PLACEMENT).toBe("focused");
+    expect(modeFor({}, "chat")).toBe("focused");
     expect(modeFor({ chat: "grouped" }, "chat")).toBe("grouped");
+  });
+
+  it("puts a surface in the pane you are looking at, without splitting it", () => {
+    const choice = choosePane(arrangement(), settings, {
+      widths: {},
+      placements: {},
+      focused: "chats",
+    });
+    expect(choice).toEqual({ paneId: "chats", beside: false });
   });
 
   it("refuses to trust a mode this build does not know", () => {

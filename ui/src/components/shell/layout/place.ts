@@ -58,7 +58,20 @@ export const PLACEMENT_MODES: readonly PlacementMode[] = [
   "beside",
 ];
 
-export const DEFAULT_PLACEMENT: PlacementMode = "own";
+/**
+ * Open where you are, and split only when you ask.
+ *
+ * This was `own` — raise a column of its own for each kind — which suited a window whose
+ * default arrangement was three standing columns. It is not the window any more: the
+ * conversation list became the rail, alerts slide over the room, and what is left is one
+ * surface at a time with the whole width to read in. Under `own`, opening Work still cut the
+ * thread down to make room for a column nobody asked for.
+ *
+ * `focused` puts it in the pane you are looking at, as a tab. Splitting did not go anywhere —
+ * drag a tab to a pane's edge and it splits there, which is the deliberate gesture the
+ * arrangement used to make for you.
+ */
+export const DEFAULT_PLACEMENT: PlacementMode = "focused";
 
 /** Read a placement out of storage. Junk from a build that named a mode differently, or a
  *  surface since renamed, is ignored rather than trusted — the same rule the tree's structural

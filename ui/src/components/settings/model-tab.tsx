@@ -145,7 +145,7 @@ export function ModelTab({
       ) : null}
 
       {probe.probe.models.length > 0 ? (
-        <Section title="Model">
+        <Section title="Choose one">
           <ModelStep
             models={probe.probe.models}
             suggested={probe.probe.suggested}

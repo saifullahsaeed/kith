@@ -1,9 +1,15 @@
-import { FolderOpen, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 
 import { StandingGrants } from "@/components/settings/standing-grants";
 import { usePermissions } from "@/hooks/use-permissions";
 import { MODE_LABELS, type PermissionMode } from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import {
+  PathValue,
+  SettingRow,
+  SettingRows,
+  SettingSection,
+} from "@/components/settings/setting-row";
 
 /**
  * What he may do on this computer without asking.
@@ -38,17 +44,11 @@ export function PermissionsTab() {
   const { mode, setMode, workspace, pending } = usePermissions();
 
   return (
-    <div className="space-y-8">
-      <section className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium">When he asks</h3>
-          <p className="text-muted-foreground max-w-prose text-[13px]">
-            He runs on your real computer. This is how much rope he has before he stops to check
-            with you — and it is the same control as the one in the title bar, which is where to
-            reach for it mid-conversation.
-          </p>
-        </div>
-
+    <div>
+      <SettingSection
+        title="When he asks"
+        sub="He runs on your real computer. This is how much rope he has before he stops to check with you."
+      >
         {/* Three cards rather than a select. The difference between these is a paragraph, not a
             word, and a dropdown shows you one hint at a time — so choosing between them means
             opening it three times and remembering. */}
@@ -63,13 +63,18 @@ export function PermissionsTab() {
                 onClick={() => setMode(one)}
                 aria-pressed={chosen}
                 className={cn(
-                  "rounded-lg border p-3 text-left transition",
+                  "rounded-xl border p-3 text-left transition",
                   chosen
-                    ? "border-ring/60 bg-muted/60"
-                    : "border-border/60 hover:border-border hover:bg-muted/30",
+                    ? "border-kith/45 bg-kith-soft"
+                    : "border-border/60 bg-card hover:border-border hover:bg-accent/30",
                 )}
               >
-                <span className="flex items-center gap-1.5 text-[13px] font-medium">
+                <span
+                  className={cn(
+                    "flex items-center gap-1.5 text-[13px] font-semibold",
+                    chosen && "text-kith",
+                  )}
+                >
                   <Icon
                     className={cn(
                       "size-3.5",
@@ -79,7 +84,7 @@ export function PermissionsTab() {
                   />
                   {MODE_LABELS[one].label}
                 </span>
-                <span className="text-muted-foreground mt-1 block text-[12px] leading-snug">
+                <span className="text-muted-foreground mt-1.5 block text-[11.5px] leading-[1.45]">
                   {MODE_LABELS[one].hint}
                 </span>
               </button>
@@ -87,29 +92,42 @@ export function PermissionsTab() {
           })}
         </div>
 
+        {/* Bypass needs the warning beside it, not in the card's own hint where it reads as one
+            more feature of the option. The container that made it safe is gone. */}
+        {mode === "bypass" ? (
+          <div className="border-destructive/26 bg-destructive/8 mt-2.5 flex gap-2.5 rounded-xl border p-3 text-[11.5px] leading-[1.5]">
+            <ShieldAlert className="text-destructive mt-px size-4 shrink-0" />
+            <p>
+              <b className="font-semibold">Bypass checks nothing.</b> It was safe when Kith ran
+              inside a container, and that container is gone. On this machine he has your files
+              and your shell.
+            </p>
+          </div>
+        ) : null}
+
         {pending.length > 0 ? (
-          <p className="text-muted-foreground text-[12px]">
+          <p className="text-muted-foreground mt-2.5 text-[11.5px]">
             {pending.length === 1
               ? "He is waiting on one answer right now."
               : `He is waiting on ${pending.length} answers right now.`}{" "}
             Those appear in the conversation, not here.
           </p>
         ) : null}
-      </section>
+      </SettingSection>
 
       {/* Where "inside his folder" points. The mode's hints all turn on it, and it was readable
           only from a readiness check on another pane. */}
       {workspace?.root ? (
-        <section className="space-y-2">
-          <h3 className="text-sm font-medium">Where he works</h3>
-          <p className="text-muted-foreground max-w-prose text-[13px]">
-            Everything the modes above call "his folder".
-          </p>
-          <p className="flex items-center gap-2 rounded-lg border border-border/60 px-3 py-2 font-mono text-[12px]">
-            <FolderOpen className="text-muted-foreground size-3.5 flex-none" />
-            <span className="truncate">{workspace.root}</span>
-          </p>
-        </section>
+        <SettingSection title="Where he works" sub={'Everything the modes above call "his folder".'}>
+          <SettingRows>
+            <SettingRow
+              label="His folder"
+              help="Reading, writing and running here is free in every mode. Everything outside it follows the setting above."
+            >
+              <PathValue>{workspace.root}</PathValue>
+            </SettingRow>
+          </SettingRows>
+        </SettingSection>
       ) : null}
 
       <StandingGrants />

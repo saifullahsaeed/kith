@@ -35,11 +35,9 @@
 /** Everything that can be a tab. `chat` is the only one that repeats. */
 export type SurfaceId =
   | "chat"
-  | "conversations"
   | "work"
   | "board"
   | "settings"
-  | "inbox"
   | "context"
   /* Every plugin surface, under one member.
    *
@@ -82,12 +80,15 @@ export type TabRef =
       view: string;
       /** Set only for a surface declaring `instances: "many"`. */
       instance?: string;
-      conversationId?: undefined;
+      /** Which conversation this surface is about — see `BOUND`. */
+      conversationId?: string;
       uid?: string;
     }
   | {
       surface: Exclude<SurfaceId, "chat" | "plugin">;
-      conversationId?: undefined;
+      /** Which conversation this surface is about — see `BOUND`. Unset on `board` and
+       *  `settings`, which are about the app rather than about a chat. */
+      conversationId?: string;
       plugin?: undefined;
       view?: undefined;
       instance?: undefined;
@@ -130,8 +131,28 @@ export type Edge = "left" | "right" | "top" | "bottom" | "center";
  * Keyed by conversation rather than by position, so a tab survives being moved, and so opening
  * a conversation that is already open focuses it instead of making a second copy of a live
  * runtime. */
+/**
+ * The surfaces that are *about* a conversation rather than about the app.
+ *
+ * Every one of these already took a `conversationId` — they just took whichever chat happened
+ * to be focused, worked out in `Workspace` and handed down. That inference is what let a click
+ * inside the Work pane re-elect a different conversation and point the Fold button at it; the
+ * fix at the time made the inference sticky, which narrowed the bug without removing what
+ * caused it. Naming the conversation on the tab removes it: a Work tab is about the chat it was
+ * opened from, for as long as it is open, whatever you click next.
+ *
+ * `board` and `settings` are deliberately absent — they are about Kith, not about a chat.
+ */
+export const BOUND: ReadonlySet<SurfaceId> = new Set(["work", "context", "plugin"]);
+
 export function tabKey(ref: TabRef): string {
   if (ref.surface === "chat") return `chat:${ref.conversationId}`;
+  /* `@<conversation>` for a bound surface, which is what makes Work-for-this-chat and
+   * Work-for-that-chat two tabs rather than one tab that changes its mind. Invariant 4 is
+   * unchanged and now does more: the same surface for the same conversation is still a
+   * singleton, so asking for it twice focuses the one already open. */
+  const bound =
+    BOUND.has(ref.surface) && ref.conversationId ? `@${ref.conversationId}` : "";
   /* `plugin:<id>/<view>` — the namespace prefix and the plugin/view boundary use different
    * separators, so neither is ambiguous, and a plugin id contains neither `/` nor `#`.
    *
@@ -141,9 +162,9 @@ export function tabKey(ref: TabRef): string {
    * else stays a singleton by construction — which is invariant 4, unchanged. */
   if (ref.surface === "plugin") {
     const base = `plugin:${ref.plugin}/${ref.view}`;
-    return ref.instance ? `${base}#${ref.instance}` : base;
+    return (ref.instance ? `${base}#${ref.instance}` : base) + bound;
   }
-  return ref.surface;
+  return ref.surface + bound;
 }
 
 let counter = 0;

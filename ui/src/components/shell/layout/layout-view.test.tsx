@@ -330,7 +330,7 @@ describe("a railed pane", () => {
 describe("a pinned tab", () => {
   beforeEach(() => {
     useLayout.setState({
-      tree: pane([{ surface: "work" }, { surface: "board" }, { surface: "inbox" }], 0, "only"),
+      tree: pane([{ surface: "work" }, { surface: "board" }, { surface: "context" }], 0, "only"),
       focused: "only",
       order: ["only"],
       pins: { board: { place: "p", slot: { direction: "row", index: 0, size: 100 } } },
@@ -348,7 +348,7 @@ describe("a pinned tab", () => {
     const strip = Array.from(document.querySelectorAll("[data-tab]")).map((one) =>
       one.getAttribute("data-tab"),
     );
-    expect(strip).toEqual(["board", "work", "inbox"]);
+    expect(strip).toEqual(["board", "work", "context"]);
   });
 
   it("has no close button — that X is the accidental one", () => {
@@ -379,7 +379,7 @@ describe("a zoomed pane", () => {
     useLayout.setState({
       tree: split("row", [
         pane([{ surface: "work" }], 0, "left"),
-        pane([{ surface: "inbox" }], 0, "right"),
+        pane([{ surface: "context" }], 0, "right"),
       ]),
       focused: "left",
       order: ["left", "right"],

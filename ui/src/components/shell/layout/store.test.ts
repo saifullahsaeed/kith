@@ -36,13 +36,12 @@ afterEach(() => {
 });
 
 describe("what the app opens as", () => {
-  it("is the three columns the fixed layout had", () => {
+  /* One pane, full width. Work is a tab in the pane you are looking at now rather than a
+   * column of its own — see `DEFAULT_PLACEMENT` — and the conversation list is the rail. */
+  it("is a single full-width chat pane", () => {
     const tree = defaultLayout();
-    expect(panes(tree).map((one) => one.tabs.map(tabKey))).toEqual([
-      ["conversations"],
-      ["chat:"],
-      ["work"],
-    ]);
+    expect(tree.kind).toBe("pane");
+    expect(panes(tree).map((one) => one.tabs.map(tabKey))).toEqual([["chat:"]]);
   });
 
   it("is itself a legal layout", () => {
@@ -64,6 +63,20 @@ describe("reading what was stored", () => {
   it("refuses a layout from a version it does not know", () => {
     const tree = defaultLayout();
     localStorage.setItem(layoutKey, JSON.stringify({ version: layoutVersion + 1, tree }));
+
+    expect(readStored()).toBeNull();
+  });
+
+  /* The one that motivated the version bump. A v2 tree is structurally fine — `looksLikeLayout`
+   * walks it happily — and holds a `conversations` tab whose surface is no longer a key of
+   * `SURFACES`, which `LayoutView` derefs above every per-surface boundary. Version is the only
+   * thing that catches it. */
+  it("refuses a layout from before the list left the tree", () => {
+    const stale = split("row", [
+      pane([{ surface: "conversations" } as unknown as { surface: "work" }]),
+      pane([{ surface: "chat", conversationId: "" }]),
+    ]);
+    localStorage.setItem(layoutKey, JSON.stringify({ version: 2, tree: stale }));
 
     expect(readStored()).toBeNull();
   });
@@ -171,13 +184,13 @@ describe("where surfaces prefer to open", () => {
         settings: "beside",
         board: "somewhere-else",
         chat: 42,
-        inbox: "focused",
+        context: "focused",
       }),
     );
 
     const read = readPlacements();
     expect(read.settings).toBe("beside");
-    expect(read.inbox).toBe("focused");
+    expect(read.context).toBe("focused");
     expect(read.board).toBeUndefined();
     expect(read.chat).toBeUndefined();
   });
@@ -211,7 +224,9 @@ describe("the default is the section rule", () => {
     useLayout.setState({ tree: pane([{ surface: "work" }]), focused: "" });
     const was = useLayout.getState().placements;
     try {
-      useLayout.setState({ placements: {} });
+      // The section rule, named: it is no longer the default, but it is still the rung this
+      // test is about.
+      useLayout.setState({ placements: { settings: "own" } });
       useLayout.getState().open({ surface: "settings" });
 
       const tree = useLayout.getState().tree;
@@ -262,7 +277,7 @@ describe("reading pins back", () => {
       JSON.stringify({
         work: { place: "p", slot: { direction: "row", index: 0, size: 20 } },
         board: { place: "p" },
-        inbox: { place: "", slot: { direction: "row", index: 0, size: 20 } },
+        plugin: { place: "", slot: { direction: "row", index: 0, size: 20 } },
         settings: { place: "p", slot: { direction: "sideways", index: 0, size: 20 } },
         context: { place: "p", slot: { direction: "row", index: -1, size: 20 } },
       }),
@@ -281,7 +296,7 @@ describe("pinning", () => {
     useLayout.setState({
       tree: split(
         "row",
-        [pane([{ surface: "conversations" }], 0, "left"), pane([{ surface: "work" }], 0, "right")],
+        [pane([{ surface: "board" }], 0, "left"), pane([{ surface: "work" }], 0, "right")],
         [30, 70],
       ),
       focused: "right",
@@ -302,11 +317,11 @@ describe("pinning", () => {
   it("puts a second pin on the same pane's existing place", () => {
     useLayout.getState().pin("work");
     useLayout.setState({ tree: useLayout.getState().tree });
-    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
-    useLayout.getState().pin("inbox");
+    useLayout.getState().open({ surface: "context" }, { paneId: "right" });
+    useLayout.getState().pin("context");
 
     const { pins } = useLayout.getState();
-    expect(pins.inbox.place).toBe(pins.work.place);
+    expect(pins.context.place).toBe(pins.work.place);
   });
 
   it("does not re-record a slot for a tab that is already pinned", () => {
@@ -321,7 +336,7 @@ describe("pinning", () => {
     /* A second tab so the pane outlives the close — the whole point being that reopening lands
      * in *that* pane rather than wherever `own` would have put it, which is a pane of its own
      * beside whatever is focused. */
-    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().open({ surface: "context" }, { paneId: "right" });
     useLayout.getState().pin("work");
     useLayout.getState().focus("left");
     useLayout.getState().close("work");
@@ -329,7 +344,7 @@ describe("pinning", () => {
 
     expect(
       panes(useLayout.getState().tree).find((one) => one.id === "right")!.tabs.map(tabKey),
-    ).toEqual(["work", "inbox"]);
+    ).toEqual(["work", "context"]);
   });
 
   it("rebuilds the pane at the recorded slot when the whole pane went with the tab", () => {
@@ -341,18 +356,18 @@ describe("pinning", () => {
     useLayout.getState().open({ surface: "work" });
 
     const tree = useLayout.getState().tree;
-    expect(panes(tree).map((one) => one.tabs.map(tabKey))).toEqual([["conversations"], ["work"]]);
+    expect(panes(tree).map((one) => one.tabs.map(tabKey))).toEqual([["board"], ["work"]]);
     expect(paneWithPlace(tree, place)).not.toBeNull();
   });
 
   it("keeps pinned tabs at the front of the strip however they are dropped", () => {
-    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
-    useLayout.getState().pin("inbox");
+    useLayout.getState().open({ surface: "context" }, { paneId: "right" });
+    useLayout.getState().pin("context");
     // Aim the unpinned tab at the very front of the strip. Invariant 7 sends it back.
     useLayout.getState().move("work", "right", 0);
 
     expect(panes(useLayout.getState().tree).find((one) => one.id === "right")!.tabs.map(tabKey))
-      .toEqual(["inbox", "work"]);
+      .toEqual(["context", "work"]);
   });
 
   it("carries the pin across a rename, which is how a pinned draft chat survives its first turn", () => {
@@ -368,23 +383,23 @@ describe("pinning", () => {
   });
 
   it("drops the place with the last pin on it, and not before", () => {
-    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().open({ surface: "context" }, { paneId: "right" });
     useLayout.getState().pin("work");
-    useLayout.getState().pin("inbox");
+    useLayout.getState().pin("context");
     const place = useLayout.getState().pins.work.place;
 
     useLayout.getState().unpin("work");
-    expect(paneWithPlace(useLayout.getState().tree, place), "inbox is still pinned there").not
+    expect(paneWithPlace(useLayout.getState().tree, place), "context is still pinned there").not
       .toBeNull();
 
-    useLayout.getState().unpin("inbox");
+    useLayout.getState().unpin("context");
     expect(paneWithPlace(useLayout.getState().tree, place)).toBeNull();
   });
 
   it("keeps a place while a pinned tab is closed, because it has somewhere to come back to", () => {
     useLayout.getState().pin("work");
     const place = useLayout.getState().pins.work.place;
-    useLayout.getState().open({ surface: "inbox" }, { paneId: "right" });
+    useLayout.getState().open({ surface: "context" }, { paneId: "right" });
     useLayout.getState().close("work");
     expect(paneWithPlace(useLayout.getState().tree, place)).not.toBeNull();
   });
@@ -398,7 +413,7 @@ describe("pinning", () => {
 describe("zoom", () => {
   beforeEach(() => {
     useLayout.setState({
-      tree: split("row", [pane([{ surface: "work" }], 0, "a"), pane([{ surface: "inbox" }], 0, "b")]),
+      tree: split("row", [pane([{ surface: "work" }], 0, "a"), pane([{ surface: "context" }], 0, "b")]),
       focused: "a",
       order: ["a", "b"],
       pins: {},
@@ -442,7 +457,7 @@ describe("saved arrangements", () => {
       tree: split(
         "row",
         [
-          pane([{ surface: "conversations" }], 0, "left"),
+          pane([{ surface: "board" }], 0, "left"),
           pane([{ surface: "chat", conversationId: "c-1" }], 0, "mid"),
           pane([{ surface: "work" }], 0, "right"),
         ],
@@ -462,7 +477,7 @@ describe("saved arrangements", () => {
     const saved = readLayouts();
     expect(saved.map((one) => one.name)).toEqual(["Writing"]);
     expect(panes(saved[0].tree).map((one) => one.tabs.map(tabKey))).toEqual([
-      ["conversations"],
+      ["board"],
       [],
       ["work"],
     ]);
@@ -505,14 +520,19 @@ describe("saved arrangements", () => {
     expect(paneWithPlace(useLayout.getState().tree, place)).not.toBeNull();
   });
 
+  /* Under the section rule. The empty-pane rung lives inside `own` on purpose — `focused` and
+   * `grouped` both mean "where you are", and an empty pane somewhere else is not where you are.
+   * With the default now `focused`, a blank pane is only refilled when a surface has been told
+   * to keep a section of its own. */
   it("fills the blank chat pane on the next open instead of splitting beside it", () => {
+    useLayout.setState({ placements: { chat: "own" } });
     useLayout.getState().saveLayout("Writing");
     useLayout.getState().loadLayout("Writing");
 
     useLayout.getState().open({ surface: "chat", conversationId: "c-2" });
 
     expect(panes(useLayout.getState().tree).map((one) => one.tabs.map(tabKey))).toEqual([
-      ["conversations"],
+      ["board"],
       ["chat:c-2"],
       ["work"],
     ]);
@@ -545,5 +565,81 @@ describe("saved arrangements", () => {
   it("answers with nothing at all rather than throwing", () => {
     localStorage.setItem(layoutsKey, "[ not json");
     expect(readLayouts()).toEqual([]);
+  });
+});
+
+/**
+ * Where a surface that is *about a conversation* lands.
+ *
+ * Routed inside `open` rather than at the call sites, because four of them ask for one — the
+ * plugins tab, both ways in from a tool result, and `open_surface` when the model asks — and
+ * four copies of a placement policy drift apart.
+ */
+describe("a bound surface opens into the chat's column", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useLayout.setState({
+      tree: pane([{ surface: "chat", conversationId: "c-1" }], 0, "here"),
+      focused: "here",
+      companions: {},
+      pins: {},
+      zoomed: null,
+    });
+  });
+
+  it("attaches a plugin surface instead of raising a tab", () => {
+    useLayout.getState().open({ surface: "plugin", plugin: "flowpad", view: "board" });
+
+    const tabs = panes(useLayout.getState().tree)[0]!.tabs.map(tabKey);
+    expect(tabs, "the strip still holds only the chat").toEqual(["chat:c-1"]);
+
+    const held = useLayout.getState().companions["chat:c-1"] ?? [];
+    expect(held.map((one) => one.surface)).toEqual(["plugin"]);
+  });
+
+  /* Stamped on the way in, so a panel opened from a tool result — which names a plugin and a
+   * view and nothing else — still knows which conversation it is showing. */
+  it("stamps the conversation onto a surface that arrived without one", () => {
+    useLayout.getState().open({ surface: "plugin", plugin: "flowpad", view: "board" });
+    expect(useLayout.getState().companions["chat:c-1"]![0]!.conversationId).toBe("c-1");
+  });
+
+  it("is idempotent, so asking twice does not stack two", () => {
+    useLayout.getState().open({ surface: "work" });
+    useLayout.getState().open({ surface: "work" });
+    expect(useLayout.getState().companions["chat:c-1"]).toHaveLength(1);
+  });
+
+  /* "Work about what?" has no answer with no chat in front of you, and a tab is the honest
+   * way to say so. */
+  it("falls back to a tab when no chat is focused", () => {
+    useLayout.setState({
+      tree: pane([{ surface: "board" }], 0, "here"),
+      focused: "here",
+      companions: {},
+    });
+    useLayout.getState().open({ surface: "work" });
+
+    expect(panes(useLayout.getState().tree)[0]!.tabs.map(tabKey)).toEqual(["board", "work"]);
+    expect(useLayout.getState().companions).toEqual({});
+  });
+
+  /* Naming a pane is an instruction, not a preference — the plugin delivery path relies on it. */
+  it("lets a caller that names a pane overrule the column", () => {
+    useLayout.getState().open({ surface: "work" }, { paneId: "here" });
+    expect(panes(useLayout.getState().tree)[0]!.tabs.map(tabKey)).toContain("work@c-1");
+    expect(useLayout.getState().companions).toEqual({});
+  });
+
+  it("board and settings are about Kith, so they stay tabs", () => {
+    useLayout.getState().open({ surface: "settings" });
+    expect(panes(useLayout.getState().tree)[0]!.tabs.map(tabKey)).toContain("settings");
+    expect(useLayout.getState().companions).toEqual({});
+  });
+
+  it("detaching the last panel drops the host rather than storing an empty column", () => {
+    useLayout.getState().open({ surface: "work" });
+    useLayout.getState().detach("chat:c-1", "work@c-1");
+    expect(useLayout.getState().companions).toEqual({});
   });
 });

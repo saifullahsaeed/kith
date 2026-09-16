@@ -7,6 +7,8 @@ import { AppHeader } from "@/components/shell/app-header";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 import { PluginSurface } from "@/components/shell/plugin-surface";
 import { PluginWebView } from "@/components/shell/plugin-web-view";
+import { Sidebar, useSidebar } from "@/components/shell/sidebar";
+import { Companions } from "@/components/shell/companions";
 import { useHostEffects } from "@/components/shell/use-host-effects";
 
 import { ChatPane } from "@/components/chat/chat-pane";
@@ -14,11 +16,14 @@ import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
 import { LayoutView } from "@/components/shell/layout/layout-view";
 import { useLayout } from "@/components/shell/layout/store";
+import { surfaceFor } from "@/components/shell/layout/surfaces";
 import { useCanAttach } from "@/lib/active-composer";
 import { useDrafts, useDraftedTabs } from "@/lib/drafts";
 import {
+  BOUND,
   hasTab as treeHasTab,
   panes as panesOf,
+  tabKey,
   type TabRef,
 } from "@/components/shell/layout/tree";
 import { DropZone } from "@/components/shell/drop-zone";
@@ -106,9 +111,16 @@ export function Workspace({
 
   /** Closing a surface from inside it — its own header X — is closing its tab. Two ways to
    *  shut the same thing that disagreed would be worse than one. */
+  /* The rail's own state, deliberately not in the layout store: it is furniture, not part of
+   * the arrangement, and it must survive the tree's version bumps rather than reset with them. */
+  const sidebar = useSidebar();
+
   const closeLayoutTab = useLayout((state) => state.close);
   const openSurface = useLayout((state) => state.open);
   const layoutTree = useLayout((state) => state.tree);
+  const companions = useLayout((state) => state.companions);
+  const attach = useLayout((state) => state.attach);
+  const detach = useLayout((state) => state.detach);
   /** Whether a surface is on screen anywhere, for the header's pressed states. Read from the
    *  tree rather than from a flag beside it, so the button cannot disagree with the layout. */
   const hasTab = useCallback((key: string) => treeHasTab(layoutTree, key), [layoutTree]);
@@ -132,21 +144,12 @@ export function Workspace({
       const routed =
         (key === "settings" && route.settingsTab) ||
         (key === "board" && panelOpen) ||
-        (key === "inbox" && inboxOpen) ||
         (key === "context" && route.contextOpen);
       if (routed) navigate(pathForHome());
     },
-    [closeLayoutTab, inboxOpen, navigate, panelOpen, route.contextOpen, route.settingsTab],
+    [closeLayoutTab, navigate, panelOpen, route.contextOpen, route.settingsTab],
   );
 
-  /** The header's buttons are toggles: pressing one twice puts the surface away again. */
-  const toggleSurface = useCallback(
-    (surface: "conversations" | "work" | "board" | "settings") => {
-      if (treeHasTab(layoutTree, surface)) closeTab(surface);
-      else openSurface({ surface });
-    },
-    [closeTab, layoutTree, openSurface],
-  );
 
 
 
@@ -226,6 +229,35 @@ export function Workspace({
     return lastChat.current;
   }, [focusedPane, layoutTree]);
 
+  /** The header's buttons are toggles: pressing one twice puts the surface away again.
+   *
+   * A surface that is *about* a conversation goes into that chat's own column rather than
+   * beside it in the strip — that is what a companion is, and why Work no longer arrives as a
+   * sibling tab of the conversation it describes. It needs a chat to belong to: with none in
+   * front of you it falls back to a tab, which is the honest answer for "Work about what?".
+   *
+   * `board` and `settings` are about Kith rather than about a chat, so they stay tabs. */
+  const toggleSurface = useCallback(
+    (surface: "work" | "board" | "settings") => {
+      if (BOUND.has(surface) && conversationId) {
+        const hostKey = tabKey({ surface: "chat", conversationId });
+        const key = tabKey({ surface, conversationId });
+        if ((companions[hostKey] ?? []).some((one) => tabKey(one) === key)) {
+          detach(hostKey, key);
+        } else {
+          attach(hostKey, { surface, conversationId });
+        }
+        return;
+      }
+
+      const ref: TabRef = { surface };
+      const key = tabKey(ref);
+      if (treeHasTab(layoutTree, key)) closeTab(key);
+      else openSurface(ref);
+    },
+    [attach, closeTab, companions, conversationId, detach, layoutTree, openSurface],
+  );
+
   // Reopen where you were. A reload used to land on an empty chat with the conversation you
   // were mid-way through two clicks away, looking gone.
   useEffect(() => {
@@ -276,10 +308,7 @@ export function Workspace({
     if (panelOpen) openSurface({ surface: "board" });
   }, [openSurface, panelOpen]);
   useEffect(() => {
-    if (inboxOpen) openSurface({ surface: "inbox" });
-  }, [openSurface, inboxOpen]);
-  useEffect(() => {
-    if (route.contextOpen) openSurface({ surface: "context" });
+    if (route.contextOpen) openSurface({ surface: "context", conversationId });
   }, [openSurface, route.contextOpen]);
 
 
@@ -403,21 +432,9 @@ export function Workspace({
    * One `ErrorBoundary` per surface, kept from the fixed layout: a pane that throws takes only
    * itself down, and the chat surviving a broken roadmap graph is the difference between "one
    * thing is wrong" and "Kith is down". */
-  const renderSurface = useCallback(
-    (ref: TabRef) => {
+  const surfaceBody = useCallback(
+    (ref: TabRef, onClose: () => void) => {
       switch (ref.surface) {
-        case "conversations":
-          return (
-            <ErrorBoundary where="Conversations" compact>
-              <HistoryPanel
-                activeId={conversationId}
-                onOpen={(id) => void openConversation(id)}
-                onNew={(project) => newConversation(project ?? null)}
-                onClose={() => closeTab("conversations")}
-              />
-            </ErrorBoundary>
-          );
-
         case "chat":
           /* No key here. `PaneView` keys the body on the tab's permanent `uid`, which is what
            * survives a draft chat being named — keying on the conversation unmounted the pane
@@ -441,10 +458,14 @@ export function Workspace({
         case "work":
           return (
             <ErrorBoundary where="Work" compact>
+              {/* `ref.conversationId`, not the focused chat. This is the whole point of the
+                  binding: the panel that can fold a transcript now acts on the conversation its
+                  tab names, so a click elsewhere cannot re-aim it. The fallback covers a tab
+                  stored before surfaces could be bound. */}
               <WorkPanel
                 activity={activity}
-                conversationId={conversationId}
-                onClose={() => closeTab("work")}
+                conversationId={ref.conversationId ?? conversationId}
+                onClose={onClose}
               />
             </ErrorBoundary>
           );
@@ -458,7 +479,7 @@ export function Workspace({
                   openTask={route.taskId}
                   onSelectTab={(t) => navigate(pathForTab(t))}
                   onOpenTask={(id) => navigate(pathForTask(id))}
-                  onClose={() => closeTab("board")}
+                  onClose={onClose}
                 />
               </Suspense>
             </ErrorBoundary>
@@ -474,17 +495,10 @@ export function Workspace({
                   onSelectTab={(t) => navigate(pathForSettings(t))}
                   onSaveConfig={onSaveConfig}
                   onConnectionSaved={onConnectionSaved}
-                  onClose={() => closeTab("settings")}
+                  onClose={onClose}
                 />
               </Suspense>
             </ErrorBoundary>
-          );
-
-        case "inbox":
-          return (
-            <Suspense fallback={<ScreenLoading />}>
-              <InboxPanel inbox={inbox} onClose={() => closeTab("inbox")} />
-            </Suspense>
           );
 
         case "plugin":
@@ -503,14 +517,14 @@ export function Workspace({
                 <PluginWebView
                   plugin={ref.plugin}
                   view={ref.view}
-                  conversationId={conversationId}
+                  conversationId={ref.conversationId ?? conversationId}
                 />
               ) : (
                 <PluginSurface
                   plugin={ref.plugin}
                   view={ref.view}
                   instance={ref.instance}
-                  conversationId={conversationId}
+                  conversationId={ref.conversationId ?? conversationId}
                 />
               )}
             </ErrorBoundary>
@@ -521,8 +535,8 @@ export function Workspace({
             <ErrorBoundary where="The context breakdown">
               <Suspense fallback={<ScreenLoading />}>
                 <ContextDetailScreen
-                  conversationId={conversationId}
-                  onClose={() => closeTab("context")}
+                  conversationId={ref.conversationId ?? conversationId}
+                  onClose={onClose}
                 />
               </Suspense>
             </ErrorBoundary>
@@ -542,6 +556,47 @@ export function Workspace({
       route.tab,
       route.taskId,
     ],
+  );
+
+  /**
+   * A tab, plus whatever it carries with it.
+   *
+   * A chat's companions are rendered *inside* its body — the same components a tab would get,
+   * through the same switch, with `detach` where `closeTab` would be. So Work in a chat's
+   * column and Work as a tab are the same panel; only where it sits differs, and neither
+   * spelling needs the other to know about it.
+   *
+   * Only chats carry a column. A companion is a surface that is about a conversation, and a
+   * Board with a Work panel bolted to its side would be a shape with nothing to mean.
+   */
+  const renderSurface = useCallback(
+    (ref: TabRef) => {
+      const host = surfaceBody(ref, () => closeTab(tabKey(ref)));
+      if (ref.surface !== "chat") return host;
+
+      const hostKey = tabKey(ref);
+      const held = companions[hostKey] ?? [];
+      if (!held.length) return host;
+
+      return (
+        <Companions
+          host={host}
+          onClose={(key) => detach(hostKey, key)}
+          panels={held.map((one) => {
+            const key = tabKey(one);
+            return {
+              key,
+              // The bare surface name: which conversation it is about is the tab it is sitting
+              // in, so "Work — find me a domain…" here would be repeating the tab above it.
+              title: surfaceFor(one).title,
+              icon: surfaceFor(one).icon,
+              body: surfaceBody(one, () => detach(hostKey, key)),
+            };
+          })}
+        />
+      );
+    },
+    [closeTab, companions, detach, surfaceBody],
   );
 
   /** The project the focused chat is bound to.
@@ -577,7 +632,9 @@ export function Workspace({
   });
   const titleForTab = useCallback(
     (ref: TabRef) => {
-      if (ref.surface !== "chat" || !ref.conversationId) return undefined;
+      // Any tab that names a conversation, not only a chat — `tabTitle` decides what to do
+      // with it, and a bound Work tab wants the same string a chat tab would get.
+      if (!ref.conversationId) return undefined;
       return known.find((one) => one.id === ref.conversationId)?.title;
     },
     [known],
@@ -615,8 +672,8 @@ export function Workspace({
                 onSaveConfig({ ...config, effort });
                 void patchServerConfig({ effort });
               }}
-              historyOpen={hasTab("conversations")}
-              onOpenHistory={() => toggleSurface("conversations")}
+              historyOpen={sidebar.open}
+              onOpenHistory={sidebar.toggle}
               onNewConversation={() => newConversation()}
               elsewhere={elsewhere}
               /* The chats holding unsent text, excluding the one in front of you — whose draft is
@@ -625,20 +682,27 @@ export function Workspace({
               drafting={drafting.filter((id) => id !== conversationId)}
               onGoToDraft={(id) => {
                 if (id) void openConversation(id);
-                else openSurface({ surface: "conversations" });
+                else sidebar.setOpen(true);
               }}
               onGoToWorking={(id) => {
                 // One: go straight to it, which is the whole point of knowing where. Several: open
                 // the list, because picking is the question and the panel is where it is answered.
                 if (id) void openConversation(id);
-                else openSurface({ surface: "conversations" });
+                else sidebar.setOpen(true);
               }}
               unread={inbox.unread}
-              workOpen={hasTab("work")}
+              workOpen={
+                conversationId
+                  ? (companions[tabKey({ surface: "chat", conversationId })] ?? []).some(
+                      (one) => one.surface === "work",
+                    )
+                  : hasTab("work")
+              }
               onOpenInbox={() => {
                 inbox.enableNotifications();
-                openSurface({ surface: "inbox" });
-                navigate(pathForMessages());
+                // Toggle: the bell is the way in and the way back out, so pressing it twice
+                // puts the alerts away the same as every other header control.
+                navigate(inboxOpen ? pathForHome() : pathForMessages());
               }}
               onOpenWork={() => toggleSurface("work")}
               onOpenPanel={() => {
@@ -647,7 +711,54 @@ export function Workspace({
               }}
               onOpenSettings={() => navigate(pathForSettings())}
             />
-            <LayoutView render={renderSurface} titleFor={titleForTab} markFor={markForTab} />
+            {/* The rail and the tree, side by side. The rail is furniture — outside the tree
+                on purpose, so no drag, split or tab-close can take the list away. */}
+            <div className="relative flex min-h-0 flex-1">
+              <Sidebar
+                open={sidebar.open}
+                width={sidebar.width}
+                onWidth={sidebar.setWidth}
+              >
+                <ErrorBoundary where="Conversations" compact>
+                  <HistoryPanel
+                    activeId={conversationId}
+                    onOpen={(id) => void openConversation(id)}
+                    onNew={(project) => newConversation(project ?? null)}
+                  />
+                </ErrorBoundary>
+              </Sidebar>
+              <LayoutView render={renderSurface} titleFor={titleForTab} markFor={markForTab} />
+
+              {/* Alerts, over the room rather than beside it.
+                *
+                * `Layer.Panel` has described this surface as one that "slides over the room but
+                * leaves it visible" since the layering was written down; being a pane in the
+                * tree was the thing that disagreed. A glance at what arrived while you were
+                * away should not cost the chat a third of its width, and it should not be
+                * something you can dock, split, or leave open behind another tab.
+                *
+                * The route is the only state: `/messages` is open, anything else is closed. No
+                * tab to keep in step with it, which is an effect and a special case in
+                * `closeTab` that both went away with the surface. */}
+              {inboxOpen ? (
+                <>
+                  {/* Click-away. Transparent on purpose — dimming the room would contradict
+                      "leaves it visible", and this only has to catch the click. */}
+                  <button
+                    type="button"
+                    aria-label="Close alerts"
+                    tabIndex={-1}
+                    onClick={() => navigate(pathForHome())}
+                    className="absolute inset-0 z-20 cursor-default"
+                  />
+                  <div className="absolute inset-y-0 right-0 z-30 flex w-[380px] max-w-full shadow-[-8px_0_32px_oklch(0_0_0/12%)]">
+                    <ErrorBoundary where="Alerts" compact>
+                      <InboxPanel inbox={inbox} onClose={() => navigate(pathForHome())} />
+                    </ErrorBoundary>
+                  </div>
+                </>
+              ) : null}
+            </div>
           </div>
         </div>
         {/* Drop a file anywhere in the window and it lands on the composer. Disabled — but

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { withoutPictureBlocks } from "@/components/assistant-ui/tool-result";
+import { summaryLine } from "@/lib/tool-language";
 
 /**
  * A batch read's text half, once the pictures are drawn above it.
@@ -61,5 +62,53 @@ describe("the row's own subject line", () => {
     const { describeCall } = await import("@/lib/tool-language");
     const subject = describeCall("read_file", { paths: ["/tmp/a.png", "/tmp/b.png"] }).subject;
     expect(subject).toBe("/tmp/a.png, /tmp/b.png");
+  });
+});
+
+describe("cutting a call down to one row", () => {
+  it("leaves a phrase that already fits", () => {
+    expect(summaryLine("ran ./domaincheck2.sh --test")).toBe("ran ./domaincheck2.sh --test");
+  });
+
+  /* The case this exists for. A shell subject is whatever a person typed, and what he types is
+   * routinely a loop over four `curl`s — whole, one of these came to about a thousand
+   * characters in a heading. */
+  it("keeps only the first line of a multi-line command", () => {
+    expect(summaryLine('ran echo "one"\nfor d in a b c; do\n  curl "$d"\ndone')).toBe(
+      'ran echo "one"',
+    );
+  });
+
+  it("drops a line continuation left dangling by the cut", () => {
+    expect(summaryLine("ran ./domaincheck.sh \\\n  a.com b.com")).toBe("ran ./domaincheck.sh");
+  });
+
+  it("collapses runs of whitespace", () => {
+    expect(summaryLine("ran   whois    -h   iana.org")).toBe("ran whois -h iana.org");
+  });
+
+  it("truncates past the limit and marks it", () => {
+    const long = summaryLine("ran " + "x".repeat(200));
+    expect(long.length).toBeLessThanOrEqual(73);
+    expect(long.endsWith("\u2026")).toBe(true);
+  });
+
+  /* Cutting mid-path or mid-flag reads as a rendering fault rather than an elision, so the cut
+   * moves back to a word boundary when one is close to the end. */
+  it("prefers a word boundary near the cut", () => {
+    const words = "ran whois --host iana.org --timeout 20 --verbose --retries 3 --quiet extra tail";
+    const kept = summaryLine(words).replace(/\u2026$/, "");
+
+    // What survives is a whole prefix of the original, ending where a word ends — not part-way
+    // through `--retries` or a path.
+    expect(words.startsWith(kept)).toBe(true);
+    expect(words[kept.length]).toBe(" ");
+    expect(kept.endsWith(" ")).toBe(false);
+  });
+
+  /* "" is the caller's signal to fall back to counting, rather than heading a run with a stub. */
+  it("gives nothing back when there would be nothing to read", () => {
+    expect(summaryLine("  \n  ")).toBe("");
+    expect(summaryLine("ok")).toBe("");
   });
 });

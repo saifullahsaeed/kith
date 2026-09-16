@@ -292,13 +292,29 @@ function PaneView({
    * it and React unmounts it. What is left behind is its key, a string, in a set that dies with
    * the pane. */
   const activeKey = active ? (active.uid ?? tabKey(active)) : "";
-  const [opened, setOpened] = useState<ReadonlySet<string>>(() =>
-    activeKey ? new Set([activeKey]) : new Set(),
-  );
-  useEffect(() => {
-    if (!activeKey) return;
-    setOpened((was) => (was.has(activeKey) ? was : new Set(was).add(activeKey)));
-  }, [activeKey]);
+
+  /* Built during render, not in an effect.
+   *
+   * This was `useState` plus a `useEffect` that added the newly-active key, and the order that
+   * produces is the bug: on the render where you activate a tab for the first time, its key is
+   * not in the set yet, so the map below returns `null` for it — React commits a pane with
+   * nothing in it, *then* runs the effect, *then* commits again with the content. Two commits
+   * and an empty one in between, which is the blank the eye reads as the old text fading out
+   * before the new text arrives. Measured at 44ms from click to content with no long task
+   * anywhere: not one slow mount, just a round trip through the effect queue.
+   *
+   * A ref instead, because this is a cache and not state — nothing needs to re-render *because*
+   * it changed; it is read in the same render that writes it. Appending the key before the map
+   * runs means the tab you just activated is built in that first commit, so there is no frame
+   * where the pane is empty.
+   *
+   * Still lazy, which is the point of the set: a pane restored from storage holding eight chats
+   * builds one, not eight. And still append-only — a closed tab leaves `pane.tabs`, React
+   * unmounts it, and its key stays behind harmlessly in a set that dies with the pane. */
+  const openedRef = useRef<Set<string>>(null);
+  openedRef.current ??= new Set();
+  if (activeKey) openedRef.current.add(activeKey);
+  const opened = openedRef.current;
 
   /* Placement reads this pane's real width — what the yielding rule left it with — and here is
    * where it is measured. Live state, never stored: a width is a fact about right now, and a
@@ -1099,7 +1115,27 @@ function Rail({
 function PaneBody({ showing, children }: { showing: boolean; children: ReactNode }) {
   return (
     <div
-      className={cn("absolute inset-0", showing ? null : "invisible pointer-events-none")}
+      className={cn(
+        "absolute inset-0",
+        /* `opacity-0` beside `invisible`, and the second one is what actually holds.
+         *
+         * `visibility` is inherited but *overridable*: a descendant setting
+         * `visibility: visible` paints straight through a hidden ancestor. Tailwind ships
+         * `.visible{visibility:visible}` — the only rule in the stylesheet that sets it — and a
+         * dependency's own classNames use it, so a held tab leaked pieces of itself over the
+         * tab you had just switched to: a Copy button, an icon, and the text around them, drawn
+         * on top of another conversation for as long as those elements were mounted. Measured
+         * at seven elements computing to `visible` inside a body computing to `hidden`.
+         *
+         * An ancestor's `opacity: 0` cannot be undone from inside the subtree — it establishes
+         * a stacking context and the whole group composites at zero — so this is the version of
+         * "hidden" that no dependency can opt out of. `invisible` stays for the same reason it
+         * was there: it takes the subtree out of the accessibility tree and out of find-in-page.
+         *
+         * Both keep the property this needs — the box stays laid out and its scroll offsets
+         * survive — which is why `display: none` was rejected here in the first place. */
+        showing ? null : "invisible opacity-0 pointer-events-none",
+      )}
       inert={!showing}
     >
       {children}

@@ -7,7 +7,6 @@ import {
   ListChecks,
   type LucideIcon,
   MessageSquare,
-  MessagesSquare,
   Palette,
   Pencil,
   Plus,
@@ -22,7 +21,7 @@ import {
 
 import { indexSettled, pluginSurface } from "@/lib/plugin-index";
 
-import type { SurfaceId, TabRef } from "./tree";
+import { BOUND, type SurfaceId, type TabRef } from "./tree";
 
 /**
  * What each surface is called, what it is drawn with, and how narrow it may get.
@@ -49,9 +48,6 @@ export const SURFACES: Record<SurfaceId, Surface> = {
   // 560 was `CHAT_FLOOR`, measured rather than chosen: below it a paragraph wraps to three
   // words a line and the thread stops being readable prose.
   chat: { title: "Chat", icon: MessageSquare, minWidth: 560 },
-  // 256 was `HISTORY_WIDTH`, the width a conversation title needs before it starts eliding
-  // mid-word.
-  conversations: { title: "Conversations", icon: MessagesSquare, minWidth: 240 },
   // 320 was `WORK_MIN`.
   work: { title: "Work", icon: ListChecks, minWidth: 320 },
   /* The Control Panel, whole.
@@ -63,7 +59,6 @@ export const SURFACES: Record<SurfaceId, Surface> = {
    * shell. One surface here, and the split is its own piece of work. */
   board: { title: "Board", icon: LayoutGrid, minWidth: 380 },
   settings: { title: "Settings", icon: Settings, minWidth: 420 },
-  inbox: { title: "Inbox", icon: Inbox, minWidth: 320 },
   context: { title: "Context", icon: Gauge, minWidth: 420 },
   /* The placeholder every plugin surface resolves through when its own declaration is not
    * (yet) known. A real static key, which is what keeps the four `SURFACES[...]` derefs safe by
@@ -142,8 +137,17 @@ export const MIN_HEIGHT = 140;
  * one, and no way to tell which conversation either was. A chat with an id says so instead,
  * until its title arrives. */
 export function tabTitle(ref: TabRef, chatTitle?: string): string {
-  if (ref.surface !== "chat") return surfaceFor(ref).title;
   const given = chatTitle?.trim();
+
+  /* A bound surface names its conversation: "Work — vendor risk review". Two Work tabs are a
+   * normal arrangement now, and "Work" twice in a strip is two tabs you cannot tell apart —
+   * the binding is only useful if it is legible. Falls back to the bare surface name while the
+   * title is still unknown, which is the window between a reload and the listing arriving. */
+  if (ref.surface !== "chat") {
+    const base = surfaceFor(ref).title;
+    return BOUND.has(ref.surface) && ref.conversationId && given ? `${base} — ${given}` : base;
+  }
+
   if (given) return given;
   return ref.conversationId ? "Chat" : "New chat";
 }
