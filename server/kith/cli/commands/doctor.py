@@ -61,6 +61,19 @@ conversations. Talk to him with the `kith` command.
   something was said.
 - `kith projects`, `kith settings`, `kith status`.
 
+**When he asks you something.** He has an `ask` tool that holds his turn open waiting for a
+person. Piped output (which is what you have) tells the server nobody is watching, so he
+answers himself and says which way he went — he will not hang. Pass `--attended` only if you
+intend to answer.
+
+- `kith questions` — everything he is blocked on, across every conversation, with the options.
+- `kith answer -c <id> 2` — pick option 2. One number per question in order (`1 3`), commas for
+  several in one (`1,3`), free text instead of numbers, or `--skip` to let him choose.
+
+This matters when a person is away: a question raised in *their* window blocks that turn for
+fifteen minutes and then he carries on without it. If you can answer it, do — `kith questions`
+is worth checking when he seems stuck.
+
 He can read and edit files, run commands and do long jobs on his own. Ask him for the parts of
 the work you are not doing — he keeps context across sessions that you do not.
 """

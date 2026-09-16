@@ -28,7 +28,60 @@ import {
   fetchConversation,
   resumeTurn,
   setConversationProject,
+  type StoredTurn,
 } from "@/lib/backend";
+
+/** A live turn this pane has taken, as `resumeTurn` hands it over. */
+type Attached = NonNullable<Awaited<ReturnType<typeof resumeTurn>>>;
+
+/**
+ * The stored page, minus the turn a stream is about to deliver.
+ *
+ * The transcript and the live stream carry the same turn while it runs, because the recorder
+ * writes the turn's parts to the transcript as they happen rather than at the end. That overlap
+ * is not a mistake to be removed — writing as it goes is what makes a turn survive a crash — so
+ * the two ends stamp the same id on it instead, and the client drops whichever copy it is not
+ * rendering. This is that drop, and it is the whole of it.
+ *
+ * A turn with no id is one recorded before ids existed, and is never claimed by anything. That is
+ * the safe direction: it renders as history, which is exactly what a turn nobody is streaming is.
+ */
+function withoutTurn(timeline: StoredTurn[], turnId: string | undefined): StoredTurn[] {
+  if (!turnId) return timeline;
+  return timeline.filter((one) => one.turn !== turnId);
+}
+
+/** The turn that wrote the newest assistant entry on this page, if it says. */
+function lastTurn(timeline: StoredTurn[]): string {
+  for (let index = timeline.length - 1; index >= 0; index--) {
+    const one = timeline[index];
+    if (one.role === "assistant") return one.turn ?? "";
+  }
+  return "";
+}
+
+/**
+ * Hold a claim on a turn for as long as its stream is running, and let go when it stops.
+ *
+ * The claim is what `load` reads to know the screen is not its to rebuild, and what the `turn`
+ * listener reads to know an announcement is about its own work. Released from a `finally` so that
+ * an abandoned stream — an abort, a thrown chunk, a pane closed mid-answer — lets go on exactly
+ * the same terms as one that ran to the end. A claim that outlived its stream would go on hiding
+ * the stored copy of that turn for as long as the pane lived, which is the original bug with the
+ * sign flipped.
+ */
+async function* hold<T>(
+  turnId: string,
+  stream: AsyncGenerator<T>,
+  claim: (turnId: string) => void,
+): AsyncGenerator<T> {
+  claim(turnId);
+  try {
+    yield* stream;
+  } finally {
+    claim("");
+  }
+}
 
 /**
  * One conversation, with its own runtime, its own window into its transcript, and its own
@@ -116,6 +169,34 @@ export function ChatPane({
   const pendingProject = useRef<number | null>(openedIn);
 
   const [resumed, setResumed] = useState<ThreadMessageLike[]>([]);
+  /** A live turn waiting to be attached, once the page it belongs on top of is in the thread.
+   *  Held as state rather than attached on the spot so that the two happen in a fixed order —
+   *  see the pair of effects below `load`. */
+  const [pending, setPending] = useState<Attached | null>(null);
+
+  /** The turn whose stream this pane is rendering, or `""`.
+   *
+   *  The one fact that used to be missing. A pane is handed the same turn twice while it runs —
+   *  once by the transcript, which the recorder writes as it goes, and once by the stream — and
+   *  with no name in common between the two copies the only way to tell them apart was to guess
+   *  from which arrived first. This is that name, and everything that used to be a timing guard
+   *  now asks it instead. */
+  const owned = useRef("");
+  /** The last turn this pane read all the way to its end.
+   *
+   *  What `isRunning` cannot say after the fact: by the time a `turn` event announces an ending
+   *  the run is over either way, and nothing but the pane knows whether it ever saw it. Kept as an
+   *  id rather than a flag because a flag can only be spent once — an announcement arriving in the
+   *  wrong order left it set, and the next turn was then skipped instead of attached to. An id is
+   *  compared rather than consumed, so a stale one is simply an id that no longer matches. */
+  const lastRead = useRef("");
+  /** Take or release the claim. One function so the two ways in — a turn this pane started, and
+   *  one it attached to — cannot drift into meaning different things. */
+  const claim = useCallback((turnId: string) => {
+    // Letting go is also the moment this pane can say it read that turn to the end.
+    if (!turnId) lastRead.current = owned.current;
+    owned.current = turnId;
+  }, []);
   /* No `timeline` state.
    *
    * It held the fetched turns so that "load earlier" could rebuild the thread from them — which
@@ -136,8 +217,11 @@ export function ChatPane({
         get: () => idRef.current,
         set: (given) => setId((was) => was || given),
         project: () => pendingProject.current,
+        // A turn this pane starts is owned on exactly the same terms as one it attaches to:
+        // while its stream runs, the stored copy of it is not this pane's to render.
+        onTurn: claim,
       }),
-    [],
+    [claim],
   );
   const attachments = useMemo(() => new AnyFileAttachmentAdapter(), []);
   const runtime = useLocalRuntime(adapter, {
@@ -158,68 +242,8 @@ export function ChatPane({
     });
   }, [conversationId, id, rename]);
 
-  /* The page this pane opens on.
-   *
-   * Through the cache, so a conversation you were just in comes back instantly and two panes
-   * showing the same one do not fetch it twice. A `turn` event invalidates the key, so a pane
-   * mounting after a turn it never saw fetches rather than restoring a page without its reply.
-   *
-   * That covers a *new* mount and nothing else, which is worth being plain about: this effect's
-   * deps are `[cache, conversationId]` and a pane's conversation never changes, so it runs once
-   * and an invalidation has no observer here to act on. A pane that is already mounted catches
-   * up through `catchUp` below instead. */
-  useEffect(() => {
-    if (!conversationId) {
-      setLoading(false);
-      return;
-    }
-    let live = true;
-    setLoading(true);
-    void cache
-      .fetchQuery({
-        queryKey: keys.conversation(conversationId),
-        queryFn: () => fetchConversation(conversationId),
-      })
-      .then((detail) => {
-        if (!live) return;
-        setProjectId(detail.projectId ?? null);
-        setWindowStart(detail.windowStart ?? 0);
-        setResumed(toThreadMessages(detail.timeline));
-        setLoading(false);
-      })
-      .catch(() => {
-        if (live) setLoading(false);
-      });
-    return () => {
-      live = false;
-    };
-  }, [cache, conversationId]);
-
-  /* Put the loaded page into the thread.
-   *
-   * No cancel-and-wait dance, because this runtime only ever holds this conversation and there
-   * is never a foreign run to unwind. But `reset` is still destructive — it clears the
-   * repository and re-imports, minting new message ids — so it must not land on a run in
-   * flight: the streaming reply's captured `parentId` stops existing, the next chunk throws
-   * `Parent message not found`, and the reply simply disappears while the server keeps
-   * generating into nothing. It does not even look stuck, because `isRunning` is derived from
-   * the last message's status and after a reset that is a completed stored turn.
-   *
-   * The guard is here as well as on the button because a turn can start between the click and
-   * the page arriving. */
-  useEffect(() => {
-    if (!resumed.length) return;
-    if (runtime.thread.getState().isRunning) return;
-    runtime.thread.reset(resumed);
-  }, [runtime, resumed]);
-
-  /* Rejoin the turn already running here.
-   *
-   * The screen is a window onto a turn, not the thing running it: the turn lives on the server
-   * and carries on whether or not anyone is watching. Guarded on `isRunning`, because this pane
-   * is already streaming when it started the turn itself — resuming then would put a second
-   * reader on the same events and render every token twice. */
-  /** Set while this pane is mounted. A rejoin that lands after it is gone must discard. */
+  /** Set while this pane is mounted. Work that lands after it is gone must let go of what it is
+   *  holding rather than write into a runtime nobody is looking at. */
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -228,90 +252,163 @@ export function ChatPane({
     };
   }, []);
 
-  /** Whether this pane is the one reading the turn running here.
-   *
-   *  What `isRunning` cannot answer after the fact. A `turn` event that finds nothing live means
-   *  a turn just *ended*, and by then the run is over either way — so the only remaining question
-   *  is whether this pane ever read it, and nothing but the pane itself knows. */
-  const reading = useRef(false);
+  /** How many times this pane has gone to fetch itself. Only the newest attempt may write. */
+  const loads = useRef(0);
 
-  /* Fetch the transcript again and put it back on screen.
+  /* Put this pane back in step with the server: the stored page, and then the turn running on
+   * top of it, in that order and as one operation.
    *
-   * The fallback under the live view, and the piece the pane did not have. Everything else about
-   * a turn survives nobody watching: it runs on its own thread, its output lives in `live_turns`
-   * rather than in a request, and `/attach` hands a latecomer the same stream as the first
-   * reader. The *reader*, though, is this component — and this component exists only while its
-   * tab is the active one in its pane (`layout-view` renders the active tab and an `EmptyPane`
-   * for the rest). So a turn Kith started himself — a background task finishing — could run and
-   * end with nobody having read a word of it, and then nothing would ever go and get it:
-   * `STALE_ON.turn` invalidates this key, and the comment on the mount fetch above claims that
-   * invalidation is what catches such a pane up, but an imperative `fetchQuery` has no observer,
-   * so invalidating it refetches nothing. Reloading the window was the only way to see the reply.
+   * **This replaces three functions, and they were never three jobs.** The mount fetch, `catchUp`
+   * and `rejoin` each did part of this, fired off in parallel from separate effects, and were
+   * reconciled by asking `isRunning` at the moment each of them landed. That is a check-then-act
+   * across an await over state that means something different at either end of it, and both
+   * interleavings were bugs somebody had reported:
    *
-   * `staleTime: 0` because this races the invalidation it is reacting to — `useLiveUpdates`
-   * coalesces on a 50ms timer, so the cached page from *before* the turn is very often still
-   * fresh at this moment, and without it this would carefully put the conversation back exactly
-   * as it was. */
-  const catchUp = useCallback(async () => {
-    const wanted = idRef.current;
-    if (!wanted) return;
-    const detail = await cache
-      .fetchQuery({
-        queryKey: keys.conversation(wanted),
-        queryFn: () => fetchConversation(wanted),
-        staleTime: 0,
-      })
-      .catch(() => null);
-    if (!detail || !alive.current || idRef.current !== wanted) return;
-    // Never over a run. `reset` mints new message ids, and a reply streaming into the old ones
-    // goes with them — the same reason the effect below it is guarded.
-    if (runtime.thread.getState().isRunning) return;
-    setWindowStart(detail.windowStart ?? 0);
-    setResumed(toThreadMessages(detail.timeline));
-  }, [cache, runtime]);
+   * * **page first, stream second** — the transcript already holds the half-written reply,
+   *   because the recorder writes `said` and `reasoning` rows *while the turn runs*, so attaching
+   *   rendered the same turn a second time underneath the first. That is the answer that appears
+   *   twice.
+   * * **stream first, page second** — the reset is skipped because a run is now in flight, and
+   *   nothing ever retried it, so the conversation opened showing a reply with nothing above it.
+   *   That is the chat that loads with all of its history missing.
+   *
+   * Neither was fixable with a better guard, because the guard was never the broken part: at
+   * `reset` time nothing is running yet, and at `resumeRun` time `isRunning` reads false because
+   * the reset has just produced a *completed* message. What was missing is that the two copies of
+   * one turn had no name in common. Now they do — `X-Kith-Turn` on the stream, `turn` on the
+   * stored turn — so the live turn is taken out of the page before the page is rendered, and the
+   * two channels stop competing to describe the same thing.
+   *
+   * `fresh` bypasses the cache, and only a `turn` event asks for it: such an event races the
+   * invalidation it arrives with, since `useLiveUpdates` coalesces on a 50ms timer, so the page
+   * from *before* the turn is very often still fresh at this moment and a cached read would
+   * carefully restore the conversation exactly as it already was. A mount wants the opposite — the
+   * page it had a moment ago, on screen without a round trip.
+   */
+  const load = useCallback(
+    async (fresh = false) => {
+      const wanted = idRef.current;
+      if (!wanted) {
+        setLoading(false);
+        return;
+      }
+      /* Which load this is. Two can be out at once — a `turn` event landing while the mount's
+       * own is still in flight, or React's development double-mount — and two that both finish
+       * would hand this pane two pages and two streams, of which it can only render one. The
+       * later one wins, and the earlier discards what it was carrying rather than leaking a held
+       * response. A counter rather than a promise: what matters is *which* is newest, which a
+       * single in-flight flag cannot say. */
+      const mine = ++loads.current;
+      /* A stream running here already owns the screen, and describes the turn more accurately
+       * than the transcript does — the transcript is behind by whatever has not been flushed.
+       * There is nothing to catch up to, and rebuilding the thread under a live run is what
+       * loses the reply. */
+      if (owned.current) return;
+      setLoading(true);
+      const [detail, attached] = await Promise.all([
+        cache
+          .fetchQuery({
+            queryKey: keys.conversation(wanted),
+            queryFn: () => fetchConversation(wanted),
+            ...(fresh ? { staleTime: 0 } : {}),
+          })
+          .catch(() => null),
+        resumeTurn(wanted).catch(() => null),
+      ]);
 
-  const rejoin = useCallback(
-    /** `missable` is true when a *turn event* prompted this, and false when the pane's own mount
-     *  did. Only the first can mean "a turn ended that I might not have read"; on mount there is
-     *  no turn to have missed, and treating it as one would refetch the page just fetched. */
-    (missable = false) => {
-      if (!id) return;
-      const wanted = id;
-      void resumeTurn(wanted).then((attached) => {
-        if (!attached) {
-          const missed = missable && !reading.current;
-          reading.current = false;
-          if (missed) void catchUp();
-          return;
-        }
-        // `discard()`, never a bare return: the generator has not started, so letting it go
-        // leaves the response body open and a server thread writing into it.
-        if (idRef.current !== wanted) return attached.discard();
-        // And the same if the pane went away while the attach was in flight — closing a tab
-        // mid-rejoin otherwise left a held response on one of the browser's six sockets per
-        // origin, with a `live_turns` reader blocked writing into it on the other end.
-        // A tab is closed at exactly the moment a turn is running, so this is not a rare path.
-        if (!alive.current) return attached.discard();
-        // Something in this pane is on this turn from here: either the run it already had, or
-        // the stream about to be attached below.
-        reading.current = true;
-        const state = runtime.thread.getState();
-        if (state.isRunning) return attached.discard();
-        runtime.thread.resumeRun({
-          parentId: state.messages.at(-1)?.id ?? null,
-          stream: () => attached.stream,
-        });
-      });
+      /* `discard()` on every path that declines the stream, never a bare return. `readTurn` is a
+       * generator whose body has not run, so its `finally` is not armed and letting it go collects
+       * nothing: the response body stays open, with a `live_turns` watcher blocked writing into it
+       * on the other end, holding one of the six sockets this origin gets. A tab is closed at
+       * exactly the moment a turn is running, so this is not a rare path. */
+      const gone = mine !== loads.current || !alive.current || idRef.current !== wanted;
+      if (gone || !detail || owned.current) {
+        attached?.discard();
+        if (!gone) setLoading(false);
+        return;
+      }
+
+      /* Nothing is live, and the newest turn on disk is the one this pane just finished reading:
+       * the thread already holds it, in the form it was streamed. Rebuilding to show what is
+       * already shown costs a `reset` — new message ids, a re-render of every part, and the scroll
+       * settling again — which reads as a flash at the end of every single answer.
+       *
+       * Decided by comparing ids rather than by a flag that a turn event consumes, so an
+       * announcement that arrives in an unexpected order costs nothing: the next turn has a
+       * different id, does not match, and is loaded and attached to normally. */
+      if (!attached && lastTurn(detail.timeline) && lastTurn(detail.timeline) === lastRead.current) {
+        setLoading(false);
+        return;
+      }
+
+      setProjectId(detail.projectId ?? null);
+      setWindowStart(detail.windowStart ?? 0);
+      setResumed(toThreadMessages(withoutTurn(detail.timeline, attached?.turnId)));
+      setPending(attached);
+      setLoading(false);
     },
-    [id, runtime, catchUp],
+    [cache],
   );
 
+  /* Put the page into the thread.
+   *
+   * `reset` is destructive — it clears the repository and re-imports, minting new message ids —
+   * so it must not land on a run in flight: the streaming reply's captured `parentId` stops
+   * existing, the next chunk throws `Parent message not found`, and the reply simply disappears
+   * while the server keeps generating into nothing. It does not even look stuck, because
+   * `isRunning` is derived from the last message's status and after a reset that is a completed
+   * stored turn.
+   *
+   * What changed is that this guard is no longer load-bearing for *correctness*. `load` declines
+   * to fetch at all while this pane owns a stream, so the only way to reach here mid-run is for a
+   * run to have started between that check and this commit — which means the person has just sent
+   * something, and the history above it is already on screen and already right. Skipping used to
+   * mean the history was lost for good; now it means there is nothing to put back. */
   useEffect(() => {
-    rejoin();
-  }, [rejoin]);
-  // Not a query: there is nothing to refetch, there is a stream to attach to — and when there is
-  // no stream to attach to, a turn just ended that this pane may never have read.
-  useServerEvent("turn", () => rejoin(true), id);
+    if (!resumed.length) return;
+    if (runtime.thread.getState().isRunning) return;
+    runtime.thread.reset(resumed);
+  }, [runtime, resumed]);
+
+  /* And the live turn on top of it.
+   *
+   * A second effect rather than a few more lines at the end of `load`, and declared *after* the
+   * reset above, because that is what orders the two: `load` sets both pieces of state in one
+   * batch, so both effects run in the same commit, and React runs effects in the order they are
+   * declared. The page is in the thread before a stream is ever attached to it — every time,
+   * rather than whenever the two round trips happen to land. */
+  useEffect(() => {
+    if (!pending) return;
+    setPending(null);
+    if (!alive.current) return pending.discard();
+    const state = runtime.thread.getState();
+    if (state.isRunning) return pending.discard();
+    runtime.thread.resumeRun({
+      parentId: state.messages.at(-1)?.id ?? null,
+      stream: () => hold(pending.turnId, pending.stream, claim),
+    });
+  }, [pending, runtime, claim]);
+
+  useEffect(() => {
+    void load();
+  }, [load, id]);
+
+  /* And again whenever a turn starts or ends in this conversation.
+   *
+   * Not a query, because what a `turn` event calls for is not a refetch but a *decision*: whether
+   * this pane should be reading the turn now running, and whether what is on screen is still the
+   * whole of what happened. `load` answers both, which is why there is nothing else left here.
+   *
+   * The one skip is a pane already holding the stream, which is looking at the very turn being
+   * announced. Everything else `load` works out for itself from what the server says. */
+  useServerEvent(
+    "turn",
+    () => {
+      if (owned.current) return;
+      void load(true);
+    },
+    id,
+  );
 
   /* Confirm the project against the conversation once it exists. It rides *with* the first turn
    * through the adapter — writing it afterwards was a turn too late, and that turn is the one

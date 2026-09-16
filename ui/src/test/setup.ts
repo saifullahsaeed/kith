@@ -86,6 +86,23 @@ if (!(globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver) {
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = StubResizeObserver;
 }
 
+/**
+ * jsdom implements no scrolling at all, and `Element.prototype.scrollTo` is simply absent — so the
+ * thread's own scroll-to-bottom throws the moment a test renders a real conversation. It throws
+ * from inside the library's effect, which makes it an *unhandled* error rather than a failed
+ * assertion: the test passes and the run fails, with a stack that names neither.
+ *
+ * A no-op rather than a recorded position. Nothing in jsdom lays out, so every element measures
+ * 0x0 and a faithful implementation could only ever report zero — the same reason `ResizeObserver`
+ * above observes nothing. Scroll behaviour belongs to the browser and to the Playwright pass; what
+ * these tests are for is what ends up in the thread.
+ */
+for (const key of ["scrollTo", "scrollIntoView", "scrollBy"] as const) {
+  if (!(key in Element.prototype)) {
+    Object.defineProperty(Element.prototype, key, { value: () => {}, writable: true });
+  }
+}
+
 // Unmount between tests. Without it a component from one test keeps listening through the next,
 // which is the kind of failure that looks like flakiness.
 afterEach(() => {

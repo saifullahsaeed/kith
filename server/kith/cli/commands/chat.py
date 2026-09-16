@@ -38,6 +38,21 @@ def add(subparsers) -> None:
     send.add_argument("-p", "--project", default="", help="project name or id (new conversations only)")
     send.add_argument("--json", action="store_true", help="pass the raw NDJSON event stream through")
     send.add_argument("--quiet", action="store_true", help="answer only — no reasoning, tools or totals")
+    watching = send.add_mutually_exclusive_group()
+    watching.add_argument(
+        "--attended",
+        dest="attended",
+        action="store_true",
+        default=None,
+        help="someone is here to answer a question (default when stdout is a terminal)",
+    )
+    watching.add_argument(
+        "--unattended",
+        dest="attended",
+        action="store_false",
+        default=None,
+        help="nobody is here — he decides instead of waiting (default when piped)",
+    )
     send.set_defaults(run=_send)
 
     new = subparsers.add_parser("new", help="start a conversation and print its id")
@@ -93,6 +108,26 @@ def _message_from(args) -> str:
     if not piped:
         raise Failure("nothing to say", USAGE, "stdin was empty")
     return piped
+
+
+def _unattended(args) -> bool:
+    """Is there anybody here to answer a question? Decided by the terminal unless told.
+
+    `ask` parks the turn for fifteen minutes waiting for an answer, and the permission gate
+    parks it the same way. That is fine when a person is watching and fatal when one is not —
+    and it is *worse* than fatal for another agent, because a caller blocked inside `kith send`
+    cannot answer the question that is blocking it. It waits out the deadline against itself,
+    and does it again for every question he asks.
+
+    So the default is read off stdout: a terminal means somebody might be looking, a pipe means
+    nobody is. That is the honest signal rather than a flag people must remember, and the two
+    flags exist for the cases it gets wrong — a terminal nobody is sitting at overnight, or a
+    wrapper script with a person reading its output.
+    """
+    chosen = getattr(args, "attended", None)
+    if chosen is not None:
+        return not chosen
+    return not sys.stdout.isatty()
 
 
 def _projects(client: Client) -> list[dict]:
@@ -175,7 +210,11 @@ def _send(client: Client, args) -> int:
     # directory and used to send nothing about it, so a question about "this repo" reached
     # someone with no way to know which folder that was — measured once at a whole turn spent
     # searching the disk for a path that was sitting in a local variable here.
-    body: dict = {"messages": [{"role": "user", "content": message}], "cwd": str(Path.cwd())}
+    body: dict = {
+        "messages": [{"role": "user", "content": message}],
+        "cwd": str(Path.cwd()),
+        "unattended": _unattended(args),
+    }
     if conversation:
         body["conversationId"] = conversation
     elif project:

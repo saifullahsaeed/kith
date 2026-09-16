@@ -444,7 +444,12 @@ export type LayoutState = {
  * Deliberately *only* the focused pane's active tab, with no fallback to "the first chat
  * anywhere". A companion column is a place things are put; guessing a host when none is in
  * front of you is how a panel ends up attached to a conversation you were not looking at. With
- * no answer here a bound surface opens as a tab, which is the honest one. */
+ * no answer here a bound surface opens as a tab, which is the honest one.
+ *
+ * Read as the *fallback* in `open`, not as the answer: a ref that names its own conversation has
+ * already said which chat it is about, and this is only asked when it has not. Being the sole
+ * answer is what made the Context button open a stray tab whenever focus had moved into the
+ * column beside the chat — see the comment at its one call site. */
 function focusedChat(tree: Node, focused: string): string {
   const pane = panes(tree).find((one) => one.id === focused);
   const active = pane?.tabs[pane.active];
@@ -530,14 +535,38 @@ export const useLayout = create<LayoutState>((set, get) => {
        * one and we are back to the inference this replaced. *Attaching* is about placement, and
        * a caller naming a pane overrules it — that is what naming a pane means, and the plugin
        * delivery path relies on it. Conflating the two left a `paneId` open unbound. */
-      const chat = focusedChat(tree, focused);
+      /* Which conversation this surface is *about* — the ref's answer first, and the focused
+       * chat only when the ref has none.
+       *
+       * That order is the fix for a panel that opened in the wrong place, and the cause was two
+       * policies for one question. `workspace.tsx` computes the chat a surface is about with a
+       * deliberately *sticky* rule — a click outside a chat leaves the answer where it was, so
+       * that the Context button still works while you are in the panel beside the chat.
+       * `focusedChat` below has the opposite rule, equally deliberately: it refuses to guess a
+       * host when none is in front of you. Both are right about their own question and they
+       * disagree exactly when focus is on a companion — the caller asked for "context for c-1",
+       * this read "no chat is focused", and the panel opened as a stray tab somewhere else.
+       *
+       * So the caller wins when it has said something. `focusedChat` keeps its rule and becomes
+       * what it always should have been: the fallback for a ref that did not say. */
+      const focusedOn = focusedChat(tree, focused);
+      const about = (BOUND.has(ref.surface) ? (ref.conversationId ?? "") : "") || focusedOn;
       const bound: TabRef =
-        BOUND.has(ref.surface) && chat && !ref.conversationId
-          ? ({ ...ref, conversationId: chat } as TabRef)
+        BOUND.has(ref.surface) && about && !ref.conversationId
+          ? ({ ...ref, conversationId: about } as TabRef)
           : ref;
 
-      if (!opts?.paneId && chat && BOUND.has(bound.surface)) {
-        get().attach(tabKey({ surface: "chat", conversationId: chat }), bound);
+      /* And into that chat's column only if that chat is actually open. A column is rendered
+       * inside its host's body (see `workspace.renderSurface`), so attaching to a tab that is
+       * not there stores a panel nothing will ever draw — asked for, accepted, and invisible.
+       * A tab is the honest answer in that case, which is what it already was for a ref with no
+       * conversation at all. */
+      const host = tabKey({ surface: "chat", conversationId: about });
+      const hosted =
+        !!about && panes(tree).some((one) => one.tabs.some((tab) => tabKey(tab) === host));
+
+      if (!opts?.paneId && hosted && BOUND.has(bound.surface)) {
+        get().attach(host, bound);
         return;
       }
 

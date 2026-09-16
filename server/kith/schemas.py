@@ -118,6 +118,17 @@ class ChatRequestSchema(Schema):
             "it. Omit it from the window, which has no directory to name.",
         },
     )
+    unattended = Boolean(
+        required=False,
+        metadata={
+            "description": "True when nobody is at a screen to answer a question or approve a "
+            "tool — a scripted run, or another agent driving this turn. It makes `ask` and the "
+            "permission gate return immediately instead of parking the turn for fifteen "
+            "minutes, so he decides and says which way he went. The CLI sets it from whether "
+            "its output is a terminal, because a caller blocked inside a request cannot answer "
+            "the question blocking it.",
+        },
+    )
     projectId = Integer(
         required=False,
         allow_none=True,

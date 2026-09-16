@@ -38,6 +38,9 @@ class Style:
     def __init__(self, on: bool) -> None:
         self.on = on
 
+    def bold(self, text: str) -> str:
+        return f"\033[1m{text}\033[0m" if self.on else text
+
     def dim(self, text: str) -> str:
         return f"\033[2m{text}\033[0m" if self.on else text
 
@@ -81,6 +84,27 @@ def _aside(kind: str, event: dict) -> str:
     if kind == "errand_back":
         return f"errand reported ({len(str(event.get('text') or ''))} chars)"
     return kind
+
+
+def _render_question(arguments: Any, note, style: Style, conversation: str) -> None:
+    """The question he is waiting on, with the command that answers it.
+
+    The command is printed with the conversation already filled in, because the session that
+    has to answer is usually not the one looking at this: he asks in a chat opened this
+    morning and you read it this evening, in another directory. A reader who has to work out
+    the id first is a reader who closes the terminal.
+    """
+    note(style.bold("  ? he is waiting on you"))
+    for question in arguments.get("questions") or [] if isinstance(arguments, dict) else []:
+        note("    " + str(question.get("question") or ""))
+        for index, option in enumerate(question.get("options") or [], start=1):
+            blurb = str(option.get("description") or "")
+            note(
+                style.dim(f"      {index}. {option.get('label')}")
+                + (style.dim("  — " + blurb) if blurb else "")
+            )
+    where = f" -c {conversation}" if conversation else ""
+    note(style.dim(f"    kith answer{where} <number|text>   ·   kith answer{where} --skip"))
 
 
 def passthrough(events: Iterator[tuple[str, dict]], out: TextIO | None = None) -> tuple[int, str]:
@@ -175,6 +199,22 @@ def human(
 
         elif kind == "tool_call":
             tools += 1
+            if str(event.get("name") or "") == "ask":
+                # Shown in full, and shown even under --quiet, because it is the one tool call
+                # that stops being information and becomes a thing you have to do. It parks the
+                # turn for fifteen minutes, and from a terminal it used to be a `· ask` line
+                # followed by silence — indistinguishable from a turn that had simply gone slow.
+                if in_reasoning:
+                    aside.write("\n")
+                    in_reasoning = False
+                if wrote_prose:
+                    # Prose is on stdout and this is on stderr, so a terminal showing both
+                    # interleaves them with no break: a real transcript read "…which I'll ask
+                    # about:  ? he is waiting on you". Only the visible stream needs the break.
+                    answer.write("\n")
+                    answer.flush()
+                _render_question(event.get("arguments"), note, style, conversation)
+                continue
             if quiet:
                 continue
             if in_reasoning:

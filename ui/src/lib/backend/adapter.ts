@@ -112,6 +112,20 @@ export function createBackendAdapter(conversation?: {
    * picked.
    */
   project?: () => number | null;
+  /**
+   * Which turn this pane is now rendering, and `""` when it has stopped.
+   *
+   * The transcript carries the same turn as the stream does — the recorder writes `said` and
+   * `reasoning` rows while the turn runs — so a pane that fetches its page mid-turn is handed a
+   * copy of the very reply it is streaming. Knowing the id is what lets it drop that copy
+   * instead of rendering the turn twice, which is what it used to do.
+   *
+   * Reported for a turn this pane *started* as well as one it attached to, because the two are
+   * the same question once the turn exists: the pane owns a stream, and the stored copy of that
+   * stream's turn is not its to render. `""` on the way out, from a `finally`, so a turn that
+   * throws or is abandoned releases its claim exactly like one that ends.
+   */
+  onTurn?: (turnId: string) => void;
 }): ChatModelAdapter {
   // The composer's keystroke needs to know which conversation it is in, and cannot reach it
   // through the runtime. Registered here because this is where the getter already exists.
@@ -226,7 +240,16 @@ export function createBackendAdapter(conversation?: {
 
       if (!response) throw new Error(lastError || "Could not start the turn.");
 
-      yield* readTurn(response, conversation);
+      /* The turn is ours from the header on, and not ours the moment this generator unwinds.
+       * `finally` rather than a line after the `yield*`: a run is abandoned far more often than
+       * it ends — an abort, a thrown chunk, a pane closing — and a claim released only on the
+       * happy path is a claim that outlives its stream and silently hides the stored turn. */
+      conversation?.onTurn?.(response.headers.get("X-Kith-Turn") ?? "");
+      try {
+        yield* readTurn(response, conversation);
+      } finally {
+        conversation?.onTurn?.("");
+      }
     },
   };
 }
@@ -429,7 +452,12 @@ let retried = 0;
  */
 export async function resumeTurn(
   conversationId: string,
-): Promise<{ stream: AsyncGenerator<ChatModelRunResult>; discard: () => void } | null> {
+): Promise<{
+  /** Which turn this stream is carrying — the same id the transcript stamps on it. */
+  turnId: string;
+  stream: AsyncGenerator<ChatModelRunResult>;
+  discard: () => void;
+} | null> {
   if (!conversationId) return null;
   const response = await fetch(`/api/chat/${conversationId}/attach`).catch(() => null);
   // 204 is "nothing is running"; a body is the backlog followed by the rest as it happens.
@@ -448,7 +476,14 @@ export async function resumeTurn(
    * started. Cancelling the body is what actually closes it, which is what `queued-send.ts`
    * already does on this same endpoint. */
   const body = response.body;
-  return { stream: readTurn(response), discard: () => void body.cancel().catch(() => {}) };
+  return {
+    // Read off the response rather than out of the stream: the caller has to know which turn it
+    // is about to own *before* it decides what to render, and a first event would put that
+    // answer behind the round trip it exists to settle.
+    turnId: response.headers.get("X-Kith-Turn") ?? "",
+    stream: readTurn(response),
+    discard: () => void body.cancel().catch(() => {}),
+  };
 }
 
 /** The text of the message just sent, or "" — commands are only ever the whole of it. */

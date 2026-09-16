@@ -416,17 +416,35 @@ def timeline(conversation_id: str) -> list[dict]:
     """
     out: list[dict] = []
     current: dict | None = None
+    #: Which turn is writing, from its marker until the next one. See the `turn` branch below.
+    turn_id: str = ""
 
     def assistant() -> dict:
         nonlocal current
         if current is None or current["role"] != "assistant":
             current = {"role": "assistant", "parts": [], "at": entry.get("at") or ""}
+            # Stamped only on assistant entries, and deliberately not on the person's messages.
+            #
+            # The id exists so a client can drop the copy of a turn it is already receiving on
+            # the live stream. What the stream carries is the *reply*; a message he typed is
+            # history the moment he typed it, and one recorded mid-turn by a steer is still his.
+            # Stamping those would let an attach strip something nobody else will ever send.
+            if turn_id:
+                current["turn"] = turn_id
             out.append(current)
         return current
 
     calls: dict[str, dict] = {}
     for entry in read(conversation_id):
         kind = entry.get("type")
+        if kind == "turn":
+            # Bookkeeping, not a part: written by `begin_turn` before the turn says anything, so
+            # that the transcript and the live stream can be recognised as the same turn. It
+            # produces nothing to render, and a turn that only ever wrote its own marker is a
+            # turn that failed before its first token — filtered out with the empties at the end.
+            turn_id = str(entry.get("turn") or "")
+            current = None
+            continue
         if kind == "message" and entry.get("role") in ("user", "system"):
             # `system` reaches the interface as its own role rather than being flattened into
             # `user`. It used to be recorded as one, so on reload a reminder's own prose came

@@ -87,6 +87,19 @@ export interface StoredTurn {
   /** When the turn started, ISO. `timeline()` has always sent it; nothing read it until the
    *  footer showed a clock. `""` on a turn from before it was recorded. */
   at?: string;
+  /**
+   * Which turn wrote this, when the server knows.
+   *
+   * Only on assistant turns, and only on ones recorded since turns were given ids — the
+   * transcript is append-only and every conversation on disk predates this. Absent means "no
+   * stream can claim this", which is the safe reading: it renders as history, which is what a
+   * turn nobody is streaming actually is.
+   *
+   * What it is for: a pane streaming a turn is *also* handed that turn's half-written copy by
+   * `fetchConversation`, because the recorder writes as the turn runs. Matching this against the
+   * `X-Kith-Turn` of the stream it owns is how it drops the copy rather than rendering both.
+   */
+  turn?: string;
 }
 
 /** One page of a conversation, newest last.

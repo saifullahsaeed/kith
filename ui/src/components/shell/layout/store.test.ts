@@ -637,6 +637,40 @@ describe("a bound surface opens into the chat's column", () => {
     expect(useLayout.getState().companions).toEqual({});
   });
 
+  /* A ref that names its conversation is answering the question, not asking it.
+   *
+   * `workspace.tsx` computes which chat a surface is about with a *sticky* rule — a click outside
+   * a chat deliberately leaves the answer where it was, so the Context button still works while
+   * you are in the panel beside the chat. `focusedChat` here had the opposite rule and refused to
+   * fall back at all. So the two disagreed exactly when focus was on a companion: the caller said
+   * "context for c-1", this read "no chat is focused", and the panel opened as a stray tab
+   * somewhere else instead of in the column it was asked for.
+   *
+   * One policy, and it is the caller's: if the ref says which conversation, that is the host. */
+  it("attaches to the conversation the ref names, not the one that happens to be focused", () => {
+    useLayout.setState({
+      tree: pane([{ surface: "chat", conversationId: "c-1" }, { surface: "board" }], 1, "here"),
+      focused: "here",
+      companions: {},
+    });
+    useLayout.getState().open({ surface: "context", conversationId: "c-1" });
+
+    expect(useLayout.getState().companions["chat:c-1"]).toHaveLength(1);
+    expect(panes(useLayout.getState().tree)[0]!.tabs.map(tabKey)).toEqual(["chat:c-1", "board"]);
+  });
+
+  it("still falls back to a tab when the named conversation is not open anywhere", () => {
+    useLayout.setState({
+      tree: pane([{ surface: "board" }], 0, "here"),
+      focused: "here",
+      companions: {},
+    });
+    useLayout.getState().open({ surface: "context", conversationId: "c-gone" });
+
+    expect(useLayout.getState().companions).toEqual({});
+    expect(panes(useLayout.getState().tree)[0]!.tabs.map(tabKey)).toContain("context@c-gone");
+  });
+
   it("detaching the last panel drops the host rather than storing an empty column", () => {
     useLayout.getState().open({ surface: "work" });
     useLayout.getState().detach("chat:c-1", "work@c-1");

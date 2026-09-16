@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import uuid
 from collections.abc import Generator
 from dataclasses import dataclass, field
 
@@ -36,6 +37,17 @@ _END = object()
 @dataclass
 class LiveTurn:
     conversation_id: str
+    #: What this turn is called, for as long as anyone needs to say which turn they mean.
+    #:
+    #: A conversation is not enough to name a turn by: a conversation has many, and the question
+    #: worth asking is "is the turn in this stream the same one I can see in the transcript?".
+    #: Without an answer the interface had to guess from timing, and the guess was wrong often
+    #: enough to render a reply twice. Minted here because this is where a turn starts existing,
+    #: and carried into the transcript by `begin_turn` so that both channels agree.
+    #:
+    #: Only meaningful while the turn is live — the transcript keeps the id, but nothing looks a
+    #: finished turn up by it, so there is no index to maintain and no id to reuse.
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
     #: Every line emitted so far, in order. What a late reader is caught up with.
     lines: list[str] = field(default_factory=list)
     done: bool = False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
 import threading
@@ -188,9 +189,9 @@ def fold_now(conversation_id: str):
     )
 
 
-def _ndjson(lines) -> Response:
-    """A streaming response: the two headers that make it stream, and a first byte that makes it
-    *answer*.
+def _ndjson(lines, turn: str = "") -> Response:
+    """A streaming response: the two headers that make it stream, a first byte that makes it
+    *answer*, and the name of the turn it is carrying.
 
     `X-Accel-Buffering` is the one that matters and the easy one to forget: behind nginx without
     it the whole turn is buffered and delivered in a single lump at the end, which is a stream
@@ -222,11 +223,15 @@ def _ndjson(lines) -> Response:
         yield "\n"
         yield from lines
 
-    return Response(
-        opened(),
-        mimetype="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    # `X-Kith-Turn` is a header rather than a first event on purpose: the client has to know
+    # which turn it is taking ownership of *before* it decides what to render, and a header is
+    # there the moment the response resolves. An in-band event would mean reading a line to find
+    # out, which puts the answer behind the same round trip it is meant to settle — and both
+    # callers already have the turn in hand, so there is nothing to look up.
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    if turn:
+        headers["X-Kith-Turn"] = turn
+    return Response(opened(), mimetype="application/x-ndjson", headers=headers)
 
 
 @api.get("/chat/<conversation_id>/context")
@@ -385,7 +390,7 @@ def attach_turn(conversation_id: str):
     # answers on its own opening byte now, so nothing pulls on that generator until the client
     # reads again — and a turn that ends in the gap would have cleared its backlog with this
     # reader not yet registered. See `live_turns.read`.
-    return _ndjson(live_turns.drain(live, live_turns.read(live)))
+    return _ndjson(live_turns.drain(live, live_turns.read(live)), turn=live.id)
 
 
 def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
@@ -425,7 +430,28 @@ def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
     return history
 
 
-def begin_turn(conversation_id: str, config, gather, opening: str = "", sent_from: str = ""):
+@contextlib.contextmanager
+def _watching(unattended: bool):
+    """Open `nobody_watching` for a turn whose client said nobody is there, and nothing otherwise.
+
+    A plain `if` around a `with` would mean writing the turn body twice. This is the same
+    branch, once, in the only place that knows the answer.
+    """
+    if unattended:
+        with session_context.nobody_watching():
+            yield
+    else:
+        yield
+
+
+def begin_turn(
+    conversation_id: str,
+    config,
+    gather,
+    opening: str = "",
+    sent_from: str = "",
+    unattended: bool = False,
+):
     """Start a turn, supervised, and return the stream to watch. **The only way one begins.**
 
     There used to be two. A typed message came through here and got the whole apparatus — a
@@ -462,6 +488,17 @@ def begin_turn(conversation_id: str, config, gather, opening: str = "", sent_fro
     # outlives the connection that asked for it, so leaving mid-answer and coming back attaches
     # to the same stream instead of finding a finished wall of text.
     live = live_turns.begin(conversation_id)
+    # And written down, so the transcript and the stream can be recognised as the same turn.
+    #
+    # Here rather than inside `live_turns.begin`, which is kernel and must not reach up into a
+    # service to write a file — and here rather than in `_Recorder`, which writes what the turn
+    # *says*: this is written before it has said anything, and a turn that dies before its first
+    # token still has to be identifiable by whoever was attached to it.
+    #
+    # After the user or system message that prompted it, on both paths in, which is what makes
+    # the boundary right: everything before the marker is history and stays, everything the turn
+    # writes after it is the turn's and can be dropped by a client already receiving it live.
+    conversations.record_event(conversation_id, "turn", {"turn": live.id})
 
     # Held as a local for the life of this turn, not re-read from `_RUNNING` between events.
     # See `_arm`: the dict says which turn is current, and a turn asking that question about
@@ -492,7 +529,11 @@ def begin_turn(conversation_id: str, config, gather, opening: str = "", sent_fro
             # every tool call in here believing it belonged to no conversation, which is silent
             # rather than loud: files still get written, and nothing records whose turn wrote
             # them. See `copy_context` below for the other half of that.
-            with session_context.working_in(conversation_id), session_context.arriving_from(sent_from):
+            with (
+                session_context.working_in(conversation_id),
+                session_context.arriving_from(sent_from),
+                _watching(unattended),
+            ):
                 # Reading the transcript and building the prompt happen *here*, not on the
                 # request path, because building it can fold — and a fold is a summarisation
                 # call to the model. On a long conversation it is a large one: measured on a
@@ -1029,7 +1070,16 @@ def chat(payload):
     # Where the message was typed, when a terminal typed it. Informational only — see
     # `session_context.arriving_from`, which is deliberately not the variable that grants
     # access to a folder. A client saying where it is must never widen what he may touch.
-    live = begin_turn(conversation_id, config, gather, latest, sent_from=str(payload.get("cwd") or ""))
+    live = begin_turn(
+        conversation_id,
+        config,
+        gather,
+        latest,
+        sent_from=str(payload.get("cwd") or ""),
+        # Said by the client, because only the client knows. The window is a screen with a
+        # person in front of it; a CLI writing into a pipe is not. See `_watching`.
+        unattended=bool(payload.get("unattended")),
+    )
     # Just the first reader, joined the same way and at the same moment `/attach` joins for one
     # arriving later — which is the point: there is no separate "resume" path to keep in step.
     # Outside `generate` because a generator does not run until something pulls on it, and the
@@ -1042,7 +1092,7 @@ def chat(payload):
         yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
         yield from live_turns.drain(live, reader)
 
-    return _ndjson(generate())
+    return _ndjson(generate(), turn=live.id)
 
 
 def _bind_to_project(conversation_id: str, project_id: int | str | None) -> None:

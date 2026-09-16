@@ -22,7 +22,7 @@ import sys
 
 from kith import settings as kith_settings
 from kith.cli import client as client_module
-from kith.cli.commands import chat, conversations, doctor, projects, settings
+from kith.cli.commands import chat, conversations, doctor, projects, questions, settings
 from kith.cli.errors import INTERNAL, USAGE, Failure, report
 
 #: Printed by `--version` and worth having in a bug report, because the commonest confusion with
@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds to wait between bytes, not for the whole turn",
     )
     subparsers = parser.add_subparsers(dest="command")
-    for group in (chat, conversations, projects, settings, doctor):
+    for group in (chat, conversations, questions, projects, settings, doctor):
         group.add(subparsers)
     return parser
 

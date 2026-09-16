@@ -131,7 +131,19 @@ def unattended() -> bool:
 
 @contextmanager
 def nobody_watching() -> Iterator[None]:
-    """Run a block as work nobody is watching. Opened by the scheduler, and nothing else."""
+    """Run a block as work nobody is watching.
+
+    Two openers. The scheduler, for a reminder firing at four in the morning. And a chat turn
+    whose client said nobody is at a terminal — the command line, driven by a script or by
+    another agent, which has no screen to put a question on and nobody to click it.
+
+    That second one is not a convenience. `ask` parks the turn for fifteen minutes waiting for
+    an answer and the permission gate parks it the same way, and a caller blocked inside
+    `kith send` cannot answer the question that is blocking it — so an automated turn that
+    raises one deadlocks against itself until the deadline, twice over if it asks twice. Saying
+    plainly that nobody is here turns a quarter of an hour of silence into a decision he makes
+    and reports.
+    """
     token = _unattended.set(True)
     try:
         yield
