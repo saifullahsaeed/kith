@@ -256,7 +256,12 @@ def _ask_view(agent_db: Path, plugin: Plugin, command: CommandDecl, args: dict) 
     from kith.infra import renderer
 
     act = str(command.does.get("act") or "")
-    answer = renderer.browse(plugin.id, command.surface, act, _owner(plugin, command.surface), **args)
+    # `args=`, not `**args`. Splatting a plugin's declared parameters into a function whose own
+    # signature begins `(plugin, view, act, owner, ...)` means a manifest is free to pick a name
+    # that collides with one of them — `view` is a plausible parameter for a browser command —
+    # and every call to it raises `TypeError: got multiple values for argument`. A third party's
+    # choice of parameter name cannot be allowed to reach a Python call site.
+    answer = renderer.browse(plugin.id, command.surface, act, _owner(plugin, command.surface), args=args)
     if answer is None:
         # No shell. Said in a sentence he can act on, the way `_ask_surface` does for a tab that
         # is shut: a scheduled turn at four in the morning has no window, and `None` is not

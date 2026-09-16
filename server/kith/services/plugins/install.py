@@ -25,7 +25,7 @@ from pathlib import Path
 from kith.domain.plugins import MANIFEST, Plugin, PluginError, parse
 from kith.infra import confinement, permissions
 from kith.kernel import changes
-from kith.services.plugins import registry
+from kith.services.plugins import registry, sources
 
 #: What every installed plugin may add to each request, together.
 #:
@@ -36,8 +36,15 @@ from kith.services.plugins import registry
 MAX_INSTALLED_PROMPT_CHARS = 8_000
 
 
-def inspect(source: Path, config_db: Path) -> dict:
-    """Read a folder as a plugin and say what installing it would mean. Writes nothing.
+def inspect(source: Path | str | sources.Source, config_db: Path) -> dict:
+    """Read a plugin and say what installing it would mean. Writes nothing *here*.
+
+    `source` is a folder on this machine or a GitHub reference; `sources.resolve` turns the
+    second into the first and everything below this line only ever sees a directory. A remote
+    reference does write — it downloads a tree into a cache under the plugins root — and that is
+    the one qualification on "writes nothing": nothing is *installed*, no row is touched, no
+    grant is given, and the cache is dropped at the next app start whether or not anybody agreed
+    to anything.
 
     Every string a plugin contributes comes back as *data* — id, name, version, command, args,
     env names, reach paths — and none of it is prose this app will speak. There is deliberately
@@ -46,11 +53,13 @@ def inspect(source: Path, config_db: Path) -> dict:
     composed", and a third party's sentence on the screen where someone grants disk access is
     that same mistake one layer out.
     """
-    directory = Path(source).expanduser()
+    found = source if isinstance(source, sources.Source) else sources.resolve(source)
+    directory = found.folder
     if not directory.is_dir():
         raise PluginError(f"{directory} is not a folder.")
     if not (directory / MANIFEST).is_file():
-        raise PluginError(f"There is no {MANIFEST} in {directory.name}.")
+        where = found.described() if found.origin == "github" else directory.name
+        raise PluginError(f"There is no {MANIFEST} in {where}.")
 
     plugin = parse(directory)
     faults = list(plugin.problems())
@@ -69,10 +78,24 @@ def inspect(source: Path, config_db: Path) -> dict:
         faults += documents.asset_faults(plugin)
 
     already = registry.row(config_db, plugin.id)
-    together = registry.installed_prompt_chars(config_db) + plugin.prompt_chars()
-    if already is None and together > MAX_INSTALLED_PROMPT_CHARS:
-        expensive = sorted(registry.enabled(config_db), key=lambda p: -p.prompt_chars())[:2]
-        naming = ", ".join(f"{p.name} (~{p.prompt_tokens():,})" for p in expensive)
+    # **An upgrade is measured too, against what it replaces rather than against nothing.**
+    #
+    # This used to be skipped whenever a row already existed — `already is None` guarded the
+    # whole check — so the ceiling bound the first install of a plugin and nothing afterwards.
+    # A plugin could ship one command, install under the limit, and then add twenty in a version
+    # bump that the only screen quoting a number waved through. Its *current* contribution comes
+    # off the total first, because that is already counted in `installed_prompt_chars` and
+    # charging a plugin twice would refuse an upgrade that costs nothing new.
+    standing = next((p.prompt_chars() for p in registry.enabled(config_db) if p.id == plugin.id), 0)
+    together = registry.installed_prompt_chars(config_db) - standing + plugin.prompt_chars()
+    if together > MAX_INSTALLED_PROMPT_CHARS:
+        expensive = sorted(
+            (p for p in registry.enabled(config_db) if p.id != plugin.id),
+            key=lambda p: -p.prompt_chars(),
+        )[:2]
+        naming = ", ".join(f"{p.name} (~{p.prompt_tokens():,})" for p in expensive) or (
+            f"{plugin.name} itself (~{plugin.prompt_tokens():,})"
+        )
         faults.append(
             f"Installed plugins would add about {together:,} characters to every request, over "
             f"the {MAX_INSTALLED_PROMPT_CHARS:,} limit. The most expensive are {naming}."
@@ -83,6 +106,13 @@ def inspect(source: Path, config_db: Path) -> dict:
         "faults": faults,
         "installable": not faults,
         "replacing": already or None,
+        # Where this came from, as its own fields. A screen that is about to ask somebody to
+        # grant disk access to a stranger's program should be able to name the stranger, and the
+        # commit id is the only part of that which cannot be re-pointed after the fact.
+        "origin": found.origin,
+        "from": found.described(),
+        "repository": found.repository,
+        "revision": found.revision,
         "signature": registry.spawn_signature(plugin),
         "promptChars": plugin.prompt_chars(),
         "promptTokens": plugin.prompt_tokens(),
@@ -93,11 +123,16 @@ def inspect(source: Path, config_db: Path) -> dict:
 def _collision_faults(plugin: Plugin, config_db: Path) -> list[str]:
     """What this plugin would shadow. Named with its owner, never resolved silently."""
     faults: list[str] = []
-    for other in registry.installed(config_db):
-        if other.id == plugin.id:
-            continue
-        if plugin.server and other.server and other.id == plugin.id:
-            faults.append(f"{other.name} already contributes a server called {plugin.id!r}.")
+    # A plugin's MCP server is labelled with the plugin's own id (`registry.mcp_servers`), so the
+    # clash left to find is with a server the person configured *by hand*, never with another
+    # plugin — two plugins cannot share an id. This used to loop over installed plugins asking
+    # `other.id == plugin.id` immediately after a `continue` on that same condition, so it was
+    # unreachable and had never once fired.
+    if plugin.server and plugin.id in _server_labels(config_db):
+        faults.append(
+            f"You already have an MCP server called {plugin.id!r}. A label is a tool namespace, "
+            f"so the two would shadow each other — rename yours, or this plugin cannot install."
+        )
     from kith.services import skills as skills_service
 
     if plugin.skills:
@@ -120,11 +155,39 @@ def _collision_faults(plugin: Plugin, config_db: Path) -> list[str]:
     return faults
 
 
+def _server_labels(config_db: Path) -> set[str]:
+    """The MCP labels the person configured by hand.
+
+    Every label is a tool namespace — `mcp__<label>__<tool>` — so a plugin whose id matches one
+    would have its tools shadow, or be shadowed by, a server the person set up themselves, with
+    nothing on either screen saying which call reached which process. Plugin-to-plugin collision
+    is structurally impossible (the id is the label), so this is the only collision left.
+
+    Read through `manager.configured` and the plugin ids taken back out, rather than through the
+    manager's private row reader, so this keeps working if where those rows live ever changes.
+    """
+    try:
+        from kith.services.mcp import manager
+
+        theirs = {row.label for row in manager.configured(config_db)}
+        return theirs - {plugin.id for plugin in registry.installed(config_db)}
+    except Exception:  # pragma: no cover - a review must not fail on an unreadable server list
+        return set()
+
+
 def install(
-    config_db: Path, source: Path, *, env: dict[str, str] | None = None, standing: bool = True
+    config_db: Path, source: Path | str, *, env: dict[str, str] | None = None, standing: bool = True
 ) -> Plugin:
-    """Copy a plugin in and record the decision. See the module docstring for the order."""
-    report = inspect(Path(source), config_db)
+    """Copy a plugin in and record the decision. See the module docstring for the order.
+
+    A GitHub reference is resolved **once**, here, and the resolved folder is what `inspect` and
+    the copy below both see. Resolving twice would be two more requests and, worse, two chances
+    for the answer to differ: `owner/repo@main` is a different commit after somebody pushes, and
+    a review of one commit followed by an install of another is exactly the gap that pinning
+    exists to close.
+    """
+    found = sources.resolve(source)
+    report = inspect(found, config_db)
     if not report["installable"]:
         raise PluginError(report["faults"][0])
 
@@ -133,7 +196,7 @@ def install(
     staging.parent.mkdir(parents=True, exist_ok=True)
     # `copy` rather than `copy2`: metadata is dropped exactly as `skills.root()` drops it when
     # seeding, so an archive's ownership and times do not travel into the install.
-    shutil.copytree(Path(source).expanduser(), staging, copy_function=shutil.copy)
+    shutil.copytree(found.folder, staging, copy_function=shutil.copy)
 
     try:
         plugin = parse(staging)
@@ -200,7 +263,12 @@ def install(
         "env": {**(previous.get("env") or {}), **(env or {})},
         "installedAt": previous.get("installedAt") or _now(),
         "updatedAt": _now(),
-        "source": str(source),
+        # What was typed, not where it landed. A cache path under `.fetched` is gone at the next
+        # app start, where `owner/repo@main` is still a thing somebody can hand back to this
+        # function to get whatever `main` says next time.
+        "source": found.ref,
+        "origin": found.origin,
+        "revision": found.revision,
     }
     held[plugin.id].pop("retiredAt", None)
     # What its skills looked like when they were copied, so an upgrade can tell an untouched
@@ -245,17 +313,38 @@ def _import_skills(folder: Path, names: tuple[str, ...], previous: dict) -> dict
         source = folder / "skills" / name
         target = destination / name
         if target.exists():
-            verdict = _on_upgrade(target, source, str(previous.get(name) or ""))
+            installed_digest = str(previous.get(name) or "")
+            on_disk = _digest_of(target)
+            verdict = _on_upgrade(on_disk, _digest_of(source), installed_digest)
             if verdict != "replace":
                 # Left alone, and its digest carried forward unchanged so the next upgrade sees
                 # the same thing this one did rather than adopting the person's edit as the
                 # baseline.
-                kept[name] = str(previous.get(name) or "")
+                kept[name] = installed_digest
                 continue
-            shutil.rmtree(target, ignore_errors=True)
+            # **Trashed when it is theirs, deleted when it is ours.** The copy this replaces is
+            # either byte-identical to what we wrote at install — in which case it is a cache and
+            # destroying it costs nobody anything — or it has the person's edits in it, and then
+            # it follows the rule `skills.remove()` and `_withdraw_skills` both state: recoverable
+            # beats tidy. Overwriting somebody's writing with no way back is the one outcome this
+            # whole digest mechanism exists to avoid.
+            if installed_digest and on_disk != installed_digest:
+                _trash(target)
+            else:
+                shutil.rmtree(target, ignore_errors=True)
         shutil.copytree(source, target, copy_function=shutil.copy)
         kept[name] = _digest_of(target)
     return kept
+
+
+def _trash(target: Path) -> None:
+    """Out of the way but recoverable, falling back to a delete when there is no Trash."""
+    from kith.infra import workspace
+
+    try:
+        workspace.trash_path(target)
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
 
 
 def _withdraw_skills(config_db: Path, plugin_id: str) -> None:
@@ -270,7 +359,6 @@ def _withdraw_skills(config_db: Path, plugin_id: str) -> None:
     Trashed rather than deleted, the way `skills.remove()` treats a skill folder, because by now
     the person may have edited it. Recoverable beats tidy.
     """
-    from kith.infra import workspace
     from kith.services import skills as skills_service
 
     row = registry.rows(config_db).get(plugin_id) or {}
@@ -278,10 +366,7 @@ def _withdraw_skills(config_db: Path, plugin_id: str) -> None:
         target = skills_service.root() / name
         if not target.is_dir():
             continue
-        try:
-            workspace.trash_path(target)
-        except Exception:
-            shutil.rmtree(target, ignore_errors=True)
+        _trash(target)
 
 
 def _digest_of(skill: Path) -> str:
@@ -295,14 +380,42 @@ def _digest_of(skill: Path) -> str:
     return digest.hexdigest()[:16]
 
 
-def _on_upgrade(existing: Path, incoming: Path, installed_digest: str) -> str:
+def _on_upgrade(on_disk: str, incoming: str, installed_digest: str) -> str:
     """What happens to a skill already in the person's folder when a plugin ships a new one.
 
-    Return `"replace"` to overwrite it with the plugin's version, or `"keep"` to leave the
-    person's alone.
+    Three digests of the same skill folder — what is there now, what the plugin is shipping, and
+    what Kith wrote at install — and the answer follows from which two of them agree. Pure string
+    comparison on purpose: the caller has already hashed both folders for its own decision about
+    trashing, and a policy this consequential should be readable without a filesystem in it.
 
-    TODO(human)
+    ==================================  =====================  ===========================
+    what the digests say                answer                 why
+    ==================================  =====================  ===========================
+    on disk == installed                ``"replace"``          untouched since install, so
+                                                               nothing of theirs is in it
+    incoming == installed               ``"keep"``             they edited it and the plugin
+                                                               shipped no change; there is
+                                                               nothing to upgrade *to*
+    both differ                         ``"replace"``          a skill describing tools that
+                                                               no longer exist is worse than
+                                                               a lost edit — and the caller
+                                                               trashes rather than destroys,
+                                                               so the edit is not lost
+    no installed digest                 ``"keep"``             no baseline, so an edit cannot
+                                                               be ruled out
+    ==================================  =====================  ===========================
+
+    **The last row is the one worth arguing about.** A row written before digests were recorded
+    has no baseline, and treating the folder on disk as one would silently bless whatever is in
+    it. Keeping is the recoverable direction: a skill left alone can still be replaced by hand,
+    where writing over an edit that was never hashed cannot be undone.
     """
+    if not installed_digest:
+        return "keep"
+    if on_disk == installed_digest:
+        return "replace"
+    if incoming == installed_digest:
+        return "keep"
     return "replace"
 
 
@@ -369,6 +482,16 @@ def uninstall(config_db: Path, plugin_id: str, *, delete_state: bool = False) ->
     held = registry.rows(config_db)
     if plugin_id not in held:
         raise PluginError(f"{plugin_id!r} is not installed.")
+
+    # **Before the row is touched, because the row is where the list of what was imported lives.**
+    #
+    # This used to run after `write_rows`, and the comment saying it had to come first sat over
+    # the call at the bottom of the function. With `delete_state=True` the row was already gone
+    # by then, so `_withdraw_skills` read an empty dict and left every imported skill in the
+    # person's folder for good — telling him how to use tools that had just been uninstalled,
+    # which is the exact failure that function's own docstring exists to prevent.
+    _withdraw_skills(config_db, plugin_id)
+
     if delete_state:
         held.pop(plugin_id, None)
     else:
@@ -385,8 +508,6 @@ def uninstall(config_db: Path, plugin_id: str, *, delete_state: bool = False) ->
     # line left behind are exactly the ones a plain revoke misses.
     for stale in permissions.plugin_spawn_grants(plugin_id):
         permissions.revoke(stale)
-    # Before the row goes, since that is where the list of what was imported lives.
-    _withdraw_skills(config_db, plugin_id)
     # The profile goes with the grant. Its *storage* does not — that is the person's data, and
     # it follows the same thirty-day rule as the plugin's state.
     confinement.forget(plugin_id)
@@ -421,6 +542,9 @@ def sweep(config_db: Path) -> list[dict]:
     they already answered.
     """
     done: list[dict] = []
+    fetched = sources.sweep()
+    if fetched:
+        done.append({"kind": "fetched", "id": f"{fetched} tree(s)"})
     staging = registry.root() / registry.STAGING
     if staging.is_dir():
         for leftover in staging.iterdir():
@@ -499,8 +623,17 @@ def _now() -> str:
 
 
 def _parsed(stamp: str) -> float:
+    """A `Z` stamp back to epoch seconds, **read as UTC**.
+
+    `time.mktime` reads a struct as *local* time, so the retirement it produced was off by this
+    machine's offset from UTC — thirty days minus three hours in Riyadh, and a day out either
+    way across a DST boundary. `calendar.timegm` is the inverse of the `time.gmtime` that
+    `_now()` writes with.
+    """
+    import calendar
+
     try:
-        return time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+        return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
     except (TypeError, ValueError):
         return 0.0
 

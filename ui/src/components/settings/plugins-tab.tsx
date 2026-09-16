@@ -128,7 +128,13 @@ export function PluginsTab() {
   );
 }
 
-/** Point at a folder, read what it would mean, then agree to it. */
+/** Point at a folder or a repository, read what it would mean, then agree to it.
+ *
+ * One box for both, because the review below is what actually tells the two apart: a GitHub
+ * reference resolves to a commit and the panel names it, a folder names the folder. A second
+ * input with a radio button above it would be asking somebody to classify a string that the
+ * server classifies better, and then to be wrong about it in a place with no error message.
+ */
 function Install({ onInstalled, busy }: { onInstalled: () => void; busy: boolean }) {
   const [path, setPath] = useState("");
   const [review, setReview] = useState<PluginReview | null>(null);
@@ -169,7 +175,7 @@ function Install({ onInstalled, busy }: { onInstalled: () => void; busy: boolean
         <input
           value={path}
           onChange={(event) => setPath(event.target.value)}
-          placeholder="/path/to/the/plugin/folder"
+          placeholder="/path/to/a/folder  ·  owner/repo  ·  owner/repo@v1.2.0"
           className={`${inputClass} flex-1 font-mono text-[12px]`}
           onKeyDown={(event) => {
             if (event.key === "Enter" && path.trim()) void look();
@@ -180,6 +186,16 @@ function Install({ onInstalled, busy }: { onInstalled: () => void; busy: boolean
           Read it
         </Button>
       </div>
+
+      <p className="text-muted-foreground/60 text-[11px]">
+        A folder on this machine, or a GitHub repository — <code className="font-mono">owner/repo</code>,{" "}
+        <code className="font-mono">owner/repo@v1.2.0</code>,{" "}
+        <code className="font-mono">owner/repo/path/to/it</code>, or the URL from the address bar.
+        {/* Said here rather than in a tooltip, because the rate limit is the failure people hit
+            first and the fix for it is an environment variable nobody would guess. */}{" "}
+        Private repositories and heavy use need a <code className="font-mono">GITHUB_TOKEN</code>{" "}
+        in Kith's environment.
+      </p>
 
       {failure ? <p className="text-destructive text-[12px]">{failure}</p> : null}
 
@@ -219,6 +235,16 @@ function Review({
       </div>
 
       <dl className="space-y-1.5 text-[12px]">
+        {/* **First, because it is the thing the rest of this panel is about.** Every other line
+            here describes what a stranger's code will be allowed to do; this one says whose code
+            it is. The commit id is the load-bearing part: a tag can be moved and a branch means
+            something different tomorrow, and an install that can only name a branch cannot
+            answer "what did I agree to" afterwards. */}
+        {review.origin === "github" ? (
+          <Fact label="From">
+            <code className="font-mono">{review.from}</code>
+          </Fact>
+        ) : null}
         <Fact label="Adds to every request">
           ~{review.promptTokens.toLocaleString()} tokens, for as long as it is installed
         </Fact>
@@ -339,9 +365,25 @@ function Row({
           </p>
         </div>
 
+        {/* **Asked, because the button below it asks and destroys less.** This removed a plugin
+            on one click of a 14px X — revoking its grants, trashing its folder and taking its
+            skills back out of the person's own skills folder — while "Remove and delete its
+            data", which does all of that *and* drops the state, put a dialog in the way. The
+            more destructive path was the one with a confirmation on it. */}
         <button
           type="button"
-          onClick={() => onRemove(false)}
+          onClick={async () => {
+            const sure = await confirm({
+              title: "Remove this plugin?",
+              subject: plugin.name,
+              description:
+                "Its program stops, its grants are revoked and its skills come back out of your " +
+                "skills folder. What it has stored is kept for thirty days, so reinstalling " +
+                "inside that window gets it back.",
+              confirmLabel: "Remove",
+            });
+            if (sure) onRemove(false);
+          }}
           disabled={busy}
           title="Remove it — its stored data is kept for thirty days"
           aria-label={`Remove ${plugin.name}`}

@@ -289,3 +289,41 @@ def test_reading_an_unknown_plugin_names_the_ones_installed(db: Path):
         answer = tools.run_tool("plugin_state", {"plugin": "nope"}, db)
 
     assert "circulars" in answer["result"]["error"]
+
+
+# --------------------------------------------------------------------------- #
+# Asking for it by name
+# --------------------------------------------------------------------------- #
+
+
+def test_the_tool_answers_to_the_name_the_line_shows_him(db: Path, config_db: Path, monkeypatch):
+    """**The label in his context and the label this matched on were not the same string.**
+
+    The digest line is headed by `lead`, which falls back to the plugin's display *name*. The
+    tool matched on its *id*, and its own description told him to use "the plugin's name,
+    exactly as the summary lists it". So the one label he is ever shown was the one label that
+    did not resolve — a wasted round, every time, of the kind he retries.
+    """
+    from kith.tools.plugins import plugin_state
+
+    monkeypatch.setattr("kith.settings.CONFIG_DB_PATH", config_db)
+    installer.set_digest(config_db, "circulars", True)
+    with in_a_conversation():
+        state.write(db, "circulars", {"unreviewed": 4})
+
+        for asked in ("circulars", "Circulars", "Circular Watch", "circular watch"):
+            answer = plugin_state(db, {"plugin": asked})
+
+            assert "error" not in answer, asked
+            assert answer["plugin"] == "circulars"
+
+
+def test_a_name_nobody_has_lists_both_labels(db: Path, config_db: Path, monkeypatch):
+    """So the retry is informed. Naming only the id was half the reason the first try missed."""
+    from kith.tools.plugins import plugin_state
+
+    monkeypatch.setattr("kith.settings.CONFIG_DB_PATH", config_db)
+
+    answer = plugin_state(db, {"plugin": "nothing-like-this"})
+
+    assert "Circular Watch (circulars)" in answer["error"]

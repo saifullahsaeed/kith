@@ -195,8 +195,8 @@ def installed(monkeypatch, tmp_path: Path, folder: Path, config_db: Path) -> Ite
 def test_it_asks_the_shell_to_drive_the_page(monkeypatch, installed, db: Path, config_db: Path):
     asked: list[tuple] = []
 
-    def fake(plugin: str, view: str, act: str, owner: str = "", **args) -> dict:
-        asked.append((plugin, view, act, args))
+    def fake(plugin: str, view: str, act: str, owner: str = "", args: dict | None = None) -> dict:
+        asked.append((plugin, view, act, args or {}))
         return {"url": "https://example.com/", "title": "Example"}
 
     monkeypatch.setattr(renderer, "browse", fake)
@@ -266,8 +266,8 @@ def test_a_resize_call_reaches_the_shell_with_its_size(monkeypatch, installed, d
 
     asked: list[tuple] = []
 
-    def fake(plugin: str, view: str, act: str, owner: str = "", **args) -> dict:
-        asked.append((plugin, view, act, args))
+    def fake(plugin: str, view: str, act: str, owner: str = "", args: dict | None = None) -> dict:
+        asked.append((plugin, view, act, args or {}))
         return {"width": 390, "height": 844, "url": "https://example.com/", "title": "Example"}
 
     monkeypatch.setattr(renderer, "browse", fake)

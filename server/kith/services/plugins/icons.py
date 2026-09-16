@@ -82,8 +82,11 @@ def named(names) -> dict[str, str]:
     wanted = {str(name).strip() for name in names if str(name).strip()}
     out: dict[str, str] = {}
     for name in wanted:
-        if name in ICONS:
-            out[name] = ICONS[name]
-        else:
-            out[FALLBACK] = ICONS[FALLBACK]
+        # **Aliased, not substituted.** A document renders one `<symbol id="icon-{name}">` per
+        # entry and a surface references `#icon-{name}` by the name it wrote in its manifest, so
+        # emitting the puzzle glyph under the id `icon-puzzle` answered a question nobody asked:
+        # the frame still pointed at `#icon-widget`, still found nothing, and drew an empty box.
+        # The documented fallback only applies if it is reachable by the name it is standing in
+        # for.
+        out[name] = ICONS.get(name, ICONS[FALLBACK])
     return out

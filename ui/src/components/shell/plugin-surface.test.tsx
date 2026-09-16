@@ -46,6 +46,7 @@ function answer(body: unknown, ok = true) {
 
 let store: Record<string, unknown>;
 let revisions: Record<string, number>;
+let mounts: number;
 
 beforeEach(() => {
   store = {};
@@ -64,13 +65,28 @@ beforeEach(() => {
     },
   ]);
 
+  mounts = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) => {
       if (String(url).includes("/surface/board/mount")) {
-        return answer({ ticket: "t-1", url: "/api/plugins/frame/t-1", protocol: 1 });
+        // A fresh ticket every time, the way the server issues them: a ticket is single-use.
+        mounts += 1;
+        return answer({
+          ticket: `t-${mounts}`,
+          url: `/api/plugins/frame/t-${mounts}`,
+          protocol: 1,
+          assets: ["shot"],
+        });
       }
       if (String(url).includes("/state")) return answer({ values: store, revisions, slot: {} });
+      if (String(url).includes("/file?path=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+        });
+      }
       return answer({});
     }),
   );
@@ -169,5 +185,55 @@ describe("what the host pushes into a plugin's frame", () => {
     // root and discard every split and size in the window.
     await waitFor(() => expect(getByText(/is not installed/)).toBeTruthy());
     expect(document.querySelector("iframe")).toBeNull();
+  });
+});
+
+describe("what a new frame is told", () => {
+  /**
+   * **The dedupe map outlived the page it was describing.**
+   *
+   * Declared assets are pushed in as bytes and keyed on their path, so a store write that did
+   * not change a file does not re-read it. That map is a ref on this component; the page is not.
+   * A `key` bump replaces the iframe and a fresh ticket replaces the document inside it, and
+   * across either one every asset still looked delivered — so the reload offered as the one
+   * recovery from an unresponsive surface produced a frame with no images in it.
+   */
+  it("pushes a declared asset into a frame that replaced the one it was sent to", async () => {
+    store = { shot: "/plugins/.storage/sketchpad/board.png" };
+    revisions = { shot: 1 };
+    setPluginSurfaces([
+      {
+        plugin: "sketchpad",
+        pluginName: "Sketchpad",
+        view: "board",
+        title: "Sketchpad",
+        icon: "palette",
+        minWidth: 360,
+        minHeight: 240,
+        instances: "single",
+        answers: "conversation",
+        assets: ["shot"],
+      },
+    ]);
+
+    const { rerender } = render(
+      <PluginSurface plugin="sketchpad" view="board" conversationId="c-1" />,
+    );
+    await waitFor(() => expect(document.querySelector("iframe")).toBeTruthy());
+    frameSaysReady();
+    await waitFor(() => expect(pushes().filter((one) => one.type === "asset")).toHaveLength(1));
+
+    // A new conversation mounts a new ticket, so the frame navigates to a different document.
+    rerender(<PluginSurface plugin="sketchpad" view="board" conversationId="c-2" />);
+    // The *document*, not the request: `mounts` counts calls, and the frame does not point at
+    // the new ticket until the answer lands.
+    await waitFor(() =>
+      expect(document.querySelector("iframe")?.getAttribute("src")).toBe("/api/plugins/frame/t-2"),
+    );
+    frameSaysReady();
+
+    await waitFor(() => {
+      expect(pushes().filter((one) => one.type === "asset").length).toBeGreaterThan(1);
+    });
   });
 });

@@ -87,43 +87,50 @@ def list_plugins():
 
 @api.get("/plugins/review")
 @api.doc(
-    summary="Read a folder as a plugin, without installing it",
+    summary="Read a plugin without installing it",
     description=(
         "Parses and validates the manifest and reports what installing it would mean — the "
         "program it would run, the files that program would see, the skills it would add and "
-        "what it would cost on every request. Writes nothing."
+        "what it would cost on every request. Installs nothing.\n\n"
+        "`?path=` is a folder on this machine **or** a GitHub reference: `owner/repo`, "
+        "`owner/repo@v1.2.0`, `owner/repo/path/to/the/plugin`, or the URL from the address bar. "
+        "A remote one is resolved to a commit before it is downloaded, and the commit is "
+        "reported here so the review names something that cannot be re-pointed afterwards."
     ),
 )
 def review_plugin():
     source = str(request.args.get("path") or "").strip()
     if not source:
-        return jsonify({"error": "send ?path=<folder>"}), 400
+        return jsonify({"error": "send ?path=<folder or owner/repo>"}), 400
     try:
-        return jsonify(installer.inspect(Path(source), CONFIG_DB_PATH))
+        return jsonify(installer.inspect(source, CONFIG_DB_PATH))
     except PluginError as refused:
         return jsonify({"error": str(refused)}), 400
 
 
 @api.post("/plugins")
 @api.doc(
-    summary="Install a plugin from a folder",
+    summary="Install a plugin from a folder or from GitHub",
     description=(
         "Copies it in, grants its program the right to run, and records the decision. The grant "
         "is written here because this request IS the person's approval — the per-call gate then "
-        "never prompts in ordinary use."
+        "never prompts in ordinary use.\n\n"
+        "`path` takes the same forms `GET /plugins/review` does. A GitHub reference is resolved "
+        "to a commit here rather than reusing the one the review reported, so an install always "
+        "carries its own answer to what it is installing."
     ),
 )
 def install_plugin():
     payload = request.get_json(silent=True) or {}
     source = str(payload.get("path") or "").strip()
     if not source:
-        return jsonify({"error": 'send {"path": "<folder>"}'}), 400
+        return jsonify({"error": 'send {"path": "<folder or owner/repo>"}'}), 400
     supplied = payload.get("env")
     env = supplied if isinstance(supplied, dict) else {}
     try:
         plugin = installer.install(
             CONFIG_DB_PATH,
-            Path(source),
+            source,
             env={str(k): str(v) for k, v in env.items()},
             standing=bool(payload.get("standing", True)),
         )
@@ -354,9 +361,11 @@ def read_plugin_state(plugin_id: str):
 @api.doc(
     summary="Run a declared command as the person",
     description=(
-        "For a button Kith drew in its own chrome. A person clicking one IS the authorisation, "
-        "so this origin skips the permission gate — which is only safe while core draws every "
-        "affordance, and is why a sealed frame has no action channel of its own."
+        "For an affordance Kith drew — a button in its own chrome, or one inside a surface the "
+        'manifest declared `in: "surface"`. A person clicking one IS the authorisation, so '
+        "this origin skips the permission gate, and **that is only safe while this route refuses "
+        "anything the manifest did not offer as a button.** It checks that here; it used to say "
+        "so in three docstrings and check it only in the renderer."
     ),
 )
 def run_plugin_command(plugin_id: str, command: str):
@@ -365,12 +374,36 @@ def run_plugin_command(plugin_id: str, command: str):
     from kith.settings import AGENT_DB_PATH
 
     plugin = registry.get(CONFIG_DB_PATH, plugin_id)
-    if plugin is None:
-        return jsonify({"error": f"{plugin_id!r} is not installed."}), 404
+    # **Enabled, not merely installed.** `registry.get` answers the second question, and a
+    # switched-off plugin whose commands still ran was a plugin that had not been switched off —
+    # the `mcp.manager._retire` failure one layer out. Every other route on a live plugin
+    # (`mount_surface` above) already asks this.
+    if plugin is None or plugin_id not in registry.enabled_ids(CONFIG_DB_PATH):
+        return jsonify({"error": f"{plugin_id!r} is not installed or is switched off."}), 404
     declared = plugin.command(command)
     if declared is None:
         return jsonify({"error": f"{plugin.name} has no {command!r} command."}), 404
     payload = request.get_json(silent=True) or {}
+
+    # **Where the click came from decides which opt-in the manifest had to make.**
+    #
+    # `origin="person"` below skips the permission gate, on the stated grounds that core drew the
+    # affordance. Nothing on this side checked that a command *had* an affordance, so any declared
+    # command — including the `in: "none"` ones that exist only for him to call — ran ungated for
+    # anything that could reach the port. The allowlist lived in `plugin-surface.tsx` alone, which
+    # is the renderer enforcing a rule on the server's behalf.
+    #
+    # `surface` is the default because it is the only caller there is today; a default has to be
+    # the narrower of the two.
+    where = str(payload.get("from") or "surface")
+    if where == "surface":
+        if not declared.from_surface():
+            return jsonify({"error": f"{plugin.name} does not let its own tab run {command!r}."}), 403
+    elif where == "chrome":
+        if declared.present.get("in") != "toolbar":
+            return jsonify({"error": f"{plugin.name} draws no button for {command!r}."}), 403
+    else:
+        return jsonify({"error": f"unknown origin {where!r}"}), 400
     args, wrong = commands.coerce(declared, payload.get("args") or {})
     if wrong:
         return jsonify({"error": f"{declared.title!r} {wrong}"}), 400

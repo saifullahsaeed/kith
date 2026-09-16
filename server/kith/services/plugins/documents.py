@@ -375,7 +375,7 @@ def _bridge(plugin: str, view: str) -> str:
         "};"
         "post({kith:1,type:'ready',protocol:1,handles:[]});"
         "})();"
-    ).replace("'", "'")
+    )
 
 
 # --------------------------------------------------------------------------- #

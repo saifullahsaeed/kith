@@ -13,6 +13,39 @@ curl -s -X POST localhost:8611/api/plugins \
 Nothing is installed by default. A folder sitting here contributes nothing until somebody
 installs it — the row in the database is what makes a plugin exist, not the folder.
 
+## From a repository
+
+The same box, and the same API field, takes a GitHub reference instead of a path:
+
+| you type | you get |
+| --- | --- |
+| `owner/repo` | the default branch, at whatever commit it is on now |
+| `owner/repo@v1.2.0` | that tag |
+| `owner/repo@9f2c1a…` | that commit |
+| `owner/repo/examples/sketchpad` | a plugin that is not at the root of the repository |
+| `https://github.com/owner/repo/tree/main/examples/sketchpad` | the same thing, pasted from the address bar |
+
+**A reference is resolved to a commit before anything is downloaded**, and the review screen
+names that commit. It is the same rule the manifest checker applies to `npx -y pkg`: you are
+about to grant a program the right to run, and `main` is not a program — it is a name that means
+something different tomorrow. The commit goes on the row, so "what did I agree to" keeps its
+answer. What you *typed* goes on the row too, so handing `owner/repo@main` back later is still a
+request for whatever `main` says then.
+
+A folder on this machine always wins the ambiguity: `kith/notes` is a directory if there is one,
+and a repository otherwise. Nothing here runs `git` — it is a tarball over HTTPS, so there are no
+hooks, no submodules and no credential helper involved, and git does not have to be installed.
+
+Private repositories, and more than 60 lookups an hour, need a token in Kith's environment:
+
+```sh
+export GITHUB_TOKEN=ghp_…        # or KITH_GITHUB_TOKEN
+```
+
+It is read from the environment and has no home in Kith's own configuration, for the reason a
+manifest may not carry an environment *value*: a credential written somewhere a plugin could
+read has already leaked.
+
 ## sketchpad
 
 A tab he draws on. The shortest honest demonstration of the whole loop:

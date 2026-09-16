@@ -220,7 +220,7 @@ def install_cli(remove: bool = False) -> dict | None:
 _BROWSE_TIMEOUT = 40
 
 
-def browse(plugin: str, view: str, act: str, owner: str = "", **args) -> dict | None:
+def browse(plugin: str, view: str, act: str, owner: str = "", args: dict | None = None) -> dict | None:
     """Drive a plugin's browser pane. None when the desktop shell is not there.
 
     **The one path a model has to a browser it shares with the person.** A `web` surface is web
@@ -242,7 +242,13 @@ def browse(plugin: str, view: str, act: str, owner: str = "", **args) -> dict | 
     if endpoint is None:
         return None
 
-    payload = json.dumps({"plugin": plugin, "view": view, "act": act, "owner": owner, **args}).encode()
+    # **The plugin's arguments go in first, so the four keys the shell routes on always win.**
+    # `args` is a dict rather than `**kwargs` so a manifest declaring a parameter called `view`
+    # is a wrong key in a payload instead of a `TypeError` at the call site — and spread first so
+    # it cannot become a *right* key either, silently steering the call at some other pane.
+    payload = json.dumps(
+        {**(args or {}), "plugin": plugin, "view": view, "act": act, "owner": owner}
+    ).encode()
     request = urllib.request.Request(
         f"{endpoint.url}/browse",
         data=payload,

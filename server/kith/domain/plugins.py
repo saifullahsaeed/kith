@@ -108,6 +108,25 @@ CHARS_PER_TOKEN = 3.7
 #: the cheapest thing that makes "the subprocess is the code that was reviewed" true at all.
 _RUNNERS = ("npx", "uvx", "pipx", "bunx", "dlx", "pnpx")
 
+
+def _is_pinned(arg: str) -> bool:
+    """Whether one runner argument names a package *at a version*.
+
+    **A scope is not a version, and the first version of this could not tell the difference.**
+    The test was `"@" in arg`, so `npx -y @acme/notes` — a scoped package with no version at all,
+    which is the shape most published MCP servers take — satisfied the pin check and installed
+    against whatever `@acme/notes` happened to be that morning. That is the one thing this guard
+    exists to refuse, and it was the case it let through.
+
+    A leading `@` is the scope marker and is dropped before looking; `pkg==1.2.3` is here for
+    `uvx` and `pipx`, which spell a pin the Python way.
+    """
+    text = arg.strip()
+    if not text or text.startswith("-"):
+        return False
+    return "@" in text.removeprefix("@") or "==" in text
+
+
 Delivery = Literal["host", "state", "surface", "server", "view"]
 
 #: Where a command may offer itself a button. `none` is the default and the overwhelming
@@ -220,6 +239,38 @@ def _mapping(value: Any) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
 
+#: What a manifest may write for `server.reach.network`, and what each one means.
+#:
+#: **Closed, and unmatched values are refused rather than resolved.** This was
+#: `str(value).lower() != "none"`, which grants the network for everything that is not the exact
+#: string `none` — so a manifest saying `"network": false`, which is how anybody who had not read
+#: the schema would write it, parsed to `str(False) == "false"`, compared unequal to `"none"`,
+#: and was granted full network access. A boundary parser that resolves what it does not
+#: recognise resolves it in the direction of more access every time.
+_NETWORK = {"any": True, "true": True, "yes": True, "none": False, "false": False, "no": False}
+
+
+def _network(value: Any) -> bool:
+    """Whether the declared reach includes the network. Refuses anything it does not know.
+
+    Loud rather than silent, and refused rather than defaulted, because both other options are
+    wrong in a way somebody only finds out later: defaulting open hands out access nobody wrote
+    down, and defaulting closed produces a plugin whose server hangs on first start with nothing
+    on any screen saying why.
+    """
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text not in _NETWORK:
+        raise PluginError(
+            f"`server.reach.network` is {value!r}. It can be "
+            f"{', '.join(sorted(k for k, v in _NETWORK.items() if v))} for a plugin that needs "
+            f"the network, or {', '.join(sorted(k for k, v in _NETWORK.items() if not v))} for "
+            f"one that does not."
+        )
+    return _NETWORK[text]
+
+
 def _text(value: Any, limit: int) -> str:
     """One line of someone else's text, bounded and stripped of anything that can lie.
 
@@ -281,8 +332,7 @@ class ServerSpec:
                 found.append(f"{name!r} is not an environment variable name.")
         base = Path(self.command).name
         if base in _RUNNERS:
-            pinned = any("@" in arg and not arg.startswith("-") for arg in self.args)
-            if not pinned:
+            if not any(_is_pinned(arg) for arg in self.args):
                 found.append(
                     f"{base} downloads its package every time it starts, so this plugin would "
                     f"run whatever is newest rather than what you approved. Pin a version "
@@ -803,7 +853,7 @@ def parse(directory: Path) -> Plugin:
             reach=Reach(
                 read=tuple(_text(p, 512) for p in (reach_raw.get("read") or [])),
                 write=tuple(_text(p, 512) for p in (reach_raw.get("write") or ["plugin:state"])),
-                network=str(reach_raw.get("network", "any")).lower() != "none",
+                network=_network(reach_raw.get("network", "any")),
             ),
         )
 

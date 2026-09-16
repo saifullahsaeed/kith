@@ -80,6 +80,14 @@ class Call:
     timeout_ms: int = 3_000
     answered: threading.Event = field(default_factory=threading.Event)
     reply: dict | None = None
+    #: Set when something answered *for* the frame because the frame would not.
+    #:
+    #: **`reply is None` cannot carry this and that was a real bug.** A stopped turn and a
+    #: renderer reporting a hung frame both left `reply` unset, so the commonest surface failure
+    #: there is reached the model as "The turn was stopped before that was answered" — a sentence
+    #: about something the person did, for something the person had not done. A third state costs
+    #: one field and makes both sentences true.
+    failed: bool = False
     #: Set once a renderer has taken it, so a second window does not answer the same call.
     claimed_by: str = ""
 
@@ -142,7 +150,25 @@ def ask(call: Call) -> dict:
     # the wait, so the thing that answers is not queued behind the thing waiting.
     changes.publish("plugin_call", conversation=call.conversation_id)
     try:
-        if not call.answered.wait(timeout=min(call.timeout_ms / 1000, DEADLINE)):
+        # `DEADLINE`, not `min(DEADLINE, the command's own)`. The two clocks cover different
+        # failures — see the table at the top — and the renderer runs the inner one. Taking the
+        # smaller of the two made the outer clock fire first or level with the inner one in every
+        # case the ceiling allows (10s against 20s), so the *server* answered for a slow frame
+        # while the renderer's own answer was still in flight, and the deadline that exists for a
+        # window that has gone away never once ran to its length.
+        if not call.answered.wait(timeout=DEADLINE):
+            with _LOCK:
+                _MISSES[key] = _MISSES.get(key, 0) + 1
+            return _refused(
+                "slow",
+                f"The {call.view} surface did not answer within {call.timeout_ms}ms. Carry on "
+                f"and say what you skipped.",
+            )
+        if call.failed:
+            # The renderer answering for a frame that did not. Counted the same way a server-side
+            # timeout is, because it is the same fact arriving by a faster route — and without
+            # this `UNRESPONSIVE_AFTER` could never trip while a window was open, which is every
+            # case it was written for.
             with _LOCK:
                 _MISSES[key] = _MISSES.get(key, 0) + 1
             return _refused(
@@ -204,7 +230,13 @@ def reply(call_id: str, value: dict | None, *, ok: bool = True) -> bool:
         call = _OPEN.get(call_id)
         if call is None or call.answered.is_set():
             return False
-        call.reply = dict(value or {}) if ok else None
+        if ok:
+            call.reply = dict(value or {})
+        else:
+            # Not `reply = None`. That is what `release` leaves behind when a turn is stopped,
+            # and one sentinel for two facts made every frame timeout report itself as the
+            # person having pressed stop.
+            call.failed = True
     call.answered.set()
     return True
 

@@ -284,6 +284,25 @@ export function PluginSurface({
    * fetch's push would trigger the next.
    */
   const sent = useRef<Map<string, string>>(new Map());
+
+  /* **A new document is a new frame, and a new frame knows nothing.**
+   *
+   * `sent` lives on this component while the page it describes does not: a `key` bump replaces
+   * the iframe, and a fresh ticket replaces the document inside it. Either way the dedupe map
+   * outlived what it was describing — every asset still looked delivered, nothing was pushed
+   * again, and the reload offered as the one recovery from an unresponsive surface produced a
+   * frame with no images in it.
+   *
+   * `ready` had the same shape of bug one step earlier. It stayed `"yes"` across the swap, so a
+   * push could land on a page that had not yet registered a handler — which is the exact case
+   * the `ready` message was added to prevent, defeated by the state that tracks it.
+   *
+   * Keyed on both, because they are two different ways to get a new page: `attempt` is the
+   * person asking for one, `url` is a re-mount handing one over. */
+  useEffect(() => {
+    sent.current.clear();
+    setReady("no");
+  }, [attempt, url]);
   useEffect(() => {
     const frameWindow = frame.current?.contentWindow;
     const keys = declared?.assets ?? [];

@@ -28,19 +28,47 @@ from kith.tools.registry import tool
     "summary taken when the turn began; this is current, and it is the whole of what the "
     "plugin has stored rather than the few keys the summary shows. Read it when the summary "
     "is not enough to act on — not before.",
-    {"plugin": {**STR, "description": "The plugin's name, exactly as the summary lists it."}},
+    {"plugin": {**STR, "description": "The plugin, named the way the summary line names it."}},
     required=("plugin",),
 )
 def plugin_state(path: Path, args: dict):
     from kith import settings as live
     from kith.services.plugins import registry, state
 
-    name = str(args.get("plugin") or "").strip()
+    asked = str(args.get("plugin") or "").strip()
     installed = registry.enabled(live.CONFIG_DB_PATH)
-    if not any(plugin.id == name for plugin in installed):
-        known = ", ".join(plugin.id for plugin in installed) or "none installed"
-        return {"error": f"no plugin called {name!r}. Installed: {known}"}
+    found = _resolve(asked, installed)
+    if found is None:
+        known = ", ".join(f"{p.name} ({p.id})" for p in installed) or "none installed"
+        return {"error": f"no plugin called {asked!r}. Installed: {known}"}
     try:
-        return {"plugin": name, **state.read(path, name)}
+        return {"plugin": found, **state.read(path, found)}
     except state.PluginStateError as refused:
         return {"error": str(refused)}
+
+
+def _resolve(asked: str, installed) -> str | None:
+    """The plugin id behind whatever he typed.
+
+    **The name in his context and the name this matched on were not the same string.** The digest
+    line is headed by `state.digest`'s `lead`, which falls back to the plugin's display *name*;
+    this asked for an exact match on its *id*. So the one label he is ever shown — "Sketchpad" —
+    was the one label that did not resolve, and the tool's own description told him to use it.
+    Guaranteed to cost a round every time, and a wrong-argument round is the kind he retries.
+
+    Matched loosely rather than by fixing the description, because the fix that only changes
+    prose is the fix that stops working the next time either end is edited. Id first, so an exact
+    id can never be shadowed by somebody else's display name.
+    """
+    wanted = asked.casefold()
+    for plugin in installed:
+        if plugin.id.casefold() == wanted:
+            return plugin.id
+    if not wanted:
+        return None
+    for plugin in installed:
+        declared = (plugin.state or {}).get("digest")
+        lead = str(declared.get("lead") or "") if isinstance(declared, dict) else ""
+        if wanted in {plugin.name.casefold(), lead.casefold()} - {""}:
+            return plugin.id
+    return None

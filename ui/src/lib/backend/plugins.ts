@@ -92,6 +92,14 @@ export interface PluginReview {
   promptChars: number;
   promptTokens: number;
   installedPromptChars: number;
+  /** `folder` or `github`. */
+  origin: string;
+  /** Where it came from, as one line the server composed from fields it parsed itself. */
+  from: string;
+  /** `owner/repo`, empty for a folder. */
+  repository: string;
+  /** The full commit id this was read at. Empty for a folder — a folder has no such answer. */
+  revision: string;
 }
 
 export async function fetchPlugins(): Promise<PluginsSnapshot> {
@@ -107,10 +115,12 @@ export async function fetchPluginSurfaces(): Promise<PluginSurface[]> {
 }
 
 /** Read a folder as a plugin without installing it. Writes nothing — see `install`. */
+/** Read a plugin without installing it. `path` is a folder on this machine or a GitHub
+ *  reference — `owner/repo`, `owner/repo@v1.2.0`, `owner/repo/path/to/it`, or the URL. */
 export async function reviewPlugin(path: string): Promise<PluginReview> {
   const response = await fetch(`/api/plugins/review?path=${encodeURIComponent(path)}`);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `could not read that folder (${response.status})`);
+  if (!response.ok) throw new Error(body.error || `could not read that (${response.status})`);
   return body as PluginReview;
 }
 
@@ -252,16 +262,22 @@ export async function fetchPluginFile(plugin: string, path: string): Promise<Arr
 /** Set off one of a plugin's commands as the person.
  *
  * `origin: "person"` on the server, which skips the permission gate — safe because the only
- * routes here are chrome Kith drew and a surface the manifest explicitly opted in per command. */
+ * routes here are chrome Kith drew and a surface the manifest explicitly opted in per command.
+ *
+ * `from` says which of those two it was, and the server checks the matching opt-in itself. It is
+ * sent explicitly rather than left to the server's default because this is the half of the rule
+ * that used to live only here: the allowlist was applied in `plugin-surface.tsx` and nowhere
+ * else, so the endpoint would run any declared command for anything that could reach the port. */
 export async function runPluginCommand(
   plugin: string,
   command: string,
   args: Record<string, unknown>,
   conversation: string,
+  from: "surface" | "chrome" = "surface",
 ): Promise<void> {
   await fetch(`/api/plugins/${plugin}/command/${command}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ args, conversation }),
+    body: JSON.stringify({ args, conversation, from }),
   }).catch(() => {});
 }
