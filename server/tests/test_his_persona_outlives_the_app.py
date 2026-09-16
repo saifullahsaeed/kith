@@ -78,18 +78,86 @@ def test_an_edit_outlives_the_bundle_it_shipped_in(packaged):
 
 
 def test_an_update_does_not_overwrite_what_someone_wrote(packaged):
+    """The half of the bargain that was always true, and must stay true."""
     bundle, data, persona = packaged
 
     persona.load_persona()
     persona.write_fragment("00-who.md", "Your name is Atlas.\n")
 
-    # A new version of the app, carrying different bundled fragments.
+    # A new version of the app, carrying a different version of the fragment they rewrote.
     (bundle / "persona" / "00-who.md").write_text("Your name is Kith, version two.\n")
-    (bundle / "persona" / "20-new-in-this-release.md").write_text("Something new.\n")
     persona._seeded = False
 
     assert "Atlas" in persona.load_persona(), "an update must not replace their persona"
-    assert not (data / "persona" / "20-new-in-this-release.md").exists()
+    assert (data / "persona" / "00-who.md").read_text() == "Your name is Atlas.\n"
+
+
+def test_an_update_delivers_a_fragment_nobody_has_touched(packaged):
+    """The half that was not true, and is the reason `infra/seed.py` exists.
+
+    The release this was written for added the paragraph teaching `send_builder` to
+    `30-how-you-read.md` — in the same release that made `send_builder` the headline feature.
+    Under the old rule, every person already running Kith would have received the feature and
+    none of the sentence that makes him reach for it, because their persona folder existed.
+    """
+    bundle, data, persona = packaged
+
+    persona.load_persona()
+    assert (data / "persona" / "10-tone.md").read_text() == "Be brief.\n"
+
+    (bundle / "persona" / "10-tone.md").write_text("Be brief, and say what you did.\n")
+    persona._seeded = False
+
+    assert "say what you did" in persona.load_persona()
+
+
+def test_a_fragment_new_in_this_release_arrives(packaged):
+    bundle, data, persona = packaged
+
+    persona.load_persona()
+    (bundle / "persona" / "20-new-in-this-release.md").write_text("Something new.\n")
+    persona._seeded = False
+
+    assert "Something new." in persona.load_persona()
+    assert (data / "persona" / "20-new-in-this-release.md").exists()
+
+
+def test_a_fragment_they_deleted_is_not_delivered_again(packaged):
+    """Absence is an answer, and the manifest is what makes it readable as one.
+
+    Without a record of what was placed here, a deleted fragment and a fragment that has never
+    arrived look identical — and the rule that delivers the second would undo the first on the
+    next launch.
+    """
+    bundle, data, persona = packaged
+
+    persona.load_persona()
+    persona.delete_fragment("10-tone.md")
+    persona._seeded = False
+    assert persona.load_persona() == "Your name is Kith."
+
+    # And it stays gone across an update that changes the very fragment they threw away.
+    (bundle / "persona" / "10-tone.md").write_text("Be brief, and say what you did.\n")
+    persona._seeded = False
+
+    assert not (data / "persona" / "10-tone.md").exists()
+
+
+def test_a_fragment_they_switched_off_is_not_delivered_again(packaged):
+    """Disabling is a rename, so the shipped name goes absent — and must read as a decision.
+
+    This is the deletion rule reached by a different door, and the door matters: somebody who
+    turns a fragment off in Settings has not deleted anything, and would have no reason to
+    expect the next launch to put the original back beside the one they renamed.
+    """
+    _bundle, _data, persona = packaged
+
+    persona.load_persona()
+    persona.set_enabled("10-tone.md", False)
+    persona._seeded = False
+    persona.load_persona()
+
+    assert {one["name"] for one in persona.fragments()} == {"00-who.md", "_10-tone.md"}
 
 
 def test_deleting_every_fragment_is_a_decision_not_a_gap(packaged):

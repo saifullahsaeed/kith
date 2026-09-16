@@ -77,7 +77,12 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: false
 
     steps:
+      # fetch-depth: 0 for the same reason the version job needs it: the shipped-history check
+      # below is derived from the release tags, and a shallow clone carries none — which would
+      # make it compare against an empty history and fail every release.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -126,11 +131,39 @@ jobs:
       - name: ./check ui
         run: ./check ui
 
-      # The interface is copied inside the frozen server, and the frozen server is copied
-      # inside the app bundle. Out of order means shipping yesterday's interface.
-      - name: Freeze the server
+      # The shell is what the person actually launches, and until this line it was the only
+      # package a release did not check.
+      - name: ./check desktop
+        run: ./check desktop
+
+      # `server/shipped.json` is how a future update recognises the files THIS release ships as
+      # its own rather than as something the person wrote. Cutting a release without
+      # regenerating it has no symptom now and a permanent one later: everybody who installs
+      # this build is holding bytes no history records, so the next release reads their untouched
+      # persona as edited and never corrects it again.
+      - name: The shipped history covers every release
         working-directory: server
-        run: .venv/bin/pyinstaller kith-server.spec --noconfirm --log-level WARN
+        run: .venv/bin/python scripts/record_shipped.py --check
+
+      # `npm run freeze` rather than the pyinstaller line it used to spell out here. There are
+      # two binaries now — the server and the CLI — and this step knew about one of them, so the
+      # first release after the CLI landed would have packaged an app whose Resources folder was
+      # missing the `kith` that `extraResources` asks for and that `kith install` links to. That
+      # is the exact bug the CLI's own commit was written to fix, reintroduced by a build file
+      # that lists the steps a second time.
+      #
+      # It is the same objection `ci.yml` opens with: a workflow that re-states what a script
+      # already does is a second source of truth, and it drifts in the direction of whichever
+      # copy nobody ran. `npm run dist` is what a person runs locally; these are its two halves,
+      # kept as two steps only so a failure says which one broke.
+      #
+      # It rebuilds `ui/dist`, which `./check ui` has already produced. That is deliberate: the
+      # interface is copied inside the frozen server and the frozen server inside the app
+      # bundle, so the freeze owning its own input is what makes the ordering unbreakable rather
+      # than conventional.
+      - name: Freeze the server and the CLI
+        working-directory: desktop
+        run: npm run freeze
 
       - name: Build the shell
         working-directory: desktop

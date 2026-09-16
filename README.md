@@ -128,9 +128,10 @@ explain why. The header of [`run`](run) documents what reloads and what does not
 Before opening a pull request:
 
 ```sh
-./check         # ruff, ruff format, pyright, pytest, tsc, vite build
-./check server  # Python only — the fast loop
-./check ui      # TypeScript only
+./check         # everything below, in one exit code
+./check server  # ruff, ruff format, pyright, pytest — the fast loop
+./check ui      # tsc, vitest, vite build
+./check desktop # tsc, vitest — the Electron shell is its own package
 ```
 
 Run the script rather than the individual commands. `pytest | tail -1 && ruff`
@@ -237,10 +238,20 @@ notification and take you to the conversation that is waiting.
   [`.gitignore`](.gitignore), written before `git init` for that reason.
   `KITH_DATA_DIR` overrides both.
 - `server/persona/` — the persona fragments that ship with the build, merged in
-  filename order. A packaged install copies them to `~/.kith/persona` the first
-  time it needs them and reads from there afterwards, so an update cannot
-  overwrite a persona you have edited. A source checkout reads this folder
-  directly. Either way they are re-read per request, so edits need no restart.
+  filename order. A packaged install copies them to `~/.kith/persona` and reads
+  from there afterwards; a source checkout reads this folder directly. Either way
+  they are re-read per request, so edits need no restart.
+
+  An update leaves anything you have written alone, and updates what you have
+  not. Those used to be the same rule, which meant the second half did not
+  happen: the copy was made only when the folder was absent, so a correction to a
+  shipped fragment reached new installs and nobody else. `server/shipped.json`
+  records every version of every fragment that has been released, so a file still
+  holding bytes Kith published is recognisable as nobody's work and can be
+  replaced — and anything else is yours and is not touched. `~/.kith/seeded.json`
+  is the other half of that record. See
+  [`kith/infra/seed.py`](server/kith/infra/seed.py); the same applies to
+  `server/skills/`.
 
 ## Reading the code
 

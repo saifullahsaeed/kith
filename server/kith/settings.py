@@ -98,6 +98,27 @@ AGENT_DB_PATH = DATA_DIR / "agent.db"
 #: lets the page be handed the API token in the document.
 UI_DIST = _text("KITH_UI_DIST") or (str(SERVER_ROOT / "ui") if FROZEN else "")
 
+#: What this build calls itself. Printed by `kith --version`, and the number the release
+#: workflow keys on lives in `desktop/package.json` — `test_one_version_number` holds the two
+#: together, because a CLI that reports a version the app does not have is worse in a bug report
+#: than one that reports nothing.
+#:
+#: Here rather than in `kith/cli/` because `kith.settings` is the only module of this server the
+#: CLI package is permitted to import (see `test_the_cli_is_only_a_client`), and a second
+#: hand-bumped constant inside the CLI is how it came to say 0.1.0 while the app said 0.5.2.
+VERSION = "0.6.0"
+
+#: Every released version of every bundled file, generated from the release tags by
+#: ``scripts/record_shipped.py``. Read by ``infra/seed.py`` to tell a file Kith wrote from one
+#: somebody has rewritten — the only way to recognise bytes from a build that the update has
+#: already replaced on disk. Ships at the root of the bundle, beside ``persona/`` and ``skills/``.
+SHIPPED_HISTORY_PATH = SERVER_ROOT / "shipped.json"
+
+#: What ``infra/seed.py`` last placed in the data directory. Here rather than inside the folders
+#: it describes because it covers both of them, and because a record kept inside ``persona/``
+#: would be a file the persona editor lists and offers to delete.
+SEED_MANIFEST_PATH = DATA_DIR / "seeded.json"
+
 #: Persona fragments. Empty = ``DEFAULT_PERSONA_DIR``.
 PERSONA_DIR = _text("KITH_PERSONA_DIR")
 
@@ -126,9 +147,10 @@ DEFAULT_PERSONA_DIR = (DATA_DIR / "persona") if FROZEN else BUNDLED_PERSONA_DIR
 #: ``kith.infra.permissions`` instead.
 WORKSPACE_DIR = _text("KITH_WORKSPACE")
 
-#: The skills that ship with Kith. Seeded into ``skills_dir()`` on first run, then left alone.
+#: The skills that ship with Kith. Reconciled against ``skills_dir()`` on startup by
+#: ``infra/seed.py``, which updates the copies nobody has edited and leaves the rest.
 #:
-#: Two, and they are here for two different reasons.
+#: Four, for three different reasons.
 #:
 #: ``drawing-a-canvas`` because the persona points at it by name. A default persona that names a
 #: skill nobody has is a dead pointer in every downloaded copy — it was written on a machine where
@@ -141,8 +163,17 @@ WORKSPACE_DIR = _text("KITH_WORKSPACE")
 #: ``milestone_task_cap`` guards one symptom of that with a number; this is the part that cannot be
 #: a number.
 #:
-#: Both are seeded once and then belong to whoever installed them. Adding a third is not free: a
-#: description sits in the cached prefix on every request, and these two cost ~430 tokens together.
+#: ``brainstorming`` and ``sending-workers`` for the same reason as each other: both name the way
+#: out of a failure he does not otherwise recognise as one. A brief vague enough to invent around
+#: comes back as a confident patch, and it reads exactly like a good one — there is no moment at
+#: which that goes wrong loudly, so it has to be said before the work starts rather than caught
+#: after.
+#:
+#: They are seeded on first run and updated afterwards only while nobody has edited them — see
+#: ``infra/seed.py``, which is what makes a correction to a shipped skill reach the people who
+#: already have the broken copy. Adding a fifth is not free: a description sits in the cached
+#: prefix on every request, and these four cost ~435 tokens together (1,565 characters of name
+#: and description, measured by ``skills.split_frontmatter`` over this folder).
 BUNDLED_SKILLS_DIR = SERVER_ROOT / "skills"
 
 #: The variable naming the skills folder.

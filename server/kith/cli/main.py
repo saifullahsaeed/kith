@@ -20,13 +20,18 @@ from __future__ import annotations
 import argparse
 import sys
 
+from kith import settings as kith_settings
 from kith.cli import client as client_module
 from kith.cli.commands import chat, conversations, doctor, projects, settings
 from kith.cli.errors import INTERNAL, USAGE, Failure, report
 
-#: Bumped by hand. Printed by `--version` and worth having in a bug report, because the
-#: commonest confusion with a CLI installed from a checkout is not knowing which checkout.
-VERSION = "0.1.0"
+#: Printed by `--version` and worth having in a bug report, because the commonest confusion with
+#: a CLI installed from a checkout is not knowing which checkout. Read from `kith.settings`
+#: rather than kept here: this said 0.1.0 while the app it talks to said 0.5.2, which is a bug
+#: report that points at the wrong release.
+# Aliased on import: `kith.cli.commands.settings` is the `kith settings` subcommand and would
+# otherwise shadow the module this reads.
+VERSION = kith_settings.VERSION
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -9,9 +9,11 @@
 # with nginx in front of it; both were removed once the server started serving the
 # UI itself — nginx was serving the same build at a second port for no benefit.
 #
-# Docker is still needed for ONE thing: Kith's sandbox, the container that is his
-# computer. It is created on demand by the server (see infra/sandbox.py), not by
-# compose. Removing that dependency is the open question in desktop/PACKAGING.md.
+# Docker is not needed at all. This used to say it was still required for Kith's
+# sandbox and to point at infra/sandbox.py; that module was deleted when the
+# sandbox was replaced by infra/permissions.py, and the sentence outlived it by
+# months. Docker is now only a fallback route to a SearXNG instance for web
+# search, which is optional — see desktop/RELEASE.md.
 
 SHELL := /bin/bash
 ROOT  := $(shell pwd)
@@ -27,7 +29,7 @@ export KITH_TZ             := Asia/Riyadh
 export KITH_SEARCH_PROVIDER := auto
 export KITH_OR_PROVIDER    := DeepSeek
 
-.PHONY: help venv ui server desktop dev cli lint test check clean
+.PHONY: help venv ui server desktop dev cli lint test check shipped clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -54,15 +56,23 @@ dev: ui ## desktop app with the window-chrome self-check
 cli: venv ## install the `kith` command into ~/.local/bin
 	@PYTHONPATH=$(ROOT)/server $(PY) -m kith.cli install $(ARGS)
 
-lint: ## ruff (server), oxlint (ui), tsc (desktop)
+lint: ## ruff (server), oxlint (ui) — the fast pass, not the gate
 	@$(PY) -m ruff check server/kith
 	@cd ui && npm run lint
-	@cd desktop && npx tsc --noEmit -p tsconfig.json
 
 test: venv ## run the server test suite
 	@cd server && $(PY) -m pytest -q
 
-check: lint test ## everything CI would run
+# Delegates rather than re-listing the steps, which is the whole reason `./check` exists. This
+# target used to be `lint test` and describe itself as "everything CI would run", and both CI
+# workflows run `./check` — so the two drifted in the direction nobody noticed: no pyright, no
+# vitest, no vite build, and a desktop `tsc --noEmit` that reads a different config from the
+# real build and passed clean on a tree that failed to compile.
+check: venv ## everything CI would run — the real gate
+	@./check
+
+shipped: venv ## regenerate server/shipped.json from the release tags (before cutting a release)
+	@cd server && $(PY) scripts/record_shipped.py
 
 clean: ## drop build output and the desktop app's saved window geometry
 	@rm -rf ui/dist desktop/out

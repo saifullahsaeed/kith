@@ -20,6 +20,7 @@ machine with the tools you already have, and `infra/permissions.py` is what boun
 ./check            # everything CI runs
 ./check server     # python only, the fast loop
 ./check ui         # typescript only
+./check desktop    # the electron shell, which is its own package and its own toolchain
 ```
 
 Run the script rather than the individual commands. It exists because
@@ -29,6 +30,12 @@ line of green — that happened twice in one night and a commit went out on top 
 The server side runs ruff, ruff format, pyright and pytest. The type check is a gate and sits at
 zero — [`server/docs/typing.md`](server/docs/typing.md) covers what it checks, the one rule set
 relaxed inside `tests/`, and the helpers that keep it there.
+
+The `ui` and `desktop` sides both run `tsc -b`, never `tsc --noEmit`. They read different
+configs: `--noEmit` passed clean on a tree whose real build failed with six errors, two of them
+genuine type mismatches. `desktop` was the last package with no gate on it at all — 63 tests
+that nothing ran — which is how a release nearly went out with a `kith` binary that the
+packaging step had never been told to build.
 
 ## House style
 

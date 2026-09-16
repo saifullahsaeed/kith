@@ -5,9 +5,12 @@
 # second source of truth that drifts — the failure mode being a green pull request that fails
 # the moment someone runs `./check` on their own machine.
 #
-# Two jobs rather than one, because they need different toolchains and there is no reason for a
-# Python failure to hide a TypeScript one. `./check server` and `./check ui` are the same split
-# the script already offers.
+# Three jobs rather than one, because they need different toolchains and there is no reason for
+# a Python failure to hide a TypeScript one. `./check server`, `./check ui` and `./check desktop`
+# are the same split the script already offers.
+#
+# The desktop job is the newest and was missing for a long time, which is how the shell ended up
+# being the one package with 63 tests and nothing running them.
 
 name: check
 
@@ -69,3 +72,25 @@ jobs:
         run: npm ci
 
       - run: ./check ui
+
+  desktop:
+    name: desktop (tsc, vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      # ubuntu rather than macOS even though the app only ships for macOS: these tests are the
+      # shell's own logic — the token file, the SSE reader, the tray menu, the web-view rules —
+      # and none of it touches a Mac API. Running them here costs a fraction of a macOS runner
+      # minute, and the packaging that genuinely needs macOS is gated by the release workflow.
+      - name: Install
+        working-directory: desktop
+        run: npm ci
+
+      - run: ./check desktop

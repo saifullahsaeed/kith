@@ -20,10 +20,10 @@ to bypass the folder entirely with a single inline prompt.
 from __future__ import annotations
 
 import re
-import shutil
 from pathlib import Path
 
 from kith import settings
+from kith.infra import seed
 
 _DEFAULT_DIR = settings.DEFAULT_PERSONA_DIR
 _FRAGMENT_SUFFIXES = {".md", ".txt"}
@@ -34,17 +34,22 @@ _seeded = False
 
 
 def persona_dir() -> Path:
-    """The directory persona fragments are read from, seeded from the bundle on first use.
+    """The directory persona fragments are read from, reconciled with the bundle on first use.
 
     A packaged Kith unpacks its own files to a temporary directory that is deleted when the
     app closes, so the fragments that ship with it cannot be the ones you edit — see
-    ``settings.DEFAULT_PERSONA_DIR``. They are copied into the data directory the first time
-    he needs them and read from there ever after, which is also what stops an update from
-    replacing a persona someone has spent a month shaping.
+    ``settings.DEFAULT_PERSONA_DIR``. They are copied into the data directory and read from
+    there ever after.
 
-    Copied only when the folder is absent, never when it is merely empty: someone who has
-    deleted every fragment has said something, and answering by putting them all back would
-    be the app arguing with them.
+    What that copy used to cost was every later change: the rule was "copy when the folder is
+    absent", so an update reached new installs and nobody else. ``infra.seed`` keeps the half
+    that mattered — a fragment you have written is never overwritten — and drops the half that
+    was only ever a limitation, by recording which bytes Kith itself wrote. A fragment still
+    holding those bytes is nobody's work and is updated; anything else is yours and is left.
+
+    A fragment you have deleted stays deleted, which is the same sentence as before and now
+    means it: the manifest remembers that the file was placed here, so its absence reads as an
+    answer rather than as a file that has never arrived.
     """
     global _seeded
     override = settings.PERSONA_DIR
@@ -53,14 +58,7 @@ def persona_dir() -> Path:
     live = _DEFAULT_DIR
     if not _seeded:
         _seeded = True
-        if live != settings.BUNDLED_PERSONA_DIR and not live.exists():
-            try:
-                shutil.copytree(settings.BUNDLED_PERSONA_DIR, live)
-            except (OSError, shutil.Error):
-                # Nothing to gain from failing here: an unwritable data directory is already
-                # fatal for the databases, and starting with no persona is survivable and
-                # visible — the Settings screen shows an empty folder rather than a lie.
-                pass
+        seed.sync("persona", settings.BUNDLED_PERSONA_DIR, live)
     return live
 
 

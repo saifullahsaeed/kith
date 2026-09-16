@@ -11,9 +11,19 @@ branch — but only when the version in `desktop/package.json` has no tag yet. S
 cutting a release is one edit:
 
 ```sh
+make shipped                         # record what the LAST release shipped — see below
 npm --prefix desktop version patch   # or edit the version by hand
-git push
+git commit -am "Kith <version>" && git push
 ```
+
+`record_shipped.py` first, and it is not optional. `server/shipped.json` is the record of every
+file Kith has *released* under `persona/` and `skills/`, and `infra/seed.py` reads it to tell a
+fragment somebody rewrote from one it placed there itself. Skipping it has no symptom in this
+release and a permanent one in the next: the files this build ships go unrecorded, so a year of
+installs are holding bytes no history knows about, every untouched persona is reclassified as
+somebody's own writing, and corrections stop reaching them for good. The workflow refuses to
+build if it is stale — `scripts/record_shipped.py --check` is a step — so the failure mode is a
+red run rather than a quiet one.
 
 Push without touching the version and the workflow stops in seconds, having found
 `v<version>` already tagged. That check is deliberately "does the tag exist"
@@ -28,18 +38,25 @@ artifact is arm64 because the runner is.
 
 ## Building it
 
-Three artifacts have to exist, in this order, because each one is baked into the
+Four artifacts have to exist, in this order, because each one is baked into the
 next:
 
 ```sh
-cd ui      && npm run build      # the interface
-cd ../server && .venv/bin/pyinstaller kith-server.spec --noconfirm
-cd ../desktop && npm run build   # the shell's main process (tsc)
-cd desktop && npx electron-builder --mac dmg --arm64
+cd ui        && npm run build                                          # the interface
+cd ../server && .venv/bin/pyinstaller kith-server.spec --noconfirm     # the server
+cd ../server && .venv/bin/pyinstaller kith-cli.spec    --noconfirm     # the `kith` command
+cd ../desktop && npm run build                                         # the shell (tsc)
+cd ../desktop && npx electron-builder --mac dmg --arm64
 ```
 
-`npm run dist` chains the first two for you. The reason to know the long form is
-that a failure in the middle is otherwise silent about which half broke.
+Four artifacts, not three. The CLI is frozen from its own spec because the server bundle
+carries Flask, SQLAlchemy and the whole built interface and the CLI needs none of it — 19MB
+against 55MB — and `extraResources` copies both into Resources. Leaving it out is not a
+smaller build, it is a build where `kith install` has nothing to link to, which is how the
+command shipped once already with nothing able to reach it.
+
+`npm run dist` chains all of this for you (`freeze` is the first three). The reason to know
+the long form is that a failure in the middle is otherwise silent about which part broke.
 
 The order is not stylistic. The built interface is copied *inside* the frozen
 server (`kith-server.spec` refuses to build without `ui/dist`), and the frozen
@@ -47,7 +64,7 @@ server is copied inside the app bundle by `extraResources`. Build them out of
 order and you ship yesterday's interface with today's server, which looks like a
 bug in the app rather than a bug in the build.
 
-Result: `release/Kith-0.1.0-arm64.dmg`, about 140 MB. The `.app` inside carries
+Result: `release/Kith-<version>-arm64.dmg`, about 140 MB. The `.app` inside carries
 its own Python, its own server and its own copy of the interface — nothing is
 fetched at first launch.
 
@@ -125,7 +142,11 @@ discovered if present and simply left out of the prompt if not.
 
 ## Where his data goes
 
-`~/.kith` — `agent.db`, `config.db`, `api.token`, `skills/`, and `server.log`.
+`~/.kith` — `agent.db`, `config.db`, `api.token`, `persona/`, `skills/`, `seeded.json`, and
+`server.log`. `persona/` and `skills/` are seeded from the bundle and then belong to whoever
+installed them; `seeded.json` is how an update tells those two apart from files that have been
+edited, so deleting it does not break anything but does stop corrections arriving for anything
+already on disk.
 The shell passes it as `KITH_DATA_DIR` and the frozen server defaults to the same
 path, so the two agree without configuration. `server.log` is appended, not
 truncated, because the log of the run that failed is the one you want.
@@ -139,11 +160,19 @@ The failure mode worth ruling out is an app that launches on the machine that
 built it and dies everywhere else, so test a *copy*, outside the build tree:
 
 ```sh
-hdiutil attach release/Kith-0.1.0-arm64.dmg
-cp -R "/Volumes/Kith 0.1.0-arm64/Kith.app" /tmp/
+VERSION=$(node -p "require('./package.json').version")
+hdiutil attach release/Kith-$VERSION-arm64.dmg
+cp -R "/Volumes/Kith $VERSION-arm64/Kith.app" /tmp/
 codesign --verify --deep --strict /tmp/Kith.app        # must pass
+ls /tmp/Kith.app/Contents/Resources/kith-cli/kith      # must be there, or `kith install` has
+                                                       # nothing to link and fails silently
 /tmp/Kith.app/Contents/MacOS/Kith                       # must open a window
 ```
+
+`server.log` is also where an upgrade says what it delivered: a line like
+`persona: 1 updated` or `skills: 2 added` on the first launch after the update, and nothing at
+all on every launch after that. On a machine with no previous install there is nothing to
+report, so testing that half means upgrading over a real `~/.kith` rather than a fresh one.
 
 Then check the window is not empty and `~/.kith/server.log` has a fresh
 `launching` line — that is the shell having found and started its own server

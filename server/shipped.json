@@ -1,0 +1,67 @@
+{
+  "note": "Every version of a bundled file that has been released. See scripts/record_shipped.py and infra/seed.py.",
+  "tags": [
+    "v0.1.0",
+    "v0.2.0-beta",
+    "v0.3.0",
+    "v0.4.0",
+    "v0.5.0",
+    "v0.5.1",
+    "v0.5.2"
+  ],
+  "paths": {
+    "persona/00-who.md": [
+      "afac61de84e703d704d134b22a30abb3c9b9fd1891b37c9da7593c4b8ca8d83b",
+      "b0fcc8cbd1d09330c303fe303c10cfde257d4ba7a4bcef198a1e39cb4595edbd"
+    ],
+    "persona/05-where-you-are.md": [
+      "80941064f2a2f68fe3a91cfe37e63297638b11ea4d57adff54af23f0f9d6a876",
+      "d5e97c14d10048ec8dc98ea1dfb90366b84574a69a25b9649b57dc1ecb682e12"
+    ],
+    "persona/10-how-you-judge.md": [
+      "28c5d7bb6e8c5291a41a41ad473b5bfe0edb51f156896d8d33917f6a9a04bc2a",
+      "40f476f1930c973d1ecca979a864e1480f005530e54c33ce820ea27539bab88c",
+      "b2821c54d0953b96b66a281a7220d4f3f9bca88b4a02f08cd8b4a2886cb252a1"
+    ],
+    "persona/15-how-you-work.md": [
+      "931fac0024b608138e2384ad64b34c7ee38980abdd852c1f853f8e402a80c20f"
+    ],
+    "persona/17-asked-to-think.md": [
+      "a701f04ee9b4322b9e77763ec2f449d76f7d3c5fea30e104bd21658a7448cadb"
+    ],
+    "persona/20-how-you-answer.md": [
+      "69cc082c0d27a536b8255a9e55d79300cc7aba9c3a74f8562f8fa215bbbd8c63",
+      "708307cfa637a4c1827de50a928ffcb7cf2063df69abfb8eeb4365acbe51fb24",
+      "c7010b31ba7df20a60778176475f57915260a152c77471124046f0aa22db2923",
+      "d3e23b2a79e0a165f8c595e48724dffda970dc54919e0177ced0e290e27a6883",
+      "d9a985073b0e14f323c8f145bdc903440cb74c392f19c0868ca6a20cb5d13d88"
+    ],
+    "persona/25-what-you-draw.md": [
+      "fcc24ef26b05a89584df60ce696b0b228e5cd5bb86780bc3e3cd6243641e84de"
+    ],
+    "persona/30-how-you-read.md": [
+      "636cb7ba369d12f6b5ff6f1ef1ffa401f143723dbbd1f91ed4871e8d0526b261",
+      "e66fb67b306c6595f92c5f334744ef0d5df48a64f2af187899bd2e81604a6b34",
+      "f9ad2132aca501d2b5fe13fb002d7277e97fadc7dfa85c2868bb6924b337cb66"
+    ],
+    "persona/35-how-you-spend-a-round.md": [
+      "041211a181505d95cdabc30661404a67d5de0e2c3cfa10733f60571e7892ef56",
+      "9a903b0955256b989f7db4e27bbfd5755baf6cd1a566fcfdd3cbb60181376f3f",
+      "c10109ba220374de05a6abfdf32dfaa5cad6328614c5b61040345af61fc0483d"
+    ],
+    "persona/README.md": [
+      "7173c674346c2e038de21d51d47fc0e36a94ef355fb973325da80f34163ec35b",
+      "8d6d59ab62c6df61a7f00a4a2c5e8c8c6426e09fdb2f2cf97e5e1704e4890673",
+      "9974d84360074daefd7c56374d87e939dca8362243027bb31b4b2e16a0fc6764"
+    ],
+    "skills/drawing-a-canvas/SKILL.md": [
+      "8734fb4d8deb6263689b08f663e3631aae61b374a9aabab338bb53e3f7973b51"
+    ],
+    "skills/drawing-a-canvas/scripts/check_canvas.py": [
+      "d05ee654f32e8ba86cfbc178a5efacf805ddaee0d50dbb30c7a95b6a5e58dd93"
+    ],
+    "skills/running-a-project/SKILL.md": [
+      "39428ead7b5c9a14dd6ac7c60be67a4dc53ed94c7ed874c1be50738d579f1b9d"
+    ]
+  }
+}

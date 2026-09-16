@@ -10,6 +10,7 @@
 #   ./check         everything
 #   ./check server  python only (fast loop while working on the backend)
 #   ./check ui      typescript only
+#   ./check desktop the electron shell — its own package, its own toolchain
 #
 # There used to be a `lint` mode here — ruff and format only, no pytest — because the suite
 # did not run on a machine that was not a developer's. A clean checkout failed ~200 tests on
@@ -79,6 +80,21 @@ if [[ "$what" == "all" || "$what" == "ui" ]]; then
   # thing worked. That difference was landing on whoever was looking at the screen.
   step "vitest" npm test --silent
   step "vite build" npm run build
+fi
+
+if [[ "$what" == "all" || "$what" == "desktop" ]]; then
+  cd "${here}/desktop"
+  # Added after a release nearly went out with a `kith` CLI that nothing had packaged. The
+  # shell was the one package with no gate on it at all: `desktop/src` has had vitest tests
+  # since the tray work and neither this script nor either workflow ever ran them, so the
+  # newest and least-exercised code in the tree — a first-run install that escalates through
+  # `osascript` — was the part nothing checked.
+  #
+  # `tsc -b`, not the `--noEmit` the Makefile used to run here, for the reason written above
+  # the ui block: they read different configs, and --noEmit passed clean on a tree whose real
+  # build failed.
+  step "tsc" npx tsc -b --force
+  step "vitest" npm test --silent
 fi
 
 printf '\n'

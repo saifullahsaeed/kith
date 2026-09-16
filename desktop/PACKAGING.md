@@ -1,9 +1,15 @@
 # Packaging Kith for other people
 
 The goal that defines this list: **someone installs Kith and it works — no Docker,
-no Python, no Ollama, no terminal.** Today the app is a real desktop shell, but it
-still requires the developer's Docker stack to be running. Everything below is what
-closes that gap.
+no Python, no Ollama, no terminal.** Most of it is now done: the app carries a
+frozen server and the built interface, the Docker stack is gone, and a dmg is cut
+by `.github/workflows/release.yml`. `RELEASE.md` is the part that works; this is
+what is left.
+
+The paragraph that used to be here said the app "still requires the developer's
+Docker stack to be running", and it was months out of date — which matters in a
+roadmap more than anywhere else, because the first thing it tells a reader is what
+to work on next.
 
 Ordered by dependency, not by size. Each item says what "done" looks like.
 
@@ -13,10 +19,12 @@ Ordered by dependency, not by size. Each item says what "done" looks like.
 
 Today `main.ts` only *waits* for a server on `127.0.0.1:8611`. It has to *own* one.
 
-- [ ] **Freeze the Python server** — PyInstaller (or Nuitka) → a `kith-server`
-      binary. `--onedir`, not `--onefile`: onefile unpacks to a temp directory on
-      every launch, which is slow and trips Gatekeeper.
-- [ ] **Replace Werkzeug with waitress.** `app.run(threaded=True)` is a
+- [x] **~~Freeze the Python server~~** — Done. `server/kith-server.spec`, `--onedir`
+      for the reason below; `server/kith-cli.spec` freezes the `kith` command
+      beside it, and `extraResources` copies both into the app bundle.
+- [x] **~~Replace Werkzeug with waitress.~~** Done — see the header of `server/app.py`:
+      waitress by default, Werkzeug only under `KITH_RELOAD=1` for its auto-reloader.
+      The original reasoning, kept because it is why: `app.run(threaded=True)` is a
       development server and says so in its own warning. Waitress is pure Python,
       so it freezes cleanly. Verify streaming still works afterwards —
       `scripts/stream-check.py` is the gate, and it must still report incremental
@@ -49,13 +57,13 @@ Kith's tools run in a Docker container where he has root. That is what lets him
 install packages, run Playwright, and build his own tools. Remove Docker and that
 capability has to come from somewhere else.
 
-- [ ] **Choose the model.** Direct execution on the user's machine (what Claude
-      Code does) is the only option that keeps his capabilities intact — and it
-      means the sandbox stops being the safety mechanism.
-- [ ] **Build the permission layer first, if so.** Every tool call already funnels
-      through one `run_tool` dispatch — that is the chokepoint. Reads free; writes,
-      deletes and anything outward-facing gated. Plus an audit log and a kill
-      switch. Do not ship autonomous unsandboxed execution without this.
+- [x] **~~Choose the model.~~** Done, and the answer was direct execution on the
+      user's machine — which is what Claude Code does, keeps his capabilities
+      intact, and means the sandbox stops being the safety mechanism. There is no
+      `infra/sandbox.py` any more.
+- [x] **~~Build the permission layer first, if so.~~** Done — `infra/permissions.py`,
+      1,168 lines, gating the one `run_tool` chokepoint. Reads free; writes, deletes
+      and anything outward-facing gated.
 - [x] **~~Drop Playwright, use Electron's Chromium.~~** Done — `render-service.ts`
       renders in an offscreen `BrowserWindow` and the server prefers it over the
       sandbox (`infra/renderer.py`). Verified against the WAF-protected CMA page:
@@ -71,8 +79,9 @@ capability has to come from somewhere else.
 - [ ] **API key storage.** Currently plaintext in `config.db`. Move to
       `safeStorage` / the macOS Keychain. A shipped app storing someone's
       OpenRouter key in a readable SQLite file is not acceptable.
-- [ ] **First-run setup.** A packaged app cannot assume a configured key. Needs an
-      onboarding screen: paste key, pick model, done.
+- [x] **~~First-run setup.~~** Done — `ui/src/components/onboarding/`: provider
+      choice, key, model, workspace access, search, and the offer to install the
+      `kith` command.
 
 ## 4. Make it distributable
 
