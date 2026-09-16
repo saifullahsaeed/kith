@@ -580,3 +580,34 @@ class TestTheWorkerCanReadTheNotesItWasBriefedOn:
         assert (carried / "PLAN.md").read_text() == "the actual note\n"
         assert not (carried / "node_modules").exists()
         assert not (carried / "dist").exists()
+
+    def test_a_patch_survives_the_notes_being_gitignored(self, repo: Path):
+        """The bug that made three builders in a row look like they had done nothing.
+
+        `_carry_notes` copies `.kith` in, and `.kith` is gitignored in most projects. The staging
+        step named `.` explicitly, so git refused the ignored path that matched it — printing
+        "the following paths are ignored", exiting 1 — and `diff_in` returned "" on that exit
+        code. Every builder reported "changed nothing in its copy" while its edits sat staged.
+
+        Two fixes in one test, because either alone would leave it broken: the add takes no
+        pathspec (ignored paths are skipped silently), and a non-zero exit is no longer read as
+        "there is nothing here".
+        """
+        (repo / ".gitignore").write_text(".kith/\n")
+        (repo / ".kith").mkdir()
+        (repo / ".kith" / "CONVENTION.md").write_text("hold to this\n")
+        import subprocess
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "ignore the notes"], cwd=repo, check=True)
+
+        copy = worktrees.open_for("ignored-notes")
+        assert copy is not None
+        # The worker can read its brief...
+        assert (copy / ".kith" / "CONVENTION.md").read_text() == "hold to this\n"
+        # ...and its work still comes back.
+        (copy / "kept.py").write_text("the builder did this\n")
+
+        patch = worktrees.diff_in(copy)
+        assert "the builder did this" in patch
+        assert ".kith" not in patch

@@ -207,15 +207,25 @@ def diff_in(worktree: Path) -> str:
     ``--binary`` so an image or a compiled fixture survives the round trip, and no ``--stat``
     or colour: the reader is `git apply`, and after it a language model. Both want the patch.
 
-    ``.kith`` is excluded from both halves. It was copied in by :func:`_carry_notes` rather
-    than checked out, so it is not the worker's work and must not come back as a patch. In the
-    usual case it is gitignored and `add -A` would skip it anyway — but a project that tracks
-    it would otherwise hand the main agent a diff that writes its own notes back over itself.
-    Excluded explicitly so the answer does not depend on someone's ignore file.
+    ``.kith`` is excluded from the diff. It was copied in by :func:`_carry_notes` rather than
+    checked out, so it is not the worker's work and must not come back as a patch. Usually it is
+    gitignored and would never appear — but a project that tracks it would otherwise hand the
+    main agent a diff that writes its own notes back over itself, so the answer does not depend
+    on someone's ignore file.
+
+    **The add takes no pathspec, and that is the fix for a bug that made every builder look
+    broken.** It was ``add -A -- . ':(exclude).kith'``, and naming `.` explicitly makes git
+    refuse an ignored path that matches it: with `.kith` copied in *and* gitignored — which is
+    the normal case — git printed "the following paths are ignored", exited 1, and this returned
+    "" on the exit code. Three builders in a row did the work correctly, had it staged, and were
+    reported as having changed nothing. Bare ``add -A`` skips ignored paths silently and stages
+    exactly the same bytes; measured on those three worktrees, 5,843 either way.
+
+    The exit code is no longer fatal either. `add` warns about all sorts of things, and turning
+    an advisory into "this worker produced nothing" is the worst available reading — an empty
+    diff below is the honest answer, and it is empty only when nothing is really there.
     """
-    staged = _git("add", "-A", "--", ".", ":(exclude).kith", cwd=worktree, timeout=_TIMEOUT)
-    if staged.exit_code != 0:
-        return ""
+    _git("add", "-A", cwd=worktree, timeout=_TIMEOUT)
     return _git(
         "diff", "--cached", "--binary", "--", ".", ":(exclude).kith", cwd=worktree, timeout=_TIMEOUT
     ).output
