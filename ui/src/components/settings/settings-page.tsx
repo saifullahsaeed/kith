@@ -13,6 +13,7 @@ import {
   Server,
   Settings2,
   ShieldCheck,
+  Terminal,
   SlidersHorizontal,
   Wrench,
   X,
@@ -20,6 +21,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { ChatTab } from "@/components/settings/chat-tab";
+import { CliPage } from "@/components/settings/cli-page";
 import { TuningPage } from "@/components/settings/tuning-page";
 import { FilesPage } from "@/components/settings/files-page";
 import { UpdatesPage } from "@/components/settings/updates-page";
@@ -216,6 +218,15 @@ const TABS: {
     hint: "where his things live",
     blurb: "Where his things live on this machine.",
     icon: FolderOpen,
+    group: "machine",
+    layout: "fill",
+  },
+  {
+    id: "cli",
+    label: "Command line",
+    hint: "kith in a terminal",
+    blurb: "Talk to him from a terminal, and let other tools talk to him.",
+    icon: Terminal,
     group: "machine",
     layout: "fill",
   },
@@ -509,6 +520,8 @@ export function SettingsPage({
                 <ChatTab config={config} connection={snapshot.connection} onSave={onSaveConfig} />
               ) : tab === "permissions" ? (
                 <PermissionsTab />
+              ) : tab === "cli" ? (
+                <CliPage />
               ) : tab === "updates" ? (
                 <UpdatesPage />
               ) : tab === "files" ? (

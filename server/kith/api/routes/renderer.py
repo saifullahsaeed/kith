@@ -90,3 +90,44 @@ def system_settings_pane():
     payload = request.get_json(silent=True) or {}
     opened = renderer.open_settings_pane(str(payload.get("pane") or ""))
     return jsonify({"opened": opened})
+
+
+@api.get("/system/cli")
+@api.doc(
+    summary="Is the `kith` command installed",
+    description=(
+        "Whether the shipped command line is linked onto PATH, and where it would go. "
+        '`{"available": false}` means there is no desktop shell to ask — a bare server has '
+        "no app bundle to link from, so the interface should say so rather than offer a "
+        "button that cannot work.\n\n"
+        "`stale` is its own field rather than a flavour of not-installed: it means a link "
+        "exists and points at a different Kith, which needs replacing rather than creating. "
+        'Reporting that as "not installed" sends someone looking for a command that is '
+        "right there and broken."
+    ),
+)
+def system_cli_status():
+    status = renderer.cli_status()
+    if status is None:
+        return jsonify({"available": False, "installed": False, "stale": False})
+    return jsonify(status)
+
+
+@api.post("/system/cli")
+@api.doc(
+    summary="Install or remove the `kith` command",
+    description=(
+        "Links the shipped CLI into /usr/local/bin behind a macOS administrator prompt, or "
+        "removes it with `{remove: true}`. /usr/local/bin because it is on PATH on every Mac "
+        "by construction, where `~/.local/bin` is on none of them without editing a shell "
+        "profile.\n\n"
+        "`{cancelled: true}` means the password dialog was dismissed. That is an answer, not "
+        "a failure, and the interface must not show it back as an error."
+    ),
+)
+def system_cli_install():
+    payload = request.get_json(silent=True) or {}
+    result = renderer.install_cli(remove=bool(payload.get("remove")))
+    if result is None:
+        return jsonify({"ok": False, "error": "no desktop shell to install from"}), 503
+    return jsonify(result)

@@ -22,6 +22,7 @@ import * as crypto from "node:crypto";
 import * as http from "node:http";
 import { URL } from "node:url";
 
+import { cliStatus, installCli, removeCli } from "../cli/install";
 import { APP_ICON, BACKEND_ORIGIN } from "../config";
 
 import { getMainWindow, showMainWindow } from "../window/window";
@@ -84,7 +85,16 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   };
 
   const route = (request.url ?? "").split("?")[0] ?? "";
-  const ROUTES = ["/render", "/notify", "/open-pane", "/pick-folder", "/browse", "/forget-plugin"];
+  const ROUTES = [
+    "/render",
+    "/notify",
+    "/open-pane",
+    "/pick-folder",
+    "/browse",
+    "/forget-plugin",
+    "/cli-status",
+    "/install-cli",
+  ];
   if (request.method !== "POST" || !ROUTES.includes(route)) {
     return reply(404, { error: "not found" });
   }
@@ -101,6 +111,8 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   if (route === "/notify") return notify(request, reply);
   if (route === "/open-pane") return openPane(request, reply);
   if (route === "/pick-folder") return pickFolder(request, reply);
+  if (route === "/cli-status") return reply(200, cliStatus());
+  if (route === "/install-cli") return installOrRemoveCli(request, reply);
 
   let target: string;
   try {
@@ -377,6 +389,32 @@ function delay(ms: number): Promise<void> {
  * `isSupported()` is checked so a machine that cannot do this says so instead of the call
  * succeeding into nothing — "sent one" with nothing on screen is worse than an error.
  */
+/**
+ * Install or remove the `kith` command, on request from the settings page.
+ *
+ * Both directions through one route because both are the same privileged act with the same
+ * dialog, and splitting them would mean two places that know how to escape a path into
+ * AppleScript. `{remove: true}` is the only body it reads.
+ *
+ * It never fails the request over a cancelled password prompt. Dismissing that dialog is an
+ * answer, and the page needs to tell the two apart: nothing happened because you said no,
+ * versus nothing happened and here is why.
+ */
+async function installOrRemoveCli(
+  request: http.IncomingMessage,
+  reply: (status: number, body: unknown) => void,
+): Promise<void> {
+  let remove = false;
+  try {
+    const parsed = JSON.parse((await readBody(request)) || "{}") as { remove?: unknown };
+    remove = parsed.remove === true;
+  } catch (error) {
+    return reply(400, { error: `bad request: ${(error as Error).message}` });
+  }
+  const result = remove ? await removeCli() : await installCli();
+  reply(200, result);
+}
+
 async function notify(
   request: http.IncomingMessage,
   reply: (status: number, body: unknown) => void,

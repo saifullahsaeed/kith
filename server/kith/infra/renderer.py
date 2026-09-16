@@ -192,6 +192,27 @@ def pick_folder(title: str = "", start: str = "") -> str | None:
     return path if isinstance(path, str) else ""
 
 
+def cli_status() -> dict | None:
+    """Whether the `kith` command is linked onto PATH, asked of the shell.
+
+    ``None`` when there is no shell — a bare server has no app bundle to link *from*, so the
+    question has no answer rather than a negative one, and the settings page should say "not
+    available here" instead of offering a button that cannot work.
+    """
+    return _ask("/cli-status", {})
+
+
+def install_cli(remove: bool = False) -> dict | None:
+    """Link the shipped CLI into /usr/local/bin, or unlink it. Asks for a password.
+
+    The timeout is the folder picker's rather than the default five seconds, and for the same
+    reason: what is being waited on is a person reading a dialog and typing a password, and
+    yanking that away after five seconds would make the button fail for everybody who did not
+    already have their hands on the keyboard.
+    """
+    return _ask("/install-cli", {"remove": bool(remove)}, timeout=_PICKER_TIMEOUT)
+
+
 #: A browser act is a page load plus a settle, so it needs the render timeout rather than the
 #: five seconds a notification gets. Not the full 55: a person is usually watching this happen
 #: in a pane, and a call that hangs for a minute on a page that will not load is worse than one

@@ -146,10 +146,22 @@ drive other tools (he has a shell, he can type `claude -p`) and nothing could dr
 Kith. The CLI is a thin client over the same HTTP API the window uses; it adds no
 behaviour of its own.
 
+Installed from the app, it is a Settings button — **Settings → Command line** — and an offer
+on the last screen of first run. That links the shipped binary into `/usr/local/bin` behind a
+macOS administrator prompt, because `/usr/local/bin` is on PATH on every Mac by construction
+and `~/.local/bin` is on none of them without editing a shell profile. It is a symlink, so an
+app update needs no second install.
+
+From a checkout:
+
 ```sh
-./run cli              # install it into ~/.local/bin, pointing at this checkout
+./run cli              # a launcher in ~/.local/bin, pointing at this working tree
 ./run cli --claude     # ...and tell Claude Code that it exists
 ```
+
+`~/.local/bin` here rather than an admin prompt, because a developer install should track your
+edits and not need a password. It prints the `export PATH=...` line when that directory is not
+on yours, which on macOS it will not be.
 
 ```sh
 kith send "what's left on the roadmap?"   # continues THIS directory's conversation

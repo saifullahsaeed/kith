@@ -13,10 +13,16 @@ project this directory is, and which conversation ``send`` would continue.
 * **Frozen**, there is a real binary in a bundle and the right move is a symlink to it, which
   is what ``code`` does on macOS and what keeps an app update from leaving a stale copy behind.
 
-``~/.local/bin`` rather than ``/usr/local/bin`` in both cases: no sudo, and it is already on
-PATH in the default zsh and bash profiles on every machine this runs on. When it is not, that
-is said plainly with the line to paste — an install that reports success and leaves nothing
-runnable is the worst of the available outcomes.
+``~/.local/bin`` rather than ``/usr/local/bin`` in both cases, because it needs no sudo — and
+that is a real trade rather than a free win. **On macOS it is not on PATH by default.** The
+system PATH comes from ``/etc/paths`` — ``/usr/local/bin``, ``/usr/bin``, ``/bin``,
+``/usr/sbin``, ``/sbin`` — and nothing in the default zsh profile adds a home directory to it.
+Linux distributions generally do; macOS does not, and macOS is what this runs on.
+
+So the PATH check below is not a courtesy for an unusual setup. It is the expected outcome on
+a clean Mac, and the install is only half-finished without acting on what it says. An install
+that reports success and leaves nothing runnable is the worst of the available outcomes, which
+is why the line to paste is printed rather than assumed.
 """
 
 from __future__ import annotations

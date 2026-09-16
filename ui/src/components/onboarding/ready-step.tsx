@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, CircleDashed, Info } from "lucide-react";
 
+import { CliOffer } from "@/components/onboarding/cli-offer";
 import { formatContext, formatPrice, type ModelOption, type ReadinessCheck } from "@/lib/backend";
 
 /**
@@ -57,6 +58,8 @@ export function ReadyStep({
           checks.map((check) => <CheckRow key={check.key} check={check} />)
         )}
       </div>
+
+      <CliOffer />
     </div>
   );
 }

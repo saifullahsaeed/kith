@@ -65,6 +65,7 @@ const SETTINGS_TABS = [
   "budget",
   "context",
   "files",
+  "cli",
   "updates",
 ] as const;
 
