@@ -3,6 +3,7 @@
 #   make server        the backend, natively on 127.0.0.1:8611 (also serves the UI)
 #   make ui            build the interface
 #   make desktop       build and launch the Mac app
+#   make cli           put `kith` on PATH, pointing at this checkout
 #
 # There is no Docker Compose stack any more. The server used to run in a container
 # with nginx in front of it; both were removed once the server started serving the
@@ -26,7 +27,7 @@ export KITH_TZ             := Asia/Riyadh
 export KITH_SEARCH_PROVIDER := auto
 export KITH_OR_PROVIDER    := DeepSeek
 
-.PHONY: help venv ui server desktop dev lint test check clean
+.PHONY: help venv ui server desktop dev cli lint test check clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -49,6 +50,9 @@ desktop: ui ## build and launch the Mac app (expects `make server` running)
 
 dev: ui ## desktop app with the window-chrome self-check
 	@cd desktop && npm run build && npx electron . --dev
+
+cli: venv ## install the `kith` command into ~/.local/bin
+	@PYTHONPATH=$(ROOT)/server $(PY) -m kith.cli install $(ARGS)
 
 lint: ## ruff (server), oxlint (ui), tsc (desktop)
 	@$(PY) -m ruff check server/kith

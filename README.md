@@ -138,6 +138,44 @@ reports the exit status of `tail`, so a failing suite can scroll past as a singl
 line of green — which happened twice in one night, and a commit went out on top
 of it.
 
+## The command line
+
+Kith has two front doors: the app window, and `kith` in a terminal. The second one
+exists because the first is not reachable from a script — which meant Kith could
+drive other tools (he has a shell, he can type `claude -p`) and nothing could drive
+Kith. The CLI is a thin client over the same HTTP API the window uses; it adds no
+behaviour of its own.
+
+```sh
+./run cli              # install it into ~/.local/bin, pointing at this checkout
+./run cli --claude     # ...and tell Claude Code that it exists
+```
+
+```sh
+kith send "what's left on the roadmap?"   # continues THIS directory's conversation
+kith send "review this" < diff.patch      # reads stdin when no message is given
+kith conversations                        # recent chats, with who is mid-turn
+kith show                                 # the transcript of the current one
+kith search "connection pool"             # across every transcript
+kith projects · kith settings · kith status
+```
+
+You rarely name a conversation. `kith send` resolves one from where you are
+standing: an explicit `-c`, else `$KITH_CONVERSATION`, else this directory's last
+conversation, else a new one bound to whichever project owns the directory. Ids are
+prefix-matchable (`-c 20260916-1430`), and an ambiguous prefix lists the candidates
+rather than guessing.
+
+Two properties make it usable by another agent rather than only by a person:
+
+- **Prose goes to stdout; reasoning, tool calls and totals go to stderr.** So
+  `$(kith send ...)` captures the answer and nothing else, with no flag to remember.
+- **`--json` is a passthrough**, not a re-serialisation — the server's own NDJSON
+  event stream, byte for byte, documented on `POST /api/chat`.
+
+Exit codes distinguish the two failures worth handling differently: `69` means
+nothing is listening (start it and retry), `1` means the turn ran and failed.
+
 ## Project layout
 
 ```

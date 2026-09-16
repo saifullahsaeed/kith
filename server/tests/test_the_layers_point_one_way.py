@@ -80,6 +80,13 @@ RANK = {
     "api": 5,
     "tools": 5,
     "app": 6,
+    # The command line is a *client* of the HTTP API, not a layer of the server, so it sits at
+    # the top where nothing can import it. The rank rule alone is too permissive for it —
+    # rank 6 would let it reach into `services` — so the real constraint lives in
+    # `test_the_cli_is_only_a_client.py`, which allows `settings` and nothing else. It is
+    # ranked here anyway so that an import *into* it is caught by this test rather than by
+    # nothing at all.
+    "cli": 6,
 }
 
 #: Packages that share a rank and still may not import each other.

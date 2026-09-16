@@ -12,6 +12,7 @@
 #   ./run dev      the same window, but both halves reload on save (see below)
 #   ./run server   backend only (for a browser at 127.0.0.1:8611, or a second window)
 #   ./run stop     stop everything
+#   ./run cli      put `kith` on PATH (add --claude to tell Claude Code about it)
 #   ./run --fresh  rebuild the interface even if it looks current
 #
 # `dev` differs from `all` in where the *page* comes from, which is the only thing that
@@ -259,6 +260,15 @@ start_app() {
   fi
 }
 
+# Put `kith` on PATH, pointing back at this checkout.
+#
+# Separate from `./run server` because it is not a thing you do per launch — it is done once,
+# and then the command tracks whatever is in the working tree. The CLI itself owns the logic
+# (see `kith/cli/commands/doctor.py`); this only saves you knowing that it does.
+install_cli() {
+  PYTHONPATH="${here}/server" "${here}/server/.venv/bin/python" -m kith.cli install "$@"
+}
+
 case "${1:-all}" in
   stop)
     stop_all
@@ -267,6 +277,10 @@ case "${1:-all}" in
   server)
     build_ui "${2:-}"
     start_server
+    ;;
+  cli)
+    shift
+    install_cli "$@"
     ;;
   dev)
     # No build_ui: Vite compiles from source on demand, so a build here would only produce a
@@ -281,7 +295,7 @@ case "${1:-all}" in
     start_app
     ;;
   *)
-    say "usage: ./run [dev|server|stop|--fresh]"
+    say "usage: ./run [dev|server|stop|cli|--fresh]"
     exit 2
     ;;
 esac

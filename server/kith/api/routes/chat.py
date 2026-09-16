@@ -957,6 +957,18 @@ class _MindFeed:
     description=(
         "Runs the agentic loop (the model may call its memory/notes/journal/task "
         "tools) and streams `application/x-ndjson`: one JSON object per line.\n"
+        "\n"
+        "**This list is the contract.** It was for a long time a partial one — it described "
+        "seven of the fifteen types the loop actually yields, so a client written against it "
+        "silently dropped the half that says what is happening between rounds. "
+        "`tests/test_the_cli_speaks_the_documented_stream.py` now compares this text against "
+        "what `services.agent_loop` emits, so the two cannot drift again.\n"
+        "\n"
+        "The turn itself:\n"
+        '- `{"type":"conversation","id":"..."}` — first, always; a chat started without an id '
+        "learns its own here\n"
+        '- `{"type":"context","context":{...}}` — what is in the window at the start of the '
+        "turn, itemised by category\n"
         '- `{"type":"delta","role":"reasoning"|"text","text":"..."}`\n'
         '- `{"type":"writing","name":"...","path":"...","chars":N}` — a tool call still being '
         "written, throttled; live only, never recorded\n"
@@ -965,7 +977,19 @@ class _MindFeed:
         '- `{"type":"stats","stats":{...}}` (one per model request, so several per turn — '
         "`uncachedTokens` is the prompt with cache hits removed)\n"
         '- `{"type":"error","message":"..."}`\n'
-        '- `{"type":"done"}` (terminal)'
+        '- `{"type":"done"}` (terminal)\n'
+        "\n"
+        "What is happening around it — each of these means the turn changed shape, and a "
+        "client that ignores them shows a turn that appears to stall:\n"
+        '- `{"type":"compacting","used":N,"window":N}` — the context is being folded\n'
+        '- `{"type":"retrying","attempt":N,"message":"..."}` — the round failed and is being '
+        "tried again\n"
+        '- `{"type":"steered","text":"..."}` — something you sent mid-turn was delivered at a '
+        "round boundary\n"
+        '- `{"type":"directive","text":"..."}` — the loop told itself something (a budget '
+        "reached, a reserve entered)\n"
+        '- `{"type":"waiting_on_errands","count":N}` — paused for sub-agents to report\n'
+        '- `{"type":"errand_back","text":"..."}` — a sub-agent reported'
     ),
     responses={200: "NDJSON stream of agent events"},
 )
