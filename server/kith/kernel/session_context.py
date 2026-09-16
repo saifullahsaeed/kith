@@ -154,3 +154,79 @@ def working_on(project_id: int | None) -> Iterator[None]:
         yield
     finally:
         _project.reset(token)
+
+
+#: The copy this context is pinned to, and the folder it is a copy *of*: ``(source, copy)``.
+#: Empty strings for everything that is not a worker running in its own checkout.
+#:
+#: **Both halves, and the second one is not decoration.** The first version stored only the
+#: copy, and a builder wrote straight into the real repository anyway — because the agent that
+#: sent it put the project's absolute path in the objective (its own tool description asks for
+#: "any paths you have"), the worker called `write_file` with that absolute path, and
+#: `paths.resolve` honours an absolute path as given without ever consulting `base_dir`. The
+#: pin was set, correct, and never consulted. Knowing what the copy is a copy *of* is what lets
+#: `resolve` recognise such a path and bend it into the copy.
+_isolated: ContextVar[tuple[str, str]] = ContextVar("kith_isolated_base", default=("", ""))
+
+
+def isolated_base() -> str:
+    """The folder this context has been pinned to, or "" when nothing has pinned it.
+
+    A string rather than a ``Path`` because a ``ContextVar`` default should be a cheap
+    immutable, and because "" is already this module's spelling for "nobody claims this" —
+    see :func:`current`. The one caller that wants a path builds one.
+    """
+    return _isolated.get()[1]
+
+
+def isolated_mirror() -> tuple[str, str]:
+    """``(source, copy)`` for a pinned context, or ``("", "")``.
+
+    Separate from :func:`isolated_base` because the two questions have different callers and
+    different answers when only one folder is known. `permissions` asks "may he write here",
+    which is about the copy alone; `paths.resolve` asks "is this path really about the copy",
+    which cannot be answered without the original.
+    """
+    return _isolated.get()
+
+
+@contextmanager
+def working_from(directory: str | None, mirror_of: str | None = None) -> Iterator[None]:
+    """Run a block with every relative path anchored in ``directory``.
+
+    The third of the three, and the only one that names a folder outright. ``working_in``
+    says which conversation, ``working_on`` says which project, and both of those are
+    *questions* that `paths.base_dir` answers by going and looking something up. This is the
+    answer handed over directly, for the case where there is nothing to look up: a worker
+    editing inside its own `git worktree` is not on a different project and not in a
+    different conversation — it is the same work, in a copy of the same folder.
+
+    That is what makes worker isolation one variable rather than a parameter on fifty-nine
+    handlers. Every path in the application goes through `paths.resolve` → `paths.base_dir`,
+    so a worker thread that runs in a ``copy_context()`` with this set reads and writes its
+    copy through every existing tool, and no tool knows it moved.
+
+    **It grants permission as well as location, and that is deliberate.** `permissions`
+    reads this too (see ``_inside_linked_project``), because a folder he may write in is
+    exactly what a worktree has to be: a worker has no `ask`, and nobody is watching a
+    scratchpad, so a permission prompt raised in here would be asked of an empty room while
+    the turn that sent it waits on a tool call that never returns. Pinning a context to a
+    folder is therefore a decision only the code that *made* that folder may take — which is
+    why this takes a path and not a name, and why nothing reachable by a tool calls it.
+
+    ``mirror_of`` is the folder ``directory`` is a copy of. Optional only so that a test can
+    pin a plain folder; a real worktree must always pass it, because without it an absolute
+    path into the original is honoured as written and the isolation is silently not there.
+
+    Passing ``None`` or "" is a no-op rather than an error: the caller that would need to
+    branch is the one that has no worktree, and "no isolation" is what it already wants.
+    """
+    text = str(directory or "").strip()
+    if not text:
+        yield
+        return
+    token = _isolated.set((str(mirror_of or "").strip(), text))
+    try:
+        yield
+    finally:
+        _isolated.reset(token)

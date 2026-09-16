@@ -133,7 +133,7 @@ class TestItStartsFromNothing:
         """Two messages. The caller's context does not leak in — which is what makes this
         cheap — and so the objective has to stand on its own, which is what the tool
         description asks the caller for."""
-        pad = delegation._scratchpad("PERSONA", "find the ledger")
+        pad = delegation._scratchpad("PERSONA", delegation.SCOUT_BRIEF, "find the ledger")
 
         assert [m["role"] for m in pad] == ["system", "user"]
         assert pad[1]["content"] == "find the ledger"
@@ -146,10 +146,10 @@ class TestItStartsFromNothing:
         already has warm. A worker whose brief went first would share none of it and write its
         own copy on every call.
         """
-        pad = delegation._scratchpad("PERSONA", "find the ledger")
+        pad = delegation._scratchpad("PERSONA", delegation.SCOUT_BRIEF, "find the ledger")
 
         assert pad[0]["content"].startswith("PERSONA")
-        assert delegation.BRIEF in pad[0]["content"]
+        assert delegation.SCOUT_BRIEF in pad[0]["content"]
 
 
 class TestItHasNoLandingPhase:

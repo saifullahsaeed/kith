@@ -775,6 +775,47 @@ def _migrations():
             """
         )
 
+    def v45_workers(conn):
+        """A worker that can be asked one more thing after it has reported.
+
+        In the database and not in memory, which is the one decision in this table worth
+        arguing. `services/errands.py` keeps what is out *right now* in memory on purpose —
+        an errand is only meaningful to the turn that sent it. A worker is the other half of
+        that: the turn is over, the report is read, and the follow-up ("your diff misses the
+        test file") is asked in the next turn by an agent that knows exactly what it is
+        asking about. Re-running a ten-round search to add one file to a patch is the cost
+        this table removes.
+
+        ``scratchpad`` is the worker's private message list as JSON — everything it read and
+        every dead end, which is precisely what never enters the conversation. It is the
+        expensive thing to rebuild and the whole reason a row exists.
+
+        ``worktree`` is empty for a scout, which cannot write and needs no copy. For a
+        builder it is the private checkout its edits are sitting in, and it is why a worker
+        outliving its turn means a *directory* outliving its turn too — see
+        `infra/workspace/worktrees.prune`.
+        """
+        conn.executescript(
+            """
+            CREATE TABLE workers (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                worker_id       TEXT NOT NULL,
+                conversation_id TEXT NOT NULL DEFAULT '',
+                role            TEXT NOT NULL DEFAULT 'scout',
+                objective       TEXT NOT NULL,
+                scratchpad      TEXT NOT NULL DEFAULT '[]',
+                worktree        TEXT NOT NULL DEFAULT '',
+                state           TEXT NOT NULL DEFAULT 'out',
+                report          TEXT NOT NULL DEFAULT '',
+                rounds          INTEGER NOT NULL DEFAULT 0,
+                created_at      TEXT NOT NULL,
+                at              TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX workers_one ON workers (worker_id);
+            CREATE INDEX workers_conversation ON workers (conversation_id, state);
+            """
+        )
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -820,6 +861,7 @@ def _migrations():
         v42_memory_project,
         v43_message_project,
         v44_plugin_state,
+        v45_workers,
     ]
 
 

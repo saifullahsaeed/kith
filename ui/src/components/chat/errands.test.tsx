@@ -10,7 +10,7 @@
  * Three scouts sharing a round is the case worth pinning down, because it is the case the
  * feature exists for and the one a naive fold gets wrong: the lines interleave.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Errands, foldErrands, isErrandLine } from "./errands";
@@ -125,5 +125,98 @@ describe("the section itself", () => {
 
     expect(screen.queryByText(/searched files for/)).toBeNull();
     expect(screen.getByText("grep x3, read_file x8")).toBeTruthy();
+  });
+});
+
+describe("a long objective does not take the column", () => {
+  it("folds a running errand's objective instead of rendering all of it", () => {
+    // The bug a builder found. `send_builder`'s description tells the worker to say exactly
+    // what to change and in which files, so a *good* builder objective is hundreds of words —
+    // and the panel had no clamp on a running errand at all, only on a finished one.
+    const long = "TASK: ".concat("add a docstring saying why this exists. ".repeat(40));
+    render(
+      <Errands
+        lines={[
+          {
+            kind: "errand",
+            text: long,
+            at: "2026-09-15T20:18:00Z",
+            conversation: "c1",
+            errand: { id: "w1", state: "running", objective: long, role: "builder" },
+          },
+        ]}
+        conversationId="c1"
+      />,
+    );
+    const head = screen.getByRole("button", { expanded: false });
+    expect(head.className).toContain("line-clamp-2");
+  });
+
+  it("opens the whole objective on click, and folds it again", async () => {
+    const long = "change every call site. ".repeat(40);
+    render(
+      <Errands
+        lines={[
+          {
+            kind: "errand",
+            text: long,
+            at: "2026-09-15T20:18:00Z",
+            conversation: "c1",
+            errand: { id: "w1", state: "running", objective: long, role: "builder" },
+          },
+        ]}
+        conversationId="c1"
+      />,
+    );
+    const head = screen.getByRole("button", { expanded: false });
+    fireEvent.click(head);
+    expect(screen.getByRole("button", { expanded: true }).className).not.toContain("line-clamp-2");
+    fireEvent.click(screen.getByRole("button", { expanded: true }));
+    expect(screen.getByRole("button", { expanded: false })).toBeTruthy();
+  });
+
+  it("says which errands are builders, in words and not only in colour", () => {
+    render(
+      <Errands
+        lines={[
+          {
+            kind: "errand",
+            text: "x",
+            at: "2026-09-15T20:18:00Z",
+            conversation: "c1",
+            errand: { id: "w1", state: "running", objective: "rewrite store.py", role: "builder" },
+          },
+          {
+            kind: "errand",
+            text: "y",
+            at: "2026-09-15T20:18:00Z",
+            conversation: "c1",
+            errand: { id: "w2", state: "running", objective: "where does it live", role: "scout" },
+          },
+        ]}
+        conversationId="c1"
+      />,
+    );
+    // One label, not two: a scout is the unmarked case, so only the one editing your files
+    // is called out.
+    expect(screen.getAllByText("builder")).toHaveLength(1);
+  });
+
+  it("treats a line with no role as a scout", () => {
+    // Lines published before roles existed. Wrong in the safe direction: nothing gets labelled
+    // as editing your repository unless it said so.
+    const folded = foldErrands(
+      [
+        {
+          kind: "errand",
+          text: "x",
+          at: "2026-09-15T20:18:00Z",
+          conversation: "c1",
+          errand: { id: "w1", state: "running", objective: "look" },
+        },
+      ],
+      "c1",
+    );
+    expect(folded[0].role).toBe("scout");
   });
 });

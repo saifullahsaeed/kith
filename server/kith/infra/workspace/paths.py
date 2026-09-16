@@ -112,7 +112,23 @@ def base_dir() -> Path:
     (``permissions._inside_linked_project``), so this only decides *where paths land*, never *what
     he may touch*. Defensive to a fault — any failure in the lookup returns ``root()`` rather than
     breaking the file operation that asked.
+
+    **A pinned context wins over all of it.** `session_context.working_from` hands a folder over
+    directly instead of leaving one to be looked up, and a worker running inside its own copy of
+    the repository is the only thing that does. It is checked first because there is nothing for
+    the lookup below to usefully say: the worker is on the same project and in the same
+    conversation as the turn that sent it, so every branch after this would resolve to the
+    original folder — which is the one folder it must not write in.
     """
+    pinned = session_context.isolated_base()
+    if pinned:
+        # Trusted without an `is_dir()` check, unlike a project's linked directory below. That
+        # one is a path a person typed into a settings field months ago and may since have
+        # deleted; this one was created by the code that opened the worktree, moments ago, and a
+        # silent fall through to `root()` here would not be a graceful degradation — it would be
+        # a worker that believes it is isolated writing into the real tree.
+        return Path(pinned)
+
     try:
         from kith.infra.db import repositories as repo
         from kith.settings import AGENT_DB_PATH
@@ -299,8 +315,61 @@ def resolve(path: str) -> str:
 
     expanded = Path(text).expanduser()
     if expanded.is_absolute():
-        return str(expanded)
+        return str(_bent_into_the_copy(expanded))
     return str(base_dir() / expanded)
+
+
+def _bent_into_the_copy(absolute: Path) -> Path:
+    """An absolute path into the original repository, rewritten into the copy pinned here.
+
+    **The hole this closes, which shipped and was found the same evening.** A builder works in
+    a `git worktree` and the pin above sends every *relative* path there. But the agent that
+    sends a builder writes the objective, and `send_builder`'s own description tells it to give
+    the worker "any paths you have" — so it wrote the project's absolute path into the brief,
+    the worker called `write_file` with it, and this function's caller honoured it as given.
+    Two builders wrote 224 lines straight into the real repository while their copies sat
+    empty. The permission layer did not catch it either: the install was in bypass mode, so
+    `check_path` returned true on its first line.
+
+    The rewrite is the honest reading of what a worktree *is*. A worktree is the same
+    repository at a different path, so a path naming a file in the original is naming a file
+    that exists, identically, in the copy — bending it is not a redirection, it is resolving
+    the same name in the right checkout.
+
+    Matched exactly first, then case-folded, because macOS is case-insensitive: the objective
+    that caused this said ``.../Desktop/Personal/ai-play`` and the project is reached as
+    ``.../desktop/personal/…`` all day. ``os.path.normcase`` is **not** the tool for that — on
+    POSIX it returns the string unchanged and only folds case on Windows, which is exactly the
+    shape of bug that passes a review and fails on the one machine this runs on. (It did; the
+    test below caught it.)
+
+    Folding second rather than only folding means a genuinely case-sensitive filesystem behaves
+    exactly as before for every path that matches outright. The residual risk is two sibling
+    directories differing only in case, on a case-sensitive volume, one of them the repository —
+    and the wrong answer there is "bent into the copy", which is the safe direction.
+
+    Anything outside the original is returned untouched. A worker reading `~/Downloads/spec.pdf`
+    is doing something legitimate that has nothing to do with its copy.
+    """
+    source, copy = session_context.isolated_mirror()
+    if not source or not copy:
+        return absolute
+    try:
+        here = os.path.realpath(absolute)
+        original = os.path.realpath(source).rstrip(os.sep)
+    except OSError:
+        # A path that cannot be settled is a path we cannot prove is inside the original, and
+        # the safe answer is the one that does not silently move a write somewhere else.
+        return absolute
+
+    for mine, theirs in ((here, original), (here.casefold(), original.casefold())):
+        if mine == theirs:
+            return Path(copy)
+        if mine.startswith(theirs + os.sep):
+            # Sliced off `here` rather than recomputed from the folded pair, so what lands in
+            # the copy keeps the spelling the caller used for everything below the root.
+            return Path(copy) / here[len(theirs) + 1 :]
+    return absolute
 
 
 #: Folders never worth walking to find a file someone clicked on. The same set `glob` prunes,

@@ -26,6 +26,13 @@ this cannot be the thing that makes Stop feel broken.
 In memory and per conversation, deliberately, like `services/steering.py`: an errand is only
 meaningful to the turn that sent it, and one that outlived a restart would come back to a
 conversation with no idea what it was.
+
+**Not a contradiction of the `workers` table, which does outlive the turn.** Two different
+things are being kept. This module holds *delivery* — which answers are still owed to a turn
+that is running — and that is meaningless once the turn is over. The table holds a worker's
+brief and its last report, so the next turn can ask it something more. The objection above is
+about a finding being **pushed** into a conversation that has moved on; a resume is **pulled**
+by an agent that knows exactly what it is asking, so it never applies. See `tools/delegation`.
 """
 
 from __future__ import annotations

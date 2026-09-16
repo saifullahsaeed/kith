@@ -333,3 +333,36 @@ class FileTouch(Base):
     version: Mapped[str] = mapped_column(Text, nullable=False, default="")
     extent: Mapped[str] = mapped_column(Text, nullable=False, default="")
     at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class Worker(Base):
+    """One sub-agent, as a stored transcript rather than a running thing.
+
+    There is no thread behind a row here. A worker *is* its ``scratchpad`` — the private
+    message list nobody ever sees — plus the function that runs more rounds on it, which is
+    what makes "resume it next turn" and "run it now" the same code path with different
+    callers, and what makes a worker survive a restart for free.
+
+    ``state`` is ``out`` while rounds are running, ``reported`` once it has said something and
+    can be asked more, and ``spent`` when its copy of the repository has been taken away and
+    it can only be read. A builder that has been pruned is ``spent``: its report is still
+    worth having, and following it up is not, because the tree it was describing is gone.
+
+    ``worktree`` is '' for a scout. The asymmetry is the read-only boundary showing through:
+    a worker that cannot write needs nowhere private to write in.
+    """
+
+    __tablename__ = "workers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    worker_id: Mapped[str] = mapped_column(Text, nullable=False)
+    conversation_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    role: Mapped[str] = mapped_column(Text, nullable=False, default="scout")
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    scratchpad: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    worktree: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="out")
+    report: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    at: Mapped[str] = mapped_column(Text, nullable=False)

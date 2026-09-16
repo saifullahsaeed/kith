@@ -564,6 +564,11 @@ def check_path(kind: Kind, target: Path, root: Path, purpose: str = "") -> Decis
     if not sensitive and _inside_linked_project(resolved):
         return Decision(True)
 
+    # And the copy of a repository a worker was pinned to, for as long as it is pinned there.
+    # See `_inside_pinned_worktree` for why this cannot be left to the prompt.
+    if not sensitive and _inside_pinned_worktree(resolved):
+        return Decision(True)
+
     signature = f"path:{resolved}"
     if granted(signature):
         return Decision(True)
@@ -1129,3 +1134,35 @@ def linked_project_roots() -> tuple[Path, ...]:
 
 def _inside_linked_project(resolved: Path) -> bool:
     return any(_inside(resolved, root) for root in linked_project_roots())
+
+
+def _inside_pinned_worktree(resolved: Path) -> bool:
+    """Is this inside the private copy of the repository a worker was pinned to?
+
+    Kept apart from :func:`_inside_linked_project` rather than folded into it, because two
+    things that both mean "he may write here" are still two things. A linked project is a
+    standing grant a person made in the interface and can take back there; this is a grant
+    that exists for the length of one `contextvars` scope, over a folder the code created
+    itself moments ago.
+
+    **Why a worker needs one at all.** A worktree is not the linked folder, so without this
+    every write a worker makes lands here as an anonymous out-of-folder path and raises a
+    prompt. That prompt would be raised of an empty room: a worker has no `ask` and no
+    `reach_out` by construction (`tools/delegation.WITHHELD`), and nobody is watching a
+    scratchpad — so in ask-mode the turn that sent the worker would block on a tool call that
+    never returns, which is indistinguishable from a hang.
+
+    The grant is narrower than the one above it, not wider. It covers one directory, for one
+    worker, for as long as that worker is running, and the sensitivity check in `check_path`
+    is applied before this is consulted — so a worktree that somehow contains a credential
+    file is still gated on that file.
+    """
+    pinned = session_context.isolated_base()
+    if not pinned:
+        return False
+    try:
+        return _inside(resolved, _resolve(Path(pinned)))
+    except OSError:
+        # Same posture as `linked_project_roots`: a permission check must not fail because a
+        # path lookup did, and "not in the worktree" is the answer that gates rather than grants.
+        return False

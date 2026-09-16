@@ -61,6 +61,16 @@ _PARALLEL_SAFE = frozenset(
         # thing this makes possible; serialised they are three times the wall-clock for the
         # same answer.
         "delegate_subtask",
+        # And a builder, which *writes* — and clears the bar anyway, because of where it
+        # writes. Each one gets its own `git worktree` (`infra/workspace/worktrees`), so two
+        # builders in one round share an object store and nothing else: no file either can
+        # see is a file the other can change. This is the one entry here where the
+        # side-effect-free test is passed by construction rather than by the tool doing
+        # nothing, and it is the payoff for the whole isolation mechanism — without the
+        # separate copies, builders would have to be serial.
+        "send_builder",
+        # Resuming one is the same work as sending one, on the same copy it already had.
+        "follow_up",
     }
 )
 
@@ -256,6 +266,11 @@ _GATHERING_TOOLS = frozenset(
         # Sending someone else to look is still looking, and it is the most expensive kind: an
         # errand's cost is its own model calls. A turn that is landing must not open a new one.
         "delegate_subtask",
+        # A builder is the same argument twice over: its own model calls, and a patch that
+        # still has to be read and applied afterwards. A turn with just enough budget left to
+        # finish has nowhere near enough to start one.
+        "send_builder",
+        "follow_up",
     }
 )
 

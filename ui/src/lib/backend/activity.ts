@@ -39,7 +39,14 @@ export interface ActivityItem {
   /** Present on `errand` lines: which sub-agent this is, and where it has got to.
    *  `running` opens one, `step` is a tool call inside it, `done` closes it. The id is what
    *  keeps three scouts sent in the same round from reading as one confused list. */
-  errand?: { id: string; state: "running" | "step" | "done"; objective: string };
+  errand?: {
+    id: string;
+    state: "running" | "step" | "done";
+    objective: string;
+    /** `scout` reads, `builder` edits in its own copy of the repository. Absent on lines from
+     *  before roles existed, which read as a scout — the safer of the two to be wrong about. */
+    role?: string;
+  };
   /** Which session this line belongs to. Absent on the genuinely global lines — a status
    *  change — which every session shows, because they are about the machine rather than
    *  about one piece of work. */

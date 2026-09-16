@@ -18,6 +18,7 @@ from kith.infra.db.repositories import (
     sources,
     tasks,
     touches,
+    workers,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "sources",
     "tasks",
     "touches",
+    "workers",
 ]

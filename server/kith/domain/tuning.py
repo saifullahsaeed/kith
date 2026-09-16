@@ -230,6 +230,35 @@ TUNABLES: tuple[Tunable, ...] = (
         maximum=20,
         unit="rounds",
     ),
+    Tunable(
+        key="builder_rounds",
+        env="KITH_BUILDER_ROUNDS",
+        label="Rounds a builder gets",
+        help="How long a worker sent to change something may work before it has to hand back "
+        "its patch. Larger than a scout's, and for a reason rather than generosity: a scout "
+        "stops when it knows the answer, and a builder is not finished until the edit is "
+        "actually made — reading four files and then writing three is most of the budget "
+        "before it starts. Too small and patches come back half-applied, which is worse than "
+        "none at all.",
+        default=16,
+        group="context",
+        minimum=4,
+        maximum=40,
+        unit="rounds",
+    ),
+    Tunable(
+        key="scout_model",
+        env="KITH_SCOUT_MODEL",
+        label="Model a scout uses",
+        help="Which model goes and looks things up, when it should not be the one he thinks "
+        "with. Blank means the same model as everything else. A scout greps, reads and "
+        "reports — instruction-following rather than judgement — so a smaller model is "
+        "usually the right trade, and six scouts in one round is six streams of whatever is "
+        "named here. A builder always uses the main model: it is writing code he will keep.",
+        default="",
+        group="context",
+        kind="text",
+    ),
     # `stop_after_delegating` stood here and is gone with the mechanism it drove — see the long
     # note in `services/agent_loop` where the `delegated` latch used to be. Short version: it
     # dated from when a conversation was an intake desk, it contradicted the chat directive
