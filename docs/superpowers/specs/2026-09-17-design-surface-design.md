@@ -207,8 +207,10 @@ editable dialect. Vision catches "this looks wrong". The report catches "this is
 
 * **Only flex round-trips.** Grid, media queries, pseudo-elements and animation render but are
   not handle-editable. Source view is the answer; the report names them.
-* **No version history outside a repo.** A design in a project gets git. A design in the bare
-  sandbox gets in-editor undo and nothing more.
+* **Version history is checkpoints, not the editor.** `write_file` calls
+  `_checkpoint_before_change` on every write, so a design has history whether or not it is in a
+  repo — and a design inside a project also gets git. The editor itself keeps no undo stack
+  beyond the current draft, which is the honest limit: reverting is `restore_to_sha`, not Cmd-Z.
 * **Single writer.** If he edits the file mid-session while the editor is open, last write wins.
   The editor reloads on focus and warns when the file changed underneath it; it does not merge.
   (This is the `two-writers-one-worktree` problem in miniature and gets the same honest answer.)
@@ -230,3 +232,17 @@ Each step ends somewhere demonstrable.
 5. Drag: reorder, reparent, padding/gap handles.
 6. Source view and save.
 7. The `designing-a-screen` skill and `check_design.py`.
+
+## What was built, against the above
+
+All seven, with three amendments the work itself forced:
+
+* `<style>` is sanitised rather than dropped (Layer 0) — dropping it would have meant an editor
+  that only opens on output he does not naturally write.
+* Ids are minted in document order. They were post-order, which nothing rendered differently and
+  which would have put every patch past the first nesting on the wrong node.
+* Designs get history from `_checkpoint_before_change`, not from a repo, as above.
+
+Two things were found that were not about this feature at all: the test suite had no workspace
+isolation, so any test reaching a write path wrote into `~/kith`; and the litter suite's skill
+assertion failed on any newly bundled skill. Both fixed where they live.
