@@ -143,10 +143,20 @@ class ChatRequestSchema(Schema):
 
 
 class HealthSchema(Schema):
-    """Whether the backend is up, and whether the model it is configured for answered."""
+    """Whether the backend is up, whether the model it is configured for answered, and which
+    data directory this particular server is using.
+
+    ``dataDir`` is here for the CLI. The API token lives in that directory, and a client can
+    only guess at it from its own build type — a frozen ``kith`` looks in ``~/.kith`` and has
+    no way to even name the ``server/data`` of a checkout, so on a machine running both it
+    holds the wrong key and reads the 401 as the server's fault. This is the server saying
+    where its own key is. It is on the unauthenticated path because a client that could
+    authenticate would not need to ask, and it is safe there for the same reason the token file
+    is safe: the value is a path, the file is 0600, and only the same user can open it."""
 
     ok = Boolean(metadata={"description": "The backend is up"})
     ollamaReachable = Boolean(metadata={"description": "Ollama answered a probe"})
+    dataDir = String(metadata={"description": "The directory this server keeps its data and API token in"})
 
 
 class ReplySchema(Schema):

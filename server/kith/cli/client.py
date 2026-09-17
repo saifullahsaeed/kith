@@ -2,13 +2,17 @@
 
 Three things here are load-bearing and none of them are obvious.
 
-**The token is found, not configured.** The server writes a 0600 file next to its databases
-and the desktop app injects its contents into the page it serves; a CLI has neither of those
-routes, so it reads the file. The trap is that "next to its databases" is two different places:
-``~/.kith`` when frozen, ``server/data`` from a checkout (``settings._DEFAULT_DATA_DIR``). A
-client that only knows the first works for everyone who installed Kith and fails for everyone
-who is building it. Both are tried, in that order, and ``kith status`` prints which one
-answered — because the failure mode otherwise is a 401 that looks like a server fault.
+**The token is found, not configured, and finding it is a guess the server settles.** The
+server writes a 0600 file next to its databases and the desktop app injects its contents into
+the page it serves; a CLI has neither of those routes, so it reads the file. The trap is that
+"next to its databases" is two different places — ``~/.kith`` when frozen, ``server/data`` from
+a checkout (``settings._DEFAULT_DATA_DIR``) — and that a client resolves it from *its own*
+build type, not from the server it is about to talk to. The installed ``kith`` is frozen; the
+server on this port is usually a checkout; both files exist on any machine that has ever run a
+packaged build. So the first readable file is not evidence of anything, and treating it as the
+answer is a 401 that looks like a server fault. Every token is collected instead, and a 401 is
+read as "wrong file, try the next one" rather than as a verdict. ``kith status`` prints which
+one the server accepted.
 
 **The stream is read line by line, not buffered.** ``/api/chat`` returns
 ``application/x-ndjson`` and the whole point is that it arrives as it happens. ``urlopen``
@@ -77,22 +81,41 @@ def token_candidates() -> list[Path]:
     return seen
 
 
-def find_token() -> tuple[str, str]:
-    """The token and where it came from. Raises if there is none to find.
+def token_options() -> list[tuple[str, str]]:
+    """Every token readable on this machine, best guess first, as ``(value, source)``.
 
-    The source travels with the value because ``kith status`` reports it and a 401 is otherwise
-    undiagnosable: the two failures — wrong file, stale file — look identical from the server.
+    ``$KITH_TOKEN`` is alone when it is set: someone who names a token means that token, and
+    silently using a different one would hide the typo they need to see.
+
+    Otherwise this is a *list* rather than a choice, because nothing here can tell which file
+    belongs to the server on the other end. ``settings.DATA_DIR`` answers for this binary —
+    frozen means ``~/.kith`` — while the server answering on the port may be a checkout using
+    ``server/data``, and a machine that has run both has both files. Existing is not the same
+    as being the right one; see `Client._open`, which lets the server decide.
     """
     from_env = (os.environ.get("KITH_TOKEN") or "").strip()
     if from_env:
-        return from_env, "$KITH_TOKEN"
+        return [(from_env, "$KITH_TOKEN")]
+    options: list[tuple[str, str]] = []
     for candidate in token_candidates():
         try:
             value = candidate.read_text().strip()
         except OSError:
             continue
-        if value:
-            return value, str(candidate)
+        if value and not any(value == known for known, _ in options):
+            options.append((value, str(candidate)))
+    return options
+
+
+def find_token() -> tuple[str, str]:
+    """The best guess at the token, and where it came from. Raises if there is none to find.
+
+    The source travels with the value because ``kith status`` reports it and a 401 is otherwise
+    undiagnosable: the two failures — wrong file, stale file — look identical from the server.
+    """
+    options = token_options()
+    if options:
+        return options[0]
     looked = " or ".join(str(path) for path in token_candidates())
     raise Failure(
         "no API token found",
@@ -107,10 +130,20 @@ class Client:
     def __init__(self, url: str = "", token: str = "", timeout: float = DEFAULT_TIMEOUT) -> None:
         self.url = (url or base_url()).rstrip("/")
         self.token_source = ""
+        #: Tokens not yet tried, for `_open` to fall through to on a 401. Empty when the caller
+        #: named a token: an explicit value is an instruction, not a guess to be second-guessed.
+        self._spares: list[tuple[str, str]] = []
+        #: `/api/health` is asked for the server's data directory at most once, and only after
+        #: every file has been refused — see `_token_the_server_points_at`.
+        self._asked_the_server = bool(token) or bool((os.environ.get("KITH_TOKEN") or "").strip())
         if token:
             self.token = token
         else:
-            self.token, self.token_source = find_token()
+            options = token_options()
+            if not options:
+                find_token()  # raises the "no API token found" failure, with where it looked
+            self.token, self.token_source = options[0]
+            self._spares = options[1:]
         self.timeout = timeout
 
     # ----------------------------------------------------------------- requests
@@ -145,6 +178,23 @@ class Client:
                 detail = str(payload.get("error") or payload.get("message") or "")
             except Exception:
                 pass
+            if refused.code == 401 and not self._spares:
+                # Nothing left to guess with, so stop guessing and ask. `/api/health` needs no
+                # token and reports the server's own data directory — which is the only way a
+                # frozen CLI can name the `server/data` of a checkout it was not built from.
+                # Once, per client: a second round would be the same answer.
+                asked = self._token_the_server_points_at()
+                if asked:
+                    self._spares.append(asked)
+            if refused.code == 401 and self._spares:
+                # A 401 is the only authority on which file belongs to this server, so it is
+                # taken as one: adopt the next token and send the same request again. Safe to
+                # repeat because the rejection happened in `api.auth` before the handler ran,
+                # so nothing has been created, and cheap because it happens at most once per
+                # file and the one that answers is kept for the rest of the process.
+                self.token, self.token_source = self._spares.pop(0)
+                request.add_header(HEADER, self.token)
+                return self._open(request)
             if refused.code == 401:
                 raise Failure(
                     "the server rejected the API token",
@@ -160,6 +210,32 @@ class Client:
             ) from unreachable
         except TimeoutError as slow:
             raise Failure(f"timed out after {self.timeout:g}s waiting for {self.url}", FAILED) from slow
+
+    def _token_the_server_points_at(self) -> tuple[str, str] | None:
+        """The token in the directory `/api/health` names, if that is somewhere new.
+
+        Returns ``None`` — never raises — for every failure: this runs while reporting a 401,
+        and a diagnostic path that throws its own error replaces a message about the token with
+        a message about the diagnostic. An older server that does not send ``dataDir`` simply
+        has no answer, and the original 401 stands.
+        """
+        if self._asked_the_server:
+            return None
+        self._asked_the_server = True
+        try:
+            request = urllib.request.Request(f"{self.url}/api/health", headers={"Accept": "application/json"})
+            with urllib.request.urlopen(request, timeout=min(self.timeout, 10.0)) as response:
+                payload = json.loads(response.read().decode() or "{}")
+            directory = str((payload or {}).get("dataDir") or "").strip()
+            if not directory:
+                return None
+            source = Path(directory) / TOKEN_FILENAME
+            value = source.read_text().strip()
+        except Exception:
+            return None
+        if not value or value == self.token:
+            return None
+        return value, str(source)
 
     def get(self, path: str, **params: Any) -> Any:
         with self._open(self._request("GET", path, params=params)) as response:
@@ -229,4 +305,13 @@ def connect(timeout: float = DEFAULT_TIMEOUT) -> Client:
     return Client(timeout=timeout)
 
 
-__all__ = ["HEADER", "Client", "base_url", "connect", "die", "find_token", "token_candidates"]
+__all__ = [
+    "HEADER",
+    "Client",
+    "base_url",
+    "connect",
+    "die",
+    "find_token",
+    "token_candidates",
+    "token_options",
+]

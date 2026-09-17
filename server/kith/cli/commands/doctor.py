@@ -130,6 +130,11 @@ def _status(client: Client | None, args) -> int:
             if listening:
                 probe.get("/config")
                 authorised = True
+                # The client may have moved on to a different file to get that 200 — a machine
+                # with two installs has two tokens and only one of them is this server's. What
+                # is worth printing is the one that worked, not the one tried first, because
+                # the whole reason this line exists is to answer "which Kith am I talking to".
+                token_source = probe.token_source or token_source
         except Failure:
             authorised = False
     reachable = listening and authorised

@@ -113,15 +113,38 @@ def released() -> dict[str, list[str]]:
     return paths if isinstance(paths, dict) else {}
 
 
-def _read_manifest() -> dict[str, str]:
+def _manifest_path(live: Path | None = None) -> Path:
+    """Where the record of our own writes belongs: beside the tree it describes.
+
+    It used to be one global path, read and written no matter which folder `sync` was actually
+    reconciling — which is fine for the app, where there is only ever one, and quietly wrong
+    everywhere else. Anything that syncs into a scratch directory (a test, a check, a script)
+    recorded those writes against the *live* manifest, and the manifest's meaning is "we already
+    placed this". So a bundled file that had never been installed anywhere real was marked as
+    delivered, and the next boot skipped it. Permanently, and silently: nothing fails, the skill
+    simply is not there.
+
+    That is not hypothetical. It happened to `designing-a-screen` twice in one session — once
+    from a one-off check and once from the persona test suite, whose fixture redirects the skills
+    directory but could not redirect this.
+
+    Deriving it from `live` makes the record follow the tree, so a sync into a temp folder writes
+    a temp manifest and the real one is only touched by a real install.
+    """
+    if live is None:
+        return settings.SEED_MANIFEST_PATH
+    return live.parent / settings.SEED_MANIFEST_PATH.name
+
+
+def _read_manifest(live: Path | None = None) -> dict[str, str]:
     try:
-        loaded = json.loads(settings.SEED_MANIFEST_PATH.read_text(encoding="utf-8"))
+        loaded = json.loads(_manifest_path(live).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return loaded.get("paths", {}) if isinstance(loaded, dict) else {}
 
 
-def _write_manifest(paths: dict[str, str]) -> None:
+def _write_manifest(paths: dict[str, str], live: Path | None = None) -> None:
     """Replace the manifest in one step.
 
     Written to a neighbour and renamed because a half-written manifest is worse than none: the
@@ -130,7 +153,7 @@ def _write_manifest(paths: dict[str, str]) -> None:
     and stop receiving updates forever. `os.replace` is atomic within a filesystem, which this
     is by construction.
     """
-    target = settings.SEED_MANIFEST_PATH
+    target = _manifest_path(live)
     body = json.dumps(
         {
             "note": "What Kith placed in this folder, so an update can tell its own files from "
@@ -165,7 +188,7 @@ def sync(name: str, bundled: Path, live: Path) -> Report:
         return report
 
     first_run = not live.exists()
-    manifest = _read_manifest()
+    manifest = _read_manifest(live)
     history = released()
     touched = False
 
@@ -219,7 +242,7 @@ def sync(name: str, bundled: Path, live: Path) -> Report:
             report.kept.append(key)
 
     if touched:
-        _write_manifest(manifest)
+        _write_manifest(manifest, live)
     if report:
         # To `~/.kith/server.log`, which the shell pipes stdout into — silent on every launch
         # that changes nothing, and the one place somebody can check after an update whether a

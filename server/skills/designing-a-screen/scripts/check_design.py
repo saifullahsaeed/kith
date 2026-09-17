@@ -129,21 +129,36 @@ _MEASURE = """
       out.editable.push(name(el) + ': display:grid — renders, but has no handles');
     }
 
-    // Spacing: off the scale by enough to be felt rather than seen.
-    //
-    // `gap` is one declaration that the cascade reports as three — gap, rowGap and columnGap all
-    // come back set — so naming each would print the same 7px three times and make a one-line
-    // fix look like three problems. The pair is only worth mentioning separately when they
-    // actually differ, which is the case where he really did set two.
-    const spacing = [['paddingTop', style.paddingTop], ['paddingLeft', style.paddingLeft],
-                     ['marginTop', style.marginTop], ['marginLeft', style.marginLeft]];
-    if (style.rowGap === style.columnGap) spacing.push(['gap', style.rowGap]);
-    else spacing.push(['row-gap', style.rowGap], ['column-gap', style.columnGap]);
+    /* Spacing: off the scale by enough to be felt rather than seen.
+     *
+     * Read from what he *wrote*, not from what the browser computed, and that distinction is the
+     * whole check. `margin-top: auto` is a perfectly good instruction that computes to whatever
+     * space was left — 309px on one of these — and reporting that as "off the 4px scale" is a
+     * defect the tool invented. Computed values also carry the user-agent's own margins on
+     * headings and paragraphs, which he never chose and cannot be blamed for.
+     *
+     * The inline declarations are exactly the editable surface, so checking those is checking
+     * the thing the dialect actually asks him to get right.
+     *
+     * `gap` is also one declaration the cascade reports as three, so it is read once. */
+    const wrote = (property) => el.style.getPropertyValue(property).trim();
+    const spacing = [
+      ['padding-top', wrote('padding-top') || wrote('padding')],
+      ['padding-left', wrote('padding-left')],
+      ['margin-top', wrote('margin-top') || wrote('margin')],
+      ['margin-left', wrote('margin-left')],
+      ['gap', wrote('gap') || wrote('row-gap')],
+    ];
 
     for (const [property, raw] of spacing) {
-      const px = parseFloat(raw);
-      if (!px || Number.isNaN(px)) continue;
-      if (px % STEP !== 0) out.spacing.push(name(el) + ': ' + property + ' ' + px + 'px');
+      if (!raw || raw === 'auto') continue;
+      // A shorthand such as `16px 24px` is several values; every one of them counts.
+      for (const piece of raw.split(/\\s+/)) {
+        if (!/px$/.test(piece)) continue;
+        const px = parseFloat(piece);
+        if (!px || Number.isNaN(px)) continue;
+        if (px % STEP !== 0) out.spacing.push(name(el) + ': ' + property + ' ' + px + 'px');
+      }
     }
 
     // Contrast, for the nodes that actually carry text of their own.
