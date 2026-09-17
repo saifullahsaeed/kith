@@ -1,6 +1,6 @@
 ---
 name: designing-a-screen
-description: "Use when you are about to design a screen, a page, a component or a layout that someone will look at and then want built — a mockup, not an explanation. An HTML file attached to a task as a deliverable opens in a design editor, where they can select nodes, change spacing, type and colour, and save; their edits come back to you as a diff in the file you wrote. Read it before writing the file: it covers when a mockup is worth making at all, the dialect that keeps a design editable and consistent, the ids that make edits land, how to check a screen you cannot fully judge by looking, and what to do when they have changed it under you. Not for explaining how something works — that is a diagram or a canvas."
+description: "Use when mocking up a screen someone will look at and then want built."
 ---
 
 # Designing a screen
