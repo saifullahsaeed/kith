@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useAuiState, useComposerRuntime, type Unstable_SlashCommand } from "@assistant-ui/react";
 
 import type { ContextLedger } from "@/lib/backend/types";
-import { foldNow, listSkills, stopTurn, type SkillSummary } from "@/lib/commands";
+import { DESIGN_PROMPT, foldNow, listSkills, stopTurn, type SkillSummary } from "@/lib/commands";
 
 /**
  * The `/` commands, and the line that says what one did.
@@ -74,6 +74,20 @@ export function useSlashCommands(conversationId?: string) {
       icon: "Square",
       execute: () => {
         void stopTurn(id).then((result) => say(result.note));
+      },
+    },
+    /* Ahead of the generated `/skill` list and separate from it, because it is not the same
+     * offer. `/designing-a-screen` would say "read the skill"; this says read it *and* make
+     * several files *and* attach them, which is the difference between a board with options on
+     * it and a paragraph about options. Offered whether or not the skill is installed — it
+     * names it, and a missing skill is a thing he can say rather than a command that vanishes. */
+    {
+      id: "design",
+      label: "design",
+      description: "Mock up a few options as screens I can compare on a board",
+      icon: "Frame",
+      execute: () => {
+        composer.setText(DESIGN_PROMPT);
       },
     },
     ...skills.map(

@@ -23,6 +23,24 @@ export interface CommandResult {
   reading?: ContextLedger;
 }
 
+/**
+ * What `/design` puts in the composer.
+ *
+ * A `/skill` command already exists for every installed skill and writes "Read the X skill and
+ * use it for this: ". For designing that is not enough, and the gap is the whole reason this
+ * command exists: the skill tells him *how* to write a screen, and what a person asking for
+ * design actually wants is several of them, each its own file, attached — because that is what
+ * puts them on a board next to each other. Asked without that, he does the reasonable thing and
+ * writes one screen, or writes prose about screens, and the board stays empty.
+ *
+ * Written into the composer rather than sent, like `/skill`: "design this" is the start of a
+ * request and sending it alone would make him guess the subject.
+ */
+export const DESIGN_PROMPT =
+  "Read the designing-a-screen skill first. Give me a few options rather than one — each its " +
+  "own HTML file under screens/, checked with the skill's check script, and each attached to a " +
+  "task as a file deliverable so they land on the board together. Here is what I want: ";
+
 export async function foldNow(conversationId: string): Promise<CommandResult> {
   if (!conversationId) return { note: "Nothing to fold — this conversation has not started." };
   const response = await fetch(`/api/chat/${conversationId}/fold`, { method: "POST" });
