@@ -271,6 +271,24 @@ export async function fetchWorkspaceFile(
   return (await res.json()) as { path: string; content: string };
 }
 
+/** Write a file back, for the one surface that edits one: the design editor. */
+export async function saveWorkspaceFile(
+  path: string,
+  content: string,
+  projectId?: number | null,
+): Promise<{ path: string }> {
+  const res = await fetch("/api/workspace/file", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content, projectId: projectId ?? undefined }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error || "couldn't save that file");
+  }
+  return (await res.json()) as { path: string };
+}
+
 export async function fetchTaskDetail(id: number): Promise<TaskDetail> {
   const res = await fetch(`/api/tasks/${id}`);
   if (!res.ok) throw new Error(`/api/tasks/${id} ${res.status}`);

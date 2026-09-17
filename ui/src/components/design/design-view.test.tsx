@@ -46,6 +46,15 @@ describe("rendering a design", () => {
     expect(svg.getAttribute("viewBox")).toBe("0 0 10 10");
   });
 
+  it("defines the tokens the dialect is written in", () => {
+    // Without these, a design saying `var(--kith-accent)` refers to a variable that exists only
+    // inside the sealed frame, and every colour in it comes out as the initial value.
+    const { container } = render(<DesignView html='<div data-k="a"></div>' />);
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.style.getPropertyValue("--kith-accent")).toBeTruthy();
+    expect(root.style.getPropertyValue("--kith-text")).toBeTruthy();
+  });
+
   it("scopes his stylesheet so it cannot restyle the app around it", () => {
     const { container } = render(<DesignView html="<style>.card{gap:4px}</style><div data-k=a class=card></div>" />);
     const sheet = container.querySelector("style")!.textContent ?? "";

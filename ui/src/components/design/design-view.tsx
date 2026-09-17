@@ -14,7 +14,10 @@
  */
 import { createElement, type ReactNode, useId, useMemo } from "react";
 
+import { canvasTokens } from "@/lib/canvas-bridge";
 import { type DesignNode, parseDesign } from "@/lib/design/parse";
+import { paletteFor } from "@/lib/kith-palette";
+import { useDarkMode } from "@/lib/theme";
 import { attrsToProps, elementName, scopeStyleSheet, styleToReact, VOID_TAGS } from "@/lib/design/render";
 
 export interface DesignViewProps {
@@ -68,9 +71,29 @@ export function DesignView({ html, selected, onSelect, className }: DesignViewPr
   const scope = `design-${useId().replace(/[^\w-]/g, "")}`;
   const sheet = useMemo(() => scopeStyleSheet(parsed.sheet, `.${scope}`), [parsed.sheet, scope]);
 
+  /* The tokens the dialect is written in, defined where the design can see them.
+   *
+   * `groundwork()` puts these into the sealed frame's own stylesheet, which is why a canvas can
+   * say `var(--kith-accent)` and mean something. A design has no document of its own — it is in
+   * the app's — and the app's variables are named `--background`, `--kith` and so on. So a
+   * design written in the dialect would have referred to nine variables that resolve to nothing,
+   * and every colour in it would have come out as the initial value. Same `canvasTokens` both
+   * ends, for the reason `canvas-bridge.ts` gives: the last time these two were written
+   * separately, three of the nine silently failed to travel and it read as "light mode doesn't
+   * work". */
+  const dark = useDarkMode();
+  const tokens = useMemo(() => {
+    const style: Record<string, string> = {};
+    for (const [name, value] of Object.entries(canvasTokens(paletteFor(dark)))) {
+      style[`--kith-${name}`] = value;
+    }
+    return style;
+  }, [dark]);
+
   return (
     <div
       className={`${scope}${className ? ` ${className}` : ""}`}
+      style={tokens}
       onClick={onSelect ? () => onSelect(null) : undefined}
     >
       {sheet ? <style>{sheet}</style> : null}

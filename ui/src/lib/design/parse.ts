@@ -60,10 +60,10 @@ export interface ParsedDesign {
  * markup nobody asked to render, and keeping either would be keeping the thing we removed the
  * parent for.
  */
-const DROP_SUBTREE = new Set(["script", "noscript", "template", "link", "meta", "base", "title"]);
+export const DROP_SUBTREE = new Set(["script", "noscript", "template", "link", "meta", "base", "title"]);
 
 /** Everything a mocked-up screen is made of. Anything else is unwrapped, not rendered. */
-const ALLOWED_TAGS = new Set([
+export const ALLOWED_TAGS = new Set([
   "div", "span", "p", "a", "img", "button", "input", "textarea", "select", "option", "label",
   "h1", "h2", "h3", "h4", "h5", "h6",
   "ul", "ol", "li", "dl", "dt", "dd",
@@ -156,8 +156,15 @@ function safeValue(value: string): boolean {
   return true;
 }
 
-/** One `prop: value` pair, or nothing. */
-function declaration(prop: string, raw: string): [string, string] | null {
+/**
+ * One `prop: value` pair, or nothing.
+ *
+ * Exported because `edit.ts` writes declarations back into the file and has to refuse exactly
+ * what this refuses. An inspector that could write a property the parser drops would put
+ * something on disk the editor will never show again — and, worse, something a renderer with a
+ * different whitelist might honour.
+ */
+export function safeDeclaration(prop: string, raw: string): [string, string] | null {
   const name = prop.trim().toLowerCase();
   if (!ALLOWED_CSS.has(name)) return null;
   // `!important` would outrank every inline edit the inspector makes, which would look like the
@@ -168,7 +175,7 @@ function declaration(prop: string, raw: string): [string, string] | null {
 }
 
 /** Split on the semicolons that actually separate declarations. */
-function splitDeclarations(text: string): string[] {
+export function splitDeclarations(text: string): string[] {
   const out: string[] = [];
   let depth = 0;
   let quote = "";
@@ -195,7 +202,7 @@ function inlineStyle(text: string, dropped: string[]): Record<string, string> {
   for (const one of splitDeclarations(text)) {
     const colon = one.indexOf(":");
     if (colon < 0) continue;
-    const kept = declaration(one.slice(0, colon), one.slice(colon + 1));
+    const kept = safeDeclaration(one.slice(0, colon), one.slice(colon + 1));
     if (kept) style[kept[0]] = kept[1];
     else dropped.push(`style declaration ${one.trim().slice(0, 40)}`);
   }
@@ -253,7 +260,7 @@ function ruleBody(body: string, dropped: string[]): string {
   for (const one of splitDeclarations(body)) {
     const colon = one.indexOf(":");
     if (colon < 0) continue;
-    const pair = declaration(one.slice(0, colon), one.slice(colon + 1));
+    const pair = safeDeclaration(one.slice(0, colon), one.slice(colon + 1));
     if (pair) kept.push(`${pair[0]}: ${pair[1]}`);
     else dropped.push(`stylesheet declaration ${one.trim().slice(0, 40)}`);
   }
@@ -349,12 +356,10 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     return [];
   }
 
-  const children = Array.from(element.children).flatMap((child) => convert(child, mint, taken, dropped));
-
   if (!ALLOWED_TAGS.has(tag)) {
     // Unwrapped, not deleted. See DROP_SUBTREE for why these two are different.
     dropped.push(`${tag} tag`);
-    return children;
+    return Array.from(element.children).flatMap((child) => convert(child, mint, taken, dropped));
   }
 
   const attrs: Record<string, string> = {};
@@ -417,6 +422,17 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     }
   }
   taken.add(id);
+
+  /* Children after the id, not before.
+   *
+   * `convert` used to walk its children first and mint its own id afterwards, which numbered a
+   * document depth-first *post*-order: the deepest node became k1 and the outermost frame got the
+   * highest number. Nothing rendered differently, so it was invisible — until `edit.ts`, which
+   * writes ids into the source text by scanning open tags in the order they appear. Source order
+   * is pre-order. Any minted id past the first nesting would have been written onto a different
+   * node than the one the editor thought it had selected, which is a patch landing silently on
+   * the wrong element. */
+  const children = Array.from(element.children).flatMap((child) => convert(child, mint, taken, dropped));
 
   const text = ownText(element);
   return {
