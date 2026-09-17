@@ -1,3 +1,4 @@
+import { BoardOverlay } from "@/components/design/board-overlay";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -632,6 +633,19 @@ export function Workspace({
             className="kith-ambient fixed inset-0"
             style={{ ["--wash" as string]: wash }}
           />
+          {/* The board, once, above every pane.
+           *
+           * It used to be mounted inside `ChatPane` and gated on that pane being the focused
+           * one, which made "does the board appear" a question about tab bookkeeping. Switching
+           * tabs *unmounts* a pane, so a board opened in one died when you looked at another;
+           * and with two chats open the store is global, so the surviving pane would have drawn
+           * the other conversation's board over itself. It shows half the time because half the
+           * time its host is gone.
+           *
+           * It was never a property of a conversation. It is keyed by a task and belongs to the
+           * window, so it lives here — above the panes, outside anything that unmounts when you
+           * look somewhere else. */}
+          <BoardOverlay />
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             <AppHeader
               working={working}

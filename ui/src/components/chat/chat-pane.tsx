@@ -1,4 +1,3 @@
-import { BoardOverlay } from "@/components/design/board-overlay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -577,11 +576,6 @@ export function ChatPane({
       <PublishToTheWorkPanel active={active} />
       <KeepTheDraft uid={uid} conversationId={id} projectId={projectId} />
       <div ref={root} className="relative flex h-full min-h-0 flex-col">
-        {/* The board, over this pane. Mounted here because a design arrives *in* a conversation
-            and the place to compare designs should not be three clicks away in another screen —
-            which is what it was, and which for a thing produced in the chat is the same as not
-            existing. Only the focused pane draws it, so two open chats cannot both. */}
-        {active ? <BoardOverlay /> : null}
         <SessionBar
           conversationId={id}
           projectId={projectId}
