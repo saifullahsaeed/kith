@@ -29,6 +29,7 @@ import { dayLabel, time } from "@/lib/dates";
 import { keys } from "@/lib/query-keys";
 import { openWorkspaceFile } from "@/lib/files";
 import { DesignPage } from "@/components/design/design-page";
+import { DesignBoardPage } from "@/components/design/design-board-page";
 import { looksLikeADesign } from "@/lib/design/detect";
 import { cn } from "@/lib/utils";
 import {
@@ -78,6 +79,8 @@ export function TaskDetailPage({
   /** The design being looked at, if any. Held here rather than in the row that opened it so
    *  that leaving the editor lands back on this page with its scroll and state intact. */
   const [designing, setDesigning] = useState<{ path: string; title: string } | null>(null);
+  /** The board — every design on this task at once, which is the surface comparison needs. */
+  const [onBoard, setOnBoard] = useState(false);
   /** A download that could not be read. Said out loud, because the alternative — which this
    *  page shipped with — was handing you a .txt containing the path and calling it done. */
   const [refused, setRefused] = useState("");
@@ -216,6 +219,19 @@ export function TaskDetailPage({
    * question you can answer in a 17rem gutter next to a comment thread. Swapped in here rather
    * than routed to, because this panel navigates by state and a URL for it would be the only
    * one in the app. */
+  if (onBoard) {
+    return (
+      <DesignBoardPage
+        taskId={task.id}
+        projectId={task.project_id}
+        designs={task.deliverables
+          .filter((d) => looksLikeADesign(d.kind, d.content))
+          .map((d) => ({ file: d.content, title: d.title }))}
+        onBack={() => setOnBoard(false)}
+      />
+    );
+  }
+
   if (designing) {
     return (
       <DesignPage
@@ -567,6 +583,19 @@ export function TaskDetailPage({
                 <span className="ml-2 font-normal normal-case tracking-normal text-muted-foreground">
                   {task.deliverables.length}
                 </span>
+              ) : null}
+              {/* The board, offered once rather than per row: comparing is the thing you do with
+                  several designs, so the way in belongs to the set, not to any one of them. */}
+              {task.deliverables.some((d) => looksLikeADesign(d.kind, d.content)) ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="ml-auto gap-1.5 normal-case"
+                  onClick={() => setOnBoard(true)}
+                >
+                  <Frame className="size-3.5" />
+                  Open board
+                </Button>
               ) : null}
             </H>
             {refused ? (
