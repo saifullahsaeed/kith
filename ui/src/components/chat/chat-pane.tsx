@@ -10,6 +10,7 @@ import {
 
 import { Thread, latestUsage } from "@/components/assistant-ui/thread";
 import { CheckpointsProvider } from "@/components/assistant-ui/checkpoints-context";
+import { ConversationProvider } from "@/lib/conversation";
 import { SessionBar } from "@/components/chat/session-bar";
 import { ThreadSkeleton } from "@/components/chat/thread-skeleton";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
@@ -46,7 +47,10 @@ type Attached = NonNullable<Awaited<ReturnType<typeof resumeTurn>>>;
  * A turn with no id is one recorded before ids existed, and is never claimed by anything. That is
  * the safe direction: it renders as history, which is exactly what a turn nobody is streaming is.
  */
-function withoutTurn(timeline: StoredTurn[], turnId: string | undefined): StoredTurn[] {
+function withoutTurn(
+  timeline: StoredTurn[],
+  turnId: string | undefined,
+): StoredTurn[] {
   if (!turnId) return timeline;
   return timeline.filter((one) => one.turn !== turnId);
 }
@@ -158,7 +162,9 @@ export function ChatPane({
    * And `null` outright once there is a conversation, because `pendingProject` below is a *bind*:
    * a conversation's project is already on the server, and re-sending it on every remount is the
    * write `workspace` withholds `initialProject` from named tabs specifically to prevent. */
-  const openedIn = conversationId ? null : (heldOnMount?.projectId ?? initialProject);
+  const openedIn = conversationId
+    ? null
+    : (heldOnMount?.projectId ?? initialProject);
   const [projectId, setProjectId] = useState<number | null>(openedIn);
   /* The project the first turn will carry.
    *
@@ -207,7 +213,11 @@ export function ChatPane({
   const [loading, setLoading] = useState(!!conversationId);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [nearTop, setNearTop] = useState(false);
-  const anchor = useRef<{ index: number; shift: number; offset: number } | null>(null);
+  const anchor = useRef<{
+    index: number;
+    shift: number;
+    offset: number;
+  } | null>(null);
   /** This pane's own DOM, so a viewport query cannot find another pane's thread. */
   const root = useRef<HTMLDivElement | null>(null);
 
@@ -321,7 +331,8 @@ export function ChatPane({
        * nothing: the response body stays open, with a `live_turns` watcher blocked writing into it
        * on the other end, holding one of the six sockets this origin gets. A tab is closed at
        * exactly the moment a turn is running, so this is not a rare path. */
-      const gone = mine !== loads.current || !alive.current || idRef.current !== wanted;
+      const gone =
+        mine !== loads.current || !alive.current || idRef.current !== wanted;
       if (gone || !detail || owned.current) {
         attached?.discard();
         if (!gone) setLoading(false);
@@ -336,14 +347,20 @@ export function ChatPane({
        * Decided by comparing ids rather than by a flag that a turn event consumes, so an
        * announcement that arrives in an unexpected order costs nothing: the next turn has a
        * different id, does not match, and is loaded and attached to normally. */
-      if (!attached && lastTurn(detail.timeline) && lastTurn(detail.timeline) === lastRead.current) {
+      if (
+        !attached &&
+        lastTurn(detail.timeline) &&
+        lastTurn(detail.timeline) === lastRead.current
+      ) {
         setLoading(false);
         return;
       }
 
       setProjectId(detail.projectId ?? null);
       setWindowStart(detail.windowStart ?? 0);
-      setResumed(toThreadMessages(withoutTurn(detail.timeline, attached?.turnId)));
+      setResumed(
+        toThreadMessages(withoutTurn(detail.timeline, attached?.turnId)),
+      );
       setPending(attached);
       setLoading(false);
     },
@@ -428,9 +445,10 @@ export function ChatPane({
     if (loadingEarlier || windowStart <= 0 || !id) return;
     if (runtime.thread.getState().isRunning) return;
     setLoadingEarlier(true);
-    const older = await fetchConversation(id, { turns: WINDOW, before: windowStart }).catch(
-      () => null,
-    );
+    const older = await fetchConversation(id, {
+      turns: WINDOW,
+      before: windowStart,
+    }).catch(() => null);
     setLoadingEarlier(false);
     if (!older || !older.timeline.length) return;
 
@@ -446,13 +464,19 @@ export function ChatPane({
     const older_ = toThreadMessages(older.timeline);
     const grown = onScreen.length ? [...older_, ...onScreen] : older_;
     // Remember which message you were reading before the thread is torn down and rebuilt longer.
-    const viewport = root.current?.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
+    const viewport = root.current?.querySelector<HTMLElement>(
+      '[data-slot="aui_thread-viewport"]',
+    );
     anchor.current = null;
     if (viewport) {
       const top = viewport.getBoundingClientRect().top;
-      const messages = [...viewport.querySelectorAll<HTMLElement>("[data-message-id]")];
+      const messages = [
+        ...viewport.querySelectorAll<HTMLElement>("[data-message-id]"),
+      ];
       // The first message still on screen — the one you are reading, not the one above it.
-      const index = messages.findIndex((one) => one.getBoundingClientRect().bottom > top);
+      const index = messages.findIndex(
+        (one) => one.getBoundingClientRect().bottom > top,
+      );
       if (index >= 0) {
         anchor.current = {
           index,
@@ -486,7 +510,9 @@ export function ChatPane({
    * rather than an offset is what makes it exact: everything above it can change height and the
    * answer is still recomputed from where the element actually is. */
   useEffect(() => {
-    const viewport = root.current?.querySelector<HTMLElement>('[data-slot="aui_thread-viewport"]');
+    const viewport = root.current?.querySelector<HTMLElement>(
+      '[data-slot="aui_thread-viewport"]',
+    );
     if (!viewport) return;
 
     const look = () => setNearTop(viewport.scrollTop < viewport.clientHeight);
@@ -512,11 +538,14 @@ export function ChatPane({
       const until = performance.now() + RESTORE_MS;
       const pin = () => {
         if (done) return;
-        const messages = viewport.querySelectorAll<HTMLElement>("[data-message-id]");
+        const messages =
+          viewport.querySelectorAll<HTMLElement>("[data-message-id]");
         const mine = messages[held.index + held.shift];
         if (mine) {
           const drift =
-            mine.getBoundingClientRect().top - viewport.getBoundingClientRect().top - held.offset;
+            mine.getBoundingClientRect().top -
+            viewport.getBoundingClientRect().top -
+            held.offset;
           if (Math.abs(drift) > 1) viewport.scrollTop += drift;
         }
         if (performance.now() < until) frame = requestAnimationFrame(pin);
@@ -553,7 +582,8 @@ export function ChatPane({
           onProject={(next) => {
             setProjectId(next);
             if (!idRef.current) pendingProject.current = next;
-            else void setConversationProject(idRef.current, next).catch(() => {});
+            else
+              void setConversationProject(idRef.current, next).catch(() => {});
           }}
         />
         {/* The thread gets its own box with a definite height rather than sitting straight in
@@ -564,32 +594,39 @@ export function ChatPane({
             height on top. Anything added beside `Thread` here goes in the flow, not on top. */}
         <div className="relative flex min-h-0 flex-1 flex-col">
           <ErrorBoundary where="The conversation">
-            <CheckpointsProvider
-              conversationId={id}
-              /* Turns above this page. Checkpoints are tagged with an absolute turn index and
+            {/* Which chat everything below belongs to. A canvas or an animated diagram in a reply
+                reports back — what a control was set to, a choreography it could not run — and
+                those reports ride along with the next message. The stores holding them are global
+                and several chats are open at once, so without this they rode along with whichever
+                chat sent one next. The pane has always known; there was no way to ask from inside
+                a message. */}
+            <ConversationProvider id={id}>
+              <CheckpointsProvider
+                conversationId={id}
+                /* Turns above this page. Checkpoints are tagged with an absolute turn index and
                  matched against the rendered message index, so without it "restore to here" on
                  the first visible message targets whatever happened hundreds of turns earlier —
                  a destructive action aiming at the wrong commit. */
-              turnOffset={windowStart}
-            >
-              {windowStart > 0 && nearTop ? (
-                /* Floating, not stacked: in the flow this was a band across the top of the
+                turnOffset={windowStart}
+              >
+                {windowStart > 0 && nearTop ? (
+                  /* Floating, not stacked: in the flow this was a band across the top of the
                    conversation that claimed its own height. `pointer-events-none` on the strip
                    so only the pill is clickable. */
-                <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => void loadEarlier()}
-                    disabled={loadingEarlier}
-                    className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors disabled:opacity-60"
-                  >
-                    {loadingEarlier
-                      ? "Loading earlier…"
-                      : `Load ${Math.min(WINDOW, windowStart)} earlier · ${windowStart} above`}
-                  </button>
-                </div>
-              ) : null}
-              {/* The thread stays mounted; the skeleton lies over it.
+                  <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => void loadEarlier()}
+                      disabled={loadingEarlier}
+                      className="border-border/60 bg-card text-muted-foreground hover:text-foreground hover:border-border pointer-events-auto rounded-full border px-3 py-1 text-[11px] shadow-sm transition-colors disabled:opacity-60"
+                    >
+                      {loadingEarlier
+                        ? "Loading earlier…"
+                        : `Load ${Math.min(WINDOW, windowStart)} earlier · ${windowStart} above`}
+                    </button>
+                  </div>
+                ) : null}
+                {/* The thread stays mounted; the skeleton lies over it.
                   Swapping them was the scroll glitch on opening. Two things went wrong and
                   both come from the thread not being in the DOM yet. The effect below looks
                   for `[data-slot="aui_thread-viewport"]` inside this pane, so while the
@@ -602,15 +639,16 @@ export function ChatPane({
                   Mounted from the start, the viewport exists before the messages do, the
                   effect attaches once, and the skeleton is just something drawn on top until
                   there is something better to look at. */}
-              <div className="relative min-h-0 flex-1">
-                <Thread conversationId={id} />
-                {loading ? (
-                  <div className="bg-background absolute inset-0 z-20">
-                    <ThreadSkeleton />
-                  </div>
-                ) : null}
-              </div>
-            </CheckpointsProvider>
+                <div className="relative min-h-0 flex-1">
+                  <Thread conversationId={id} />
+                  {loading ? (
+                    <div className="bg-background absolute inset-0 z-20">
+                      <ThreadSkeleton />
+                    </div>
+                  ) : null}
+                </div>
+              </CheckpointsProvider>
+            </ConversationProvider>
           </ErrorBoundary>
         </div>
       </div>
@@ -627,7 +665,6 @@ const WINDOW = 40;
 const RESTORE_MS = 2500;
 /** How long to wait before reading the scroll position on a freshly opened thread. */
 const SETTLE_MS = 600;
-
 
 /** Publishes this pane's composer while it is the focused chat, so a file dropped anywhere in
  *  the window knows which conversation it was meant for. Renders nothing; it exists to be
@@ -705,7 +742,9 @@ function KeepTheDraft({
         quote: state.quote,
         // `file` is only on an attachment that has not been sent yet, which is all of these —
         // a composer's attachments are by definition unsent.
-        attachments: state.attachments.flatMap((one) => (one.file ? [one.file] : [])),
+        attachments: state.attachments.flatMap((one) =>
+          one.file ? [one.file] : [],
+        ),
       });
     };
     // Once immediately, which is also what re-stamps the conversation id when a chat that had

@@ -161,6 +161,19 @@ def session_id(agent_db: Path, conversation_id: str) -> str:
     return str(row.get("session_id") or "") if row else ""
 
 
+def provider_order(agent_db: Path, conversation_id: str) -> tuple[str, ...]:
+    """The upstreams this conversation prefers, best first, or empty if never settled."""
+    row = repo.conversations.get(agent_db, conversation_id)
+    raw = str(row.get("provider_order") or "") if row else ""
+    return tuple(slug for slug in raw.split(",") if slug)
+
+
+def remember_provider_order(agent_db: Path, conversation_id: str, order: tuple[str, ...]) -> None:
+    """Settle it, once. A conversation that already has one is left where it is."""
+    if conversation_id and order:
+        repo.conversations.remember_provider_order(agent_db, conversation_id, ",".join(order))
+
+
 def record(agent_db: Path, conversation_id: str, role: str, content: str, extra: dict | None = None) -> None:
     """Append one message to the transcript and touch the index.
 

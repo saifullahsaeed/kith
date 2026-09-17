@@ -240,6 +240,10 @@ class Conversation(Base):
     #: what a history list is asked about. Empty until he has spoken, and for rows that
     #: predate the column (filled from the transcript the first time they are listed).
     last_said: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: The upstreams this conversation prefers, best first, comma-separated — worked out once
+    #: when it started and kept, because moving hosts costs a cold prompt cache. Empty on rows
+    #: older than the column and where the endpoint table could not be read.
+    provider_order: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class TurnLog(Base):

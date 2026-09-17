@@ -1,11 +1,8 @@
-import { Activity, PanelRightClose } from "lucide-react";
-
 import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { BackgroundTasks } from "@/components/chat/background-tasks";
 import { StandingWork } from "@/components/chat/standing-work";
 import { ContextSection } from "@/components/chat/context-section";
 import { Errands, isErrandLine } from "@/components/chat/errands";
-import { Button } from "@/components/ui/button";
 import { formatTokens } from "@/lib/tokens";
 import type { useActivity } from "@/hooks/use-activity";
 import type { ActivityItem } from "@/lib/backend/activity";
@@ -32,13 +29,11 @@ type Activity = ReturnType<typeof useActivity>;
 export function WorkPanel({
   activity,
   conversationId = "",
-  onClose,
 }: {
   activity: Activity;
   /** Which conversation is on screen. The sections about one conversation take it; background tasks
    *  and the lifetime token count are about the machine. */
   conversationId?: string;
-  onClose: () => void;
 }) {
   const { status, activity: lines } = activity;
   // Rounds this session, counted off the activity lines. The feed used to group them into blocks and
@@ -56,33 +51,14 @@ export function WorkPanel({
     // draws the dividers, so a width here would fight the panel it sits in and the border
     // would double the one already beside it.
     <aside className="flex h-full w-full flex-col bg-background/45 backdrop-blur-md">
-      {/* header */}
-      <div className="flex shrink-0 items-center gap-2.5 border-b border-border/60 px-4 py-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-kith">
-          <Activity className="size-4" />
-        </span>
-        {/* The title is on the tab. What was under it is a live count, not a label, so it is
-            the line that stays — and it moves up to where the title was rather than sitting
-            under a gap.
+      {/* **No header of its own.** There was one — an icon, a live round count, and a collapse
+          button — and all three were already on screen. The panel is rendered inside a companion
+          column or a tab, and both draw their own bar with the title and the close control right
+          above this; the round count says the same number as the counters row at the foot. So it
+          was a third close button under a second title, costing 49px of a column whose whole
+          problem is that five sections have to fit in it.
 
-            "Work", not "Mind", is still the name: his actual mind — memories, notes, journal —
-            is the group of that name in the control panel, and having both called Mind meant
-            the word told you nothing about which one you were looking at. It lives in
-            `layout/surfaces.ts` now. */}
-        <div className="min-w-0 flex-1 truncate text-[11px] leading-tight text-muted-foreground">
-          {steps > 0 ? `${steps} round${steps === 1 ? "" : "s"} this session` : "nothing yet"}
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-foreground"
-          onClick={onClose}
-          aria-label="Collapse the work panel"
-        >
-          <PanelRightClose className="size-4" />
-        </Button>
-      </div>
-
+          The sections start at the top now. */}
       {/* Everything between the header and the counters scrolls, and until now nothing did.
           The column is `h-full` with five stacked sections in it, so whatever did not fit was
           simply unreachable — one task with a nine-step checklist was enough to put the errands,

@@ -12,6 +12,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HtmlCanvas } from "@/components/assistant-ui/html-canvas";
 import { currentCanvasState, useCanvasState } from "@/lib/canvas-state";
+import { ConversationProvider } from "@/lib/conversation";
+
+/** Mounted the way a reply is: inside the chat whose turn drew it. What these surfaces
+ *  report is scoped to that conversation, because the stores holding it are global and
+ *  several chats are open at once — see `lib/conversation`. */
+const HERE = "c-1";
+const inChat = (ui: React.ReactElement) => (
+  <ConversationProvider id={HERE}>{ui}</ConversationProvider>
+);
 
 const CANVAS = '<style>b{color:red}</style><div id="scene"></div><script>run()</script>';
 
@@ -53,7 +62,7 @@ beforeEach(() => {
 describe("an html fence, mid-stream", () => {
 
   it("shows the source for markup he is only showing you", async () => {
-    render(<HtmlCanvas code='<div class="card"><span>hi</span></div>' fallback={fallback} />);
+    render(inChat(<HtmlCanvas code='<div class="card"><span>hi</span></div>' fallback={fallback} />));
     await settle();
     expect(screen.getByTestId("source")).toBeInTheDocument();
     expect(frame()).toBeNull();
@@ -61,20 +70,20 @@ describe("an html fence, mid-stream", () => {
 
   it("never flashes the source before drawing", async () => {
     // The reason `looksRenderable` runs synchronously rather than on the settle timer.
-    render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     expect(screen.queryByTestId("source")).not.toBeInTheDocument();
     expect(screen.getByText(/building/)).toBeInTheDocument();
   });
 
   it("waits for the blocks to close before mounting anything", async () => {
-    render(<HtmlCanvas code="<style>b{colo" fallback={fallback} />);
+    render(inChat(<HtmlCanvas code="<style>b{colo" fallback={fallback} />));
     await settle(250);
     expect(frame()).toBeNull();
     expect(screen.getByText(/building/)).toBeInTheDocument();
   });
 
   it("mounts the frame once he has stopped writing", async () => {
-    render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     const box = frame();
     expect(box).not.toBeNull();
@@ -84,7 +93,7 @@ describe("an html fence, mid-stream", () => {
 
   it("seals the frame it mounts", async () => {
     // The boundary, asserted where it is actually applied rather than only where it is defined.
-    render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts");
     // The seal reaches the frame through the served document's own headers now, but the copy
@@ -95,10 +104,10 @@ describe("an html fence, mid-stream", () => {
   it("does not rebuild the frame while the tail of the message arrives", async () => {
     // A remount restarts the animation. The fence is finished here; the paragraph after it is
     // not, and re-rendering for that must not touch the canvas.
-    const { rerender } = render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    const { rerender } = render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     const sent = posted.length;
-    rerender(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    rerender(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     expect(frame()?.getAttribute("src")).toBe(HOSTED);
     expect(posted.length).toBe(sent);
@@ -107,7 +116,7 @@ describe("an html fence, mid-stream", () => {
   it("gives the source back for a document he never finished", async () => {
     // A truncated reply, or a `<script` he opened and abandoned. Without the give-up timer this
     // is a placeholder that stays on screen forever.
-    render(<HtmlCanvas code="<html><body><script>const x =" fallback={fallback} />);
+    render(inChat(<HtmlCanvas code="<html><body><script>const x =" fallback={fallback} />));
     await settle(3000);
     expect(screen.getByTestId("source")).toBeInTheDocument();
     expect(frame()).toBeNull();
@@ -118,22 +127,22 @@ describe("an html fence, mid-stream", () => {
     // `</style>` closes, every block `isComplete` counts is balanced — so a pause between tokens
     // used to look like a finished document, mount a frame, and have it torn down by the next
     // token. Nothing is built until the thread says the message is done.
-    const { rerender } = render(<HtmlCanvas code={CANVAS} fallback={fallback} streaming />);
+    const { rerender } = render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} streaming />));
     await settle(3000);
     expect(frame()).toBeNull();
     expect(posted).toHaveLength(0);
     expect(screen.getByText(/writing a page/)).toBeInTheDocument();
 
-    rerender(<HtmlCanvas code={CANVAS} fallback={fallback} streaming={false} />);
+    rerender(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} streaming={false} />));
     await settle();
     expect(frame()).not.toBeNull();
     expect(posted).toHaveLength(1);
   });
 
   it("keeps the drawing once it has one, even if the tail never closes", async () => {
-    const { rerender } = render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    const { rerender } = render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
-    rerender(<HtmlCanvas code={`${CANVAS}<script>more(`} fallback={fallback} />);
+    rerender(inChat(<HtmlCanvas code={`${CANVAS}<script>more(`} fallback={fallback} />));
     await settle(3000);
     expect(frame()).not.toBeNull();
   });
@@ -158,7 +167,7 @@ describe("what a canvas says back", () => {
   const frames = () => Array.from(document.querySelectorAll("iframe"));
 
   it("holds a page that measures itself taller than the box will go", async () => {
-    render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     const box = frame()!;
     say(box, { kith: 1, type: "height", px: 2000 });
@@ -169,7 +178,7 @@ describe("what a canvas says back", () => {
   });
 
   it("hears the full-screen canvas, not only the small one", async () => {
-    render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     await act(async () => {
       fireEvent.click(screen.getByLabelText("Open the canvas full screen"));
@@ -180,11 +189,11 @@ describe("what a canvas says back", () => {
     say(big, { kith: 1, type: "state", title: "tuner", values: { step: 4 } });
     // The lightbox used to mount a bare frame with no listener, so the bigger and more usable
     // surface was the one whose readings were thrown away.
-    expect(currentCanvasState()).toEqual([{ title: "tuner", values: { step: 4 } }]);
+    expect(currentCanvasState(HERE)).toEqual([{ title: "tuner", values: { step: 4 } }]);
   });
 
   it("does not resize the small canvas to fit the big one's window", async () => {
-    render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     const box = frame()!;
     const was = box.style.height;
@@ -196,7 +205,7 @@ describe("what a canvas says back", () => {
   });
 
   it("pushes the theme into a replayed frame", async () => {
-    render(<HtmlCanvas code={CANVAS} fallback={fallback} />);
+    render(inChat(<HtmlCanvas code={CANVAS} fallback={fallback} />));
     await settle();
     const first = frame()!;
     const toFirst = vi.spyOn(first.contentWindow!, "postMessage");

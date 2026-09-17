@@ -8,7 +8,7 @@ import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 import { PluginSurface } from "@/components/shell/plugin-surface";
 import { PluginWebView } from "@/components/shell/plugin-web-view";
 import { Sidebar, useSidebar } from "@/components/shell/sidebar";
-import { Companions } from "@/components/shell/companions";
+import { withCompanions } from "@/components/shell/companions";
 import { useHostEffects } from "@/components/shell/use-host-effects";
 
 import { ChatPane } from "@/components/chat/chat-pane";
@@ -465,7 +465,6 @@ export function Workspace({
               <WorkPanel
                 activity={activity}
                 conversationId={ref.conversationId ?? conversationId}
-                onClose={onClose}
               />
             </ErrorBoundary>
           );
@@ -572,28 +571,28 @@ export function Workspace({
   const renderSurface = useCallback(
     (ref: TabRef) => {
       const host = surfaceBody(ref, () => closeTab(tabKey(ref)));
-      if (ref.surface !== "chat") return host;
-
       const hostKey = tabKey(ref);
-      const held = companions[hostKey] ?? [];
-      if (!held.length) return host;
-
-      return (
-        <Companions
-          host={host}
-          onClose={(key) => detach(hostKey, key)}
-          panels={held.map((one) => {
-            const key = tabKey(one);
-            return {
-              key,
-              // The bare surface name: which conversation it is about is the tab it is sitting
-              // in, so "Work — find me a domain…" here would be repeating the tab above it.
-              title: surfaceFor(one).title,
-              icon: surfaceFor(one).icon,
-              body: surfaceBody(one, () => detach(hostKey, key)),
-            };
-          })}
-        />
+      /* No early return for a chat with nothing beside it, and that absence is load-bearing —
+       * `withCompanions` says why at length. In short: returning the host itself here and a
+       * `<Companions>` there changes the element *type* at this position the moment the first
+       * panel opens, and React answers a changed type by unmounting everything below it. The chat
+       * losing its runtime and refetching itself is what that looked like from a chair. */
+      const held = ref.surface === "chat" ? (companions[hostKey] ?? []) : [];
+      return withCompanions(
+        ref,
+        host,
+        held.map((one) => {
+          const key = tabKey(one);
+          return {
+            key,
+            // The bare surface name: which conversation it is about is the tab it is sitting
+            // in, so "Work — find me a domain…" here would be repeating the tab above it.
+            title: surfaceFor(one).title,
+            icon: surfaceFor(one).icon,
+            body: surfaceBody(one, () => detach(hostKey, key)),
+          };
+        }),
+        (key) => detach(hostKey, key),
       );
     },
     [closeTab, companions, detach, surfaceBody],

@@ -8,6 +8,7 @@ import type { FlowValidation, MermaidAnimator, SceneMarker, Theme } from "mermai
 import { OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { animatorTheme, defaultFlowColour } from "@/lib/animator-theme";
 import { toPng } from "@/lib/diagram";
+import { useConversationId } from "@/lib/conversation";
 import { useFlowFailures } from "@/lib/flow-failures";
 import { loopsForever } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
@@ -323,9 +324,11 @@ export function AnimatedDiagram({
      fixed is not something to bring up. */
   const id = useId();
   const reportFailure = useFlowFailures((state) => state.report);
+  // Which chat's reply drew this diagram — see `currentFlowFailures`.
+  const conversation = useConversationId();
   const forgetFailure = useFlowFailures((state) => state.forget);
   useEffect(() => {
-    if (error) reportFailure(id, error);
+    if (error) reportFailure(conversation, id, error);
     else forgetFailure(id);
     return () => forgetFailure(id);
   }, [error, id, reportFailure, forgetFailure]);

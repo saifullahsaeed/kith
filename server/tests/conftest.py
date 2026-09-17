@@ -274,3 +274,29 @@ def never_the_real_persona(tmp_path_factory, monkeypatch):
         if name.startswith("kith.") and hasattr(module, "_DEFAULT_DIR"):
             monkeypatch.setattr(module, "_DEFAULT_DIR", live, raising=False)
     yield live
+
+
+@pytest.fixture(autouse=True)
+def no_host_ranking(monkeypatch):
+    """No test reaches OpenRouter to rank the hosts serving a model.
+
+    `services.routing.resolved` is called once per turn, and on a config that carries a key and
+    an OpenRouter base url it fetches the model's endpoint table. Test configs carry both — the
+    key is fake, the url is real — so without this every turn test makes a live HTTP request,
+    waits up to six seconds for it to be refused, and its outcome starts depending on the
+    developer's wifi. One timing-sensitive errand test failed in the full suite and passed on
+    its own, which is exactly the shape that has.
+
+    The module-level cache is cleared too. It is keyed on model and ordering, not on anything a
+    fixture resets, so an order worked out by one test would otherwise still be there for the
+    next one — the same hazard `isolated_tuning` above exists for.
+
+    Tests that want the real thing monkeypatch `_fetch` themselves, which lands after this and
+    wins.
+    """
+    from kith.services import routing
+
+    routing.forget()
+    monkeypatch.setattr(routing, "_fetch", lambda config, by: ())
+    yield
+    routing.forget()

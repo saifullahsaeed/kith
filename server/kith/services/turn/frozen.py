@@ -25,6 +25,7 @@ from typing import Any
 from kith.domain.chat import Config, Routing
 from kith.llm import caching
 from kith.llm.budget import ContextBudget
+from kith.services import routing as routing_policy
 from kith.services import tuning
 
 
@@ -99,7 +100,7 @@ def begin(
         budget=budget,
         reserve=reserve,
         landing_effort=landing_effort,
-        routing=tuning.routing(),
+        routing=routing_policy.for_conversation(config, agent_db_path, conversation_id),
         room=ContextBudget(window=config.context_window, reserve=int(wanted_out)),
         offload=offload,
     )

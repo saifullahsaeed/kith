@@ -661,25 +661,6 @@ export function orderPinned(root: Node, isPinned: (key: string) => boolean): Nod
   });
 }
 
-/** Fresh ids for every node and every tab, places left exactly as they are.
- *
- * What makes a saved layout loadable. A stored tree comes back holding the ids it was written
- * with, and loading one twice — or loading one whose ids overlap the live tree's — is the
- * duplicate-id crash `nextId`'s comment describes: `react-resizable-panels` throws during
- * render, below `LayoutView`, and `commit` has already written the colliding tree to storage.
- *
- * Places are the one thing that must *not* be re-minted. They are the identity a pin points at;
- * reminting them would make every pin in a loaded layout homeless. */
-export function remintIds(node: Node): Node {
-  if (node.kind === "pane") {
-    return {
-      ...node,
-      id: nextId("pane"),
-      tabs: node.tabs.map((tab) => ({ ...tab, uid: nextId("tab") })),
-    };
-  }
-  return { ...node, id: nextId("split"), children: node.children.map(remintIds) };
-}
 
 /** One pane per place, enforced on a tree that came from outside.
  *
@@ -791,21 +772,3 @@ export function paneBeside(root: Node, paneId: string, delta: number): PaneNode 
   return all[to];
 }
 
-/** The tree with every chat tab taken out, panes and places and sizes kept.
- *
- * What a saved layout is made of. A named layout captures a workspace *shape*, not a bookmark:
- * a "reviewing" layout that reopens the same three conversations is archaeology within a month,
- * and the conversations are the one part of an arrangement that genuinely goes stale.
- *
- * A pane that held only chats comes back empty, which is deliberate — it is a place ready to
- * hold chats, and `choosePane` prefers an empty pane over raising a new one precisely so the
- * next chat opened lands in it rather than splitting a column beside it. */
-export function stripChats(node: Node): Node {
-  return mapPanes(node, (one) => {
-    const tabs = one.tabs.filter((tab) => tab.surface !== "chat");
-    if (tabs.length === one.tabs.length) return one;
-    const wasActive = one.tabs[one.active];
-    const stillThere = tabs.findIndex((tab) => tab.uid === wasActive?.uid);
-    return { ...one, tabs, active: stillThere >= 0 ? stillThere : clampActive(tabs, 0) };
-  });
-}

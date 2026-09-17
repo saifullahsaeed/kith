@@ -10,6 +10,7 @@ import { OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { readCanvasMessage, themeMessage } from "@/lib/canvas-bridge";
 import { useCanvasState } from "@/lib/canvas-state";
+import { useConversationId } from "@/lib/conversation";
 import { FRAME_SANDBOX, isComplete, looksRenderable, sealedDocument } from "@/lib/canvas";
 import { paletteFor } from "@/lib/kith-palette";
 import { useDarkMode } from "@/lib/theme";
@@ -147,6 +148,8 @@ export function HtmlCanvas({
   const [generation, setGeneration] = useState(0);
 
   const report = useCanvasState((state) => state.report);
+  // Which chat drew this, so what it reports goes back to that chat and no other.
+  const conversation = useConversationId();
   const forget = useCanvasState((state) => state.forget);
 
   /* What the canvas tells us about itself. Height is applied here; state is put where the next
@@ -158,7 +161,7 @@ export function HtmlCanvas({
         if (!sized) setHeight(boxed(message.px));
         return;
       }
-      report(doc, { title: message.title, values: message.values });
+      report(conversation, doc, { title: message.title, values: message.values });
     },
     [doc, report, sized],
   );
@@ -170,7 +173,7 @@ export function HtmlCanvas({
   const heardZoomed = useCallback(
     (message: ReturnType<typeof readCanvasMessage>) => {
       if (!message || message.type === "height") return;
-      report(doc, { title: message.title, values: message.values });
+      report(conversation, doc, { title: message.title, values: message.values });
     },
     [doc, report],
   );

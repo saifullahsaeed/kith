@@ -24,7 +24,8 @@ import {
 import { type FC, useCallback, useEffect, useRef } from "react";
 
 import { steerTurn } from "@/lib/commands";
-import { currentConversation, holdUntilIdle } from "@/lib/queued-send";
+import { useConversationId } from "@/lib/conversation";
+import { holdUntilIdle } from "@/lib/queued-send";
 import { cn } from "@/lib/utils";
 
 import { COMPOSER_EXTENSIONS, fromMarkdown, markdownOffset, toMarkdown } from "./markdown";
@@ -99,10 +100,17 @@ export const RichComposerInput: FC<{
    * meant to steer or wait behind. ⏎ posts to `/steer`; ⌘⏎ holds the text here until the turn
    * has genuinely ended and only then hands it back to the composer to send normally.
    */
+  /* Which chat this composer belongs to, from the pane above it rather than from a module-level
+   * slot. `currentConversation()` was one getter for the whole process, overwritten by whichever
+   * pane built its adapter last — so with several chats open, a steer could be delivered into a
+   * conversation other than the one you were typing in. A context has one value per subtree, and
+   * a subtree here is a conversation. */
+  const here = useConversationId();
+
   const decide = useCallback(
     (queueIt: boolean) => {
       const said = latest.current.text;
-      const where = currentConversation();
+      const where = here;
       const running = latest.current.running;
 
       if (running && where && said.trim()) {

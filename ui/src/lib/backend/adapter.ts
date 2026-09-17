@@ -8,7 +8,6 @@ import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
 import { foldNow, stopTurn } from "@/lib/commands";
-import { useConversationForSteering } from "@/lib/queued-send";
 import { readEvents, toWireMessages } from "./stream";
 import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
@@ -127,9 +126,6 @@ export function createBackendAdapter(conversation?: {
    */
   onTurn?: (turnId: string) => void;
 }): ChatModelAdapter {
-  // The composer's keystroke needs to know which conversation it is in, and cannot reach it
-  // through the runtime. Registered here because this is where the getter already exists.
-  if (conversation) useConversationForSteering(conversation.get);
   return {
     async *run({ messages, abortSignal }) {
       /* A slash command never becomes a turn.
@@ -177,7 +173,7 @@ export function createBackendAdapter(conversation?: {
        */
       const startingIn = conversation?.project?.() ?? null;
       const body = JSON.stringify({
-        messages: toWireMessages(messages),
+        messages: toWireMessages(messages, conversation?.get() ?? ""),
         // Omitted on the first turn; the server opens one and tells us which.
         ...(conversation?.get() ? { conversationId: conversation.get() } : {}),
         // Sent on that same first turn, so the conversation it creates is bound before its

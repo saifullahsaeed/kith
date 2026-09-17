@@ -7,7 +7,6 @@ import { HeaderControls } from "@/components/shell/header-controls";
 import { PresenceOrb } from "@/components/shell/presence";
 import { cn } from "@/lib/utils";
 import { UpdatePill } from "@/components/shell/update-notice";
-import { LayoutsMenu } from "@/components/shell/layout/layouts-menu";
 
 /** The presence bar: Kith as a living thing (orb + what he's doing right
  * now), then his inbox, work, panel, and settings. */
@@ -260,7 +259,6 @@ export function AppHeader({
       <span className="bg-border/60 mx-1 h-4 w-px" aria-hidden />
       {/* Saved arrangements. In this run rather than beside Work and Panel because it acts on
           the window rather than taking you somewhere in it. */}
-      <LayoutsMenu />
       <Button
         variant="ghost"
         size="icon-sm"

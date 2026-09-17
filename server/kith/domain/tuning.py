@@ -570,10 +570,14 @@ TUNABLES: tuple[Tunable, ...] = (
         env="KITH_PREFER_PROVIDER_BY",
         label="Prefer providers by",
         help="How to order OpenRouter's hosts for a model when none is pinned: 'price' for the "
-        "cheapest first, 'throughput' for the fastest, 'latency' for the quickest to start. "
-        "Blank uses OpenRouter's own balancing, which is what let one session sit on a host "
-        "charging fifty times the going rate for its whole life. Not a lock — fallbacks still "
-        "apply if the preferred host is down.",
+        "cheapest first and the fastest among hosts that cost the same, 'throughput' for the "
+        "fastest, 'latency' for the quickest to start. Blank uses OpenRouter's own balancing, "
+        "which is what let one session sit on a host charging fifty times the going rate for "
+        "its whole life. Not a lock — fallbacks still apply if the preferred host is down. "
+        "All three are ranked here rather than by OpenRouter's own sort, which has no tie-break "
+        "and reads the headline prompt rate rather than the cache-read rate that bills most of "
+        "a round. Whichever you pick, the other settles ties: same price, faster host wins; "
+        "same speed, cheaper host wins.",
         default="price",
         group="connections",
         kind="text",

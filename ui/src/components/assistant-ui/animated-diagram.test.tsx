@@ -16,7 +16,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
 import { currentFlowFailures, useFlowFailures } from "@/lib/flow-failures";
+import { ConversationProvider } from "@/lib/conversation";
 import { PALETTE } from "@/lib/kith-palette";
+
+/** Mounted the way a reply is: inside the chat whose turn drew it. What these surfaces
+ *  report is scoped to that conversation, because the stores holding it are global and
+ *  several chats are open at once — see `lib/conversation`. */
+const HERE = "c-1";
+const inChat = (ui: React.ReactElement) => (
+  <ConversationProvider id={HERE}>{ui}</ConversationProvider>
+);
 
 const CODE = `---
 flow:
@@ -147,24 +156,24 @@ beforeEach(() => {
 
 describe("an animated mermaid fence", () => {
   it("shows the still diagram until the animation is up", () => {
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     expect(screen.getByTestId("still")).toBeInTheDocument();
     expect(fake.built).toHaveLength(0);
   });
 
   it("does not build one from a fence he is still writing", async () => {
-    render(<AnimatedDiagram code={CODE} still={still} streaming />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} streaming />));
     await settle(2000);
     expect(fake.built).toHaveLength(0);
     expect(screen.getByTestId("still")).toBeInTheDocument();
   });
 
   it("builds it once he has stopped, and takes the still one down", async () => {
-    const view = render(<AnimatedDiagram code={CODE} still={still} streaming />);
+    const view = render(inChat(<AnimatedDiagram code={CODE} still={still} streaming />));
     await settle();
     expect(fake.built).toHaveLength(0);
     // The reply ends. Nothing else about the fence changes.
-    view.rerender(<AnimatedDiagram code={CODE} still={still} />);
+    view.rerender(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(fake.built).toHaveLength(1);
     expect(fake.built[0].code).toBe(CODE);
@@ -175,7 +184,7 @@ describe("an animated mermaid fence", () => {
 
   it("gives the animator a container that is laid out, not hidden", async () => {
     // Geometry is what a route through a diagram is made of, and `display: none` has none.
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     const before = box()?.querySelector('[data-slot="kith_flow_stage"]');
     expect(before?.className).not.toContain("hidden");
     expect(before?.className).toContain("absolute");
@@ -186,14 +195,14 @@ describe("an animated mermaid fence", () => {
   it("does not take the wheel or the pointer inline", async () => {
     // The animator's wheel handler calls preventDefault unconditionally, so zoom on an inline
     // diagram means the conversation stops scrolling wherever one is.
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(fake.built[0].options).toMatchObject({ pan: false, zoom: false, inspect: true });
   });
 
   it("draws it with the same mermaid the still one uses", async () => {
     // One config for both renderers, because there is one mermaid — see `lib/mermaid-config.ts`.
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     const config = fake.built[0].options.mermaid as Record<string, Record<string, string>>;
     expect(config.themeVariables.lineColor).toBe(PALETTE.light.dim);
@@ -202,20 +211,20 @@ describe("an animated mermaid fence", () => {
   });
 
   it("is as tall as mermaid laid the diagram out, so nothing is magnified", async () => {
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(stage()?.style.height).toBe("260px");
   });
 
   it("shrinks a diagram taller than the box may be, rather than cropping it", async () => {
     fake.viewBox = "0 0 400 4000";
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(stage()?.style.height).toBe("1200px");
   });
 
   it("has stop, play and a timeline once it is running", async () => {
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(screen.getByLabelText("Stop the animation")).toBeInTheDocument();
     expect(screen.getByLabelText("Seek the animation")).toBeInTheDocument();
@@ -229,7 +238,7 @@ describe("an animated mermaid fence", () => {
   it("plays once and stops on its last frame", async () => {
     // The library's clock is `elapsed % duration`, so the only sign that a cycle finished is the
     // time going backwards. Nothing else can be watched for.
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     await act(async () => {
       fake.tick?.(2400, 3000);
@@ -242,7 +251,7 @@ describe("an animated mermaid fence", () => {
   });
 
   it("runs it again from the start, not from where it stopped", async () => {
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     await act(async () => {
       fake.tick?.(2400, 3000);
@@ -257,7 +266,7 @@ describe("an animated mermaid fence", () => {
 
   it("keeps going round when he asked for a loop", async () => {
     const looped = CODE.replace("  steps:", "  loop:");
-    render(<AnimatedDiagram code={looped} still={still} />);
+    render(inChat(<AnimatedDiagram code={looped} still={still} />));
     await settle();
     await act(async () => {
       fake.tick?.(2400, 3000);
@@ -269,7 +278,7 @@ describe("an animated mermaid fence", () => {
 
   it("does not mistake a scrub backwards for the end", async () => {
     // Every deliberate jump back looks like a wrap from the next frame's point of view.
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     const track = screen.getByLabelText("Seek the animation");
     await act(async () => {
@@ -284,7 +293,7 @@ describe("an animated mermaid fence", () => {
   it("is still running after a scrub that started while it was running", async () => {
     // The pause that begins a drag has to be lifted by the drag, because the effect that owns
     // playback hears nothing new when the state it watches has not changed.
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     const track = screen.getByLabelText("Seek the animation");
     const before = fake.resumed;
@@ -303,7 +312,7 @@ describe("an animated mermaid fence", () => {
       if (vocabulary.colors.includes("turquoise")) return { ok: true, checked: "graph" };
       return { ok: false, code: "UNKNOWN_COLOR", message: "unknown color", value: "turquoise" };
     };
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(asked).toBe(2);
     expect(fake.built).toHaveLength(1);
@@ -321,7 +330,7 @@ describe("an animated mermaid fence", () => {
       code: "NO_EDGE",
       message: 'flow: no edge between "A" and "C"',
     });
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(fake.built).toHaveLength(0);
     expect(screen.getByText(/no edge between/)).toBeInTheDocument();
@@ -333,7 +342,7 @@ describe("an animated mermaid fence", () => {
     // the body, then throws and leaves it there. It is a cartoon bomb the size of a paragraph,
     // it lands under the composer attached to nothing, and it was two of them for two diagrams.
     fake.parses = false;
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(fake.built).toHaveLength(0);
     // The still renderer owns this case, exactly as it did before any of this existed.
@@ -347,7 +356,7 @@ describe("an animated mermaid fence", () => {
       code: "UNKNOWN_NODE",
       message: 'flow: unknown node "Nowhere" in a route',
     };
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(fake.built).toHaveLength(0);
     expect(screen.getByTestId("still")).toBeInTheDocument();
@@ -363,7 +372,7 @@ describe("an animated mermaid fence", () => {
       message: "Tabs are not allowed for indentation",
       line: 3,
     };
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(screen.getByText(/Tabs are not allowed for indentation \(line 3\)/)).toBeInTheDocument();
   });
@@ -374,7 +383,7 @@ describe("an animated mermaid fence", () => {
     vi.spyOn(library.MermaidAnimator, "create").mockRejectedValue(
       new Error("flow: no edge between \"A\" and \"C\""),
     );
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(screen.getByTestId("still")).toBeInTheDocument();
     expect(screen.getByText(/no edge between/)).toBeInTheDocument();
@@ -388,23 +397,23 @@ describe("an animated mermaid fence", () => {
       code: "NO_EDGE",
       message: 'flow: no edge between "CompA" and "Modules"',
     };
-    const view = render(<AnimatedDiagram code={CODE} still={still} />);
+    const view = render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
-    expect(currentFlowFailures()).toEqual(['flow: no edge between "CompA" and "Modules"']);
+    expect(currentFlowFailures(HERE)).toEqual(['flow: no edge between "CompA" and "Modules"']);
     // And drops it the moment the diagram is off the screen — a reply nobody is looking at any
     // more is not context for the next thing they say.
     view.unmount();
-    expect(currentFlowFailures()).toEqual([]);
+    expect(currentFlowFailures(HERE)).toEqual([]);
   });
 
   it("says nothing about a diagram that worked", async () => {
-    render(<AnimatedDiagram code={CODE} still={still} />);
+    render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
-    expect(currentFlowFailures()).toEqual([]);
+    expect(currentFlowFailures(HERE)).toEqual([]);
   });
 
   it("takes the animation down with the message", async () => {
-    const view = render(<AnimatedDiagram code={CODE} still={still} />);
+    const view = render(inChat(<AnimatedDiagram code={CODE} still={still} />));
     await settle();
     expect(fake.destroyed).toBe(0);
     view.unmount();

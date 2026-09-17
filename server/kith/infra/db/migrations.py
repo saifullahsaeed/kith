@@ -816,6 +816,23 @@ def _migrations():
             """
         )
 
+    def v46_conversation_hosts(conn):
+        """The ranked hosts this conversation talks to, settled once when it starts.
+        A cache lives on one upstream, so the round that changes host throws the whole prefix
+        away. Measured over 1,386 recorded rounds: a round that stayed put read 94.6% of its
+        prompt from cache at $0.0064, and the first round after a host change read 68.9% at
+        $0.0177 — 2.75x, on a *smaller* prompt. 23% of consecutive rounds changed host.
+        So the ordering is a decision to take once, at the top of a conversation, and then
+        keep. Re-ranking per round would be a machine for producing exactly that 2.75x: prices
+        and throughput move through the day, so a live ranking would keep finding a marginally
+        better host and keep paying a cold prefix to move to it.
+        Stored next to `session_id` because they are the same decision seen twice — that one
+        asks OpenRouter to keep this conversation somewhere consistent, and this one says
+        where. Empty for every row that predates the column, and for a conversation started
+        while the endpoint table could not be read; both fall back to `sort`.
+        """
+        conn.execute("ALTER TABLE conversations ADD COLUMN provider_order TEXT NOT NULL DEFAULT ''")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -862,6 +879,7 @@ def _migrations():
         v43_message_project,
         v44_plugin_state,
         v45_workers,
+        v46_conversation_hosts,
     ]
 
 

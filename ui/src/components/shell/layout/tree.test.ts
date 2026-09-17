@@ -23,7 +23,6 @@ import {
   findTab,
   flipSplit,
   hasTab,
-  ids,
   moveTab,
   openAtSlot,
   openBeside,
@@ -40,9 +39,7 @@ import {
   split,
   splitAbove,
   stampPlace,
-  stripChats,
   tabKey,
-  remintIds,
   type Node,
 } from "./tree";
 
@@ -581,25 +578,6 @@ describe("pinned tabs sitting at the front", () => {
   });
 });
 
-describe("reminting a layout", () => {
-  it("gives every node and tab a new id and touches no place", () => {
-    const saved = split("row", [pane([work], 0, "a", "side"), pane([roadmap], 0, "b")]);
-
-    const fresh = remintIds(saved);
-
-    expect(ids(fresh)).not.toEqual(ids(saved));
-    expect(new Set(ids(fresh)).size).toBe(ids(fresh).length);
-    expect(paneWithPlace(fresh, "side")).not.toBeNull();
-    isSound(fresh);
-  });
-
-  it("makes two copies of one layout able to coexist, which is the crash it exists for", () => {
-    const saved = split("row", [pane([work], 0, "a"), pane([roadmap], 0, "b")]);
-    const both = [...ids(remintIds(saved)), ...ids(remintIds(saved))];
-    expect(new Set(both).size).toBe(both.length);
-  });
-});
-
 describe("restructuring", () => {
   const two = () => split("row", [pane([work], 0, "a"), pane([roadmap, files], 0, "b")], [40, 60]);
 
@@ -653,41 +631,6 @@ describe("restructuring", () => {
   });
 });
 
-describe("saving a layout", () => {
-  it("keeps the shape and drops the conversations", () => {
-    const tree = split("row", [
-      pane([{ surface: "board" as const }], 0, "a"),
-      pane([chat("c-1"), chat("c-2")], 1, "b", "chats"),
-      pane([work], 0, "c"),
-    ]);
-
-    const saved = stripChats(tree);
-
-    expect(panes(saved).map((one) => one.tabs.map(tabKey))).toEqual([
-      ["board"],
-      [],
-      ["work"],
-    ]);
-    expect(paneWithPlace(saved, "chats"), "the place is the point of the empty pane").not.toBeNull();
-    isSound(saved);
-  });
-
-  it("leaves a pane's own selection alone when the chats were not it", () => {
-    const tree = pane([work, chat("c-1"), roadmap], 2, "a");
-    expect(panes(stripChats(tree))[0].tabs[panes(stripChats(tree))[0].active]).toMatchObject({
-      surface: "board",
-    });
-  });
-});
-
-/**
- * A surface that is about a conversation says so on its tab.
- *
- * The bug this exists to make impossible: Work took whichever chat was focused, so a click
- * inside the Work pane re-elected a different conversation and the Fold button in that panel
- * then folded it — appended to a transcript, with no unfold anywhere. Sticky focus narrowed
- * that; naming the conversation on the tab removes the inference entirely.
- */
 describe("surfaces bound to a conversation", () => {
   it("makes Work for two chats two different tabs", () => {
     const a = tabKey({ surface: "work", conversationId: "c-1" });

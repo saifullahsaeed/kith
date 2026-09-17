@@ -24,17 +24,20 @@ import { create } from "zustand";
  *  not five, and the first few say what it is. */
 const MAX_FAILURES = 4;
 
+/** A refusal, and which chat's reply drew the diagram that earned it. */
+type Held = { conversation: string; error: string };
+
 export const useFlowFailures = create<{
-  failures: Record<string, string>;
-  report: (id: string, error: string) => void;
+  failures: Record<string, Held>;
+  report: (conversation: string, id: string, error: string) => void;
   forget: (id: string) => void;
   clear: () => void;
 }>((set) => ({
   failures: {},
-  report: (id, error) =>
+  report: (conversation, id, error) =>
     set((state) => {
-      if (state.failures[id] === error) return state;
-      const next = { ...state.failures, [id]: error };
+      if (state.failures[id]?.error === error) return state;
+      const next = { ...state.failures, [id]: { conversation, error } };
       // Insertion order is stable for string keys, so the oldest is simply first.
       for (const stale of Object.keys(next).slice(0, -MAX_FAILURES)) delete next[stale];
       return { failures: next };
@@ -49,8 +52,13 @@ export const useFlowFailures = create<{
   clear: () => set({ failures: {} }),
 }));
 
-/** Everything currently broken, in the shape the wire wants. Empty in the ordinary case, where it
- *  costs the turn nothing. */
-export function currentFlowFailures(): string[] {
-  return Object.values(useFlowFailures.getState().failures).filter(Boolean);
+/** Everything currently broken **in this conversation**, in the shape the wire wants. Empty in the
+ *  ordinary case, where it costs the turn nothing — and scoped for the reason
+ *  `currentCanvasState` sets out at length: one global store, several chats open at once. */
+export function currentFlowFailures(conversation: string): string[] {
+  if (!conversation) return [];
+  return Object.values(useFlowFailures.getState().failures)
+    .filter((held) => held.conversation === conversation)
+    .map((held) => held.error)
+    .filter(Boolean);
 }

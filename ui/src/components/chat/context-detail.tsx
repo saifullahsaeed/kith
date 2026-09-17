@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, Copy, Layers, Loader2, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Check, ChevronRight, Copy, Layers, Loader2 } from "lucide-react";
 
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { keys } from "@/lib/query-keys";
 import { Button } from "@/components/ui/button";
 import { DroppedSince, MessageExplorer } from "@/components/chat/context-messages";
 import {
@@ -39,23 +42,40 @@ import { cn } from "@/lib/utils";
  */
 export function ContextDetailScreen({
   conversationId,
+  /** Still taken, and still only for the Escape key — the button that used to sit beside it is
+   *  gone with the header, because the pane this renders in draws its own. */
   onClose,
 }: {
   conversationId: string;
   onClose: () => void;
 }) {
-  const [detail, setDetail] = useState<ContextDetail | null>(null);
   const [folding, setFolding] = useState(false);
   const [note, setNote] = useState("");
   const [tab, setTab] = useState<TabKey>("prompt");
 
-  const load = useMemo(
-    () => () => fetchContextDetail(conversationId).then(setDetail),
-    [conversationId],
+  /* Through the cache, like every other reading of server state in this app.
+   *
+   * This held its own `useState` and fetched once in an effect, and that is three separate
+   * problems wearing one coat. **It never refreshed** — no query to invalidate and no
+   * subscription, so `STALE_ON.turn` could not reach it: the panel froze at whatever the numbers
+   * were the moment you opened it and went on showing them, confidently, while every turn changed
+   * them underneath. **Two panes cost two fetches** of the same report, since nothing deduped
+   * them. And **a reload racing a fold was last-write-wins** with no ordering, because a bare
+   * `.then(setDetail)` has no idea another one is out.
+   *
+   * The key is per-conversation for the same reason the transcript's is: two chats can have their
+   * context open at once, and one key must mean one shape. */
+  const cache = useQueryClient();
+  const { data: detail = null } = useQuery({
+    queryKey: keys.contextDetail(conversationId),
+    queryFn: () => fetchContextDetail(conversationId),
+  });
+  /** Ask for it again now, rather than waiting to be told. Used by the fold, which knows it has
+   *  just made every number on screen wrong. */
+  const load = useCallback(
+    () => cache.invalidateQueries({ queryKey: keys.contextDetail(conversationId) }),
+    [cache, conversationId],
   );
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   // Esc closes, as it does on every other thing that covers the thread.
   useEffect(() => {
@@ -88,44 +108,16 @@ export function ContextDetailScreen({
           paints over the whole window from inside the pane, which is the same bug as the root. */}
       <div className="kith-ambient absolute inset-0 opacity-70" />
 
-      <header className="relative z-10 flex items-center gap-3 border-b border-border/60 bg-background/70 px-4 py-2.5 backdrop-blur-xl">
-        <span className="bg-kith-soft text-kith ring-kith/20 relative flex size-8 shrink-0 items-center justify-center rounded-xl ring-1">
-          <Layers className="size-4" />
-        </span>
-        <div className="min-w-0 leading-tight">
-          <div className="text-sm font-semibold tracking-tight">Context</div>
-          <div className="text-muted-foreground hidden text-[11px] sm:block">
-            every message his next turn sends, and what each one costs
-          </div>
-        </div>
-        <div className="flex-1" />
-        {detail?.reading ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground gap-1.5"
-            onClick={fold}
-            disabled={folding}
-            title="Summarise the older turns now, instead of waiting for the window to fill"
-          >
-            {folding ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Layers className="size-3.5" />
-            )}
-            Fold now
-          </Button>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 hover:text-destructive"
-          onClick={onClose}
-          aria-label="Close"
-        >
-          <X className="size-4" />
-        </Button>
-      </header>
+      {/* **No header of its own.** There was one — the Layers mark, "Context", a line of
+          explanation, and a close button — and it sat directly under the bar its own pane draws,
+          which already carries the name and the close. A second title under the first, and a
+          third way to shut the same panel, in a column whose whole job is to fit a lot of
+          numbers.
+
+          `Fold now` was the one thing here that lived nowhere else, so it moved rather than
+          going: it is in the legend row beside the sentence that says when the window will fold
+          on its own, which is the only place on this screen where that sentence is already being
+          read. It costs no height there at all. */}
 
       {detail === null ? (
         <div className="relative z-10 min-h-0 flex-1 overflow-y-auto px-6 py-8 xl:px-10">
@@ -145,6 +137,8 @@ export function ContextDetailScreen({
             groups={groups}
             note={note}
             onPickGroup={() => setTab("where")}
+            onFold={fold}
+            folding={folding}
           />
 
           <Tabs
@@ -284,11 +278,17 @@ function Overview({
   groups,
   note,
   onPickGroup,
+  onFold,
+  folding,
 }: {
   detail: ContextDetail;
   groups: GroupReading[];
   note: string;
   onPickGroup: () => void;
+  /** Summarise the older turns now. Here rather than in a header because the sentence it belongs
+   *  beside — "Folds at 80%" — is already in this row. */
+  onFold: () => void;
+  folding: boolean;
 }) {
   const percent = Math.round(detail.share * 100);
   const nearFold = detail.share >= FOLDS_AT;
@@ -365,6 +365,22 @@ function Overview({
                   ? "Near the fold — earlier steps will be summarised to make room."
                   : `Folds at ${Math.round(FOLDS_AT * 100)}%.`)}
           </span>
+          {/* Next to the sentence about folding, because that is the sentence it answers. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground -my-1 h-6 gap-1.5 px-2 text-[11px]"
+            onClick={onFold}
+            disabled={folding}
+            title="Summarise the older turns now, instead of waiting for the window to fill"
+          >
+            {folding ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Layers className="size-3" />
+            )}
+            Fold now
+          </Button>
         </div>
       </div>
     </section>

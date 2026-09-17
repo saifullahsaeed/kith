@@ -32,12 +32,14 @@ import { PresenceOrb } from "@/components/shell/presence";
 import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { steerTurn, stopTurn } from "@/lib/commands";
-import { currentConversation, dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
+import { useConversationId } from "@/lib/conversation";
+import { dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
 import { time, when } from "@/lib/dates";
 import { ERRAND_PART, STEER_PART, USAGE_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
 import { callText, describeCall, summariseRun, summaryLine } from "@/lib/tool-language";
+import { useLatched } from "@/lib/latch";
 import { cn } from "@/lib/utils";
 import {
   ActionBarMorePrimitive,
@@ -846,6 +848,7 @@ const SteerButton: FC = () => {
   const composer = useComposerRuntime();
   const text = useAuiState((s) => s.composer.text);
   const canSend = useAuiState((s) => !s.composer.isEmpty);
+  const here = useConversationId();
 
   return (
     <TooltipIconButton
@@ -858,9 +861,9 @@ const SteerButton: FC = () => {
       className="aui-composer-send size-7 rounded-full"
       aria-label="Steer this turn"
       onClick={() => {
-        const where = currentConversation();
-        if (!where || !text.trim()) return;
-        void steerTurn(where, text);
+        // The pane this button is in, not the process's last-writer-wins guess — see `rich-input`.
+        if (!here || !text.trim()) return;
+        void steerTurn(here, text);
         composer.setText("");
       }}
     >
@@ -1174,10 +1177,24 @@ const ActivityRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group,
    * the one part of this summary a reader could not check. */
   const summary = [sole || run.text, thought ? "thought" : ""].filter(Boolean).join(" · ");
 
-  // Nothing to say and nothing to open. A chain that is only a brief thought is drawn inline by
-  // `ReasoningRun` already; wrapping that in "· thought ›" would put a disclosure in front of
-  // the one line it was hiding.
-  if (!names.length && !running) return <>{children}</>;
+  /* Nothing to say and nothing to open. A chain that is only a brief thought is drawn inline by
+   * `ReasoningRun` already; wrapping that in "· thought ›" would put a disclosure in front of the
+   * one line it was hiding.
+   *
+   * **Latched, and that is a fix rather than a flourish.** This read `!names.length && !running`
+   * directly, so a chain that had been running with no calls stopped being a disclosure the moment
+   * the turn ended — and a changed element type at this position unmounts everything below it.
+   * `ReasoningRoot` keeps your open/closed choice in a `useState` and promises, in its own
+   * docstring, that "the first manual toggle takes over permanently". It did, until the end of the
+   * turn: a reasoning block opened while reading snapped shut the instant the answer finished,
+   * which is the one moment anybody would notice.
+   *
+   * So a chain that has earned the disclosure keeps it for as long as it is on screen. The cost is
+   * a header on a brief thought that would look tidier without one — paid, because the alternative
+   * costs the reader what they had open. A conversation read back from the transcript never ran
+   * here and draws the resting shape, which is why this is per mount. */
+  const disclosed = useLatched(names.length > 0 || running);
+  if (!disclosed) return <>{children}</>;
 
   return (
     <div data-slot="aui_chain-of-thought" className="my-2">

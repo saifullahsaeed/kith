@@ -147,6 +147,25 @@ describe("what a change makes stale", () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["permissions"] });
   });
 
+  it("makes a turn's own conversation stale, and only that one", () => {
+    /* Both of this turn's per-conversation readings — the transcript it just grew, and what that
+     * did to the context window. Scoped, because a bare prefix here made every open chat refetch
+     * its whole transcript whenever any chat said anything.
+     *
+     * The context half is the one that was missing entirely: the panel held its own state and
+     * fetched once on mount, so there was no key for this to reach and the numbers on screen
+     * simply stopped being true after the turn you opened it on. */
+    const { client, invalidate } = watched();
+    mount(client);
+
+    Sources().emit("turn", "c-1");
+    vi.advanceTimersByTime(60);
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["conversation", "c-1"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["context", "c-1"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["context", "c-2"] });
+  });
+
   it("coalesces a burst into one round of invalidation per key", () => {
     // A turn that files three tasks publishes three `task` events inside a few milliseconds. Before
     // the cache, that was three rounds of every subscriber's own refetch.

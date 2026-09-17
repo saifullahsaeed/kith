@@ -14,17 +14,15 @@ import {
   defaultLayout,
   layoutKey,
   layoutVersion,
-  layoutsKey,
   looksLikeLayout,
   pinsKey,
   placementsKey,
-  readLayouts,
   readPins,
   readPlacements,
   readStored,
   useLayout,
 } from "./store";
-import { ids, pane, paneWithPlace, panes, split, tabKey } from "./tree";
+import { pane, paneWithPlace, panes, split, tabKey } from "./tree";
 
 beforeEach(() => {
   localStorage.clear();
@@ -451,130 +449,34 @@ describe("zoom", () => {
   });
 });
 
-describe("saved arrangements", () => {
-  beforeEach(() => {
+/**
+ * Back to the default.
+ *
+ * All that is left of a menu that also saved and reloaded named arrangements. It was written when
+ * Work, Context and Board were sibling panes you arranged by hand — and companions changed what a
+ * layout *is*: those two attach to a chat now, persist per chat, and never appear in the tree. A
+ * saved layout strips chat tabs, so on an ordinary arrangement it stored an empty pane.
+ *
+ * `reset` stays because it is a recovery action, not a convenience: the tree is persisted, so a
+ * layout you have wedged survives a reload, and the empty pane is exactly where somebody who has
+ * closed everything is standing.
+ */
+describe("resetting the layout", () => {
+  it("puts back a default you can actually use, and focuses it", () => {
     useLayout.setState({
-      tree: split(
-        "row",
-        [
-          pane([{ surface: "board" }], 0, "left"),
-          pane([{ surface: "chat", conversationId: "c-1" }], 0, "mid"),
-          pane([{ surface: "work" }], 0, "right"),
-        ],
-        [18, 56, 26],
-      ),
-      focused: "mid",
-      order: ["mid"],
-      pins: {},
-      layouts: [],
+      tree: split("row", [pane([{ surface: "board" }], 0, "left"), pane([], 0, "right")]),
+      focused: "right",
       zoomed: null,
     });
-  });
-
-  it("keeps the shape and leaves the conversations out", () => {
-    useLayout.getState().saveLayout("Writing");
-
-    const saved = readLayouts();
-    expect(saved.map((one) => one.name)).toEqual(["Writing"]);
-    expect(panes(saved[0].tree).map((one) => one.tabs.map(tabKey))).toEqual([
-      ["board"],
-      [],
-      ["work"],
-    ]);
-  });
-
-  it("replaces one of the same name rather than keeping two", () => {
-    useLayout.getState().saveLayout("Writing");
-    useLayout.getState().saveLayout("Writing");
-    expect(useLayout.getState().layouts).toHaveLength(1);
-  });
-
-  it("ignores a blank name", () => {
-    useLayout.getState().saveLayout("   ");
-    expect(useLayout.getState().layouts).toEqual([]);
-  });
-
-  it("loads with fresh ids, which is what lets one be loaded twice", () => {
-    useLayout.getState().saveLayout("Writing");
-    const stored = ids(useLayout.getState().layouts[0].tree);
-
-    useLayout.getState().loadLayout("Writing");
-    const first = ids(useLayout.getState().tree);
-    useLayout.getState().loadLayout("Writing");
-    const second = ids(useLayout.getState().tree);
-
-    expect(first).not.toEqual(stored);
-    expect(second).not.toEqual(first);
-    expect(new Set([...first, ...second]).size).toBe(first.length + second.length);
-  });
-
-  it("brings the places with it, so a global pin still has somewhere to land", () => {
-    useLayout.getState().pin("work");
-    const place = useLayout.getState().pins.work.place;
-    useLayout.getState().saveLayout("Writing");
 
     useLayout.getState().reset();
-    expect(paneWithPlace(useLayout.getState().tree, place)).toBeNull();
-    useLayout.getState().loadLayout("Writing");
 
-    expect(paneWithPlace(useLayout.getState().tree, place)).not.toBeNull();
-  });
-
-  /* Under the section rule. The empty-pane rung lives inside `own` on purpose — `focused` and
-   * `grouped` both mean "where you are", and an empty pane somewhere else is not where you are.
-   * With the default now `focused`, a blank pane is only refilled when a surface has been told
-   * to keep a section of its own. */
-  it("fills the blank chat pane on the next open instead of splitting beside it", () => {
-    useLayout.setState({ placements: { chat: "own" } });
-    useLayout.getState().saveLayout("Writing");
-    useLayout.getState().loadLayout("Writing");
-
-    useLayout.getState().open({ surface: "chat", conversationId: "c-2" });
-
-    expect(panes(useLayout.getState().tree).map((one) => one.tabs.map(tabKey))).toEqual([
-      ["board"],
-      ["chat:c-2"],
-      ["work"],
-    ]);
-  });
-
-  it("deletes one by name and leaves the rest", () => {
-    useLayout.getState().saveLayout("Writing");
-    useLayout.getState().saveLayout("Reviewing");
-    useLayout.getState().deleteLayout("Writing");
-    expect(useLayout.getState().layouts.map((one) => one.name)).toEqual(["Reviewing"]);
-    expect(readLayouts().map((one) => one.name)).toEqual(["Reviewing"]);
-  });
-
-  it("refuses an entry it cannot read, one at a time", () => {
-    localStorage.setItem(
-      layoutsKey,
-      JSON.stringify([
-        { name: "Good", tree: pane([{ surface: "work" }], 0, "a") },
-        { name: "", tree: pane([], 0, "b") },
-        { name: "No tree" },
-        { name: "Junk tree", tree: { kind: "banana" } },
-        /* Duplicate ids inside a saved entry are the crash `remintIds` exists to prevent, and
-         * this is the earlier lock: never offer it for loading in the first place. */
-        { name: "Doomed", tree: split("row", [pane([], 0, "same"), pane([], 0, "same")]) },
-      ]),
-    );
-    expect(readLayouts().map((one) => one.name)).toEqual(["Good"]);
-  });
-
-  it("answers with nothing at all rather than throwing", () => {
-    localStorage.setItem(layoutsKey, "[ not json");
-    expect(readLayouts()).toEqual([]);
+    const after = useLayout.getState();
+    expect(panes(after.tree).length).toBeGreaterThan(0);
+    expect(after.focused).toBe(panes(after.tree)[0]!.id);
   });
 });
 
-/**
- * Where a surface that is *about a conversation* lands.
- *
- * Routed inside `open` rather than at the call sites, because four of them ask for one — the
- * plugins tab, both ways in from a tool result, and `open_surface` when the model asks — and
- * four copies of a placement policy drift apart.
- */
 describe("a bound surface opens into the chat's column", () => {
   beforeEach(() => {
     localStorage.clear();

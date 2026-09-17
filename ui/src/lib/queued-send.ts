@@ -14,37 +14,13 @@
  * switch and a live-turn slot, and the loser of that race is a run nobody can stop. So this
  * polls until the conversation is quiet, then lets the normal send proceed.
  *
- * A one-shot flag rather than a parameter because the composer and the adapter are separated by
- * the assistant-ui runtime, which carries text and attachments and no room for an intent. It is
- * set by the keystroke and consumed by the very next send.
+ * **Which conversation is not kept here any more.** This module held a `readConversation` getter
+ * that every adapter overwrote as its pane mounted, so with several chats open the answer was
+ * whichever one had mounted last — and a steer could be delivered into a conversation other than
+ * the one being typed in. The composer reads `useConversationId()` instead: one value per subtree,
+ * and a subtree is a conversation. What stays here is what is genuinely about the *process* — one
+ * held message, waiting.
  */
-
-/**
- * Which conversation the composer is in.
- *
- * The keystroke needs it and cannot reach it: the composer lives inside assistant-ui's runtime,
- * which carries text and attachments, and the conversation id belongs to the shell that built
- * the adapter. Registered here by that shell rather than threaded down through the library.
- *
- * It has to be the keystroke that steers, not the adapter, and that is not a preference. Sending
- * anything while a turn is running goes through `performRoundtrip`, whose first line is
- * `this.abortController?.abort()` — so the in-flight run is cancelled, our abort handler posts
- * `/stop`, and the server turn dies. A steer routed that way would kill the work it was meant to
- * redirect and then start a fresh turn, which is Stop wearing a better name.
- */
-let readConversation: (() => string) | null = null;
-
-export function useConversationForSteering(get: () => string): void {
-  readConversation = get;
-}
-
-export function currentConversation(): string {
-  try {
-    return readConversation?.() ?? "";
-  } catch {
-    return "";
-  }
-}
 
 /**
  * Whether a ⌘⏎ message is sitting here waiting for the turn to end, and who to tell.

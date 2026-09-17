@@ -25,10 +25,8 @@ import {
   panes,
   resizeSplit,
   rotateSplit as rotateSplitIn,
-  remintIds,
   slotFor,
   stampPlace,
-  stripChats,
   tabKey,
   type Edge,
   type Node,
@@ -313,45 +311,6 @@ function writeCompanions(companions: Record<string, TabRef[]>): void {
   }
 }
 
-const LAYOUTS_KEY = "kith-layouts";
-
-/** A saved arrangement. Chat tabs are already out of `tree` — see `stripChats`. */
-export type SavedLayout = { name: string; tree: Node };
-
-export function readLayouts(): SavedLayout[] {
-  try {
-    const raw = localStorage.getItem(LAYOUTS_KEY);
-    if (!raw) return [];
-    const held = JSON.parse(raw) as unknown;
-    if (!Array.isArray(held)) return [];
-    const out: SavedLayout[] = [];
-    for (const one of held) {
-      if (!one || typeof one !== "object") continue;
-      const entry = one as Partial<SavedLayout>;
-      if (typeof entry.name !== "string" || !entry.name.trim()) continue;
-      if (!looksLikeLayout(entry.tree)) continue;
-      // A saved layout's own ids are never trusted either: `loadLayout` remints, and a stored
-      // entry with duplicates inside it would be a crash waiting for someone to pick it.
-      const seen = ids(entry.tree);
-      if (new Set(seen).size !== seen.length) continue;
-      if (out.some((kept) => kept.name === entry.name)) continue;
-      out.push({ name: entry.name, tree: entry.tree });
-    }
-    return out;
-  } catch {
-    /* not JSON, private mode, no storage — no saved layouts is a correct answer */
-    return [];
-  }
-}
-
-function writeLayouts(layouts: SavedLayout[]): void {
-  try {
-    localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts));
-  } catch {
-    /* storage full or unavailable — a saved layout is a convenience, not the work */
-  }
-}
-
 export type LayoutState = {
   tree: Node;
   /** The pane a new tab lands in. Follows what you last clicked, so "open the roadmap" puts it
@@ -425,17 +384,9 @@ export type LayoutState = {
   /** Take one back out of the column. */
   detach: (hostKey: string, key: string) => void;
 
-  /** Arrangements saved by name, newest last. */
-  layouts: SavedLayout[];
-  /** Snapshot the arrangement under a name, replacing one of the same name. Chat tabs are left
-   *  out; everything else — panes, sizes, places, non-chat tabs — is kept. */
-  saveLayout: (name: string) => void;
-  /** Replace the live arrangement with a saved one. Every node id is re-minted and every place
-   *  is kept, which is what makes a layout loadable twice. */
-  loadLayout: (name: string) => void;
-  deleteLayout: (name: string) => void;
   /** Put the layout back to the default. Reachable from an empty pane, which is exactly where
-   *  somebody who has closed everything is standing. */
+   *  somebody who has closed everything is standing — and, since the saved-arrangements menu
+   *  went, the only way back. */
   reset: () => void;
 };
 
@@ -513,7 +464,6 @@ export const useLayout = create<LayoutState>((set, get) => {
     placements: readPlacements(),
     pins: readPins(),
     companions: readCompanions(),
-    layouts: readLayouts(),
     zoomed: null,
     widths: {},
 
@@ -726,36 +676,6 @@ export const useLayout = create<LayoutState>((set, get) => {
       set({ widths: { ...widths, [paneId]: rounded } });
     },
 
-    saveLayout: (name) => {
-      const clean = name.trim();
-      if (!clean) return;
-      const entry: SavedLayout = { name: clean, tree: stripChats(get().tree) };
-      const layouts = [...get().layouts.filter((one) => one.name !== clean), entry];
-      writeLayouts(layouts);
-      set({ layouts });
-    },
-
-    loadLayout: (name) => {
-      const found = get().layouts.find((one) => one.name === name);
-      if (!found) return;
-      /* Reminted, always.
-       *
-       * A saved tree comes back holding the ids it was written with. Loading one twice, or
-       * loading one whose ids overlap the live tree, is the duplicate-id crash `nextId`
-       * documents: `react-resizable-panels` throws during render below `LayoutView`, and
-       * `commit` has already written the colliding tree to storage, so reloading restores it.
-       * Places are the one thing reminting leaves alone — they are what the pins point at. */
-      const tree = remintIds(found.tree);
-      commit(tree, firstPaneId(tree));
-    },
-
-    deleteLayout: (name) => {
-      const layouts = get().layouts.filter((one) => one.name !== name);
-      if (layouts.length === get().layouts.length) return;
-      writeLayouts(layouts);
-      set({ layouts });
-    },
-
     reset: () => {
       const tree = defaultLayout();
       commit(tree, firstPaneId(tree));
@@ -769,5 +689,4 @@ export const layoutKey = KEY;
 export const layoutVersion = VERSION;
 export const placementsKey = PLACEMENTS_KEY;
 export const pinsKey = PINS_KEY;
-export const layoutsKey = LAYOUTS_KEY;
 export { tabKey };

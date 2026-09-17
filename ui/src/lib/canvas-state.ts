@@ -30,16 +30,23 @@ export interface CanvasReading {
  *  what you are looking at now is what matters. */
 const MAX_CANVASES = 8;
 
+/** A reading, and which chat it was taken in. */
+type Held = CanvasReading & {
+  /** The conversation whose reply drew this canvas. `""` for a chat not yet named, which can
+   *  never be asked for — see `currentCanvasState`. */
+  conversation: string;
+};
+
 export const useCanvasState = create<{
-  readings: Record<string, CanvasReading>;
-  report: (id: string, reading: CanvasReading) => void;
+  readings: Record<string, Held>;
+  report: (conversation: string, id: string, reading: CanvasReading) => void;
   forget: (id: string) => void;
   clear: () => void;
 }>((set) => ({
   readings: {},
-  report: (id, reading) =>
+  report: (conversation, id, reading) =>
     set((state) => {
-      const next = { ...state.readings, [id]: reading };
+      const next = { ...state.readings, [id]: { ...reading, conversation } };
       const keys = Object.keys(next);
       // Insertion order is stable in an object with string keys, so the oldest is simply first.
       for (const stale of keys.slice(0, Math.max(0, keys.length - MAX_CANVASES))) delete next[stale];
@@ -55,10 +62,25 @@ export const useCanvasState = create<{
   clear: () => set({ readings: {} }),
 }));
 
-/** Everything currently set, in the shape the wire wants. Empty when nothing has been touched,
- *  which is the common case and costs the turn nothing. */
-export function currentCanvasState(): CanvasReading[] {
-  return Object.values(useCanvasState.getState().readings).filter(
-    (reading) => Object.keys(reading.values).length > 0,
-  );
+/**
+ * What was set **in this conversation**, in the shape the wire wants.
+ *
+ * The conversation is not a nicety. This store is global and the app opens several chats at once,
+ * so "everything currently set" meant everything set anywhere: a slider moved in one chat rode
+ * along with the next message sent in another, as context for a turn that had never drawn it.
+ *
+ * The leak widened the day tabs stopped unmounting. `html-canvas` forgets its reading on unmount,
+ * so while switching chats tore the other one down this was masked by a lifetime accident — and
+ * keeping every tab mounted, which is right for every other reason, made both chats' canvases live
+ * at once. Lifetime was doing work that ownership should have been doing.
+ *
+ * An unnamed conversation matches nothing. A draft chat's first turn has no id, and nothing can
+ * have been drawn in a conversation that does not exist yet.
+ */
+export function currentCanvasState(conversation: string): CanvasReading[] {
+  if (!conversation) return [];
+  return Object.values(useCanvasState.getState().readings)
+    .filter((held) => held.conversation === conversation)
+    .filter((held) => Object.keys(held.values).length > 0)
+    .map(({ title, values }) => ({ title, values }));
 }

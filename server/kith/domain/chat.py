@@ -64,6 +64,12 @@ class Routing:
     #: How to order the pool when nothing is pinned. "price" is what keeps a session landing
     #: somewhere cheap rather than merely somewhere consistent.
     prefer_by: str = "price"
+    #: The hosts for this model, best first, when we have worked one out ourselves. Supersedes
+    #: `prefer_by`: OpenRouter's `sort` ranks on the headline prompt rate and breaks ties by
+    #: nothing, which on a cache-heavy agent picks the wrong host and then the slow one of the
+    #: hosts it calls equal. `domain.endpoints` explains the arithmetic; `services.routing`
+    #: fills this in. Empty means fall back to `sort`, which is what shipped before it.
+    order: tuple[str, ...] = ()
     #: A ceiling per million prompt tokens, for when `prefer_by` cannot help because every
     #: cheap host is busy. 0 means no ceiling — a figure set too low takes the model off air.
     max_prompt_price: float = 0.0

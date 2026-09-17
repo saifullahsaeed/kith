@@ -43,6 +43,11 @@ export const keys = {
   /** Separate from `pluginCalls` so the frame's collector and the app's do not share a cache
    *  entry — they ask the same route for different kinds and claim what they are handed. */
   pluginHostCalls: (conversation: string) => ["plugins", "calls", "host", conversation] as const,
+  /** What one conversation's next turn would send, itemised — the Context panel's breakdown.
+   *
+   *  Keyed by conversation and not global, for the same reason `conversation` is: two panes can
+   *  have two chats' context open at once, and one key must mean one shape. */
+  contextDetail: (conversation: string) => ["context", conversation] as const,
   /** One project's roadmap graph. */
   roadmap: (projectId: number) => ["roadmap", projectId] as const,
   /** One task, in the detail panel. */
@@ -127,6 +132,14 @@ export const STALE_ON: Record<ChangeKind, Stale[]> = {
     // bare prefix here made every open chat refetch its whole transcript every time any chat
     // said anything, which is the single most expensive thing this table can do.
     { scoped: ["conversation"] },
+    /* And what that turn did to the window.
+     *
+     * The Context panel is the one reading that is *only* true at a moment: every turn adds to
+     * the window and a fold empties part of it. It held its own `useState` and fetched once on
+     * mount, so it froze at whatever the numbers were when you opened it and went on showing
+     * them, confidently, for the rest of the session. Scoped for the same reason the transcript
+     * is — this is a per-conversation report and one chat's turn does not restate another's. */
+    { scoped: ["context"] },
   ],
   // Tasks are on the board, in the roadmap, in the detail panel and in the working-on card.
   task: [["brain"], ["task"], ["roadmap"], ["workingOn"], ["timeline"]],

@@ -50,6 +50,36 @@ export type CompanionPanel = {
   body: React.ReactNode;
 };
 
+/**
+ * A tab's body, with whatever that tab carries beside it.
+ *
+ * **Every chat's body comes back inside a `Companions`, including a chat carrying nothing**, and
+ * that is the entire reason this is a function rather than a branch at the call site.
+ *
+ * React decides a component's identity by its type and its position. Return the host itself when
+ * there are no panels and a `<Companions>` when there is one, and the type at that position
+ * changes the moment the first panel opens: the whole subtree below it is unmounted and built
+ * again. For a chat that means its runtime, its thread, its scroll offset and its half-written
+ * message are thrown away, and the conversation is refetched to replace them — which is the work
+ * panel appearing to reload the chat, once when it opens and again when it closes.
+ *
+ * That shape existed twice, at two layers — here and in `workspace.renderSurface` — and fixing
+ * the inner one left the outer one free to do the same damage on its own. So the decision has one
+ * home, and `Companions` renders a bare host when it has no panels rather than refusing to render.
+ *
+ * Non-chat surfaces are handed straight back. A companion is a surface that is *about a
+ * conversation*, and a Board with a Work panel bolted to its side is a shape with nothing to mean.
+ */
+export function withCompanions(
+  ref: { surface: string },
+  host: React.ReactNode,
+  panels: CompanionPanel[],
+  onClose: (key: string) => void,
+): React.ReactNode {
+  if (ref.surface !== "chat") return host;
+  return <Companions host={host} panels={panels} onClose={onClose} />;
+}
+
 export function Companions({
   host,
   panels,

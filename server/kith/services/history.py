@@ -313,7 +313,7 @@ def _summarize(text: str, config, host: str) -> str:
     prompt = [{"role": "system", "content": _INSTRUCTION}, {"role": "user", "content": text}]
     window = int(getattr(config, "context_window", 0) or 0)
     slim = replace(config, think=False, effort="", num_predict=_summary_tokens(window))
-    from kith.services import tuning
+    from kith.services import routing as routing_policy
 
     try:
         if slim.api_key and slim.base_url:
@@ -321,7 +321,9 @@ def _summarize(text: str, config, host: str) -> str:
             # `Routing()` when handed nothing, and defaulting here would quietly stop honouring
             # a pinned provider or a price ceiling on this one call — a behaviour change hiding
             # inside a layering fix.
-            stream = openai_compat.stream_once(prompt, slim, host, tools=None, routing=tuning.routing())
+            stream = openai_compat.stream_once(
+                prompt, slim, host, tools=None, routing=routing_policy.resolved(slim)
+            )
         else:
             stream = ollama.stream_once(prompt, slim, host, tools=None)
         parts: list[str] = []

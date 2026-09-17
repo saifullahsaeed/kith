@@ -139,9 +139,21 @@ def _routing_options(config: Config, routing: Routing) -> dict[str, Any]:
     # `sort` costs nothing to set and is not a lock: it orders the pool, and fallbacks still
     # apply if the cheapest is down. Combined with the session id it means sticking to a cheap
     # host rather than sticking to an arbitrary one.
-    order_by = routing.prefer_by.strip()
-    if order_by and not pinned:
-        provider["sort"] = order_by
+    if routing.order and not pinned:
+        # An order we worked out ourselves, which `sort` cannot express: `sort: "price"` reads
+        # the headline prompt rate, and 79% of this install's prompt tokens bill at the
+        # *cache-read* rate instead — where the three hosts it calls a tie at $0.150 differ by
+        # five times. It also has no tie-break, so among those three it picked an 11 tok/s host
+        # 86 times and the 146 tok/s one 8 times. See `domain/endpoints.py` for the measurements.
+        #
+        # Fallbacks stay on, exactly as they do for a pin: this is a preference over the whole
+        # pool, so a host being down costs a step down the list, not a failed round.
+        provider["order"] = list(routing.order)
+        provider["allow_fallbacks"] = True
+    else:
+        order_by = routing.prefer_by.strip()
+        if order_by and not pinned:
+            provider["sort"] = order_by
 
     # And a ceiling, for the case `sort` cannot cover: every cheap host is busy and the fallback
     # is the $6.59 one. Off by default because the right number is per-model and a figure set too

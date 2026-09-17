@@ -67,8 +67,15 @@ type WireMessage = {
   diagrams?: string[];
 };
 
-/** Convert assistant-ui messages into the server's wire format. */
-export function toWireMessages(messages: readonly ThreadMessage[]): WireMessage[] {
+/** Convert assistant-ui messages into the server's wire format.
+ *
+ *  `conversation` is which chat this turn is for. It is here because of what rides along at the
+ *  bottom of this function: both feedback stores are global, so without it "everything currently
+ *  set" meant everything set in *any* open chat. */
+export function toWireMessages(
+  messages: readonly ThreadMessage[],
+  conversation: string,
+): WireMessage[] {
   const out: WireMessage[] = [];
   for (const message of messages) {
     if (message.role !== "user" && message.role !== "assistant") continue;
@@ -88,12 +95,12 @@ export function toWireMessages(messages: readonly ThreadMessage[]): WireMessage[
   // part of what you are saying, not a separate thing that happened. Only the newest, because an
   // earlier message was sent when those controls read something else and rewriting history to
   // match the present would be a lie about both.
-  const readings = currentCanvasState();
+  const readings = currentCanvasState(conversation);
   const last = out[out.length - 1];
   if (readings.length && last?.role === "user") last.canvas = readings;
   // And any animated diagram whose choreography was refused. Same ride, same reason: the person's
   // screen knows something he does not, and the next thing they say is when it can be useful.
-  const refused = currentFlowFailures();
+  const refused = currentFlowFailures(conversation);
   if (refused.length && last?.role === "user") last.diagrams = refused;
   return out;
 }

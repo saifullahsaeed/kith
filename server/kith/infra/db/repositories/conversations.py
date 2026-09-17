@@ -34,6 +34,18 @@ def create(path: Path, conversation_id: str, title: str, session_id: str) -> dic
         return as_dict(row)
 
 
+def remember_provider_order(path: Path, conversation_id: str, order: str) -> None:
+    """Settle this conversation's host order. Written once; later calls leave it alone.
+
+    Guarded rather than overwriting, because two turns of the same conversation can reach this
+    together and the second must not move a conversation that is already warm somewhere.
+    """
+    with session(path) as db:
+        row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
+        if row is not None and not row.provider_order:
+            row.provider_order = order
+
+
 def get(path: Path, conversation_id: str) -> dict | None:
     with session(path) as db:
         row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
