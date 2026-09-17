@@ -174,6 +174,9 @@ class Reminder(Base):
     #: `kith.services.scheduler.fire_due` — this is what lets firing report
     #: back to the actual chat rather than to whichever session happened to be open.
     conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Which project this belongs to, when it belongs to one. See migration v47 — nullable
+    #: because work outside any project is a real thing.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Message(Base):
@@ -202,6 +205,9 @@ class Source(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    #: Which project this belongs to, when it belongs to one. See migration v47 — nullable
+    #: because work outside any project is a real thing.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class SourceChunk(Base):
@@ -227,6 +233,9 @@ class Schedule(Base):
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     #: Same as `Reminder.conversation_id` — which chat this standing job reports back to.
     conversation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Which project this belongs to, when it belongs to one. See migration v47 — nullable
+    #: because work outside any project is a real thing.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Conversation(Base):
@@ -349,6 +358,9 @@ class FileTouch(Base):
     version: Mapped[str] = mapped_column(Text, nullable=False, default="")
     extent: Mapped[str] = mapped_column(Text, nullable=False, default="")
     at: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Which project this belongs to, when it belongs to one. See migration v47 — nullable
+    #: because work outside any project is a real thing.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Worker(Base):
@@ -382,3 +394,6 @@ class Worker(Base):
     rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
     at: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Which project this belongs to, when it belongs to one. See migration v47 — nullable
+    #: because work outside any project is a real thing.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
