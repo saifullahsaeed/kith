@@ -61,18 +61,38 @@ the arithmetic. If you genuinely need an overlay — a badge on an avatar, a dro
 **Colour is a token. Never a literal.**
 
 ```html
-style="color: var(--kith-text); background: var(--kith-muted)"
+style="color: var(--ds-ink); background: var(--ds-panel)"
 ```
 
-The nine tokens are `--kith-bg`, `--kith-line`, `--kith-text`, `--kith-dim`, `--kith-accent`,
-`--kith-accent-soft`, `--kith-second`, `--kith-second-soft`, `--kith-muted`. They are defined for
-you in the editor and in the app. A design written in them matches everything else you have made
-and follows a theme switch for free; a design full of `#3a3a3a` is a design that looks slightly
-wrong next to the others and goes unreadable when the theme changes. The editor offers tokens as
-swatches, so this is also the version they can keep editing.
+The tokens come from **the design system this workspace is in**, not from Kith. The checker
+prints which one it found on its first line, and the editor's colour swatches are that system's
+palette. If there is a `design-system.json` (or a `brand/profile.json`) anywhere above the screen
+you are writing, those are the names you have:
 
-**Spacing goes up in fours.** 4, 8, 12, 16, 24, 32. A 7px gap is the kind of thing nobody notices
-and everybody feels.
+* `--ds-<colour>` — every colour in the system, by its own name.
+* `--ds-text-<role>-size`, `-weight`, `-tracking` — the type scale, by role.
+* `--ds-radius-<name>`, `--ds-font-<role>`.
+
+Run the checker once before you start: its `system` line tells you whose palette you are in. With
+no system file anywhere, you get Kith's own nine under the same `--ds-` names, plus the older
+`--kith-*` spellings, which still work everywhere.
+
+**You may define your own tokens.** A design can declare what it needs:
+
+```html
+<div data-k="page" style="--brand-shadow: 0 2px 8px rgba(0,0,0,.08)">
+```
+
+That is the right way to carry a value the system has not named — and the checker does not count
+a declaration as a literal colour. The two namespaces you cannot take are `--ds-*` (the system)
+and `--kith-*` (the app, and what the editor draws its own selection outline with).
+
+**Spacing follows the system's scale**, which the checker knows and measures against. With no
+system that is 4, 8, 12, 16, 24, 32, 48, 64.
+
+**Pictures work.** `<img src="assets/logo.svg">` — a workspace-relative path, resolved for you.
+Not an http URL: a design cannot reach the network, by construction. A `data:` URI is fine for
+something small.
 
 **Name the parts.** `data-k="hero.title"`, `data-k="settings.save"`. Any node you do not name is
 given a number, which works but tells nobody anything — a layers panel full of `k14` is a layers
@@ -80,10 +100,10 @@ panel nobody uses. Name the structural pieces and the things you would refer to 
 
 ## What renders but cannot be dragged
 
-`display:grid`, media queries, pseudo-elements, animation. All of it renders. None of it has
-handles, and the editor says so in the corner. Use them when a screen genuinely needs them — just
-know you have made that part of it read-only, and do not use grid for a row of three things a
-flex line would do.
+`display:grid`, media queries, `::before`/`::after`, `@keyframes` and animation. All of it
+renders and all of it is allowed — what none of it has is *handles*, and the editor says so in
+the corner. Use them when a screen genuinely needs them; just know you have made that part of it
+read-only, and do not reach for grid to lay out a row of three things a flex line would do.
 
 A stylesheet in a `<style>` block is kept and applied. Their edits are written inline, which wins
 over it, so a class you defined stays the default and their change is the exception. That is the

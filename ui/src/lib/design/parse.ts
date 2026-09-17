@@ -108,6 +108,21 @@ const ALLOWED_CSS = new Set([
   "position", "top", "right", "bottom", "left", "z-index", "inset",
   "transform", "transform-origin", "transition", "animation", "cursor", "list-style",
   "object-fit", "object-position", "fill", "stroke", "stroke-width", "backdrop-filter", "filter",
+  /* Presentational, and absent for no reason but absence. Each renders, none of them can reach
+   * outside the document, and between them they are where most of a design's visual range
+   * lives — the difference between a mockup that looks drawn and one that looks typed. */
+  "content", "mix-blend-mode", "isolation", "clip-path", "mask", "mask-image", "shape-outside",
+  "outline", "outline-offset", "outline-color", "outline-width", "outline-style",
+  "text-underline-offset", "text-decoration-color", "text-decoration-thickness", "text-wrap",
+  "font-feature-settings", "font-variant-numeric", "font-stretch", "text-indent", "hyphens",
+  "grid-auto-flow", "grid-auto-columns", "grid-auto-rows", "grid-template-areas", "gap-x", "gap-y",
+  "will-change", "contain", "container-type", "scroll-behavior", "resize", "user-select",
+  "caret-color", "accent-color", "appearance", "vertical-align", "float", "clear", "writing-mode",
+  "direction", "unicode-bidi", "table-layout", "border-collapse", "border-spacing", "counter-reset",
+  "counter-increment", "list-style-type", "list-style-position", "perspective", "transform-style",
+  "backface-visibility", "rotate", "scale", "translate", "inset-inline", "inset-block",
+  "margin-inline", "margin-block", "padding-inline", "padding-block", "border-start-start-radius",
+  "border-start-end-radius", "border-end-start-radius", "border-end-end-radius",
 ]);
 
 /**
@@ -123,13 +138,28 @@ const ALLOWED_FUNCS = new Set([
   "translate", "translatex", "translatey", "translate3d", "scale", "scalex", "scaley", "rotate",
   "skew", "skewx", "skewy", "matrix", "perspective", "cubic-bezier", "steps", "blur",
   "drop-shadow", "brightness", "contrast", "saturate", "grayscale", "opacity", "env",
+  // Grid's own arithmetic. `display: grid` was allowed and these were not, so every real grid
+  // — which is to say every one with a `repeat()` in it — lost its template and collapsed to a
+  // single column. Allowed as a layout or not at all; half of it was the worst of both.
+  "repeat", "minmax", "fit-content", "counter", "attr-safe",
+  // Type and motion.
+  "cubic-bezier", "linear", "ease", "path", "circle", "ellipse", "inset", "polygon",
 ]);
 
 /** Pseudo-classes a mockup legitimately uses. `::` and `:has()` are not among them. */
 const ALLOWED_PSEUDO = new Set([
   "hover", "focus", "focus-visible", "active", "disabled", "checked",
-  "first-child", "last-child", "only-child", "nth-child", "not",
+  "first-child", "last-child", "only-child", "first-of-type", "last-of-type",
+  "nth-child", "nth-of-type", "not", "is", "where", "empty", "placeholder",
 ]);
+
+/* Pseudo-*elements*, which are a different thing and were refused wholesale by a `::` check.
+ * A rule with no `::before` cannot draw a divider, a badge dot, a quote mark or an overlay
+ * scrim — most of the vocabulary of decoration — and `content` was not a property either, so
+ * the capability was closed from both ends at once. These four generate a box and nothing else;
+ * none of them can fetch, and their content goes through the same value check as every other
+ * declaration. */
+const ALLOWED_PSEUDO_ELEMENT = new Set(["before", "after", "marker", "selection", "placeholder"]);
 
 /** Nothing in a value should need either, and both are how a tokeniser is lied to. */
 const OBFUSCATED = /\\|\/\*|\*\//;
@@ -165,7 +195,39 @@ function safeValue(value: string): boolean {
  * different whitelist might honour.
  */
 export function safeDeclaration(prop: string, raw: string): [string, string] | null {
-  const name = prop.trim().toLowerCase();
+  const written = prop.trim();
+
+  /* A document may define its own tokens.
+   *
+   * This one line is what makes "any design system" possible. Without it a design could
+   * *reference* a token and never declare one, so the only palette that existed anywhere was the
+   * nine the app injects — and the only legal escape was a literal hex, which the skill forbids
+   * and the checker fails. The constraint that was supposed to buy consistency bought uniformity.
+   *
+   * Case is preserved, and that is not a detail: custom properties are case-sensitive while
+   * every other property here is folded to lower case. Folding one would store `--brandAccent`
+   * as `--brandaccent` while every `var(--brandAccent)` kept its case and resolved to nothing —
+   * a colour that silently becomes the initial value, with no error and nothing to see.
+   *
+   * Two namespaces are refused. `--kith-*` is what the app itself is drawn in and what the
+   * editor draws its selection outline and drop indicators with, inherited into the design
+   * subtree; `--ds-*` is the resolved system. A document free to redefine either could switch
+   * the editor's own affordances off inside the thing being edited, or quietly replace the
+   * system it claims to be using. Neither is a security hole — both are a design lying about
+   * itself.
+   *
+   * The value still goes through `safeValue`, so a token is as inert as any other declaration:
+   * no `url()`, no escapes, no comments. A custom property is a *deferred* value, substituted
+   * wherever `var()` appears — but substitution is token-level and the result is never
+   * re-tokenised, so two halves of a blocked function cannot be reassembled across two tokens. */
+  if (written.startsWith("--")) {
+    if (!/^--[A-Za-z0-9_-]{1,60}$/.test(written)) return null;
+    if (/^--(kith|ds)-/i.test(written)) return null;
+    const value = raw.replace(/!\s*important/gi, "").trim();
+    return safeValue(value) ? [written, value] : null;
+  }
+
+  const name = written.toLowerCase();
   if (!ALLOWED_CSS.has(name)) return null;
   // `!important` would outrank every inline edit the inspector makes, which would look like the
   // editor being broken rather than the design being emphatic.
@@ -247,11 +309,23 @@ function safeSelector(selector: string): boolean {
   if (!one || one.length > 200) return false;
   if (OBFUSCATED.test(one) || /[{}@]/.test(one)) return false;
   if (/(^|[\s>+~,])(html|body|\*)([\s>+~,.:#[]|$)/.test(one)) return false;
-  if (one.includes(":root") || one.includes("::") || one.includes("[")) return false;
-  for (const [, name] of one.matchAll(/:([\w-]+)/g)) {
+  if (one.includes(":root") || one.includes("[")) return false;
+
+  /* Pseudo-elements are checked as themselves rather than banned by the sight of a colon.
+   *
+   * The `::` rejection took out `::before` and `::after` along with everything else, which
+   * closed off most of the vocabulary of decoration — a divider, a badge dot, an overlay scrim —
+   * for no reason beyond the syntax being two characters instead of one. Both lists are closed,
+   * so a construct nobody named is still refused. */
+  const body = one.replace(/::([\w-]+)/g, (_, name: string) =>
+    ALLOWED_PSEUDO_ELEMENT.has(name) ? "" : "::?",
+  );
+  if (body.includes("::?")) return false;
+
+  for (const [, name] of body.matchAll(/:([\w-]+)/g)) {
     if (!ALLOWED_PSEUDO.has(name)) return false;
   }
-  return /^[\w\s.,#:()>+~-]+$/.test(one);
+  return /^[\w\s.,#:()>+~-]+$/.test(body);
 }
 
 /** The declarations of one rule, rebuilt. */
@@ -275,6 +349,21 @@ function ruleBody(body: string, dropped: string[]): string {
  * know is dropped by one and preserved as text by the other, and a boundary whose behaviour
  * depends on the environment it is tested in is not a boundary.
  */
+/** The inside of a keyframe block: `from`, `to`, and percentages, each holding declarations. */
+function sanitiseKeyframes(body: string, dropped: string[]): string {
+  const out: string[] = [];
+  for (const match of body.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const stop = match[1].trim().toLowerCase();
+    if (!/^(from|to|\d{1,3}%)(\s*,\s*(from|to|\d{1,3}%))*$/.test(stop)) {
+      dropped.push(`keyframe ${stop.slice(0, 20)}`);
+      continue;
+    }
+    const declarations = ruleBody(match[2], dropped);
+    if (declarations) out.push(`${stop} { ${declarations} }`);
+  }
+  return out.join("\n");
+}
+
 export function sanitiseStyleSheet(css: string, dropped: string[]): string {
   const text = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const out: string[] = [];
@@ -313,6 +402,14 @@ export function sanitiseStyleSheet(css: string, dropped: string[]): string {
       // either fetches (`@import`, `@font-face`) or declares something the editor cannot see.
       if (/^@media\b/i.test(prelude) && safeValue(prelude.slice(6).replace(/[()]/g, " "))) {
         const inner = sanitiseStyleSheet(body, dropped);
+        if (inner) out.push(`${prelude} {\n${inner}\n}`);
+      } else if (/^@(keyframes|supports)\b/i.test(prelude) && /^@[\w-]+\s+[\w\s(),:.%<>=-]{0,120}$/.test(prelude)) {
+        /* `animation` was on the property list and `@keyframes` was not, so every animation a
+         * design carried was wired to a name that did not exist — it rendered still and nothing
+         * said why. A keyframe block's contents are declarations and go through the same
+         * whitelist as any other; its percentage selectors are not selectors in the sense
+         * `safeSelector` means, so they are matched here instead. */
+        const inner = sanitiseKeyframes(body, dropped);
         if (inner) out.push(`${prelude} {\n${inner}\n}`);
       } else {
         dropped.push(`at-rule ${prelude.slice(0, 40)}`);

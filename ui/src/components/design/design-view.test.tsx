@@ -7,7 +7,7 @@
  * because a renderer can reintroduce what a parser removed, and `dangerouslySetInnerHTML` is one
  * plausible edit away at every point in this file.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@/test/render";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 

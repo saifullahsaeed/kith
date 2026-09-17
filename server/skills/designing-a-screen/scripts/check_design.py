@@ -73,10 +73,54 @@ html{background:var(--kith-bg)} body{margin:0;color:var(--kith-text)}"""
 #: bypassed. Inside a `var(...)` fallback is still a literal, and still stops following the theme.
 _LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
 
+#: A line that is *defining* a token rather than bypassing one.
+#:
+#: This is the whole difference between a design that carries its own system and a design that
+#: gave up on systems. `--brand-accent: #59C5C7` is a hex in source and is the correct, intended
+#: way to declare a palette; flagging it made the only legal escape from Kith's nine into a
+#: checker failure, which is the loop this script was part of causing.
+_DECLARES_TOKEN = re.compile(r"--[A-Za-z0-9_-]+\s*:")
 
-def _with_tokens(source: str) -> str:
-    """The design with the palette in front of it, as the editor would define it."""
-    style = f"<style>{_TOKENS}</style>"
+#: Where a design system is looked for, relative to the workspace. First that parses wins.
+_SYSTEM_FILES = ("design-system.json", "brand/design-system.json", "brand/profile.json")
+
+
+def _with_tokens(source: str, system: dict | None = None) -> str:
+    """The design with the palette in front of it, as the editor would define it.
+
+    Both palettes: Kith's nine, which every design written before systems existed refers to, and
+    the resolved system's own `--ds-*`. Without the second, a correctly-branded screen renders
+    with every colour at its initial value and the contrast half of this report describes a
+    design nobody will ever see.
+    """
+    tokens = _TOKENS
+    if system and system.get("colors"):
+        declared = [f"--ds-{name}:{value};" for name, value in system["colors"].items()]
+
+        # Not only the colours: a design referring to --ds-text-hero-size in a render that only
+        # declared colours gets the inherited size, so the picture shows a hero at body size and
+        # the report describes a screen nobody will see.
+        for name, value in (system.get("radius") or {}).items():
+            declared.append(f"--ds-radius-{name}:{_px(value)};")
+        for role, value in (system.get("fonts") or {}).items():
+            family = value.get("family") if isinstance(value, dict) else value
+            stack = (value.get("stack") if isinstance(value, dict) else "") or "system-ui, sans-serif"
+            if family:
+                declared.append(f'--ds-font-{role}:"{family}", {stack};')
+        for role, spec in (system.get("text") or {}).items():
+            if not isinstance(spec, dict):
+                continue
+            if spec.get("size") is not None:
+                declared.append(f"--ds-text-{role}-size:{_px(spec['size'])};")
+            if spec.get("weight"):
+                declared.append(f"--ds-text-{role}-weight:{spec['weight']};")
+            if spec.get("tracking"):
+                declared.append(f"--ds-text-{role}-tracking:{spec['tracking']};")
+
+        ground = system["colors"].get("surface") or system["colors"].get("bg")
+        page = f"html{{background:{ground}}}" if ground else ""
+        tokens = tokens + "\n:root{" + " ".join(declared) + "}\n" + page
+    style = f"<style>{tokens}</style>"
     lowered = source.lower()
     for marker in ("<head>", "<html>", "<!doctype html>"):
         at = lowered.find(marker)
@@ -84,6 +128,63 @@ def _with_tokens(source: str) -> str:
             cut = at + len(marker)
             return source[:cut] + style + source[cut:]
     return style + source
+
+
+def _px(value) -> str:
+    """A number is pixels; anything already carrying a unit is left alone."""
+    if isinstance(value, (int, float)):
+        return f"{round(value)}px"
+    return str(value)
+
+
+def _system(start: Path) -> dict:
+    """The design system this screen is drawn in, or Kith's own.
+
+    Looked for next to the design and then upwards, because a system belongs to a project and a
+    screen sits inside one. Both shapes are read: the written `design-system.json` and the brand
+    profile that existed before this surface did, whose colours are bare hex and whose type scale
+    is in points.
+    """
+    import json
+
+    here = start.resolve().parent
+    for folder in [here, *here.parents][:6]:
+        for name in _SYSTEM_FILES:
+            candidate = folder / name
+            if not candidate.is_file():
+                continue
+            try:
+                doc = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            colours = doc.get("colors") or (doc.get("tokens") or {}).get("colors")
+            if not isinstance(colours, dict) or not colours:
+                continue
+            space = doc.get("space")
+            return {
+                "name": doc.get("name") or candidate.stem,
+                "file": str(candidate),
+                "colors": {
+                    str(k): (v if str(v).startswith("#") else f"#{v}")
+                    for k, v in colours.items()
+                    if re.fullmatch(r"[\w-]{1,40}", str(k))
+                },
+                "text": doc.get("text") or {},
+                "radius": doc.get("radius") or doc.get("radii_px") or {},
+                "fonts": doc.get("fonts") or (doc.get("tokens") or {}).get("fonts") or {},
+                "space": [int(n) for n in space if isinstance(n, (int, float))]
+                if isinstance(space, list) and space
+                else [4, 8, 12, 16, 24, 32, 48, 64],
+            }
+    return {
+        "name": "Kith",
+        "file": "",
+        "colors": {},
+        "text": {},
+        "radius": {},
+        "fonts": {},
+        "space": [4, 8, 12, 16, 24, 32, 48, 64],
+    }
 
 
 def _literal_colours(source: str) -> list[str]:
@@ -95,6 +196,9 @@ def _literal_colours(source: str) -> list[str]:
     """
     found: list[str] = []
     for line, text in enumerate(source.splitlines(), 1):
+        # A line that declares a token is defining the system, not bypassing it.
+        if _DECLARES_TOKEN.search(text):
+            continue
         for hit in _LITERAL.finditer(text):
             # A gradient or a shadow can legitimately need a literal; a bare colour rarely can.
             found.append(f"line {line}: {hit.group(0)}")
@@ -176,7 +280,10 @@ _MEASURE = """
         if (!/px$/.test(piece)) continue;
         const px = parseFloat(piece);
         if (!px || Number.isNaN(px)) continue;
-        if (px % STEP !== 0) out.spacing.push(name(el) + ': ' + property + ' ' + px + 'px');
+        // Against the system's own scale, not a fixed four. A system with a 5px step is not
+        // wrong, and telling him every value in it is wrong was the checker enforcing Kith's
+        // taste on somebody else's brand.
+        if (!SCALE.includes(px)) out.spacing.push(name(el) + ': ' + property + ' ' + px + 'px');
       }
     }
 
@@ -233,6 +340,7 @@ _HEIGHT = """
 
 def check(path: Path) -> int:
     source = path.read_text(encoding="utf-8", errors="replace")
+    system = _system(path)
     literals = _literal_colours(source)
 
     with sync_playwright() as p:
@@ -247,11 +355,13 @@ def check(path: Path) -> int:
             ),
         )
         staged = Path(tempfile.mkdtemp()) / path.name
-        staged.write_text(_with_tokens(source))
+        staged.write_text(_with_tokens(source, system))
         page.goto(staged.resolve().as_uri())
         page.wait_for_timeout(250)
 
-        found = page.evaluate(_MEASURE.replace("STEP", str(STEP)))
+        scale = system.get("space") or [STEP]
+        measure = _MEASURE.replace("SCALE", repr(scale))
+        found = page.evaluate(measure)
         wide = page.evaluate(_HEIGHT)
         shots = []
         try:
@@ -265,7 +375,7 @@ def check(path: Path) -> int:
 
         page.set_viewport_size({"width": NARROW, "height": 900})
         page.wait_for_timeout(200)
-        narrow_found = page.evaluate(_MEASURE.replace("STEP", str(STEP)))
+        narrow_found = page.evaluate(measure)
         narrow = page.evaluate(_HEIGHT)
         try:
             narrow_shot = SHOTS / f"{path.stem}-{NARROW}.png"
@@ -287,6 +397,7 @@ def check(path: Path) -> int:
         tail = f" … and {len(items) - limit} more" if len(items) > limit else ""
         print(f"{label:<9}{len(items)} — {head}{tail}")
 
+    print(f"system   {system['name']}" + (f" ({system['file']})" if system["file"] else " — no system file found"))
     report("editable", found["editable"])
     report("tokens", literals)
     report("spacing", found["spacing"])

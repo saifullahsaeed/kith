@@ -19,10 +19,8 @@ import { AlignCenterHorizontal, Baseline, Box, Palette, Square } from "lucide-re
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Dropdown } from "@/components/ui/dropdown";
-import { canvasTokens } from "@/lib/canvas-bridge";
 import type { DesignNode } from "@/lib/design/parse";
-import { paletteFor } from "@/lib/kith-palette";
-import { useDarkMode } from "@/lib/theme";
+import { type System, swatches } from "@/lib/design/system";
 import { cn } from "@/lib/utils";
 
 /** `null` removes the declaration. */
@@ -31,6 +29,8 @@ export type StyleChange = (property: string, value: string | null) => void;
 export interface DesignInspectorProps {
   node: DesignNode | null;
   onChange: StyleChange;
+  /** The palette and type scale this design is drawn in — his, not Kith's. */
+  system: System;
 }
 
 const DIRECTIONS = [
@@ -65,9 +65,8 @@ const ALIGN_TEXT = [
   { value: "right", label: "Right" },
 ];
 
-export function DesignInspector({ node, onChange }: DesignInspectorProps) {
-  const dark = useDarkMode();
-  const tokens = canvasTokens(paletteFor(dark));
+export function DesignInspector({ node, onChange, system }: DesignInspectorProps) {
+  const palette = swatches(system);
 
   if (!node) {
     return (
@@ -171,13 +170,13 @@ export function DesignInspector({ node, onChange }: DesignInspectorProps) {
         </Row>
       </Group>
 
-      <Group icon={<Palette className="size-3.5" />} title="Colour">
+      <Group icon={<Palette className="size-3.5" />} title={system.name}>
         <Row label="Text">
-          <Tokens tokens={tokens} value={style.color} onChange={(value) => onChange("color", value)} />
+          <Tokens palette={palette} value={style.color} onChange={(value) => onChange("color", value)} />
         </Row>
         <Row label="Background">
           <Tokens
-            tokens={tokens}
+            palette={palette}
             value={style["background-color"] ?? style.background}
             onChange={(value) => onChange(style.background && !style["background-color"] ? "background" : "background-color", value)}
           />
@@ -317,40 +316,38 @@ function Length({ value, onChange }: { value?: string; onChange: (value: string 
  * rather than the default path, so the token stays the easy answer.
  */
 function Tokens({
-  tokens,
+  palette,
   value,
   onChange,
 }: {
-  tokens: Record<string, string>;
+  palette: { name: string; value: string; reference: string }[];
   value?: string;
   onChange: (value: string | null) => void;
 }) {
   const current = value ?? "";
+  const named = current.startsWith("var(--");
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap gap-1">
-        {Object.entries(tokens).map(([name, colour]) => {
-          const reference = `var(--kith-${name})`;
-          return (
-            <button
-              key={name}
-              type="button"
-              title={reference}
-              aria-label={name}
-              onClick={() => onChange(current === reference ? null : reference)}
-              style={{ background: colour }}
-              className={cn(
-                "size-5 rounded-md border border-border/70 transition-transform hover:scale-110",
-                current === reference && "ring-2 ring-kith ring-offset-1 ring-offset-background",
-              )}
-            />
-          );
-        })}
+        {palette.map((token) => (
+          <button
+            key={token.name}
+            type="button"
+            title={`${token.name} — ${token.value}`}
+            aria-label={token.name}
+            onClick={() => onChange(current === token.reference ? null : token.reference)}
+            style={{ background: token.value }}
+            className={cn(
+              "size-5 rounded-md border border-border/70 transition-transform hover:scale-110",
+              current === token.reference && "ring-2 ring-kith ring-offset-1 ring-offset-background",
+            )}
+          />
+        ))}
       </div>
       <Field
         className="h-7"
-        value={current.startsWith("var(--kith-") ? "" : current}
-        placeholder="custom — will not follow the theme"
+        value={named ? "" : current}
+        placeholder="custom — will not follow the system"
         commit={onChange}
       />
     </div>

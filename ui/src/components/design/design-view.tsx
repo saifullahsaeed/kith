@@ -24,6 +24,9 @@ import { createElement, type DragEvent, type ReactNode, useId, useMemo, useState
 import { canvasTokens } from "@/lib/canvas-bridge";
 import { type DesignNode, parseDesign } from "@/lib/design/parse";
 import { paletteFor } from "@/lib/kith-palette";
+import { assetPaths, useAssets } from "@/lib/design/assets";
+import { type System, tokensFor } from "@/lib/design/system";
+import { useDesignSystem } from "@/lib/design/use-system";
 import { useDarkMode } from "@/lib/theme";
 import { attrsToProps, elementName, scopeStyleSheet, styleToReact, VOID_TAGS } from "@/lib/design/render";
 
@@ -36,6 +39,11 @@ export interface DesignViewProps {
   /** Given, the design becomes draggable. The index is a position among the target's children
    *  *after* the moved node has been taken out, which is what `moveNode` expects. */
   onMove?: (id: string, parentId: string, index: number) => void;
+  /** The system this design is drawn in. Resolved here when not given, so a caller that does not
+   *  care — a thumbnail, say — gets the right palette anyway. */
+  system?: System;
+  /** Which project the design's own assets and system resolve against. */
+  projectId?: number | null;
   className?: string;
 }
 
@@ -69,7 +77,7 @@ function contains(node: DesignNode, ancestorId: string, id: string): boolean {
   return ancestor.children.some(walk);
 }
 
-export function DesignView({ html, selected, onSelect, onMove, className }: DesignViewProps) {
+export function DesignView({ html, selected, onSelect, onMove, system, projectId = null, className }: DesignViewProps) {
   const parsed = useMemo(() => parseDesign(html), [html]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
@@ -89,14 +97,40 @@ export function DesignView({ html, selected, onSelect, onMove, className }: Desi
    * ends, for the reason `canvas-bridge.ts` gives: the last time these two were written
    * separately, three of the nine silently failed to travel and it read as "light mode doesn't
    * work". */
+  /* Every picture the design asks for, fetched rather than linked — see `assets.ts` for why an
+   * `<img src="logo.png">` would otherwise be handed the app's own index.html with a 200. */
+  const wanted = useMemo(() => {
+    const found: string[] = [];
+    const walk = (node: DesignNode) => {
+      const src = node.attrs.src;
+      if (typeof src === "string") found.push(src);
+      node.children.forEach(walk);
+    };
+    parsed.root.children.forEach(walk);
+    return assetPaths(found);
+  }, [parsed]);
+  const assets = useAssets(wanted, projectId);
+
   const dark = useDarkMode();
+  const resolved = useDesignSystem(projectId);
+  const inUse = system ?? resolved;
+
   const tokens = useMemo(() => {
     const style: Record<string, string> = {};
+    /* Kith's nine, still, and unconditionally.
+     *
+     * Every design written before systems existed refers to `--kith-accent` and friends, and a
+     * surface that stopped defining them would break all of it at once for nothing. They cost
+     * nine declarations. `canvasTokens` is the sealed canvas's contract and is read here for the
+     * same reason `canvas-bridge.ts` gives — the last time these names were written out twice,
+     * three of the nine silently failed to travel and it read as "light mode doesn't work". */
     for (const [name, value] of Object.entries(canvasTokens(paletteFor(dark)))) {
       style[`--kith-${name}`] = value;
     }
+    // And the system's own, namespaced so it can never reach a variable the editor draws with.
+    Object.assign(style, tokensFor(inUse));
     return style;
-  }, [dark]);
+  }, [dark, inUse]);
 
   const land = () => {
     if (onMove && dragging && drop) {
@@ -114,12 +148,21 @@ export function DesignView({ html, selected, onSelect, onMove, className }: Desi
   };
 
   const render = (node: DesignNode, parentId: string, index: number): ReactNode => {
+    const attrs = { ...attrsToProps(node.attrs) };
+    if (typeof attrs.src === "string" && !attrs.src.startsWith("data:")) {
+      // Resolved, or nothing at all: a src pointing at a workspace path the app cannot serve is
+      // a broken box with the whole application inside it.
+      const url = assets[attrs.src];
+      if (url) attrs.src = url;
+      else delete attrs.src;
+    }
+
     const props: Record<string, unknown> = {
       key: node.id,
       // The same id the patch language uses, in the DOM, so the editor can go from a click to a
       // node to an edit without a second map that could disagree with this one.
       "data-k": node.id,
-      ...attrsToProps(node.attrs),
+      ...attrs,
       style: styleToReact(node.style),
     };
 

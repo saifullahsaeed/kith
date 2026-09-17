@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { fetchWorkspaceFile, saveWorkspaceFile } from "@/lib/backend/brain";
 import { applyStyle, materialiseIds, moveNode } from "@/lib/design/edit";
 import { type DesignNode, parseDesign } from "@/lib/design/parse";
+import { useDesignSystem } from "@/lib/design/use-system";
 import { cn } from "@/lib/utils";
 
 export interface DesignPageProps {
@@ -54,6 +55,7 @@ function find(node: DesignNode, id: string | null): DesignNode | null {
 
 export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) {
   const [selected, setSelected] = useState<string | null>(null);
+  const system = useDesignSystem(projectId);
   const [showSource, setShowSource] = useState(false);
   /** The edited document, or null while it is still exactly what was loaded. */
   const [draft, setDraft] = useState<string | null>(null);
@@ -201,6 +203,8 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
                 selected={selected}
                 onSelect={setSelected}
                 onMove={move}
+                system={system}
+                projectId={projectId}
                 className={cn(
                   "w-full max-w-[1200px] rounded-xl border border-border/70 bg-background shadow-sm",
                   // All drawn from outside, so nothing in his document has to know it is being
@@ -220,7 +224,7 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
         </div>
 
         <aside className="hidden w-64 shrink-0 overflow-y-auto border-s border-border/70 xl:block">
-          <DesignInspector node={node} onChange={change} />
+          <DesignInspector node={node} onChange={change} system={system} />
         </aside>
       </div>
     </div>
