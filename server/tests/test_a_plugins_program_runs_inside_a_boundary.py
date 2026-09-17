@@ -110,9 +110,41 @@ def under(argv: list[str], *, cwd: Path | None = None) -> subprocess.CompletedPr
 # --------------------------------------------------------------------------- #
 
 
-def test_it_cannot_read_your_keys(confined):
+@pytest.fixture
+def a_secret_in_your_home():
+    """A file in the real home directory that the boundary must refuse.
+
+    **The tests below need the file to exist, and that is not a detail.** They assert the kernel
+    said *operation not permitted*; a path that is simply absent fails with *no such file or
+    directory* instead, which is `cat` reporting the filesystem rather than the sandbox refusing
+    anything. Both readings are a non-zero exit, so a test written against the exit code alone
+    would pass on a machine with no `~/.ssh` while proving nothing at all.
+
+    That is exactly what happened: every developer's Mac has an `~/.ssh/config`, a fresh CI runner
+    has no `~/.ssh` whatsoever, so this passed locally and had never once passed in CI.
+
+    Creates nothing it does not have to, and removes only what it created — on a machine where the
+    file is real this fixture touches nothing.
+    """
+    secret = Path.home() / ".ssh" / "config"
+    if secret.exists():
+        yield secret
+        return
+
+    made_dir = not secret.parent.exists()
+    secret.parent.mkdir(mode=0o700, exist_ok=True)
+    secret.write_text("# placeholder, so the kernel has something to refuse\n")
+    try:
+        yield secret
+    finally:
+        secret.unlink(missing_ok=True)
+        if made_dir:
+            secret.parent.rmdir()
+
+
+def test_it_cannot_read_your_keys(confined, a_secret_in_your_home):
     confined()
-    answer = under(["/bin/cat", str(Path.home() / ".ssh" / "config")])
+    answer = under(["/bin/cat", str(a_secret_in_your_home)])
 
     assert answer.returncode != 0
     assert "operation not permitted" in answer.stderr.lower()
@@ -134,11 +166,11 @@ def test_it_cannot_write_outside_what_it_was_granted(confined):
     assert not target.exists()
 
 
-def test_a_child_it_spawns_inherits_the_boundary(confined):
+def test_a_child_it_spawns_inherits_the_boundary(confined, a_secret_in_your_home):
     """The property a per-call gate could never have. Whatever the server shells out to is
     inside the same walls, including work it does at `initialize` or on a timer."""
     confined()
-    answer = under(["/bin/sh", "-c", f'cat "{Path.home()}/.ssh/config"'])
+    answer = under(["/bin/sh", "-c", f'cat "{a_secret_in_your_home}"'])
 
     assert "operation not permitted" in (answer.stdout + answer.stderr).lower()
 
