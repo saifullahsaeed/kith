@@ -81,8 +81,23 @@ _LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
 #: checker failure, which is the loop this script was part of causing.
 _DECLARES_TOKEN = re.compile(r"--[A-Za-z0-9_-]+\s*:")
 
-#: Where a design system is looked for, relative to the workspace. First that parses wins.
-_SYSTEM_FILES = ("design-system.json", "brand/design-system.json", "brand/profile.json")
+#: Where a design system is looked for, in order. A file written *for screens* outranks one
+#: adapted *into* them, so `design-system.json` is tried before `brand/profile.json`.
+#:
+#: The same order the server's /api/design-system route uses, so the picture this script renders
+#: and the picture the editor renders are the same design. If they disagree, one of them is
+#: lying about the brand.
+_SYSTEM_FILES = (
+    "design-system.json",
+    "brand/design-system.json",
+    "design/system.json",
+    "brand/profile.json",
+)
+
+#: Skills hold brands too — the owner's lives in one, authored for decks long before screens.
+#: `KITH_SKILLS_DIR` is how the app names that folder; the default is where a normal install puts
+#: it. `KITH_DESIGN_SYSTEM` short-circuits everything for a one-off.
+_SKILLS_DIR = os.environ.get("KITH_SKILLS_DIR") or ""
 
 
 def _with_tokens(source: str, system: dict | None = None) -> str:
@@ -147,35 +162,27 @@ def _system(start: Path) -> dict:
     """
     import json
 
+    named = os.environ.get("KITH_DESIGN_SYSTEM")
+    if named and Path(named).is_file():
+        found = _read_system(Path(named))
+        if found:
+            return found
+
     here = start.resolve().parent
-    for folder in [here, *here.parents][:6]:
+    places = [here, *list(here.parents)[:6]]
+
+    # Then every installed skill, for a brand that was authored for something else.
+    for root in filter(None, [_SKILLS_DIR, str(Path.home() / "Kith" / ".kith" / "skills")]):
+        try:
+            places.extend(sorted(p for p in Path(root).iterdir() if p.is_dir()))
+        except OSError:
+            pass
+
+    for folder in places:
         for name in _SYSTEM_FILES:
-            candidate = folder / name
-            if not candidate.is_file():
-                continue
-            try:
-                doc = json.loads(candidate.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            colours = doc.get("colors") or (doc.get("tokens") or {}).get("colors")
-            if not isinstance(colours, dict) or not colours:
-                continue
-            space = doc.get("space")
-            return {
-                "name": doc.get("name") or candidate.stem,
-                "file": str(candidate),
-                "colors": {
-                    str(k): (v if str(v).startswith("#") else f"#{v}")
-                    for k, v in colours.items()
-                    if re.fullmatch(r"[\w-]{1,40}", str(k))
-                },
-                "text": doc.get("text") or {},
-                "radius": doc.get("radius") or doc.get("radii_px") or {},
-                "fonts": doc.get("fonts") or (doc.get("tokens") or {}).get("fonts") or {},
-                "space": [int(n) for n in space if isinstance(n, (int, float))]
-                if isinstance(space, list) and space
-                else [4, 8, 12, 16, 24, 32, 48, 64],
-            }
+            found = _read_system(folder / name)
+            if found:
+                return found
     return {
         "name": "Kith",
         "file": "",
@@ -184,6 +191,39 @@ def _system(start: Path) -> dict:
         "radius": {},
         "fonts": {},
         "space": [4, 8, 12, 16, 24, 32, 48, 64],
+    }
+
+
+def _read_system(candidate: Path) -> dict | None:
+    """One candidate file, read — or None when it is not a system."""
+    import json
+
+    if not candidate.is_file():
+        return None
+    try:
+        doc = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    colours = doc.get("colors") or (doc.get("tokens") or {}).get("colors")
+    if not isinstance(colours, dict) or not colours:
+        return None
+    space = doc.get("space")
+    return {
+        "name": doc.get("name") or candidate.stem,
+        "file": str(candidate),
+        "colors": {
+            str(k): (v if str(v).startswith("#") else f"#{v}")
+            for k, v in colours.items()
+            if re.fullmatch(r"[\w-]{1,40}", str(k))
+        },
+        "text": doc.get("text") or {},
+        "radius": doc.get("radius") or doc.get("radii_px") or {},
+        "fonts": doc.get("fonts") or (doc.get("tokens") or {}).get("fonts") or {},
+        "space": [int(n) for n in space if isinstance(n, (int, float))]
+        if isinstance(space, list) and space
+        else [4, 8, 12, 16, 24, 32, 48, 64],
     }
 
 

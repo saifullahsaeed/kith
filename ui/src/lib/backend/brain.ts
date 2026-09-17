@@ -289,6 +289,18 @@ export async function saveWorkspaceFile(
   return (await res.json()) as { path: string };
 }
 
+/** The design system a screen is drawn in — resolved server-side, where every folder is
+ *  reachable. An empty path is the ordinary answer for a workspace with no system. */
+export async function fetchDesignSystem(
+  projectId?: number | null,
+): Promise<{ path: string; content: string }> {
+  const q = new URLSearchParams();
+  if (projectId != null) q.set("projectId", String(projectId));
+  const res = await fetch(`/api/design-system?${q}`);
+  if (!res.ok) return { path: "", content: "" };
+  return (await res.json()) as { path: string; content: string };
+}
+
 export async function fetchTaskDetail(id: number): Promise<TaskDetail> {
   const res = await fetch(`/api/tasks/${id}`);
   if (!res.ok) throw new Error(`/api/tasks/${id} ${res.status}`);

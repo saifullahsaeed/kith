@@ -1,37 +1,33 @@
 /**
- * Which design system this workspace is drawn in, found rather than configured.
+ * Which design system this screen is drawn in, asked once of the one thing that can see
+ * everywhere.
  *
- * Same bet as everything else on this surface: a system that has to be selected in a settings
- * screen is a system nobody selects. The files are looked for in order and the first that parses
- * wins — a `design-system.json` he wrote for screens beats a brand profile written for slides,
- * because the one authored for this purpose should outrank the one adapted into it.
+ * The interface used to look for the file itself, which found a `design-system.json` in the
+ * workspace and missed the system that actually existed: the owner's brand lives in
+ * `brand/profile.json` *inside a skill*, and the workspace routes cannot see in there. The
+ * workaround was to copy it out, which is how two files come to disagree by next month. The
+ * server resolves it now — project folder, then workspace, then installed skills — so the file
+ * stays where it was authored and nothing is a copy.
  *
- * Kith's own nine are the answer when there is nothing, so a workspace with no system still has
- * a coherent palette and nothing has to handle "no system" as a special case.
+ * Kith's own nine are the answer when there is nothing, so a workspace with no system still has a
+ * coherent palette and nothing downstream has to treat "no system" as a special case.
  */
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
-import { fetchWorkspaceFile } from "@/lib/backend/brain";
-import { kithSystem, readSystem, SYSTEM_FILES, type System } from "@/lib/design/system";
+import { fetchDesignSystem } from "@/lib/backend/brain";
+import { kithSystem, readSystem, type System } from "@/lib/design/system";
 import { paletteFor } from "@/lib/kith-palette";
 import { useDarkMode } from "@/lib/theme";
 
 export function useDesignSystem(projectId: number | null): System {
   const dark = useDarkMode();
-  const files = useQueries({
-    queries: SYSTEM_FILES.map((path) => ({
-      queryKey: ["design-system", path, projectId],
-      // A workspace with no system is the ordinary case, not an error.
-      queryFn: () => fetchWorkspaceFile(path, projectId).catch(() => ({ path, content: "" })),
-      staleTime: 60_000,
-    })),
+  const found = useQuery({
+    queryKey: ["design-system", projectId],
+    queryFn: () => fetchDesignSystem(projectId),
+    // A brand does not change between keystrokes, and every frame on a board asks.
+    staleTime: 60_000,
   });
 
-  for (const file of files) {
-    const content = file.data?.content;
-    if (!content) continue;
-    const system = readSystem(content);
-    if (system) return system;
-  }
-  return kithSystem(paletteFor(dark));
+  const content = found.data?.content;
+  return (content ? readSystem(content) : null) ?? kithSystem(paletteFor(dark));
 }

@@ -73,9 +73,16 @@ you are writing, those are the names you have:
 * `--ds-text-<role>-size`, `-weight`, `-tracking` — the type scale, by role.
 * `--ds-radius-<name>`, `--ds-font-<role>`.
 
-Run the checker once before you start: its `system` line tells you whose palette you are in. With
-no system file anywhere, you get Kith's own nine under the same `--ds-` names, plus the older
-`--kith-*` spellings, which still work everywhere.
+Run the checker once before you start: its `system` line tells you whose palette you are in, and
+names the file. With no system anywhere you get Kith's own nine under the same `--ds-` names,
+plus the older `--kith-*` spellings, which still work everywhere.
+
+**The system is a file, and you may edit it.** It is found nearest-first — the project's folder,
+then his workspace, then any installed skill that carries a brand — so a product with its own
+brand gets its own, and one without inherits. If a screen needs a colour the system does not have,
+that is worth saying out loud rather than working around: a colour you reach for three times in
+one screen belongs in the system, and adding it there means every screen after this one has it
+too. Propose it; do not quietly add a local token and move on.
 
 **You may define your own tokens.** A design can declare what it needs:
 

@@ -17,6 +17,7 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     checkpoints,
     config,
     conversations,
+    design_system,
     events,
     health,
     language_servers,
