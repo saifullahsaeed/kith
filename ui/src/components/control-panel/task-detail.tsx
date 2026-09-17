@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Download,
   Expand,
+  Frame,
   FileCode2,
   FileText,
   Link2,
@@ -27,6 +28,8 @@ import { EditableText } from "@/components/ui/editable-text";
 import { dayLabel, time } from "@/lib/dates";
 import { keys } from "@/lib/query-keys";
 import { openWorkspaceFile } from "@/lib/files";
+import { DesignPage } from "@/components/design/design-page";
+import { looksLikeADesign } from "@/lib/design/detect";
 import { cn } from "@/lib/utils";
 import {
   createBrainItem,
@@ -72,6 +75,9 @@ export function TaskDetailPage({
   const confirm = useConfirm();
   const cache = useQueryClient();
   const [item, setItem] = useState("");
+  /** The design being looked at, if any. Held here rather than in the row that opened it so
+   *  that leaving the editor lands back on this page with its scroll and state intact. */
+  const [designing, setDesigning] = useState<{ path: string; title: string } | null>(null);
   /** A download that could not be read. Said out loud, because the alternative — which this
    *  page shipped with — was handing you a .txt containing the path and calling it done. */
   const [refused, setRefused] = useState("");
@@ -201,6 +207,23 @@ export function TaskDetailPage({
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         Loading task…
       </div>
+    );
+  }
+
+  /* A design takes the page rather than opening beside it.
+   *
+   * The first question anyone asks of a mockup is whether it breathes, and that is not a
+   * question you can answer in a 17rem gutter next to a comment thread. Swapped in here rather
+   * than routed to, because this panel navigates by state and a URL for it would be the only
+   * one in the app. */
+  if (designing) {
+    return (
+      <DesignPage
+        path={designing.path}
+        title={designing.title}
+        projectId={task.project_id}
+        onBack={() => setDesigning(null)}
+      />
     );
   }
 
@@ -564,6 +587,11 @@ export function TaskDetailPage({
                     projectId={task.project_id}
                     onDelete={() => delDeliverable(d)}
                     onDownload={() => downloadDeliverable(d)}
+                    onOpenDesign={
+                      looksLikeADesign(d.kind, d.content)
+                        ? () => setDesigning({ path: d.content, title: d.title })
+                        : undefined
+                    }
                   />
                 ))}
               </ul>
@@ -595,11 +623,14 @@ function DeliverableRow({
   projectId,
   onDelete,
   onDownload,
+  onOpenDesign,
 }: {
   d: Detail["deliverables"][number];
   projectId: number | null;
   onDelete: () => void;
   onDownload: () => void;
+  /** Present only when this deliverable is something the design editor can open. */
+  onOpenDesign?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState<string | null>(d.kind === "text" ? d.content : null);
@@ -694,6 +725,13 @@ function DeliverableRow({
           />
         ) : (
           <>
+            {onOpenDesign ? (
+              <RowAction
+                label="Open in design editor"
+                onClick={onOpenDesign}
+                icon={<Frame className="size-4" />}
+              />
+            ) : null}
             <RowAction
               label="Open preview"
               onClick={preview}
