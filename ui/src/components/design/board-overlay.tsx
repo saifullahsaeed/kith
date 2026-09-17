@@ -9,7 +9,7 @@
  * Covering the pane rather than splitting it: a board is for comparing six things at 34%, and a
  * 400px column would make that the same unreadable strip the editor already was.
  */
-import { X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -38,6 +38,22 @@ export function BoardOverlay() {
   });
 
   if (!open) return null;
+
+  /* Nothing renders until the task has answered.
+   *
+   * The board writes its arrangement to a path anchored against a project, and both entry points
+   * open with `projectId: null` because a deliverable result carries only a task id. Reads
+   * tolerate a wrong anchor — the workspace route searches by name — but writes never do. So a
+   * write landing before this query resolved would create a second `task-N.board.json` at the
+   * workspace root, and from then on the two would take turns being found. */
+  if (task.isPending) {
+    return (
+      <div className="absolute inset-0 z-40 flex items-center justify-center gap-2 bg-background text-sm text-muted-foreground">
+        <RefreshCw className="size-4 animate-spin" />
+        Opening the board…
+      </div>
+    );
+  }
 
   const designs = (task.data?.deliverables ?? [])
     .filter((one) => looksLikeADesign(one.kind, one.content))

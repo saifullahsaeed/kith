@@ -14,6 +14,16 @@ So this renders the file the way the editor renders it and reports the measurabl
     contrast   text that does not meet 4.5:1 against what is behind it
     overflow   anything wider than what contains it
     height     what the screen comes to, at a narrow and a wide column
+    shot       two PNGs — wide and narrow — that you can open with read_file
+
+It writes the pictures because it already has the page open. There is no screenshot tool in
+Kith: `read_file` will *show* you a PNG, but nothing on the machine produces one — the window's
+own capture needs a display surface and there is none in a headless turn, which is why the
+honest answer to "look at it" used to be standing up a web server and opening a browser panel.
+This has a loaded headless Chromium with the design rendered in it, and was throwing that away.
+
+Both widths, because one picture is the thing this script already tells you a single render
+never shows: a row that fits at 1200 and breaks at 720 looks perfect in one screenshot.
 
 Run it on the file before you attach it, and again after you change it:
 
@@ -25,10 +35,19 @@ iterate. Height is reported, never judged — a long page is a decision, not a d
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import tempfile
 from pathlib import Path
+
+#: Where the pictures go.
+#:
+#: Not beside the design, which is the obvious place and the wrong one: designs live in a project
+#: or in `screens/`, both of which are committed, and a PNG per check would put a stream of
+#: screenshots into somebody's history. `.kith/scratch` is what this workspace already uses for
+#: things that are worth reading once.
+SHOTS = Path(os.environ.get("KITH_SCRATCH") or Path.home() / "Kith" / ".kith" / "scratch" / "shots")
 
 #: The two column widths a design is looked at in: the editor with both panels, and without.
 WIDE = 1200
@@ -234,10 +253,26 @@ def check(path: Path) -> int:
 
         found = page.evaluate(_MEASURE.replace("STEP", str(STEP)))
         wide = page.evaluate(_HEIGHT)
+        shots = []
+        try:
+            SHOTS.mkdir(parents=True, exist_ok=True)
+            wide_shot = SHOTS / f"{path.stem}-{WIDE}.png"
+            page.screenshot(path=str(wide_shot), full_page=True)
+            shots.append(wide_shot)
+        except Exception:
+            # A picture that could not be written is not a reason to lose the measurements.
+            pass
+
         page.set_viewport_size({"width": NARROW, "height": 900})
         page.wait_for_timeout(200)
         narrow_found = page.evaluate(_MEASURE.replace("STEP", str(STEP)))
         narrow = page.evaluate(_HEIGHT)
+        try:
+            narrow_shot = SHOTS / f"{path.stem}-{NARROW}.png"
+            page.screenshot(path=str(narrow_shot), full_page=True)
+            shots.append(narrow_shot)
+        except Exception:
+            pass
         browser.close()
 
     # Overflow at the narrow width is the one that matters most and the one a single render
@@ -258,6 +293,11 @@ def check(path: Path) -> int:
     report("contrast", found["contrast"])
     report("overflow", overflow)
     print(f"height   {wide}px at {WIDE}, {narrow}px at {NARROW}")
+    if shots:
+        # Named so they can be opened directly: `read_file` shows a PNG as a picture.
+        print("shot     " + "  ".join(str(one) for one in shots))
+    else:
+        print("shot     none — could not write the pictures")
 
     return 1 if any([found["editable"], literals, found["spacing"], found["contrast"], overflow]) else 0
 

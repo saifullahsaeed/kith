@@ -44,6 +44,8 @@ export interface BoardDesign {
   title: string;
   /** The file's contents, or "" while it is still being read. */
   html: string;
+  /** Why it will never arrive, when the read failed. */
+  failed?: string;
 }
 
 export interface DesignBoardProps {
@@ -68,15 +70,34 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
   /* The viewport is held locally and written back on settle.
    *
    * Every wheel tick would otherwise be a file write — a few hundred of them to cross a board —
-   * and the thing being saved is where somebody was looking, which nobody needs to the frame. */
+   * and the thing being saved is where somebody was looking, which nobody needs to the frame.
+   *
+   * Two bugs lived in the first version of this, both from the same cause: the effect closed over
+   * `board` from the render in which `view` last changed, and deliberately did not depend on it.
+   *
+   * * It wrote back a **stale** board. Drag a frame within 600ms of the last pan and the timer
+   *   fired carrying the pre-drag arrangement, and the parent took that as authoritative — so
+   *   the drag silently reverted.
+   * * It wrote at all on **mere open**. A board nobody has arranged has no stored view, so the
+   *   comparison was false on the first pass and opening one created a file 600ms later with no
+   *   user action behind it.
+   *
+   * So: the latest board is read from a ref rather than captured, and nothing is written until
+   * somebody has actually moved something. */
+  const latest = useRef(board);
+  latest.current = board;
+  const touched = useRef(false);
+
   useEffect(() => {
+    if (!touched.current) return;
     const timer = setTimeout(() => {
-      if (board.view?.x === view.x && board.view?.y === view.y && board.view?.zoom === view.zoom) return;
-      onChange({ ...board, view });
+      const now = latest.current;
+      if (now.view?.x === view.x && now.view?.y === view.y && now.view?.zoom === view.zoom) return;
+      onChange({ ...now, view });
     }, 600);
     return () => clearTimeout(timer);
-    // `board` and `onChange` are deliberately absent: including them restarts the timer on the
-    // write this effect itself causes, which never settles.
+    // `onChange` is stable from the parent; `latest` is a ref by design — see above for why
+    // depending on `board` here is what made it never settle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
@@ -88,6 +109,23 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
     },
     [view],
   );
+
+  /* Bound by hand, not through React's `onWheel`.
+   *
+   * React registers `wheel` passively on the root, so a handler there cannot `preventDefault` —
+   * and without that, ⌘+wheel reaches Chromium's own page zoom (the whole app scales while the
+   * board scales) and a plain two-finger scroll bubbles to the conversation behind the overlay.
+   * `mermaid-diagram.tsx` already documents and solves exactly this. */
+  useEffect(() => {
+    const node = surface.current;
+    if (!node) return;
+    const handler = (event: globalThis.WheelEvent) => {
+      event.preventDefault();
+      onWheel(event as unknown as WheelEvent);
+    };
+    node.addEventListener("wheel", handler, { passive: false });
+    return () => node.removeEventListener("wheel", handler);
+  });
 
   const onWheel = (event: WheelEvent) => {
     // Ctrl/⌘ + wheel is zoom everywhere, and a trackpad pinch arrives as exactly that.
@@ -139,6 +177,19 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
     const point = toBoard(event.clientX, event.clientY);
     drag.current = { kind, id, ox: point.x - at.x, oy: point.y - at.y };
     setPicked(id);
+    touched.current = true;
+
+    /* Commit every derived position before the first move.
+     *
+     * `layout()` splits frames into ones with a stored position and ones auto-gridded below
+     * them. Writing only the dragged frame therefore *promoted* it into the stored set, and on
+     * the very next render every other frame was re-gridded underneath it — so picking up one
+     * card threw all the others across the board, and they then tracked it for the rest of the
+     * drag. Once nothing is loose, nothing can be re-gridded. */
+    if (kind === "frame") {
+      const loose = Object.keys(frames).some((file) => !board.frames[file]);
+      if (loose) onChange({ ...board, frames: { ...frames } });
+    }
   };
 
   const onPointerMove = (event: ReactPointerEvent) => {
@@ -169,6 +220,7 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
   };
 
   const addNote = (event: ReactPointerEvent) => {
+    touched.current = true;
     const point = toBoard(event.clientX, event.clientY);
     const id = `n${Date.now().toString(36)}`;
     onChange({
@@ -194,16 +246,45 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
     });
   };
 
-  // Space-to-pan, the one shortcut every canvas has and nobody is told about.
+  /* Space-to-pan, the one shortcut every canvas has and nobody is told about.
+   *
+   * Two things this has to get right, and the first version got neither. It must not fire while
+   * somebody is typing — these are `v`, `n` and space, which is most of writing a note or a
+   * message — so anything aimed at an editable element is ignored. And releasing space must
+   * restore the tool that was active *before*, not hardcode "select": someone who deliberately
+   * chose the hand tool and then typed a space found themselves back on the pointer. */
+  const beforeSpace = useRef<Tool | null>(null);
   useEffect(() => {
+    const typing = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return el.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    };
+
     const down = (event: KeyboardEvent) => {
-      if (event.code === "Space" && !editingNote) setTool((current) => (current === "hand" ? current : "hand"));
-      if (event.key === "v" && !editingNote) setTool("select");
-      if (event.key === "n" && !editingNote) setTool("note");
+      if (editingNote || typing(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.code === "Space") {
+        if (beforeSpace.current === null) {
+          setTool((current) => {
+            beforeSpace.current = current;
+            return "hand";
+          });
+        }
+        return;
+      }
+      if (event.key === "v") setTool("select");
+      if (event.key === "n") setTool("note");
     };
+
     const up = (event: KeyboardEvent) => {
-      if (event.code === "Space" && !editingNote) setTool("select");
+      if (event.code !== "Space") return;
+      const restore = beforeSpace.current;
+      beforeSpace.current = null;
+      if (restore !== null && !editingNote) setTool(restore);
     };
+
     addEventListener("keydown", down);
     addEventListener("keyup", up);
     return () => {
@@ -220,7 +301,6 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
 
       <div
         ref={surface}
-        onWheel={onWheel}
         onPointerDown={tool === "note" ? addNote : startBoardDrag}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -363,13 +443,23 @@ function Frame({
 }) {
   const scale = frame.w / DESIGN_W;
 
+  /* The counter-scale that keeps a name readable at 26%.
+   *
+   * It has to be exactly `1 / zoom`: on-screen size is 11px × zoom × scale, so anything else
+   * leaves a residue. The first version used `1 / (2.2 × zoom)`, which pinned every label to
+   * 5 device pixels at *every* zoom below 45% and applied no counter-scale at all above it —
+   * the one band where it did nothing being the one where it was least needed.
+   *
+   * Clamped, because at the 8% floor a full counter-scale makes the label taller than its frame.
+   * The width shrinks with it so the hit box stays over its own frame rather than reaching
+   * across its neighbour. */
+  const label = Math.min(4, Math.max(1, 1 / Math.max(zoom, 0.0001)));
+
   return (
-    <div className="absolute" style={{ left: frame.x, top: frame.y, width: frame.w }}>
-      {/* The label sits above the frame and counter-scales, so a name stays readable at 26%
-          the way it does on every canvas worth using. */}
+    <div className="group absolute" style={{ left: frame.x, top: frame.y, width: frame.w }}>
       <div
         className="flex origin-bottom-left items-center gap-2 pb-1"
-        style={{ transform: `scale(${Math.max(1, 1 / Math.max(zoom, 0.0001) / 2.2)})`, width: frame.w }}
+        style={{ transform: `scale(${label})`, width: frame.w / label }}
         onPointerDown={onPointerDown}
       >
         <span className="truncate text-[11px] font-medium text-muted-foreground">
@@ -400,7 +490,9 @@ function Frame({
           {design?.html ? (
             <DesignView html={design.html} />
           ) : (
-            <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">Opening…</div>
+            <div className="flex h-40 items-center justify-center px-6 text-center text-sm text-muted-foreground">
+              {design?.failed ?? "Opening…"}
+            </div>
           )}
         </div>
       </div>

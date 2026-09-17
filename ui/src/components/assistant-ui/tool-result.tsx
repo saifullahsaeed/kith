@@ -5,6 +5,7 @@ import { DesignView } from "@/components/design/design-view";
 import { fetchWorkspaceFile } from "@/lib/backend/brain";
 import { useBoardOverlay } from "@/lib/design/board-overlay";
 import { looksLikeADesign } from "@/lib/design/detect";
+import { unwrap } from "@/lib/tool-envelope";
 import { memo, useState, type FC, type ReactNode } from "react";
 import { formatBytes } from "@/lib/bytes";
 import { useThreadRuntime } from "@assistant-ui/react";
@@ -52,18 +53,6 @@ type Args = Record<string, unknown>;
  * means every renderer below sees what the tool actually returned, and `ok: false` stops being
  * invisible.
  */
-function unwrap(result: unknown): { value: unknown; failed: boolean } {
-  if (result && typeof result === "object" && !Array.isArray(result)) {
-    const outer = result as Record<string, unknown>;
-    if ("ok" in outer && "result" in outer) {
-      return { value: outer.result, failed: outer.ok === false };
-    }
-    if ("ok" in outer && "error" in outer) {
-      return { value: outer.error, failed: outer.ok === false };
-    }
-  }
-  return { value: result, failed: false };
-}
 
 /**
  * A list-shaped tool argument, however it actually arrived.

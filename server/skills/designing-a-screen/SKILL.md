@@ -89,21 +89,29 @@ A stylesheet in a `<style>` block is kept and applied. Their edits are written i
 over it, so a class you defined stays the default and their change is the exception. That is the
 right arrangement: put the repeated parts in classes.
 
-## Check it, because looking is only half
+## Check it, and look at it
 
-Take a screenshot — `read_file` on an image shows it to you, and "it renders" is not the same as
-"it is right". But the defects that survive looking are the measurable ones, so run the checker
-too:
+One command does both:
 
 ```
 python3 <skill>/scripts/check_design.py screens/settings.html
 ```
 
-It reports what you cannot see: nodes that ended up outside the editable dialect, colours written
-as literals, spacing off the scale, text that fails contrast, anything wider than what contains
-it, and the height at a narrow and a wide column. It exits non-zero while any of that is
-outstanding, so you can chain it while you iterate. Fix what it names before you attach the file
-— every one of those is something they would otherwise have to tell you.
+It reports what you cannot see — nodes outside the editable dialect, colours written as literals,
+spacing off the scale, text failing contrast, anything wider than what contains it, the height at
+a narrow and a wide column — and it exits non-zero while any of that is outstanding, so you can
+chain it while you iterate. Fix what it names before you attach the file; every one of those is
+something they would otherwise have to tell you.
+
+**And it writes two PNGs**, wide and narrow, printed on the `shot` line. Open them with
+`read_file` — an image comes back to you as a picture. Do that. "It renders" is not the same as
+"it is right", and the checker is deliberately blind to whether a thing looks good.
+
+**Do not go looking for another way to see it.** There is no screenshot tool on this machine: the
+window's own capture needs a display surface and a headless turn has none, so `read_file` can
+*show* you a picture but nothing else will *make* one. The way to see a design is this script.
+Standing up a web server and opening a browser panel works and is three moving parts where one
+will do.
 
 ## After they have edited it
 

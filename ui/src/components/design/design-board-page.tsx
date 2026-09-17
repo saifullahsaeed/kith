@@ -61,11 +61,16 @@ export function DesignBoardPage({ taskId, projectId, designs, onBack }: DesignBo
    * Dragging a frame is a change per pointer move, and a board is arranged by dragging. Writing
    * each one would be a hundred file writes to move one card — and each write is a checkpoint,
    * so it would also bury his history under the act of tidying up. */
+  /** The arrangement as of the last change, for the flush on the way out. */
+  const pending = useRef<Board | null>(null);
+
   const change = useCallback(
     (next: Board) => {
       setEdited(next);
+      pending.current = next;
       if (saving.current) clearTimeout(saving.current);
       saving.current = setTimeout(() => {
+        pending.current = null;
         void saveWorkspaceFile(path, writeBoard(next), projectId).catch(() => {
           // An arrangement that failed to save is not worth interrupting anyone over; it is
           // recoverable by moving the thing again, and the designs themselves are untouched.
@@ -75,7 +80,20 @@ export function DesignBoardPage({ taskId, projectId, designs, onBack }: DesignBo
     [path, projectId],
   );
 
-  useEffect(() => () => void (saving.current && clearTimeout(saving.current)), []);
+  /* Flushed on the way out, not merely cancelled.
+   *
+   * The debounce is 800ms and this unmounts the moment the board closes — Escape, the close
+   * button, or simply clicking the other chat pane, since only the focused pane mounts the
+   * overlay. Clearing the timer without writing meant the last thing you did to a board was the
+   * one thing it never remembered, which reads as the board losing your work at random. */
+  useEffect(() => {
+    return () => {
+      if (saving.current) clearTimeout(saving.current);
+      const last = pending.current;
+      pending.current = null;
+      if (last) void saveWorkspaceFile(path, writeBoard(last), projectId).catch(() => {});
+    };
+  }, [path, projectId]);
 
   if (open) {
     const design = designs.find((one) => one.file === open);
@@ -98,11 +116,22 @@ export function DesignBoardPage({ taskId, projectId, designs, onBack }: DesignBo
     );
   }
 
-  const loaded: BoardDesign[] = designs.map((one, at) => ({
-    file: one.file,
-    title: one.title,
-    html: files[at]?.data?.content ?? "",
-  }));
+  const loaded: BoardDesign[] = designs.map((one, at) => {
+    const query = files[at];
+    return {
+      file: one.file,
+      title: one.title,
+      html: query?.data?.content ?? "",
+      // "Opening…" forever is the wrong answer for a file that will never arrive. A design can
+      // genuinely fail to read — two files sharing a basename make the workspace route's search
+      // ambiguous — and a blank frame with a hopeful caption hides that completely.
+      failed: query?.isError
+        ? query.error instanceof Error
+          ? query.error.message
+          : "couldn't read it"
+        : undefined,
+    };
+  });
 
   return (
     <div className="flex h-full flex-col">
