@@ -44,6 +44,12 @@ class JournalEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     entry: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Which project this belongs to, when it belongs to one.
+    #:
+    #: Nullable on purpose: work outside any project is a real thing, and a NOT NULL here would
+    #: mean inventing a project to hold it. Recorded at write time from the session rather than
+    #: inferred later by a join — see migration v47 for what inferring it cost.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Task(Base):
@@ -98,6 +104,12 @@ class Deliverable(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Which project this belongs to, when it belongs to one.
+    #:
+    #: Nullable on purpose: work outside any project is a real thing, and a NOT NULL here would
+    #: mean inventing a project to hold it. Recorded at write time from the session rather than
+    #: inferred later by a join — see migration v47 for what inferring it cost.
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     kind: Mapped[str] = mapped_column(Text, nullable=False, default="text")
     title: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)

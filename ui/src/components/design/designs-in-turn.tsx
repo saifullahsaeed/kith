@@ -41,6 +41,8 @@ interface Made {
   file: string;
   title: string;
   taskId: number;
+  /** The deliverable's own project. Carried, not inferred — see migration v47. */
+  projectId: number | null;
 }
 
 /** The scale a 1200px design is drawn at in a thumbnail. */
@@ -69,7 +71,10 @@ export function DesignsInTurn() {
         const taskId = row.task_id;
         if (typeof kind !== "string" || typeof content !== "string") return [];
         if (typeof taskId !== "number" || !looksLikeADesign(kind, content)) return [];
-        return [{ file: content, title: String(row.title ?? content), taskId }];
+        // A deliverable knows its own project now, so a thumbnail can resolve a design's assets
+        // and its system without first fetching the task to find out where it lives.
+        const projectId = typeof row.project_id === "number" ? row.project_id : null;
+        return [{ file: content, title: String(row.title ?? content), taskId, projectId }];
       }),
     ),
   );
@@ -102,14 +107,14 @@ export function DesignsInTurn() {
 function Thumb({ made }: { made: Made }) {
   const show = useBoardOverlay((state) => state.show);
   const file = useQuery({
-    queryKey: ["design", made.file, null],
-    queryFn: () => fetchWorkspaceFile(made.file),
+    queryKey: ["design", made.file, made.projectId],
+    queryFn: () => fetchWorkspaceFile(made.file, made.projectId),
   });
 
   return (
     <button
       type="button"
-      onClick={() => show({ taskId: made.taskId, projectId: null, title: made.title })}
+      onClick={() => show({ taskId: made.taskId, projectId: made.projectId, title: made.title })}
       title={`${made.title} — open the board`}
       className="group w-66 overflow-hidden rounded-xl text-start ring-1 ring-border/60 transition-shadow hover:shadow-md"
     >
@@ -117,7 +122,7 @@ function Thumb({ made }: { made: Made }) {
         {file.data?.content ? (
           // Inert. This is a picture of the design; the click belongs to the button around it.
           <div className="pointer-events-none origin-top-left" style={{ transform: `scale(${THUMB})`, width: 1200 }}>
-            <DesignView html={file.data.content} />
+            <DesignView html={file.data.content} projectId={made.projectId} />
           </div>
         ) : (
           <div className="flex h-full items-center justify-center px-3 text-center text-[11px] text-muted-foreground">

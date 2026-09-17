@@ -46,7 +46,10 @@ export function BoardOverlay() {
    * tolerate a wrong anchor — the workspace route searches by name — but writes never do. So a
    * write landing before this query resolved would create a second `task-N.board.json` at the
    * workspace root, and from then on the two would take turns being found. */
-  if (task.isPending) {
+  /* The task query is still how the *list* of designs is found, but the project no longer waits
+   * on it: a deliverable carries its own, so a board opened from the thread can anchor its file
+   * before anything else answers. */
+  if (task.isPending && open.projectId == null) {
     return (
       <div className="absolute inset-0 z-40 flex items-center justify-center gap-2 bg-background text-sm text-muted-foreground">
         <RefreshCw className="size-4 animate-spin" />

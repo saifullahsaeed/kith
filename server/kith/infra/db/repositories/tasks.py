@@ -421,10 +421,25 @@ def delete_checklist_item(path: Path, item_id: int) -> bool:
 
 @notifies("task")
 def add_deliverable(path: Path, task_id: int, kind: str, title: str, content: str) -> dict:
+    """The output a task produced, carrying the project it belongs to.
+
+    Denormalised from the task deliberately. A deliverable's project used to be knowable only by
+    joining back — so anything holding a deliverable and nothing else could not anchor a
+    workspace path, which is exactly what the design board hit: it had a task id, needed a
+    project to write its file against, and had to block on a second request to learn one.
+    """
     if kind not in _DELIVERABLE_KINDS:
         kind = "text"
     with session(path) as db:
-        row = Deliverable(task_id=task_id, kind=kind, title=title, content=content, created_at=utc_now_iso())
+        owner = db.scalar(select(Task.project_id).where(Task.id == task_id))
+        row = Deliverable(
+            task_id=task_id,
+            kind=kind,
+            title=title,
+            content=content,
+            created_at=utc_now_iso(),
+            project_id=owner if owner is not None else session_context.current_project(),
+        )
         db.add(row)
         db.flush()
         return as_dict(row)

@@ -833,6 +833,58 @@ def _migrations():
         """
         conn.execute("ALTER TABLE conversations ADD COLUMN provider_order TEXT NOT NULL DEFAULT ''")
 
+    def v47_the_doing_layer_has_a_project(conn):
+        """Scope stops being a fact about the plan and becomes a fact about the work.
+
+        Counted on a real brain before writing this: five of twenty-one tables carried a
+        project — tasks, conversations, messages, memories, milestones. Everything a task owns
+        was two joins away, and everything he actually *did* had no project at all: 695 journal
+        entries, 3,112 file touches, 19 workers, every reminder and every source. So a project
+        grouped where work was *described* and evaporated the moment he started working, which
+        is the opposite of the way round it should be — the plan is the cheap part to re-derive.
+
+        The second half is `deliverables.project_id`, which is denormalised on purpose and is
+        the whole reason this was worth a migration rather than a query. A deliverable's project
+        was knowable only by joining back to its task, so anything holding a deliverable and
+        nothing else could not anchor a workspace path. That is not hypothetical: the design
+        board writes its arrangement next to the designs, had only a task id to go on, and had
+        to block on fetching the task before it could write a file — and the thumbnail in the
+        thread still passes no project at all. Carried rather than inferred, both bugs are
+        unwritable.
+
+        Every column is nullable. A journal entry made outside any project is a real thing, and
+        a NOT NULL here would have meant inventing a project to hold his own curiosities.
+        """
+        for table in (
+            "journal",
+            "file_touches",
+            "workers",
+            "reminders",
+            "sources",
+            "curiosities",
+            "schedules",
+            "deliverables",
+        ):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN project_id INTEGER")
+            except Exception:
+                # A table this install never created, or a column already added by hand. Neither
+                # is a reason to fail a migration that is otherwise additive.
+                pass
+
+        # Backfill the one that can be known exactly: a deliverable belongs to its task's project.
+        conn.execute(
+            """
+            UPDATE deliverables
+               SET project_id = (SELECT tasks.project_id FROM tasks WHERE tasks.id = deliverables.task_id)
+             WHERE project_id IS NULL
+            """
+        )
+
+        # Checkpoints are deliberately absent. They are keyed by repository root, and a
+        # repository root *is* the project's folder — a project_id there would be a second,
+        # weaker spelling of something already exact.
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -880,6 +932,7 @@ def _migrations():
         v44_plugin_state,
         v45_workers,
         v46_conversation_hosts,
+        v47_the_doing_layer_has_a_project,
     ]
 
 
