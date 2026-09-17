@@ -101,7 +101,15 @@ escaped:
 
 * Tags: a layout-and-content set (`div`, `span`, `p`, `h1`–`h6`, `img`, `svg` and its shape
   children, `button`, `input`, `ul`/`ol`/`li`, `table` and friends). `script`, `iframe`,
-  `object`, `embed`, `link`, `style`, `form` are dropped entirely.
+  `object`, `embed`, `link`, `form` are dropped entirely.
+* `<style>` is **kept and sanitised**, not dropped. He writes stylesheets — dropping them would
+  mean the editor only opens for output he does not naturally produce, which is the failure mode
+  this whole design is arranged to avoid. Its declarations go through the same property
+  whitelist; selectors are restricted to element/class/id and `@media` blocks; `@import` and
+  everything else at-rule is dropped, and the whole sheet is scoped to the design root at render.
+  **The inspector never writes into it** — edits are inline styles, which win on specificity.
+  That keeps direct manipulation unambiguous: changing one node's padding changes one node, not
+  every node sharing its class.
 * Attributes: `data-k*` (the id and `data-k-absolute`), `class`, `style`, `src`/`href` restricted to `data:` and relative
   workspace paths, `alt`, `type`, `value`, `placeholder`. Anything matching `on*` is dropped —
   not sanitised, dropped.
