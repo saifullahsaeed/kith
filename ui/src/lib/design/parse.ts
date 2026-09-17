@@ -336,6 +336,15 @@ export function sanitiseStyleSheet(css: string, dropped: string[]): string {
 
 // ── the tree ────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The id of the tree's top, which is not a node in the file.
+ *
+ * A design is a list of top-level elements, not one element, so the tree needs a holder for them
+ * and the holder needs a name the editor can pass around. It is deliberately not a legal minted
+ * or authored id, so nothing in a document can collide with it.
+ */
+export const ROOT_ID = "root";
+
 /** Names an id can take without needing quoting anywhere downstream. */
 const ID = /^[\w.:-]{1,60}$/;
 
@@ -474,7 +483,7 @@ export function parseDesign(html: string): ParsedDesign {
   const children = Array.from(body.children).flatMap((child) => convert(child, mint, taken, dropped));
 
   return {
-    root: { id: "root", tag: "root", attrs: {}, style: {}, classes: [], children, absolute: false },
+    root: { id: ROOT_ID, tag: "root", attrs: {}, style: {}, classes: [], children, absolute: false },
     sheet,
     dropped,
   };

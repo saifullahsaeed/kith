@@ -28,7 +28,7 @@ import { DesignLayers } from "@/components/design/design-layers";
 import { DesignView } from "@/components/design/design-view";
 import { Button } from "@/components/ui/button";
 import { fetchWorkspaceFile, saveWorkspaceFile } from "@/lib/backend/brain";
-import { applyStyle, materialiseIds } from "@/lib/design/edit";
+import { applyStyle, materialiseIds, moveNode } from "@/lib/design/edit";
 import { type DesignNode, parseDesign } from "@/lib/design/parse";
 import { cn } from "@/lib/utils";
 
@@ -91,6 +91,15 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
       });
     },
     [selected, loaded],
+  );
+
+  const move = useCallback(
+    (id: string, parentId: string, index: number) => {
+      setFailure("");
+      setSaved(false);
+      setDraft((current) => moveNode(materialiseIds(current ?? loaded), id, parentId, index));
+    },
+    [loaded],
   );
 
   const save = async () => {
@@ -191,10 +200,19 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
                 html={html}
                 selected={selected}
                 onSelect={setSelected}
+                onMove={move}
                 className={cn(
                   "w-full max-w-[1200px] rounded-xl border border-border/70 bg-background shadow-sm",
-                  // Drawn from outside, so nothing in his document has to know it is being edited.
+                  // All drawn from outside, so nothing in his document has to know it is being
+                  // edited. The insertion line is an inset shadow on the edge the drop would land
+                  // against — which edge is decided in the view, where the parent's flex direction
+                  // is known, because CSS cannot tell a row from a column.
                   "[&_[data-selected]]:outline [&_[data-selected]]:outline-2 [&_[data-selected]]:outline-[var(--kith)]",
+                  "[&_[data-dragging]]:opacity-40",
+                  "[&_[data-drop=top]]:shadow-[inset_0_2px_0_0_var(--kith)]",
+                  "[&_[data-drop=bottom]]:shadow-[inset_0_-2px_0_0_var(--kith)]",
+                  "[&_[data-drop=left]]:shadow-[inset_2px_0_0_0_var(--kith)]",
+                  "[&_[data-drop=right]]:shadow-[inset_-2px_0_0_0_var(--kith)]",
                 )}
               />
             </div>

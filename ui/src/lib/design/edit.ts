@@ -24,7 +24,14 @@
  * because the failure mode of proceeding is an id on the wrong node, and an edit that silently
  * lands somewhere else is worse than an edit that does not happen.
  */
-import { ALLOWED_TAGS, DROP_SUBTREE, parseDesign, safeDeclaration, splitDeclarations } from "@/lib/design/parse";
+import {
+  ALLOWED_TAGS,
+  DROP_SUBTREE,
+  parseDesign,
+  ROOT_ID,
+  safeDeclaration,
+  splitDeclarations,
+} from "@/lib/design/parse";
 
 /** One open tag in the source, with the span it occupies. */
 interface TagHit {
@@ -190,4 +197,114 @@ export function applyStyle(html: string, id: string, set: Record<string, string 
   }
 
   return html.slice(0, hit.start) + rewritten + html.slice(hit.end);
+}
+
+/**
+ * Elements with no closing tag, so a scan does not wait for one that never comes.
+ *
+ * A self-closed tag is handled separately and by its syntax; this is the list of names that are
+ * void whether or not he wrote the slash, because `<br>` and `<img src=…>` are how anybody
+ * actually writes them.
+ */
+const VOID = new Set(["br", "hr", "img", "input", "col", "embed", "source", "track", "wbr", "area"]);
+
+/**
+ * Where this node begins and ends in the source.
+ *
+ * Depth-counted over the same tag scan the rest of this file uses, rather than a second parse,
+ * so "which node is this" has one answer here. Returns null when the tag never closes — at which
+ * point the honest thing is to do nothing, because a move that guessed the end of an element
+ * would take an arbitrary amount of the document with it.
+ */
+function extentOf(html: string, id: string): [number, number] | null {
+  const open = scanTags(html).find((one) => idOf(one.attrs) === id);
+  if (!open) return null;
+
+  const selfClosed = html.slice(open.start, open.end).endsWith("/>");
+  if (selfClosed || VOID.has(open.name)) return [open.start, open.end];
+
+  let depth = 0;
+  // A fresh matcher rather than the shared one: `TAG` is global, and advancing its `lastIndex`
+  // here would leave it pointing into the middle of a document for whoever scans next.
+  const scan = new RegExp(TAG.source, "g");
+  scan.lastIndex = open.start;
+  for (let match = scan.exec(html); match; match = scan.exec(html)) {
+    if (match[0].startsWith("<!--")) continue;
+    const name = match[2].toLowerCase();
+    if (name !== open.name) continue;
+    const closing = match[1] === "/";
+    if (!closing) {
+      if (!match[0].endsWith("/>") && !VOID.has(name)) depth++;
+      continue;
+    }
+    depth--;
+    if (depth === 0) return [open.start, match.index + match[0].length];
+  }
+  return null;
+}
+
+/** The direct children of a node, by id, in document order. */
+function childrenOf(html: string, parentId: string): string[] {
+  const walk = (node: { id: string; children: { id: string; children: unknown[] }[] }): string[] | null => {
+    if (node.id === parentId) return node.children.map((child) => child.id);
+    for (const child of node.children) {
+      const hit = walk(child as never);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return walk(parseDesign(html).root as never) ?? [];
+}
+
+/**
+ * A node moved to a new place among its siblings, or into a different frame.
+ *
+ * This is what a drag means in a layout with no coordinates in it: not a position, an order. The
+ * node's own text is carried across untouched — its styles, its children, his indentation inside
+ * it — so a reorder shows up in the diff as one block that moved rather than two blocks that
+ * were rewritten.
+ *
+ * Cut before measuring where to put it, because the two operations are on the same string and
+ * doing it the other way round means every offset past the cut is wrong by the length of what
+ * was removed. That bug reads as "dragging works, except downwards".
+ */
+export function moveNode(html: string, id: string, parentId: string, index: number): string {
+  if (id === parentId) return html;
+  const extent = extentOf(html, id);
+  if (!extent) return html;
+
+  /* The top of the tree is not an element.
+   *
+   * A design is a list of top-level nodes rather than one root element, so `ROOT_ID` names a
+   * holder that exists in the tree and nowhere in the file. Dragging between two top-level
+   * sections is an ordinary thing to want, and without this it silently did nothing — there is no
+   * `<div data-k="root">` to find the inside of. The document itself is the container. */
+  const toRoot = parentId === ROOT_ID;
+  const parentExtent = toRoot ? ([0, html.length] as [number, number]) : extentOf(html, parentId);
+  if (!parentExtent) return html;
+  // Into itself is not a move, it is a document that no longer has a tree.
+  if (!toRoot && extent[0] <= parentExtent[0] && parentExtent[1] <= extent[1]) return html;
+
+  const moving = html.slice(extent[0], extent[1]);
+  const without = html.slice(0, extent[0]) + html.slice(extent[1]);
+
+  const siblings = childrenOf(without, parentId);
+  const before = siblings[Math.max(0, Math.min(index, siblings.length))];
+
+  let at: number;
+  if (before) {
+    const target = extentOf(without, before);
+    if (!target) return html;
+    at = target[0];
+  } else if (toRoot) {
+    at = without.length;
+  } else {
+    // Last child: just inside the parent's closing tag.
+    const holder = extentOf(without, parentId);
+    if (!holder) return html;
+    const close = without.lastIndexOf("</", holder[1]);
+    at = close > holder[0] ? close : holder[1];
+  }
+
+  return without.slice(0, at) + moving + without.slice(at);
 }

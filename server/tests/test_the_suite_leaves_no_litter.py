@@ -79,6 +79,19 @@ def test_skills_are_still_reachable_through_the_redirect():
     # A subset, not an exact match. The copy is made once per session and the real folder is
     # live — installing a skill while the suite runs made this fail on set equality, which is
     # a true statement about the copy and nothing at all about whether skills are reachable.
-    # What matters is that the copy is populated and is genuinely of the installed set.
+    # What matters is that the copy is populated and that everything in it came from somewhere
+    # legitimate.
+    #
+    # "Somewhere" is two places, which the first version of this missed. A skill lands in the
+    # copy either because it was installed — the case this test is about — or because it ships
+    # in `server/skills` and the app seeded it on boot during some earlier test. The second kind
+    # is in the copy and *not yet* in the real folder, so comparing against the installed set
+    # alone fails the moment anyone adds a bundled skill, with a message about the fixture
+    # isolating too much and nothing wrong with the fixture at all.
+    bundled = (
+        {one.name for one in settings.BUNDLED_SKILLS_DIR.iterdir()}
+        if settings.BUNDLED_SKILLS_DIR.is_dir()
+        else set()
+    )
     assert copied, "the skills were not copied through, so skill tests will fail obscurely"
-    assert copied <= installed
+    assert copied <= installed | bundled

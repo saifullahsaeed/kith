@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { applyStyle, materialiseIds } from "@/lib/design/edit";
+import { applyStyle, materialiseIds, moveNode } from "@/lib/design/edit";
 import { parseDesign } from "@/lib/design/parse";
 
 /** Every id the parser sees, in the order it mints them. */
@@ -137,5 +137,77 @@ describe("applyStyle — the smallest change that expresses the edit", () => {
     const after = applyStyle('<div data-k="a" style="display:flex"></div>', "a", { gap: "16px" });
     const node = parseDesign(after).root.children[0];
     expect(node.style).toEqual({ display: "flex", gap: "16px" });
+  });
+});
+
+describe("moveNode — what a drag means when there are no coordinates", () => {
+  const ROW = '<div data-k="row"><p data-k="a">A</p><p data-k="b">B</p><p data-k="c">C</p></div>';
+
+  it("reorders among siblings", () => {
+    expect(moveNode(ROW, "c", "row", 0)).toBe(
+      '<div data-k="row"><p data-k="c">C</p><p data-k="a">A</p><p data-k="b">B</p></div>',
+    );
+  });
+
+  it("moves downwards as well as up", () => {
+    // The direction that breaks when offsets are measured before the cut rather than after.
+    expect(moveNode(ROW, "a", "row", 2)).toBe(
+      '<div data-k="row"><p data-k="b">B</p><p data-k="c">C</p><p data-k="a">A</p></div>',
+    );
+  });
+
+  it("moves to the end", () => {
+    expect(moveNode(ROW, "a", "row", 9)).toBe(
+      '<div data-k="row"><p data-k="b">B</p><p data-k="c">C</p><p data-k="a">A</p></div>',
+    );
+  });
+
+  it("reparents into another frame", () => {
+    const html = '<div data-k="one"><p data-k="a">A</p></div><div data-k="two"></div>';
+    expect(moveNode(html, "a", "two", 0)).toBe(
+      '<div data-k="one"></div><div data-k="two"><p data-k="a">A</p></div>',
+    );
+  });
+
+  it("carries the node whole, children and formatting included", () => {
+    const html =
+      '<div data-k="row"><section data-k="card" style="gap:4px">\n  <p data-k="t">hi</p>\n</section><p data-k="z">z</p></div>';
+    const after = moveNode(html, "card", "row", 1);
+    expect(after).toContain('<section data-k="card" style="gap:4px">\n  <p data-k="t">hi</p>\n</section>');
+    expect(after.indexOf('data-k="z"')).toBeLessThan(after.indexOf('data-k="card"'));
+  });
+
+  it("handles a void element, which never closes", () => {
+    const html = '<div data-k="row"><img data-k="pic" src="a.png"><p data-k="a">A</p></div>';
+    expect(moveNode(html, "pic", "row", 1)).toBe(
+      '<div data-k="row"><p data-k="a">A</p><img data-k="pic" src="a.png"></div>',
+    );
+  });
+
+  it("refuses to put a node inside itself", () => {
+    const html = '<div data-k="outer"><p data-k="inner">hi</p></div>';
+    expect(moveNode(html, "outer", "inner", 0)).toBe(html);
+    expect(moveNode(html, "outer", "outer", 0)).toBe(html);
+  });
+
+  it("leaves the document alone when a tag never closes", () => {
+    // Guessing where an unclosed element ends would take an arbitrary amount of the file with it.
+    const html = '<div data-k="row"><p data-k="a">A<p data-k="b">B</div>';
+    expect(moveNode(html, "row", "row", 0)).toBe(html);
+  });
+
+  it("reorders the top level, which has no element to be inside of", () => {
+    // A design is a list of sections, not one root element, so the tree's top is a holder that
+    // exists nowhere in the file. Without a case for it, dragging two sections past each other
+    // silently did nothing.
+    const html = '<section data-k="one">1</section><section data-k="two">2</section>';
+    expect(moveNode(html, "two", "root", 0)).toBe(
+      '<section data-k="two">2</section><section data-k="one">1</section>',
+    );
+  });
+
+  it("survives a round trip through the parser", () => {
+    const tree = parseDesign(moveNode(ROW, "c", "row", 0)).root.children[0];
+    expect(tree.children.map((child) => child.id)).toEqual(["c", "a", "b"]);
   });
 });

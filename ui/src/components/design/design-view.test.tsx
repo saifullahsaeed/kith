@@ -7,7 +7,7 @@
  * because a renderer can reintroduce what a parser removed, and `dangerouslySetInnerHTML` is one
  * plausible edit away at every point in this file.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -109,5 +109,55 @@ describe("selection, which is the editor's foothold", () => {
   it("marks the current node so the editor can draw on it", () => {
     const { container } = render(<DesignView html='<p data-k="inner">hi</p>' selected="inner" />);
     expect(container.querySelector('[data-k="inner"]')!.getAttribute("data-selected")).toBe("true");
+  });
+});
+
+describe("dragging, which reorders rather than moves", () => {
+  const transfer = () => ({ setData: vi.fn(), effectAllowed: "" });
+
+  it("reports an insertion point rather than a position", async () => {
+    const onMove = vi.fn();
+    const { container } = render(
+      <DesignView
+        html='<div data-k="row"><p data-k="a">A</p><p data-k="b">B</p></div>'
+        onMove={onMove}
+      />,
+    );
+
+    const b = container.querySelector('[data-k="b"]')!;
+    fireEvent.dragStart(b, { dataTransfer: transfer() });
+    fireEvent.dragOver(container.querySelector('[data-k="a"]')!, { dataTransfer: transfer() });
+    fireEvent.drop(container.querySelector('[data-k="a"]')!, { dataTransfer: transfer() });
+
+    // Where it goes in the list, and whose child it becomes — not an x and a y, because the
+    // dialect has no way to write one down.
+    expect(onMove).toHaveBeenCalledWith("b", "row", 0);
+  });
+
+  it("refuses to drop a node into its own descendant", () => {
+    const onMove = vi.fn();
+    const { container } = render(
+      <DesignView html='<div data-k="outer"><p data-k="inner">hi</p></div>' onMove={onMove} />,
+    );
+
+    fireEvent.dragStart(container.querySelector('[data-k="outer"]')!, { dataTransfer: transfer() });
+    fireEvent.dragOver(container.querySelector('[data-k="inner"]')!, { dataTransfer: transfer() });
+    fireEvent.drop(container.querySelector('[data-k="inner"]')!, { dataTransfer: transfer() });
+
+    expect(onMove).not.toHaveBeenCalled();
+  });
+
+  it("marks the edge the drop would land against", () => {
+    const { container } = render(
+      <DesignView html='<div data-k="row"><p data-k="a">A</p><p data-k="b">B</p></div>' onMove={vi.fn()} />,
+    );
+    fireEvent.dragStart(container.querySelector('[data-k="b"]')!, { dataTransfer: transfer() });
+    fireEvent.dragOver(container.querySelector('[data-k="a"]')!, { dataTransfer: transfer() });
+    expect(container.querySelector('[data-k="a"]')!.getAttribute("data-drop")).toBeTruthy();
+  });
+
+  it("is not draggable at all when the view is read-only", () => {
+    const { container } = render(<DesignView html='<p data-k="a">A</p>' />);
+    expect(container.querySelector('[data-k="a"]')!.getAttribute("draggable")).toBeNull();
   });
 });
