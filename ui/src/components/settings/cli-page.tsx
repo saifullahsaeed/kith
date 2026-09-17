@@ -47,7 +47,7 @@ export function CliPage() {
 
   if (!status) {
     return (
-      <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+      <div className="text-muted-foreground flex items-center gap-2 px-8 pt-1 text-sm">
         <Loader2 className="size-4 animate-spin" />
         Checking…
       </div>
@@ -55,7 +55,11 @@ export function CliPage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6 p-6">
+    /* The same shell every other tab draws: own the scroll, one left edge at `px-8`, no cap.
+       This was `max-w-2xl p-6` — a narrower measure *and* a different left edge — so moving
+       between Command line and its neighbours slid the page sideways and stopped it halfway
+       across the pane. */
+    <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-8 pt-1 pb-7">
       <div className="space-y-2">
         <h2 className="flex items-center gap-2 text-base font-medium">
           <Terminal className="size-4" />

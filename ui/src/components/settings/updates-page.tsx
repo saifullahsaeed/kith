@@ -24,7 +24,10 @@ export function UpdatesPage() {
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-1 pb-7">
-      <div className="max-w-4xl">
+      {/* No cap. Every other tab spans the content area — see the note on the one left edge in
+          `settings-page` — and a `max-w-4xl` here left this page ending partway across a pane the
+          tab beside it filled. */}
+      <div>
         <SettingSection title="This build">
           <SettingRows>
             <SettingRow

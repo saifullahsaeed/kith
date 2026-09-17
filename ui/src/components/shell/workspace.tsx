@@ -141,13 +141,12 @@ export function Workspace({
   const closeTab = useCallback(
     (key: string) => {
       closeLayoutTab(key);
-      const routed =
-        (key === "settings" && route.settingsTab) ||
-        (key === "board" && panelOpen) ||
-        (key === "context" && route.contextOpen);
+      // `settings` and `board` are gone from here: they are not tabs any more, so closing one is
+      // a navigation and nothing else — see the block near the foot of this file.
+      const routed = key === "context" && route.contextOpen;
       if (routed) navigate(pathForHome());
     },
-    [closeLayoutTab, navigate, panelOpen, route.contextOpen, route.settingsTab],
+    [closeLayoutTab, navigate, route.contextOpen],
   );
 
 
@@ -301,12 +300,16 @@ export function Workspace({
    *
    * Focus-or-open rather than open: `openTab` finds an existing tab and brings it forward, so
    * a second notification about the board does not stack a second board. */
-  useEffect(() => {
-    if (route.settingsTab) openSurface({ surface: "settings" });
-  }, [openSurface, route.settingsTab]);
-  useEffect(() => {
-    if (panelOpen) openSurface({ surface: "board" });
-  }, [openSurface, panelOpen]);
+  /* Board and Settings are not here.
+   *
+   * They used to be opened as tabs by two effects like the one below, and they cover the window
+   * — `fixed inset-0 z-30`, both — because their layouts do not fit a pane. So opening one added
+   * a tab, the pane drew a strip and a pane-scoped loading veil while the lazy chunk arrived, and
+   * *then* the thing took the screen: a tab flashing into existence and vanishing, every time.
+   *
+   * They are rendered from the route now, beside the alerts panel below, which has worked this
+   * way since it stopped being a pane. `TAKEOVERS` in `layout/tree.ts` keeps them out of the
+   * tree for good. */
   useEffect(() => {
     if (route.contextOpen) openSurface({ surface: "context", conversationId });
   }, [openSurface, route.contextOpen]);
@@ -469,37 +472,10 @@ export function Workspace({
             </ErrorBoundary>
           );
 
-        case "board":
-          return (
-            <ErrorBoundary where="The Control Panel">
-              <Suspense fallback={<ScreenLoading />}>
-                <ControlPanel
-                  tab={route.tab}
-                  openTask={route.taskId}
-                  onSelectTab={(t) => navigate(pathForTab(t))}
-                  onOpenTask={(id) => navigate(pathForTask(id))}
-                  onClose={onClose}
-                />
-              </Suspense>
-            </ErrorBoundary>
-          );
-
-        case "settings":
-          return (
-            <ErrorBoundary where="Settings">
-              <Suspense fallback={<ScreenLoading />}>
-                <SettingsPage
-                  tab={route.settingsTab ?? "model"}
-                  config={config}
-                  onSelectTab={(t) => navigate(pathForSettings(t))}
-                  onSaveConfig={onSaveConfig}
-                  onConnectionSaved={onConnectionSaved}
-                  onClose={onClose}
-                />
-              </Suspense>
-            </ErrorBoundary>
-          );
-
+        /* No `board` or `settings` case. They are not tabs — the route renders them over the
+           whole window near the foot of this file, and `TAKEOVERS` keeps them out of the tree.
+           A pane can never be asked for one, so answering here would be dead code that reads
+           like a supported arrangement. */
         case "plugin":
           /* One arm, so the ErrorBoundary is structural rather than a per-case convention —
            * which matters, because two of the seven existing arms lack one despite the comment
@@ -704,10 +680,7 @@ export function Workspace({
                 navigate(inboxOpen ? pathForHome() : pathForMessages());
               }}
               onOpenWork={() => toggleSurface("work")}
-              onOpenPanel={() => {
-                openSurface({ surface: "board" });
-                navigate(pathForTab(route.tab ?? "overview"));
-              }}
+              onOpenPanel={() => navigate(pathForTab(route.tab ?? "overview"))}
               onOpenSettings={() => navigate(pathForSettings())}
             />
             {/* The rail and the tree, side by side. The rail is furniture — outside the tree
@@ -770,6 +743,43 @@ export function Workspace({
             only its active tab, so a chat sitting behind a Work tab satisfies the tree and has
             no composer mounted, and the overlay promised "Drop to attach" over a file that
             then went nowhere. The composer answers for itself. */}
+        {/* The two screens that cover the window, opened by the route and by nothing else.
+            
+            Outside `LayoutView` because that is what they are: `fixed inset-0 z-30` roots whose
+            own layouts do not fit a pane (see `pane-surfaces.test.tsx` for the measurements that
+            settled it). While they were registered as tabs the model said "pane" and the paint
+            said "window", and you could watch the disagreement — a tab appearing for as long as
+            the lazy chunk took, then the screen being taken.
+
+            The route is the only state, exactly as it is for the alerts panel above: a path is
+            open, anything else is closed. No tab to keep in step, and no effect to keep it. */}
+        {panelOpen ? (
+          <ErrorBoundary where="The Control Panel">
+            <Suspense fallback={<ScreenLoading />}>
+              <ControlPanel
+                tab={route.tab}
+                openTask={route.taskId}
+                onSelectTab={(t) => navigate(pathForTab(t))}
+                onOpenTask={(id) => navigate(pathForTask(id))}
+                onClose={() => navigate(pathForHome())}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : null}
+        {route.settingsTab ? (
+          <ErrorBoundary where="Settings">
+            <Suspense fallback={<ScreenLoading />}>
+              <SettingsPage
+                tab={route.settingsTab}
+                config={config}
+                onSelectTab={(t) => navigate(pathForSettings(t))}
+                onSaveConfig={onSaveConfig}
+                onConnectionSaved={onConnectionSaved}
+                onClose={() => navigate(pathForHome())}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : null}
         <DropZone enabled={canAttach} />
         {/* One viewer for the whole app — a path in a message, a deliverable, and the
             file browser all open this. Given this session's project, because the paths it is

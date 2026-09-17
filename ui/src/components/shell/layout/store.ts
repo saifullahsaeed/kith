@@ -28,6 +28,8 @@ import {
   slotFor,
   stampPlace,
   tabKey,
+  TAKEOVERS,
+  withoutSurfaces,
   type Edge,
   type Node,
   type SurfaceId,
@@ -150,7 +152,12 @@ export function readStored(): Node | null {
      * layout is a fine answer. */
     const seen = ids(held.tree);
     if (new Set(seen).size !== seen.length) return null;
-    return held.tree;
+    /* Retired surfaces come out here rather than failing the tree.
+     *
+     * Board and Settings were tabs until they became route-driven takeovers, so every layout
+     * stored before that holds one. Returning null for those would mean the default arrangement
+     * — the whole thing thrown away over two tabs nothing can draw. See `TAKEOVERS`. */
+    return withoutSurfaces(held.tree, TAKEOVERS);
   } catch {
     // Private mode, no storage, or something that is not JSON. All three mean the same thing.
     return null;
@@ -471,6 +478,12 @@ export const useLayout = create<LayoutState>((set, get) => {
      * split, and the pane it makes is where focus goes — an open you asked for in a new pane
      * should not leave you staring at the old one. */
     open: (ref, opts) => {
+      /* Not everything is a tab. Board and Settings cover the window and are opened by the route;
+       * putting one in the tree is what made them flash a tab on the way to taking the screen.
+       * Refused here rather than trusted to callers, because a drag and a deep link are callers
+       * too. See `TAKEOVERS`. */
+      if (TAKEOVERS.has(ref.surface)) return;
+
       const { tree, focused, widths, placements, pins } = get();
 
       /* A surface that is about a conversation joins that chat's column, not the tab strip.

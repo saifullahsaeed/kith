@@ -145,6 +145,28 @@ export type Edge = "left" | "right" | "top" | "bottom" | "center";
  */
 export const BOUND: ReadonlySet<SurfaceId> = new Set(["work", "context", "plugin"]);
 
+/**
+ * The surfaces that are not panes at all, and cannot be put in this tree.
+ *
+ * Board and Settings cover the window — `fixed inset-0 z-30`, both of them — because their own
+ * layouts do not fit a pane: at the widths their `minWidth` allows, their content columns come up
+ * short and each shortfall becomes a horizontal scrollbar rather than a squeeze. That was decided
+ * and written down (see `pane-surfaces.test.tsx`), but they were left registered as tabs anyway,
+ * so the model said "pane" while the paint said "window".
+ *
+ * You could see the disagreement. Opening one added a tab, the pane drew a strip and a
+ * pane-scoped loading veil for as long as the lazy chunk took, and *then* the thing covered the
+ * screen — a tab flashing into existence and vanishing, every time. They also sat in the strip
+ * and held a pane that nothing could ever render into.
+ *
+ * So the route opens them now and the tree never sees them. Kept in `SurfaceId` and `SURFACES`
+ * deliberately: that vocabulary is what `surfaceFor` and the layout's own tests are written
+ * against, and narrowing a union to say something the store already enforces would be a hundred
+ * edits to the layout engine for no behaviour. `open` refuses them, and `withoutSurfaces` takes
+ * them out of anything that arrives holding one.
+ */
+export const TAKEOVERS: ReadonlySet<SurfaceId> = new Set(["board", "settings"]);
+
 export function tabKey(ref: TabRef): string {
   if (ref.surface === "chat") return `chat:${ref.conversationId}`;
   /* `@<conversation>` for a bound surface, which is what makes Work-for-this-chat and
@@ -637,6 +659,28 @@ export function openAtSlot(
     tree: { ...root, children, sizes: normalise(sizes) },
     paneId: made.id,
   };
+}
+
+/**
+ * Every tab of these surfaces, gone — for a tree that arrived holding one.
+ *
+ * Stored layouts on disk predate `TAKEOVERS`, and every one of them may hold a Board or Settings
+ * tab. Rejecting such a tree is not an option: `readStored` answers null for anything it does not
+ * like, and null means the default, so one retired surface would throw away the whole
+ * arrangement. Strip the tabs, keep the panes and the sizes.
+ *
+ * An emptied pane is left empty rather than collapsed. Invariant 5 allows one, `EmptyPane` draws
+ * it with a way out, and collapsing here would silently reshape a layout the person arranged —
+ * a bigger change than the one that was asked for.
+ */
+export function withoutSurfaces(root: Node, surfaces: ReadonlySet<SurfaceId>): Node {
+  return mapPanes(root, (one) => {
+    const tabs = one.tabs.filter((tab) => !surfaces.has(tab.surface));
+    if (tabs.length === one.tabs.length) return one;
+    const wasActive = one.tabs[one.active];
+    const active = tabs.findIndex((tab) => tab.uid === wasActive?.uid);
+    return { ...one, tabs, active: active >= 0 ? active : clampActive(tabs, 0) };
+  });
 }
 
 /** Invariant 7: pinned tabs occupy a prefix of every pane's `tabs`.

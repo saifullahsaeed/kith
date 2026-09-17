@@ -49,13 +49,43 @@ describe("what the app opens as", () => {
 
 describe("reading what was stored", () => {
   it("round-trips a layout", () => {
-    const tree = split("row", [pane([{ surface: "work" }]), pane([{ surface: "settings" }])]);
+    const tree = split("row", [pane([{ surface: "work" }]), pane([{ surface: "context" }])]);
     localStorage.setItem(layoutKey, JSON.stringify({ version: layoutVersion, tree }));
 
     const back = readStored();
 
     expect(back).not.toBeNull();
-    expect(panes(back!).map((one) => one.tabs.map(tabKey))).toEqual([["work"], ["settings"]]);
+    expect(panes(back!).map((one) => one.tabs.map(tabKey))).toEqual([["work"], ["context"]]);
+  });
+
+  /* The migration, and why it is a strip rather than a rejection.
+   *
+   * Every layout stored before Board and Settings became route-driven takeovers may hold one.
+   * `readStored` answers null for anything it dislikes and null means the default — so failing
+   * such a tree would throw away the whole arrangement over two tabs nothing can draw. */
+  it("takes retired takeover tabs out of a stored layout and keeps the rest", () => {
+    const tree = split("row", [
+      pane([{ surface: "work" }, { surface: "settings" }], 1, "left"),
+      pane([{ surface: "context" }], 0, "right"),
+    ]);
+    localStorage.setItem(layoutKey, JSON.stringify({ version: layoutVersion, tree }));
+
+    const back = readStored();
+
+    expect(back).not.toBeNull();
+    expect(panes(back!).map((one) => one.tabs.map(tabKey))).toEqual([["work"], ["context"]]);
+    // And `active` comes back pointing at a tab that exists — it named the one just removed.
+    expect(panes(back!)[0]!.active).toBe(0);
+  });
+
+  it("leaves a pane empty rather than reshaping a layout the person arranged", () => {
+    const tree = split("row", [
+      pane([{ surface: "board" }], 0, "left"),
+      pane([{ surface: "work" }], 0, "right"),
+    ]);
+    localStorage.setItem(layoutKey, JSON.stringify({ version: layoutVersion, tree }));
+
+    expect(panes(readStored()!).map((one) => one.tabs.length)).toEqual([0, 1]);
   });
 
   it("refuses a layout from a version it does not know", () => {
@@ -201,13 +231,13 @@ describe("where surfaces prefer to open", () => {
     useLayout.setState({ tree: pane([{ surface: "work" }]), focused: "" });
     const was = useLayout.getState().placements;
     try {
-      useLayout.getState().setPlacement("settings", "beside");
-      useLayout.getState().open({ surface: "settings" });
+      useLayout.getState().setPlacement("context", "beside");
+      useLayout.getState().open({ surface: "context" });
 
       const tree = useLayout.getState().tree;
       expect(tree.kind).toBe("split");
       const made = panes(tree)[1];
-      expect(made.tabs.map(tabKey)).toEqual(["settings"]);
+      expect(made.tabs.map(tabKey)).toEqual(["context"]);
       expect(useLayout.getState().focused, "the pane you asked for is where you are").toBe(
         made.id,
       );
@@ -224,13 +254,13 @@ describe("the default is the section rule", () => {
     try {
       // The section rule, named: it is no longer the default, but it is still the rung this
       // test is about.
-      useLayout.setState({ placements: { settings: "own" } });
-      useLayout.getState().open({ surface: "settings" });
+      useLayout.setState({ placements: { context: "own" } });
+      useLayout.getState().open({ surface: "context" });
 
       const tree = useLayout.getState().tree;
       expect(tree.kind, "a section was raised").toBe("split");
       const made = panes(tree)[1];
-      expect(made.tabs.map(tabKey)).toEqual(["settings"]);
+      expect(made.tabs.map(tabKey)).toEqual(["context"]);
       expect(useLayout.getState().focused, "the pane you asked for is where you are").toBe(
         made.id,
       );
@@ -533,9 +563,19 @@ describe("a bound surface opens into the chat's column", () => {
     expect(useLayout.getState().companions).toEqual({});
   });
 
-  it("board and settings are about Kith, so they stay tabs", () => {
+  /* They were tabs, and the tab was the bug.
+   *
+   * Board and Settings cover the window — their layouts do not fit a pane — so registering them
+   * here meant the model said "pane" while the paint said "window". Opening one added a tab, the
+   * pane drew a strip and a loading veil while the chunk arrived, and then the screen was taken:
+   * a tab flashing into existence and vanishing, every time. The route opens them now. */
+  it("refuses board and settings outright — they are not tabs", () => {
+    const before = useLayout.getState().tree;
+
     useLayout.getState().open({ surface: "settings" });
-    expect(panes(useLayout.getState().tree)[0]!.tabs.map(tabKey)).toContain("settings");
+    useLayout.getState().open({ surface: "board" });
+
+    expect(useLayout.getState().tree).toBe(before);
     expect(useLayout.getState().companions).toEqual({});
   });
 
