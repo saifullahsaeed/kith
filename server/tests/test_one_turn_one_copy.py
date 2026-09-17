@@ -139,8 +139,8 @@ class TestTheStreamSaysWhichTurnItIs:
 
     def test_attaching_names_the_turn_it_joined(self, client):
         live = live_turns.begin("c-live")
+        response = client.get("/api/chat/c-live/attach")
         try:
-            response = client.get("/api/chat/c-live/attach")
             assert response.status_code == 200
             assert response.headers.get("X-Kith-Turn") == live.id
         finally:
