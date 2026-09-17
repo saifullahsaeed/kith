@@ -136,6 +136,33 @@ def never_the_real_data_folder(_safe_data_dir, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def never_the_real_workspace(tmp_path_factory, monkeypatch):
+    """No test can write into the folder he actually works in.
+
+    The sibling fixtures above isolate the databases and the data folder, and stopped there.
+    His *workspace* is neither: ``configured_root()`` reads ``settings.WORKSPACE_DIR``, falls
+    back to a stored setting, and then to ``~/kith`` — none of which any redirect above
+    touches. So every test that reached a write path wrote into the user's real files.
+
+    Found the way these always are. A test for the interface's save route asserted the file
+    had landed under its own ``tmp_path``, which it had not; it was in ``~/kith``, beside two
+    years of his actual work, with nothing anywhere having failed. The assertion only caught
+    it because it named a path — a test that merely wrote and read back would have passed
+    while quietly littering, which is exactly how the 4,491 transcripts happened.
+
+    Per-test rather than session-scoped: a workspace is small, and tests that create files
+    with the same name in it should not be able to see each other's.
+    """
+    safe = tmp_path_factory.mktemp("never-real-workspace")
+    monkeypatch.setenv("KITH_WORKSPACE", str(safe))
+    monkeypatch.setattr(kith.settings, "WORKSPACE_DIR", str(safe))
+    for name, module in list(sys.modules.items()):
+        if name.startswith("kith.") and hasattr(module, "WORKSPACE_DIR"):
+            monkeypatch.setattr(module, "WORKSPACE_DIR", str(safe), raising=False)
+    yield safe
+
+
+@pytest.fixture(autouse=True)
 def never_the_real_config(tmp_path_factory, monkeypatch):
     """No test can read `server/data/config.db`, which holds the developer's API key.
 

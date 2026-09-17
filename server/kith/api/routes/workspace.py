@@ -8,6 +8,7 @@ from flask import jsonify, request, send_file
 
 from kith.api.blueprint import api
 from kith.infra import default_app
+from kith.infra import permissions
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import handoff
@@ -208,6 +209,51 @@ def workspace_make_folder():
 )
 def workspace_rename():
     return _mutate(lambda body: sandbox.move(_relative(body.get("path")), _relative(body.get("to"))))
+
+
+@api.put("/workspace/file")
+@api.doc(
+    summary="Save a workspace file",
+    description=(
+        "Overwrites one file in his workspace with the text given. Anchored to a project "
+        "the same way reading is, so the same path reads and writes the same file — but "
+        "never *searched* for, because guessing which file someone meant is fine before "
+        "showing it and appalling before overwriting it. Body: {path, content, projectId?}."
+    ),
+)
+def workspace_write():
+    """The write the interface does, which is not the write he does.
+
+    ``sandbox.write_file`` ends in ``permissions.require_path``, and a refusal there does not
+    return — it *parks the thread* until somebody answers the prompt. That is right for him:
+    he writes unprompted and a person deciding is the whole point of the gate. It is wrong
+    here twice over. The person deciding is the one who just pressed save, so prompting them
+    about their own click asks a question that has already been answered; and the thing being
+    parked is an HTTP request, which would sit there until it timed out and look to the editor
+    like a save that silently failed.
+
+    So the same question is asked in the form that can be answered immediately. Inside his
+    workspace or inside a folder linked to a project, ``check_path`` allows it outright and
+    the write proceeds — which is every design there will ever be. Anywhere else it is a 403
+    with a reason, rather than a request nobody is going to answer.
+    """
+    body = request.get_json(silent=True) or {}
+    path = str(body.get("path") or "").strip()
+    content = body.get("content")
+    if not path:
+        return jsonify({"error": "path required"}), 400
+    if not isinstance(content, str):
+        return jsonify({"error": "content must be text"}), 400
+
+    target = Path(sandbox.resolve(_anchor(path, body.get("projectId"))))
+    if not permissions.check_path("write", target, sandbox.root()).allowed:
+        return jsonify({"error": "that file is outside the folders this editor can save into"}), 403
+
+    try:
+        sandbox.write_file(str(target), content)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "path": str(target)})
 
 
 @api.delete("/workspace/file")
