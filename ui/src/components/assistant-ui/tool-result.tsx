@@ -1,11 +1,16 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
+import { DesignView } from "@/components/design/design-view";
+import { fetchWorkspaceFile } from "@/lib/backend/brain";
+import { useBoardOverlay } from "@/lib/design/board-overlay";
+import { looksLikeADesign } from "@/lib/design/detect";
 import { memo, useState, type FC, type ReactNode } from "react";
 import { formatBytes } from "@/lib/bytes";
 import { useThreadRuntime } from "@assistant-ui/react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BookOpenText, Check, Copy, Radar } from "lucide-react";
+import { BookOpenText, Check, Copy, Frame, Radar } from "lucide-react";
 
 import { PluginOutcome, splitPluginTool } from "@/components/assistant-ui/plugin-outcome";
 import { Button } from "@/components/ui/button";
@@ -404,6 +409,74 @@ const Prose: FC<{ text: string; className?: string }> = ({ text, className }) =>
  *  meant to be read, not looked at. Resources are clickable (they're paths inside `directory`,
  *  which nothing did anything with before); `note`, when present, is the "you already opened
  *  this" or "that's a lot of skills this turn" warning and reads as one, ahead of the body. */
+/** A deliverable that is a design: the thing he made, not a sentence about the file he wrote. */
+function looksLikeDesign(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.task_id === "number" &&
+    typeof value.kind === "string" &&
+    typeof value.content === "string" &&
+    typeof value.title === "string" &&
+    looksLikeADesign(value.kind, value.content)
+  );
+}
+
+/**
+ * A design he attached, shown as the design.
+ *
+ * The board was three clicks away — control panel, tasks, the task, open board — which for a
+ * thing produced *in the conversation* is the same as not existing. He made four screens and the
+ * chat showed a paragraph about four filenames; the work and the place to look at the work were
+ * in different rooms.
+ *
+ * So the result renders the screen itself, small and live, and the board opens over the pane from
+ * here. Live rather than a screenshot for the same reason the board's frames are: it is the thing
+ * that will be built, it follows the theme, and it costs one more render of markup that is
+ * already parsed.
+ */
+function Design({ value }: { value: Record<string, unknown> }) {
+  const path = String(value.content);
+  const taskId = Number(value.task_id);
+  const show = useBoardOverlay((state) => state.show);
+  const file = useQuery({
+    queryKey: ["design", path, null],
+    queryFn: () => fetchWorkspaceFile(path),
+  });
+
+  return (
+    <div className="overflow-hidden rounded-xl ring-1 ring-border/60">
+      <button
+        type="button"
+        onClick={() => show({ taskId, projectId: null, title: String(value.title) })}
+        className="group block w-full text-start"
+      >
+        <div className="relative h-44 overflow-hidden border-b border-border/60 bg-muted/30">
+          {file.data?.content ? (
+            // Inert: this is a picture of the design, and a click belongs to the button.
+            <div
+              className="pointer-events-none origin-top-left"
+              style={{ transform: "scale(0.34)", width: 1200 }}
+            >
+              <DesignView html={file.data.content} />
+            </div>
+          ) : (
+            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+              {file.error ? "couldn't read that design" : "…"}
+            </div>
+          )}
+          <span className="absolute end-2 bottom-2 rounded-md bg-background/90 px-2 py-1 text-[11px] font-medium opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+            Open board
+          </span>
+        </div>
+        <div className="flex items-baseline gap-2 px-3 py-2">
+          <Frame className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate text-xs font-medium">{String(value.title)}</span>
+          <span className="truncate font-mono text-[11px] text-muted-foreground">{path}</span>
+        </div>
+      </button>
+    </div>
+  );
+}
+
 function looksLikeSkill(value: Record<string, unknown>): boolean {
   return (
     typeof value.name === "string" &&
@@ -1600,6 +1673,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     if (looksLikeAsked(object)) return <Asked args={args} value={object} />;
     if (looksLikePicture(object)) return <Picture value={object} />;
     if (looksLikeGallery(object)) return <Gallery value={object} />;
+    if (looksLikeDesign(object)) return <Design value={object} />;
     if (looksLikeTask(object)) return <Task value={object} />;
     if (looksLikeMilestone(object)) return <Milestone value={object} />;
     if (looksLikeProject(object)) return <Project value={object} />;
