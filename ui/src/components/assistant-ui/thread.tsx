@@ -1,5 +1,6 @@
 "use client";
 
+import { DesignsInTurn } from "@/components/design/designs-in-turn";
 import { AttachmentUI, UserMessageAttachments } from "@/components/assistant-ui/attachment";
 import { PendingSteer } from "@/components/assistant-ui/pending-steer";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
@@ -1070,6 +1071,9 @@ const AssistantMessage: FC = () => {
             }
           }}
         </MessagePrimitive.GroupedParts>
+        {/* What the turn *made*, under the turn, open. A design is not a step worth auditing —
+            it is the output, and it was invisible inside the tool chain's closed disclosure. */}
+        <DesignsInTurn />
         <MessageError />
       </div>
 
