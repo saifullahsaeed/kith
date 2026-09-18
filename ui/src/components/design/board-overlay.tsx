@@ -17,8 +17,14 @@ import { DesignBoardPage } from "@/components/design/design-board-page";
 import { fetchTaskDetail } from "@/lib/backend/brain";
 import { useBoardOverlay } from "@/lib/design/board-overlay";
 import { looksLikeADesign } from "@/lib/design/detect";
+import { useShowing } from "@/lib/design/use-showing";
 
 export function BoardOverlay() {
+  // He can open this himself — `show_board` sets a small piece of state and this is what
+  // notices. Listened for here rather than at the app root because this is the thing that
+  // draws the result, and a listener somewhere else would be a second place to look.
+  useShowing();
+
   const open = useBoardOverlay((state) => state.open);
   const hide = useBoardOverlay((state) => state.hide);
 

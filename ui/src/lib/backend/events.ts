@@ -55,7 +55,9 @@ export type ChangeKind =
   // and nothing refetches, which looks like a quiet widget rather than a broken one.
   | "plugin"
   | "plugin_state"
-  | "plugin_call";
+  | "plugin_call"
+  // Something he asked you to look at — see `services/showing` and `show_board`.
+  | "showing";
 
 export interface Change {
   kind: ChangeKind;

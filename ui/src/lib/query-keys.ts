@@ -21,6 +21,8 @@ import type { ChangeKind } from "@/lib/backend/events";
 
 /** Every key the app fetches under. One factory, so a typo is a type error rather than a miss. */
 export const keys = {
+  /** What he last asked you to look at, if anything. */
+  showing: () => ["showing"] as const,
   /** The board: projects, tasks, milestones — everything `GET /api/brain` answers with. */
   brain: () => ["brain"] as const,
   /** Names and statuses only. The conversations panel groups by project and needs nothing else;
@@ -121,6 +123,8 @@ export type Stale = Prefix | { scoped: Prefix };
  * from the interface as a feature that is merely quiet.
  */
 export const STALE_ON: Record<ChangeKind, Stale[]> = {
+  // He put something in front of you. `use-showing` fetches it and opens it.
+  showing: [["showing"]],
   // A turn starting or finishing changes what he is doing and what he is working through.
   turn: [
     ["activity", "status"],

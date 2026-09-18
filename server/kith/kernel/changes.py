@@ -63,6 +63,8 @@ KINDS = (
     "plugin",
     "plugin_state",
     "plugin_call",
+    # Something he asked you to look at — see `services/showing`.
+    "showing",
 )
 
 

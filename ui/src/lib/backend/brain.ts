@@ -301,6 +301,24 @@ export async function fetchDesignSystem(
   return (await res.json()) as { path: string; content: string };
 }
 
+/** What he last asked you to look at — a board, so far — or null. */
+export async function fetchShowing(): Promise<{
+  kind: string;
+  taskId: number;
+  note: string;
+  at: string;
+  conversation: string;
+} | null> {
+  const res = await fetch("/api/showing");
+  if (!res.ok) return null;
+  return ((await res.json()) as { showing: never }).showing ?? null;
+}
+
+/** Take it, so relaunching the app does not reopen a board from last Tuesday. */
+export async function takeShowing(): Promise<void> {
+  await fetch("/api/showing", { method: "DELETE" }).catch(() => {});
+}
+
 export async function fetchTaskDetail(id: number): Promise<TaskDetail> {
   const res = await fetch(`/api/tasks/${id}`);
   if (!res.ok) throw new Error(`/api/tasks/${id} ${res.status}`);

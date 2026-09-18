@@ -274,6 +274,7 @@ describe("the map itself", () => {
       "question",
       "permission",
       "schedule",
+      "showing",
       "steer",
       "plugin",
       "plugin_state",

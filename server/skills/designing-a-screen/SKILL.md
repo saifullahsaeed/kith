@@ -39,6 +39,20 @@ add_deliverable(id=41, kind="file", title="Settings screen", content="screens/se
 The editor appears on the deliverable by itself. Put designs somewhere sensible — `screens/`,
 or beside the code they are for if the task has a project.
 
+**Then show them.**
+
+```
+show_board(id=41, note="the row height is the thing I want your eye on")
+```
+
+That opens the designs on their screen, side by side, at a zoom where they can be compared. Do it
+the moment you have more than one, and any time they ask to see something you made. A paragraph
+describing four screens is not showing them four screens — and there is nothing else on this
+machine that can open one: no screenshot tool, no file that opens itself, and searching for the
+word "board" finds nothing, because the board is a surface in the app rather than a file on disk.
+
+It answers with what is actually on it, so name those titles in what you say next.
+
 ## The dialect
 
 A design is ordinary HTML, but two constraints are what make it *editable* rather than merely

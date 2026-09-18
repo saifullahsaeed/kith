@@ -8,6 +8,7 @@ from kith.domain import stall
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
+from kith.services import showing
 from kith.services import board_sync, project_binding
 from kith.services.tasks import (
     FILED_THIS_TURN,
@@ -492,3 +493,52 @@ def add_deliverable(path: Path, args: dict):
         kind="delivered",
     )
     return saved
+
+@tool(
+    "show_board",
+    "Open a task's designs on their screen, side by side, so they can look at them and say "
+    "which one. Use it the moment you have finished more than one design, and whenever they "
+    "ask to see something you made — a paragraph describing four screens is not showing them "
+    "four screens. Takes the task the designs are attached to.",
+    {
+        "id": {**INT, "description": "The task whose designs to show."},
+        "note": {
+            **STR,
+            "description": "One line to read beside them — what you want their eye on. Optional.",
+        },
+    },
+    required=("id",),
+)
+def show_board(path: Path, args: dict):
+    """Put the board in front of them.
+
+    He could make designs and never show one. Asked to, he went looking for the word "board" —
+    `find -iname "*board*"`, `git log | grep board`, two plugin reads — because the surface that
+    draws them belongs to the interface and nothing told him it could be opened. Three commands
+    to not find a thing already one click away on the screen in front of his person.
+
+    Returns what is actually on the board rather than an acknowledgement, for the same reason
+    `add_deliverable` returns the row: a tool that answers "ok" teaches him nothing about what
+    happened, and the titles are what his next sentence needs to name.
+    """
+    task_id = int(args["id"])
+    detail = repo.tasks.task_detail(path, task_id) or {}
+    designs = [
+        one
+        for one in (detail.get("deliverables") or [])
+        if one.get("kind") == "file" and str(one.get("content", "")).lower().endswith((".html", ".htm"))
+    ]
+    if not designs:
+        # Said plainly rather than opening an empty board, which would look broken and be his
+        # fault in a way he could not see.
+        return {
+            "shown": False,
+            "why": f"task #{task_id} has no design files attached — attach them with add_deliverable first",
+        }
+
+    showing.show("board", task_id, str(args.get("note") or ""))
+    return {
+        "shown": True,
+        "task": detail.get("goal") or f"task #{task_id}",
+        "designs": [{"title": one.get("title"), "file": one.get("content")} for one in designs],
+    }

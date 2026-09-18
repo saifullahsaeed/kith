@@ -25,6 +25,9 @@ vi.mock("@/lib/backend/brain", () => ({
   fetchWorkspaceFile: vi.fn(),
   saveWorkspaceFile: vi.fn(),
   fetchDesignSystem: vi.fn(),
+  // The overlay listens for what he puts in front of you — see `use-showing`.
+  fetchShowing: vi.fn(async () => null),
+  takeShowing: vi.fn(async () => {}),
 }));
 
 const task = vi.mocked(fetchTaskDetail);
