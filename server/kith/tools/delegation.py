@@ -128,6 +128,10 @@ WITHHELD = frozenset(
         # at how far behind the folder is.
         "commit",
         "publish",
+        # Reaches a person, which is the line a scout does not cross. `show_board` puts a
+        # design on their screen and interrupts what they were looking at — the main agent
+        # decides when that is worth doing, having read what the worker found.
+        "show_board",
         "remember",
         "forget",
         "journal",
