@@ -10,7 +10,7 @@ driving it. The person scrolls it, types in it and logs into it with their hands
 same page with `plugin__browser__*`. Not a copy of their page and not a screenshot of it — the
 same one. That single fact is what most of this skill follows from.
 
-## Read before you look
+## Read before you look, and crop before you read
 
 `read` returns the page as text and costs a few hundred tokens. `look` returns a **path to a
 screenshot**, and reading one costs a few thousand.
@@ -23,6 +23,17 @@ So `read` to find out what a page says. Reach for the picture only when
 
 A path is not an image. `look` costs you almost nothing until you `read_file` it — so a step
 that returns one has not spent anything yet, and the decision is still yours.
+
+**And when you do look, look at the part you were asked about.** `look(text: "Pricing")` or
+`look(selector: ".card")` crops to that component with a margin of page around it, and the
+answer carries the selector it used so you can click or type into the same thing afterwards.
+A crop of a card is a few hundred tokens where the page it sits on is a few thousand, and the
+rest of the page was not the question. The margin is deliberate: a component cropped exactly to
+its own edges cannot show you that it is overlapping its neighbour, which is half of what
+anybody is asking.
+
+Nothing matches? The answer lists what is on the page, the same way `click`'s does. Use the
+list rather than falling back to a picture of everything.
 
 ## Click by what it says
 
@@ -44,9 +55,21 @@ this look like on a phone", and to check the layout they are building.
 
 - A named size is usually the right call: `resize(preset: "phone")` for a phone, `"tablet"`
   for a tablet, `"laptop"` or `"desktop"` for the sizes a page is designed at. `"square"` is
-  there for a feed or a canvas that should hold up at 1:1.
+  there for a feed or a canvas that should hold up at 1:1. The sizes behind the names are
+  phone 390×844, phone-landscape 844×390, tablet 820×1180, tablet-landscape 1180×820,
+  laptop 1280×800, desktop 1920×1080, square 900×900.
 - `resize(width: 320)` is the precise version — an odd width from a design file, a screenshot
   spec. Width and height are independent: give only the one you mean to change.
+- `resize(ratio: "16:9")` reshapes around the width already in force, and a ratio given
+  alongside one dimension settles the other: `resize(width: 1440, ratio: "16:10")` is 1440×900
+  without you doing the arithmetic. `"21:9"`, `"9:16"`, `"4:3"`, `"1:1"` all read.
+- **The pane's size does not change the layout any more, and `scale` is how you know.** The
+  page is laid out at exactly the size you asked for whatever the pane can hold, and painted
+  smaller when it will not fit — so `resize(preset: "desktop")` in a narrow pane really is the
+  desktop breakpoint, and the answer's `scale` (0.6, say) tells you the picture is at 60%. That
+  used to be a lie: the viewport was quietly cut down to the pane and reported as the size you
+  asked for, so a "desktop" check in a narrow pane was a look at the mobile layout. If you are
+  reading old notes that treat a small pane as a constraint on `resize`, they are out of date.
 - **Read or look afterwards.** Resizing changes nothing a person would call content; the
   answer tells you the size that now holds, and `read` or `look` is how you see what it did
   to the page. A `look` at a phone viewport is the cheap way to answer "does the nav
@@ -54,6 +77,22 @@ this look like on a phone", and to check the layout they are building.
 - **Put it back.** `resize(preset: "reset")` — or a bare `resize()` — returns the page to the
   full tab when you are done. The person sees a smaller page centred in their tab otherwise,
   and the chip in the tab's header clears it with one click if you forget.
+
+## When they know which one they mean, let them point at it
+
+There is a crosshair in the tab's header. They click it, click a component on the page, and it
+arrives in the composer as a cropped picture with a caption carrying **its selector** and the
+words on it.
+
+That matters to you in two ways. The obvious one is that a picture that turns up with
+``` `main > section:nth-of-type(2) > div.card` ``` attached is a component you can `look` at
+again, `click`, or `type` into without looking for it first. The less obvious one is what to do
+*before* it arrives: when somebody is describing one card among nine and the description is not
+landing, stop narrowing it down by guessing. Say the crosshair is there and ask them to point.
+One gesture settles what three rounds of "the third one, no, the one below it" does not.
+
+You cannot start it yourself — it is their hand on the mouse, by design. `look(text: …)` is your
+half of the same idea.
 
 ## When you are stuck, hand the wheel back
 
@@ -72,6 +111,17 @@ this skill is shorter than it used to be.
 The session persists, so a login holds for later turns as well. It is the plugin's own browser
 profile — not their everyday one — so it starts logged out and holds only what they have signed
 into here.
+
+**There is a second way through a login, and it is worth offering when signing in by hand would
+be tedious.** The key button in the tab's header copies one site's cookies out of a browser they
+are already signed in on — Chrome, Arc, Brave, Edge, Firefox — into this profile. One domain
+that they name, never a whole profile, and macOS asks for that browser's key on the way. So:
+
+> "You're signed into this in Chrome already — the key button in the Browser tab will copy that
+> login across for this domain, then I'll carry on."
+
+Like the crosshair, it is theirs to press and not yours to call. Once it has landed, reload the
+page and continue.
 
 ## Things worth knowing
 
@@ -97,6 +147,7 @@ into here.
 | | |
 | --- | --- |
 | `read` on an ordinary page | a few hundred tokens |
-| `read_file` on a screenshot | a few thousand |
+| `read_file` on a whole-page screenshot | a few thousand |
+| `read_file` on a `look` cropped to one component | a few hundred |
 | `look`, unread | ~50 tokens |
 | every other call | ~50 tokens |

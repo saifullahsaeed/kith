@@ -21,6 +21,11 @@
  *   that names a file, and nothing that runs script in the page — the model's side of that goes
  *   over loopback with a token, where the Python server has already decided the caller is
  *   allowed.
+ * * **Two verbs that exist only here.** `pick` and `cookie-import` have no `/browse` case and
+ *   are not in `VIEW_ACTS`, so the model cannot start either. That is not tidiness: both are
+ *   defined by a person doing something — pointing at a component, naming a site they are
+ *   already signed into — and a version of them the model could call would be a different
+ *   feature with a different argument behind it. See `cookie-import.ts` for the long form.
  * * **A plugin id checked against what is installed.** The renderer says which plugin's view it
  *   is placing; the main process refuses anything that is not a `web` surface the person
  *   actually installed, so a compromised renderer cannot conjure a browser out of a name.
@@ -36,6 +41,7 @@ import { apiHeaders } from "../server/api-token";
 
 import { getMainWindow } from "../window/window";
 
+import * as cookies from "./cookie-import";
 import * as views from "./web-views";
 
 /** Renderer → main. One channel, a verb inside. */
@@ -113,12 +119,51 @@ export function installWebViewChannel(): void {
         case "reload":
           return await views.reload(at);
         case "resize": {
-          const asked = raw as { preset?: unknown; width?: unknown; height?: unknown };
+          const asked = raw as {
+            preset?: unknown;
+            width?: unknown;
+            height?: unknown;
+            ratio?: unknown;
+          };
           return await views.resize(at, {
             preset: typeof asked.preset === "string" ? asked.preset : undefined,
             width: typeof asked.width === "number" ? asked.width : undefined,
             height: typeof asked.height === "number" ? asked.height : undefined,
+            ratio: typeof asked.ratio === "string" ? asked.ratio : undefined,
           });
+        }
+        /* The inspector. Person-only — see the note at the top of this file — and it answers
+         * once the person has clicked something or given up, which is why the renderer treats
+         * it as a long call and not as a round trip. */
+        case "pick": {
+          const asked = raw as { pad?: unknown };
+          return await views.pick(at, typeof asked.pad === "number" ? asked.pad : undefined);
+        }
+        case "unpick":
+          await views.unpick(at);
+          return { ok: true };
+        case "cookie-sources":
+          return { sources: cookies.sources() };
+        // What that browser is holding a login for. Read-only, no keychain — host names are not
+        // encrypted in either format — and on the same chrome-only channel as the import it
+        // precedes, so neither the model nor a plugin can ask it what you are signed into.
+        case "cookie-domains": {
+          const asked = raw as { source?: unknown; profile?: unknown };
+          return {
+            domains: await cookies.domainsIn(
+              String(asked.source ?? ""),
+              asked.profile ? String(asked.profile) : undefined,
+            ),
+          };
+        }
+        case "cookie-import": {
+          const asked = raw as { source?: unknown; domain?: unknown; profile?: unknown };
+          return await cookies.importCookies(
+            at.plugin,
+            String(asked.source ?? ""),
+            String(asked.domain ?? ""),
+            asked.profile ? String(asked.profile) : undefined,
+          );
         }
         case "status":
           return views.status(at) ?? { error: "not open" };

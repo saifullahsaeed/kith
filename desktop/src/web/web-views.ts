@@ -135,6 +135,14 @@ export interface ViewStatus {
    *  it is not simply the pane. The chrome shows it, so the pane never looks broken without
    *  saying why — and the person can clear it from there in one click. */
   viewport: { width: number; height: number } | null;
+  /** How much that viewport is shrunk to fit the pane it is drawn in. 1 when it fits.
+   *
+   *  **The viewport used to be reported without it, and that made the answer untrue.** A
+   *  viewport larger than the pane was quietly cut down to the pane, and the call still said
+   *  the size it had been asked for — so `resize(preset: "desktop")` in a 700-pixel pane laid
+   *  the page out at 700 pixels and reported 1920×1080. The page is now laid out at the full
+   *  size and *drawn* smaller, and this is the number that says by how much. */
+  scale: number;
 }
 
 /** The named sizes `resize` accepts, and the reason they are named rather than invented: the
@@ -152,6 +160,31 @@ export const VIEWPORT_PRESETS: Record<string, { width: number; height: number }>
   square: { width: 900, height: 900 },
 };
 
+/**
+ * An aspect ratio, as a person writes one.
+ *
+ * `"16:9"`, `"9/16"`, `"4:3"`, or a bare number. The shape a page is looked at in is at least
+ * as often a ratio as a pair of pixel counts — "how does this hold up at 21:9", "check it at
+ * 9:16 for a phone" — and the arithmetic is the sort a model gets subtly wrong when it is
+ * asked to do it in its head and then report the number it used.
+ *
+ * Returns `0` for anything unreadable, so the caller can say so rather than silently laying
+ * the page out at a size nobody asked for.
+ */
+export function parseRatio(raw: string): number {
+  const wanted = String(raw ?? "").trim();
+  if (!wanted) return 0;
+  const pair = /^(\d+(?:\.\d+)?)\s*[:/x×]\s*(\d+(?:\.\d+)?)$/i.exec(wanted);
+  if (pair) {
+    const across = Number(pair[1]);
+    const down = Number(pair[2]);
+    if (!(across > 0) || !(down > 0)) return 0;
+    return across / down;
+  }
+  const bare = Number(wanted);
+  return Number.isFinite(bare) && bare > 0 ? bare : 0;
+}
+
 /** How small or large a hand-set viewport may be. Wide enough for every real device and every
  *  pane this app is likely to have; narrow enough that a fat-fingered call cannot ask the page
  *  to lay itself out at ten pixels and read nothing back from it. */
@@ -163,25 +196,45 @@ function clampDimension(value: number, [low, high]: readonly [number, number]): 
   return Math.min(high, Math.max(low, Math.round(value)));
 }
 
+/** A rectangle to paint at, and how much the page inside it is shrunk to get there. */
+export interface Placed extends Rect {
+  /** 1 when the pane can hold the viewport; less when the page is drawn smaller than it is
+   *  laid out. Never more — a page is not magnified to fill a pane it did not ask for. */
+  scale: number;
+}
+
 /**
- * Where the page sits inside its pane when a viewport is set: **centred, never clipped**.
+ * Where the page sits inside its pane when a viewport is set: **centred, never clipped, and
+ * laid out at the size that was actually asked for.**
  *
  * The point of a viewport is that the page lays out at that exact size — media queries, JS
- * width checks, everything — so the view's own bounds must be the viewport and nothing else.
- * Smaller than the pane, it is letterboxed on the pane's own background; a viewport the pane
- * cannot hold is brought down to what fits, because a page painted past the pane's edge would
- * cover Kith's chrome beside it, and a view painting where it should not is the one thing this
- * file must never allow. Same shape for the no-viewport case, which is just "fill the pane".
+ * width checks, everything. A view painting past the pane's edge would cover Kith's chrome
+ * beside it, which is the one thing this file must never allow, so the drawn rectangle is
+ * still bounded by the pane.
+ *
+ * **Those two used to be in conflict and the pane won, silently.** A viewport bigger than the
+ * pane was cut down to the pane, so `resize(preset: "desktop")` in a 700-pixel pane laid the
+ * page out at 700 pixels — the mobile breakpoint — while the call reported 1920×1080 back.
+ * Every judgement made from that was a judgement about the wrong layout, stated confidently.
+ *
+ * So the two are separated. The page is laid out at the full viewport (`enableDeviceEmulation`
+ * carries that to Chromium) and *drawn* at a fraction of it, the way a design tool zooms out of
+ * a canvas. `scale` is that fraction, it travels in the status, and the chrome shows it — so a
+ * page being looked at at 58% says so instead of pretending.
  */
-export function fitted(rect: Rect, viewport: { width: number; height: number } | null): Rect {
-  if (!viewport) return rect;
-  const width = Math.min(viewport.width, rect.width);
-  const height = Math.min(viewport.height, rect.height);
+export function fitted(rect: Rect, viewport: { width: number; height: number } | null): Placed {
+  if (!viewport) return { ...rect, scale: 1 };
+  const scale = Math.min(1, rect.width / viewport.width, rect.height / viewport.height);
+  // Rounded after scaling and then held inside the pane, because rounding up by a pixel on both
+  // axes is how a letterboxed view ends up one pixel over Kith's chrome.
+  const width = Math.min(rect.width, Math.max(1, Math.round(viewport.width * scale)));
+  const height = Math.min(rect.height, Math.max(1, Math.round(viewport.height * scale)));
   return {
     x: rect.x + Math.round((rect.width - width) / 2),
     y: rect.y + Math.round((rect.height - height) / 2),
     width,
     height,
+    scale,
   };
 }
 
@@ -229,6 +282,10 @@ interface Held {
    *  when a viewport is in play — the letterboxed rect is not the pane rect, and comparing the
    *  wrong pair would force a relayout on every scroll of the containing column. */
   bounds: Rect | null;
+  /** The emulation actually in force, for the same reason `bounds` is kept: `place` runs on
+   *  every scroll of the column the pane lives in, and re-asserting a device override is a
+   *  relayout of the page inside it. Null means none is set. */
+  emulated: { width: number; height: number; scale: number } | null;
 }
 
 const held = new Map<string, Held>();
@@ -277,11 +334,72 @@ export function place(at: Target, rect: Rect, home = ""): ViewStatus {
  * One door rather than three: `place`, `resize` and `hide` all want the same two invariants —
  * skip the call when nothing moved, and remember what was set — and inlining them was how the
  * viewport work nearly grew a second bookkeeping half that agreed with the first only by luck.
+ *
+ * It now carries the emulation too, and for the same reason. The drawn rectangle and the size
+ * the page is laid out at are two halves of one decision (`fitted`), and they were briefly set
+ * in different places: a pane resize moved the bounds and left the page laid out at the size
+ * the *old* pane had implied, which is the bug this whole change exists to remove, reintroduced
+ * one layer down.
  */
-function applyBounds(one: Held, next: Rect): void {
-  if (same(one.bounds, next)) return;
-  one.contents.setBounds(next);
-  one.bounds = next;
+function applyBounds(one: Held, next: Placed): void {
+  if (!same(one.bounds, next)) {
+    one.contents.setBounds({ x: next.x, y: next.y, width: next.width, height: next.height });
+    one.bounds = { x: next.x, y: next.y, width: next.width, height: next.height };
+  }
+  applyEmulation(one, next.scale);
+}
+
+/**
+ * Lay the page out at the viewport, whatever size it is drawn at.
+ *
+ * `enableDeviceEmulation` is the same mechanism DevTools' device mode uses: `viewSize` is the
+ * viewport the page sees — media queries, `innerWidth`, every breakpoint — and `scale` is how
+ * much of the pane the result is painted into. Without it, a viewport larger than the pane was
+ * simply cut down to the pane and reported as though it had held.
+ *
+ * Failure degrades honestly rather than loudly. If Chromium refuses the override the bounds are
+ * still the letterboxed rectangle, so the page lays out at the drawn size — exactly the old
+ * behaviour — and the status still carries the scale, so nothing claims a size it did not get.
+ */
+function applyEmulation(one: Held, scale: number): void {
+  const contents = one.contents.webContents;
+  if (contents.isDestroyed()) return;
+  const wanted = one.viewport
+    ? { width: one.viewport.width, height: one.viewport.height, scale }
+    : null;
+  const now = one.emulated;
+  if (!wanted && !now) return;
+  if (
+    wanted &&
+    now &&
+    now.width === wanted.width &&
+    now.height === wanted.height &&
+    now.scale === wanted.scale
+  ) {
+    return;
+  }
+  one.emulated = wanted;
+  try {
+    if (!wanted) {
+      contents.disableDeviceEmulation();
+      return;
+    }
+    contents.enableDeviceEmulation({
+      // `desktop`, not `mobile`. `mobile` additionally turns on touch emulation and the mobile
+      // viewport meta handling, which is a different question from "how wide is the window" and
+      // is not what anybody asking for a phone-sized viewport of their own app means.
+      screenPosition: "desktop",
+      screenSize: { width: wanted.width, height: wanted.height },
+      viewPosition: { x: 0, y: 0 },
+      // 0 means "whatever this display uses", which keeps a retina capture retina.
+      deviceScaleFactor: 0,
+      viewSize: { width: wanted.width, height: wanted.height },
+      scale: wanted.scale,
+    });
+  } catch {
+    /* See the note above: the bounds alone are the old behaviour, which is a page laid out
+     * small rather than a page laid out wrong. Nothing to say to the caller. */
+  }
 }
 
 /**
@@ -301,33 +419,59 @@ function applyBounds(one: Held, next: Rect): void {
  */
 export async function resize(
   at: Target,
-  asked: { preset?: string | undefined; width?: number | undefined; height?: number | undefined },
+  asked: {
+    preset?: string | undefined;
+    width?: number | undefined;
+    height?: number | undefined;
+    ratio?: string | undefined;
+  },
 ): Promise<{ width: number; height: number } & ViewStatus> {
   const one = touch(held.get(keyOf(at))) ?? create(at, "");
   const preset = String(asked.preset ?? "");
+  const ratio = parseRatio(String(asked.ratio ?? ""));
+  if (asked.ratio && !ratio) {
+    throw new Error(
+      `${asked.ratio} is not a ratio I can read. Write one as 16:9, 9:16, 4:3 — or as a number.`,
+    );
+  }
+  const asksForSize =
+    typeof asked.width === "number" || typeof asked.height === "number" || ratio > 0;
+
   let viewport: { width: number; height: number } | null;
-  if (preset) {
-    if (preset === "reset") {
-      viewport = null;
-    } else {
+  if (preset === "reset") {
+    viewport = null;
+  } else if (preset || asksForSize) {
+    /* The size being changed *from*, so one dimension can be given and the other left alone.
+     * A preset fills both; otherwise it is whatever is in force, and failing that the resting
+     * size — never the pane, which would make the same call mean different things in different
+     * layouts. */
+    let base = { width: DEFAULT_BOUNDS.width, height: DEFAULT_BOUNDS.height };
+    if (preset) {
       const named = VIEWPORT_PRESETS[preset];
       if (!named) {
         const known = [...Object.keys(VIEWPORT_PRESETS), "reset"].join(", ");
         throw new Error(`${preset} is not a size I know. The named sizes are: ${known}.`);
       }
-      viewport = { ...named };
+      base = { ...named };
+    } else if (one.viewport) {
+      base = { ...one.viewport };
     }
-  } else if (typeof asked.width === "number" || typeof asked.height === "number") {
-    const now = one.viewport ?? { width: DEFAULT_BOUNDS.width, height: DEFAULT_BOUNDS.height };
+
+    let width = typeof asked.width === "number" ? asked.width : base.width;
+    let height = typeof asked.height === "number" ? asked.height : base.height;
+    /* A ratio settles the dimension that was *not* named, so "1440 wide at 16:10" and "900 tall
+     * at 4:3" both say the obvious thing. Given neither, it reshapes around the width, because
+     * the width is the one a layout is actually designed against. */
+    if (ratio > 0) {
+      if (typeof asked.height === "number" && typeof asked.width !== "number") {
+        width = height * ratio;
+      } else {
+        height = width / ratio;
+      }
+    }
     viewport = {
-      width: clampDimension(
-        typeof asked.width === "number" ? asked.width : now.width,
-        VIEWPORT_RANGE.width,
-      ),
-      height: clampDimension(
-        typeof asked.height === "number" ? asked.height : now.height,
-        VIEWPORT_RANGE.height,
-      ),
+      width: clampDimension(width, VIEWPORT_RANGE.width),
+      height: clampDimension(height, VIEWPORT_RANGE.height),
     };
   } else {
     // Nothing asked for. "Resize" with no size is how a model says "put it back", and the
@@ -336,21 +480,25 @@ export async function resize(
   }
 
   one.viewport = viewport;
-  if (one.rect && (one.rect.width >= 1 || one.rect.height >= 1)) {
-    applyBounds(one, fitted(one.rect, viewport));
-  } else {
-    // No pane is showing it — the resting rectangle is what a `look` will capture, so that is
-    // the rectangle that has to carry the viewport.
-    applyBounds(one, viewport ? { x: 0, y: 0, ...viewport } : DEFAULT_BOUNDS);
-  }
+  const showing = one.rect && (one.rect.width >= 1 || one.rect.height >= 1);
+  const placed = showing
+    ? fitted(one.rect as Rect, viewport)
+    : viewport
+      ? { x: 0, y: 0, ...viewport, scale: 1 }
+      : { ...DEFAULT_BOUNDS, scale: 1 };
+  applyBounds(one, placed);
   announce(one);
-  // The size that now holds, so the answer is a fact he can act on — "390×844" — rather than
-  // an ok he has to take on trust. A reset reports the size the page actually went back to.
-  const size =
-    viewport ??
-    (one.rect && one.rect.width >= 1 && one.rect.height >= 1
-      ? { width: one.rect.width, height: one.rect.height }
-      : { width: DEFAULT_BOUNDS.width, height: DEFAULT_BOUNDS.height });
+  /* The size the page is **laid out** at, and separately how much of it is on screen.
+   *
+   * These were one number and it was the wrong one. A viewport bigger than the pane used to be
+   * cut down to the pane while this still reported what had been asked for, so a model checking
+   * a desktop layout inside a narrow pane was shown the mobile one and told it was desktop.
+   * The page now genuinely lays out at `width × height`; `scale` says what fraction of that is
+   * being painted, which is a fact about the picture rather than about the page.
+   */
+  const size = viewport ?? { width: placed.width, height: placed.height };
+  // `scale` rides in on the status rather than being named here — one source for it, so the
+  // number the pane draws and the number the answer carries cannot drift apart.
   return { width: size.width, height: size.height, ...statusOf(one) };
 }
 
@@ -376,8 +524,10 @@ export function hide(at: Target): void {
 /** The rectangle a view sits at when no pane is showing it: in the window, sized, and hidden —
  *  sized to the viewport when one is set, so the next `look` is a picture of the page at the
  *  size the model asked about rather than a size nobody chose. */
-function restingBounds(one: Held): Rect {
-  return one.viewport ? { x: 0, y: 0, ...one.viewport } : DEFAULT_BOUNDS;
+function restingBounds(one: Held): Placed {
+  // Scale 1: nothing is showing it, so nothing constrains it, and a `look` at a viewport nobody
+  // is watching should be the page at its own size rather than at some pane's leftovers.
+  return one.viewport ? { x: 0, y: 0, ...one.viewport, scale: 1 } : { ...DEFAULT_BOUNDS, scale: 1 };
 }
 
 /** Destroy a view and everything in it. Only for a plugin being switched off or removed. */
@@ -636,7 +786,10 @@ export async function scroll(at: Target, by: number): Promise<ViewStatus> {
  * not currently watching. Returned as base64 because the caller is the Python server over
  * loopback JSON, and it writes the bytes to a file the model can read.
  */
-export async function shot(at: Target): Promise<{ png: string } & ViewStatus> {
+export async function shot(
+  at: Target,
+  crop: (Rect & { label?: string }) | null = null,
+): Promise<{ png: string; width: number; height: number } & ViewStatus> {
   const one = required(at);
   await settle(one);
   const contents = one.contents.webContents;
@@ -644,23 +797,54 @@ export async function shot(at: Target): Promise<{ png: string } & ViewStatus> {
   /* A `look` exists so a turn can see a page nobody is watching, which is what makes the view's
    * resting bounds load-bearing rather than cosmetic — see `DEFAULT_BOUNDS`. */
   const box = one.contents.getBounds();
+  /* **Page pixels and painted pixels are two different things now**, and a crop is given in the
+   * first. The page lays out at the viewport (`applyEmulation`) and is painted at `scale` of
+   * that, so an element the page says is at 1400,300 is painted at 1400×scale, 300×scale — and
+   * a capture rectangle in the page's own numbers would have cut out the wrong part of it. */
+  const scale = one.emulated?.scale ?? 1;
+  const pageWidth = one.viewport?.width ?? box.width;
+  const pageHeight = one.viewport?.height ?? box.height;
+
+  let region: Rect | null = null;
+  if (crop) {
+    const left = Math.max(0, Math.min(pageWidth, crop.x));
+    const top = Math.max(0, Math.min(pageHeight, crop.y));
+    const right = Math.max(left, Math.min(pageWidth, crop.x + crop.width));
+    const bottom = Math.max(top, Math.min(pageHeight, crop.y + crop.height));
+    region = {
+      x: Math.round(left * scale),
+      y: Math.round(top * scale),
+      width: Math.max(1, Math.round((right - left) * scale)),
+      height: Math.max(1, Math.round((bottom - top) * scale)),
+    };
+  }
+
   /* `capturePage`, not `Page.captureScreenshot`.
    *
    * The debugger was the first attempt and it hangs: a screenshot command waits for a new
    * compositor frame, and a parked view produces one only when something changes. `capturePage`
    * asks the compositor for the current surface instead and answers immediately.
-   *
-   * Resized down to the page's own pixels afterwards. A capture comes back at the display's
-   * device ratio, so a 1280x800 page arrived 2560x1600 — four times the pixels, for an image
-   * whose entire purpose is to be read by a model at a few thousand tokens.
    */
   let png = "";
+  let width = 0;
+  let height = 0;
   try {
-    const image = await one.contents.webContents.capturePage();
-    // Resized to the page's own pixels. A capture comes back at the display's device ratio, so a
-    // 1280x800 page arrived 2560x1600 — four times the pixels, for an image whose entire purpose
-    // is to be read by a model at a few thousand tokens.
-    const sized = image.getSize().width > box.width ? image.resize({ width: box.width }) : image;
+    const image = region ? await contents.capturePage(region) : await contents.capturePage();
+    /* Resized to the **page's** own pixels, not the widget's.
+     *
+     * It used to target the widget's width, which was the same number until a viewport could be
+     * drawn smaller than it is laid out. It is not the same number any more: a 1920-wide page
+     * painted into a 1100-pixel pane captures at 1100×dpr, and throwing that down to 1100 spends
+     * the retina pixels that were the only thing making the shrunken page legible. The target is
+     * what the page thinks it is — full size where the display can pay for it, and never an
+     * upscale of pixels that were never there.
+     */
+    const target = Math.round(region ? region.width / scale : pageWidth);
+    const native = image.getSize();
+    const sized = native.width > target ? image.resize({ width: target }) : image;
+    const out = sized.getSize();
+    width = out.width;
+    height = out.height;
     png = sized.toPNG().toString("base64");
   } catch (error) {
     /* **A screenshot is the one act here that genuinely needs the tab open.**
@@ -668,9 +852,6 @@ export async function shot(at: Target): Promise<{ png: string } & ViewStatus> {
      * Everything else works on a view nobody is looking at: pages load, text reads, and input
      * dispatched inside the page lands. A capture cannot, and Chromium is blunt about it —
      * `UnknownVizError` from the compositor, because there is no on-screen surface to copy.
-     * Both alternatives were tried and measured: `Page.captureScreenshot` over the debugger
-     * waits for a frame a hidden view never produces and times out, and parking the view off
-     * the window's edge leaves nothing to composite either.
      *
      * So it is said, in a sentence carrying the alternative. A blank PNG written to a file is
      * far worse than a refusal: the model reads it, spends thousands of tokens on nothing, and
@@ -682,7 +863,188 @@ export async function shot(at: Target): Promise<{ png: string } & ViewStatus> {
     );
   }
 
-  return { png, ...statusOf(one) };
+  return { png, width, height, ...statusOf(one) };
+}
+
+/**
+ * A picture of **one thing on the page**, found by what it says or by a selector.
+ *
+ * The cheap half of the pair below. A `look` is the whole page and costs a few thousand tokens
+ * to read; most questions about a page are about one component of it — does this card wrap, is
+ * this button the right colour, what does the header actually look like — and a picture of the
+ * rest of the page is tokens spent on everything that was not asked about.
+ *
+ * Padded, deliberately, and the padding is not a rounding allowance. A component cropped exactly
+ * to its own box is a component with no context: you cannot see that it is too close to the
+ * thing above it, or that it is overlapping its neighbour, which is most of what anybody is
+ * looking for. A margin of the page around it is what makes the picture answer the question.
+ *
+ * The failure path is `click`'s, for the same reason: a selector that matched nothing comes back
+ * with the list of what is on the page rather than with nothing at all.
+ */
+export async function snap(
+  at: Target,
+  where: { selector?: string | undefined; text?: string | undefined; pad?: number | undefined },
+): Promise<
+  { png: string; width: number; height: number; selector: string; label: string; options: string[] } & ViewStatus
+> {
+  const one = required(at);
+  await settle(one);
+  const pad = clampPad(where.pad);
+  const found = (await one.contents.webContents.executeJavaScript(
+    boxOf(where.selector ?? "", where.text ?? ""),
+    true,
+  )) as
+    | { x: number; y: number; width: number; height: number; selector: string; label: string }
+    | { options: string[] };
+
+  if ("options" in found) {
+    return {
+      png: "",
+      width: 0,
+      height: 0,
+      selector: "",
+      label: "",
+      options: found.options,
+      ...statusOf(one),
+    };
+  }
+
+  const shrunk = await shot(at, padded(found, pad));
+  return {
+    png: shrunk.png,
+    width: shrunk.width,
+    height: shrunk.height,
+    selector: found.selector,
+    label: found.label,
+    options: [],
+    ...statusOf(one),
+  };
+}
+
+/**
+ * Hand the person an inspector, and take what they point at.
+ *
+ * ## Why this is a person's verb and not the model's
+ *
+ * `snap` above already crops to a selector, and a model has `read` to find selectors with. What
+ * a model cannot do is know which of nine cards on the page is *the one you meant* — and the
+ * round trips spent narrowing that down ("the third one", "no, the one below it") are the
+ * expensive part of asking about a page at all. Pointing at it is one gesture and settles it.
+ *
+ * So this is on the fixed IPC channel the pane's own chrome uses, next to back and reload, and
+ * it is not in `VIEW_ACTS`: the model cannot start it, and a plugin cannot either. A page being
+ * picked over is a page somebody is looking at, with their hand on the mouse.
+ *
+ * ## What it injects, and why that is allowed
+ *
+ * An overlay drawn *inside the page* — an outline that follows the pointer and a label naming
+ * what is under it. This is Kith's own script, the same door `read`, `click` and `type` already
+ * go through; the plugin still cannot script the page, which is the property that matters. It
+ * is inert: `pointer-events: none` on everything drawn, one capture-phase listener that takes
+ * the click and stops it reaching the page, and it removes itself on the way out however it
+ * ends.
+ *
+ * Resolves with `cancelled` on Escape, on a click outside the document, and on a minute passing
+ * — a picker left running is an overlay on a page somebody has walked away from.
+ */
+export async function pick(
+  at: Target,
+  pad?: number,
+): Promise<
+  {
+    cancelled: boolean;
+    png: string;
+    width: number;
+    height: number;
+    selector: string;
+    label: string;
+    tag: string;
+  } & ViewStatus
+> {
+  const one = required(at);
+  const padding = clampPad(pad);
+  const empty = {
+    cancelled: true,
+    png: "",
+    width: 0,
+    height: 0,
+    selector: "",
+    label: "",
+    tag: "",
+  };
+
+  let chosen: Picked | null = null;
+  try {
+    chosen = (await one.contents.webContents.executeJavaScript(picker(), true)) as Picked | null;
+  } catch (error) {
+    /* A navigation mid-pick destroys the world the promise was living in, and that is the
+     * ordinary way for this to end badly rather than an error worth a sentence: the person
+     * clicked a link instead of picking. */
+    void error;
+    return { ...empty, ...statusOf(one) };
+  }
+  if (!chosen) return { ...empty, ...statusOf(one) };
+
+  const shrunk = await shot(at, padded(chosen, padding));
+  return {
+    cancelled: false,
+    png: shrunk.png,
+    width: shrunk.width,
+    height: shrunk.height,
+    selector: chosen.selector,
+    label: chosen.label,
+    tag: chosen.tag,
+    ...statusOf(one),
+  };
+}
+
+/** What the page answers with when somebody points at something. Named rather than inline
+ *  because `pick` has to hold it across an await, and an inline shape on a `null`-initialised
+ *  variable narrows to `null` before the assignment ever happens. */
+interface Picked extends Rect {
+  selector: string;
+  label: string;
+  tag: string;
+}
+
+/** Take the picker off the page from outside it — the pane unmounting, the tab being switched
+ *  away from. Without this an overlay outlives the thing that started it, and the page is left
+ *  with an outline following a pointer nobody is pointing. */
+export async function unpick(at: Target): Promise<void> {
+  const one = touch(held.get(keyOf(at)));
+  if (!one || one.contents.webContents.isDestroyed()) return;
+  try {
+    await one.contents.webContents.executeJavaScript(
+      "(() => { if (window.__kithPick) window.__kithPick.stop(null); return true; })()",
+      true,
+    );
+  } catch {
+    /* The page went away, which is the thing this was trying to achieve. */
+  }
+}
+
+/** Room around a picked element, in page pixels. Bounded because a padding larger than the page
+ *  is a crop of the whole page dressed up as a crop of one thing. */
+const PAD_RANGE = [0, 400] as const;
+const DEFAULT_PAD = 24;
+
+function clampPad(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_PAD;
+  return Math.min(PAD_RANGE[1], Math.max(PAD_RANGE[0], Math.round(value)));
+}
+
+/** An element's box with room around it. Clamped at the top and left so padding never pulls the
+ *  rectangle off the page, which `capturePage` answers to with an empty image. */
+function padded(box: Rect, pad: number): Rect {
+  const x = Math.max(0, box.x - pad);
+  const y = Math.max(0, box.y - pad);
+  return {
+    x,
+    y,
+    width: box.width + (box.x - x) + pad,
+    height: box.height + (box.y - y) + pad,
+  };
 }
 
 // --------------------------------------------------------------------------- //
@@ -739,6 +1101,7 @@ function create(at: Target, home: string): Held {
     rect: null,
     viewport: null,
     bounds: null,
+    emulated: null,
   };
   /* In the window from the start, sized, and hidden.
    *
@@ -756,7 +1119,7 @@ function create(at: Target, home: string): Held {
     window.contentView.addChildView(contents);
     one.attached = true;
   }
-  applyBounds(one, DEFAULT_BOUNDS);
+  applyBounds(one, { ...DEFAULT_BOUNDS, scale: 1 });
   hideNow(one);
   held.set(keyOf(at), one);
   watch(one);
@@ -856,6 +1219,7 @@ function statusOf(one: Held): ViewStatus {
       canGoForward: false,
       failure: "this view is gone",
       viewport: one.viewport,
+      scale: one.emulated?.scale ?? 1,
     };
   }
   return {
@@ -869,6 +1233,7 @@ function statusOf(one: Held): ViewStatus {
     canGoForward: contents.navigationHistory.canGoForward(),
     failure: one.failure,
     viewport: one.viewport,
+    scale: one.emulated?.scale ?? 1,
   };
 }
 
@@ -1106,6 +1471,214 @@ function locate(selector: string, text: string): string {
       if (at) return { ...at, label: label(el) };
     }
     return { options: clickable.map(label).filter(Boolean).slice(0, 25) };
+  })()`;
+}
+
+/**
+ * The part of a page script both `snap` and `pick` need: a selector you can hand back.
+ *
+ * Built by walking up from the element and stopping the moment the chain is **unique in the
+ * document**, rather than by climbing a fixed number of levels. A chain that is not unique is
+ * worse than no selector at all: it looks specific, `document.querySelector` answers with the
+ * first thing that matches it, and the next call acts on some other card on the same page.
+ *
+ * An `id` or a `data-testid` short-circuits it, because those are what a person would have
+ * written themselves, and they survive the page being re-rendered — which `:nth-of-type` does
+ * not always.
+ */
+const SELECTOR_FOR = `
+    const selectorFor = (el) => {
+      if (!el || !el.tagName) return "";
+      const parts = [];
+      let node = el;
+      let climbed = 0;
+      while (node && node.nodeType === 1 && node !== document.documentElement && climbed < 8) {
+        if (node.id && /^[A-Za-z][\\w-]*$/.test(node.id) && document.querySelectorAll("#" + node.id).length === 1) {
+          parts.unshift("#" + node.id);
+          break;
+        }
+        const testid = node.getAttribute("data-testid") || node.getAttribute("data-test-id");
+        if (testid) {
+          parts.unshift(node.tagName.toLowerCase() + '[data-testid="' + testid.replace(/"/g, '\\\\"') + '"]');
+          break;
+        }
+        let part = node.tagName.toLowerCase();
+        const parent = node.parentElement;
+        if (parent) {
+          const alike = [...parent.children].filter((c) => c.tagName === node.tagName);
+          if (alike.length > 1) part += ":nth-of-type(" + (alike.indexOf(node) + 1) + ")";
+        }
+        parts.unshift(part);
+        // Stop as soon as it identifies one thing. Climbing further only makes it longer and
+        // more brittle, and a shorter selector is one a person can read.
+        try {
+          if (document.querySelectorAll(parts.join(" > ")).length === 1) break;
+        } catch (_) { break; }
+        node = parent;
+        climbed += 1;
+      }
+      return parts.join(" > ");
+    };
+    const labelFor = (el) =>
+      ((el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("alt") || el.title || "")
+        .replace(/\\s+/g, " ")
+        .trim()
+        .slice(0, 120));
+`;
+
+/** Where a named thing *is*, as a rectangle. `locate` answers with a point to click; a picture
+ *  needs the whole box, and the two disagreeing about which element they found would be the
+ *  worst kind of bug here — a crop of one component and a click on another. Same finder, same
+ *  order of preference, different answer. */
+function boxOf(selector: string, text: string): string {
+  const wanted = JSON.stringify(text.toLowerCase());
+  const css = JSON.stringify(selector);
+  return `(() => {
+    ${SELECTOR_FOR}
+    const box = (el) => {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      return {
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      };
+    };
+    if (${css}) {
+      const el = document.querySelector(${css});
+      const at = el && box(el);
+      if (at) return { ...at, selector: ${css}, label: labelFor(el) };
+    }
+    const named = [
+      ...document.querySelectorAll(
+        'a, button, input, select, textarea, [role=button], [role=link], [onclick], [tabindex], [data-testid], section, article, header, footer, nav, main, form, table, figure',
+      ),
+    ].filter((el) => box(el));
+    if (${wanted}) {
+      const exact = named.find((el) => labelFor(el).toLowerCase() === ${wanted});
+      const loose = named.find((el) => labelFor(el).toLowerCase().includes(${wanted}));
+      const el = exact || loose;
+      const at = el && box(el);
+      if (at) return { ...at, selector: selectorFor(el), label: labelFor(el) };
+    }
+    return { options: named.map(labelFor).filter(Boolean).slice(0, 25) };
+  })()`;
+}
+
+/**
+ * The inspector, as a script the page runs.
+ *
+ * Everything drawn is `pointer-events: none` and `position: fixed`, so it never changes what is
+ * under the pointer and never contributes to the page's own layout — an overlay that reflows the
+ * thing you are trying to measure would be the one unforgivable version of this.
+ *
+ * The click is taken in the **capture** phase and stopped three ways (`preventDefault`,
+ * `stopPropagation`, `stopImmediatePropagation`). Picking the "Delete account" button must
+ * never also press it, and a link would otherwise navigate out from under the capture that was
+ * about to be taken.
+ *
+ * `window.__kithPick` is the handle the outside world has on it: starting a second pick stops
+ * the first, and `unpick` uses it when the pane goes away. A picker with no way to be stopped
+ * from outside is an outline following the pointer on a page nobody is picking from.
+ */
+function picker(): string {
+  return `(() => {
+    ${SELECTOR_FOR}
+    if (window.__kithPick) window.__kithPick.stop(null);
+    return new Promise((resolve) => {
+      const chrome = [];
+      const make = (css) => {
+        const el = document.createElement("div");
+        el.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;" + css;
+        document.documentElement.appendChild(el);
+        chrome.push(el);
+        return el;
+      };
+      const outline = make(
+        "border:2px solid #4c8dff;background:rgba(76,141,255,0.13);border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,0.28);left:0;top:0;width:0;height:0",
+      );
+      const tip = make(
+        "font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;background:#11161f;color:#e9eef7;padding:2px 7px;border-radius:5px;white-space:nowrap;max-width:70vw;overflow:hidden;text-overflow:ellipsis;left:0;top:0;opacity:0",
+      );
+      const hint = make(
+        "left:50%;bottom:18px;transform:translateX(-50%);font:12px/1.6 system-ui,-apple-system,sans-serif;background:#11161f;color:#e9eef7;padding:6px 13px;border-radius:999px;opacity:.95",
+      );
+      hint.textContent = "Click a component to send it to the chat  ·  Esc to cancel";
+
+      let at = null;
+      const draw = (el) => {
+        at = el;
+        if (!el || !el.getBoundingClientRect) { outline.style.width = "0"; tip.style.opacity = "0"; return; }
+        const r = el.getBoundingClientRect();
+        outline.style.left = r.left + "px";
+        outline.style.top = r.top + "px";
+        outline.style.width = Math.max(0, r.width - 4) + "px";
+        outline.style.height = Math.max(0, r.height - 4) + "px";
+        tip.textContent = (selectorFor(el) || el.tagName.toLowerCase()) +
+          "  " + Math.round(r.width) + "×" + Math.round(r.height);
+        tip.style.opacity = "1";
+        // Above the element, or below it when it is against the top of the window.
+        tip.style.left = Math.max(4, Math.min(r.left, window.innerWidth - 240)) + "px";
+        tip.style.top = (r.top > 24 ? r.top - 22 : Math.min(r.bottom + 6, window.innerHeight - 24)) + "px";
+      };
+
+      let last = { x: -1, y: -1 };
+      const onMove = (event) => {
+        last = { x: event.clientX, y: event.clientY };
+        draw(document.elementFromPoint(event.clientX, event.clientY));
+      };
+      const onScroll = () => {
+        if (last.x >= 0) draw(document.elementFromPoint(last.x, last.y));
+      };
+      const onKey = (event) => {
+        if (event.key === "Escape") { event.preventDefault(); stop(null); }
+      };
+      const onClick = (event) => {
+        // Three ways, in the capture phase. Picking a button must not also press it, and a link
+        // would navigate out from under the capture that is about to be taken.
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        const el = at || document.elementFromPoint(event.clientX, event.clientY);
+        if (!el || !el.getBoundingClientRect) return stop(null);
+        const r = el.getBoundingClientRect();
+        stop({
+          x: Math.round(r.left),
+          y: Math.round(r.top),
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+          selector: selectorFor(el),
+          label: labelFor(el),
+          tag: el.tagName.toLowerCase(),
+        });
+      };
+
+      let done = false;
+      function stop(answer) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        window.removeEventListener("mousemove", onMove, true);
+        window.removeEventListener("scroll", onScroll, true);
+        window.removeEventListener("keydown", onKey, true);
+        window.removeEventListener("click", onClick, true);
+        for (const el of chrome) el.remove();
+        if (window.__kithPick && window.__kithPick.stop === stop) delete window.__kithPick;
+        // The outline has to be off the page before the capture is taken, and removing an element
+        // does not repaint before this promise's continuation runs in the main process. One frame
+        // is the difference between a picture of a component and a picture of a blue rectangle.
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(answer)));
+      }
+
+      // A picker nobody finishes is an overlay on a page somebody walked away from.
+      const timer = setTimeout(() => stop(null), 60000);
+      window.__kithPick = { stop };
+      window.addEventListener("mousemove", onMove, true);
+      window.addEventListener("scroll", onScroll, true);
+      window.addEventListener("keydown", onKey, true);
+      window.addEventListener("click", onClick, true);
+    });
   })()`;
 }
 

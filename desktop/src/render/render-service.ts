@@ -201,10 +201,36 @@ async function browse(
             preset: typeof asked.preset === "string" ? asked.preset : undefined,
             width: typeof asked.width === "number" ? asked.width : undefined,
             height: typeof asked.height === "number" ? asked.height : undefined,
+            ratio: typeof asked.ratio === "string" ? asked.ratio : undefined,
           }),
         );
-      case "look":
-        return reply(200, await views.shot(at));
+      /* One act, two pictures. `look` with a `text` or a `selector` crops to that component;
+       * `look` with neither is the whole page.
+       *
+       * They were briefly two commands and the manifest would not install: nine model commands
+       * is the limit and that made ten, and the prompt-character budget refused it as well. The
+       * limit turned out to be right about the design. "Look at the page" and "look at this one
+       * thing" are one verb with an argument, not a choice to put in front of him every round —
+       * and folding them cost nothing, because the manifest now spends its characters on what a
+       * command *is* and leaves when-to-use-it to the skill, which is not charged for.
+       *
+       * `pick` — the person pointing at a component with the mouse — is deliberately not here at
+       * all: see the note at the top of `web/web-view-channel.ts`.
+       */
+      case "look": {
+        const named =
+          (typeof asked.selector === "string" && asked.selector) ||
+          (typeof asked.text === "string" && asked.text);
+        if (!named) return reply(200, await views.shot(at));
+        return reply(
+          200,
+          await views.snap(at, {
+            selector: typeof asked.selector === "string" ? asked.selector : undefined,
+            text: typeof asked.text === "string" ? asked.text : undefined,
+            pad: typeof asked.pad === "number" ? asked.pad : undefined,
+          }),
+        );
+      }
       case "status": {
         const now = views.status(at);
         return now ? reply(200, now) : reply(409, { error: "that browser pane is not open" });
