@@ -287,6 +287,13 @@ class TurnLog(Base):
     tokens_uncached: Mapped[int | None] = mapped_column(Integer, nullable=True)
     seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The ledger's own breakdown, as JSON: ``{"baseline": [...lines], "final": [...lines]}``.
+    #: What was in the window rather than how much of it was used. None on rows written
+    #: before v48, and on any turn whose model reported no window.
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Names of the tool calls in this turn that failed, one entry per failed call, as JSON.
+    #: Counted against `tools` it gives a per-tool failure rate. None on rows before v49.
+    failed: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Checkpoint(Base):

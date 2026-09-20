@@ -218,13 +218,19 @@ def add_turn_log(
     seconds: float,
     outcome: str | None,
     tokens_uncached: int | None = None,
+    context: dict | None = None,
+    failed: list[str] | None = None,
 ) -> None:
     """Record one turn to the durable flight recorder.
 
     ``tokens_uncached`` comes last with a default deliberately: both callers pass every
     other argument positionally, so a parameter inserted mid-signature would slide
     ``seconds`` into ``outcome`` — and the call sites sit inside a bare ``except: pass``,
-    so nothing would have told us.
+    so nothing would have told us. ``context`` joins it at the end for the same reason.
+
+    ``context`` is the ledger's own breakdown — ``{"baseline": [...], "final": [...]}``, each a
+    list of ``as_wire`` lines. None means no reading was taken, which is a real state (a local
+    model reports no window) and must stay distinguishable from a turn that carried nothing.
     """
     with session(path) as db:
         db.add(
@@ -238,6 +244,8 @@ def add_turn_log(
                 tokens_uncached=None if tokens_uncached is None else int(tokens_uncached),
                 seconds=float(seconds),
                 outcome=outcome,
+                context=json.dumps(context) if context else None,
+                failed=json.dumps(failed) if failed else None,
             )
         )
 
@@ -250,6 +258,8 @@ def list_turn_log(path: Path, limit: int = 100) -> list[dict]:
         for row in rows:
             record = as_dict(row)
             record["tools"] = _tools(record.get("tools"))
+            record["context"] = _composition(record.get("context"))
+            record["failed"] = _tools(record.get("failed"))
             out.append(record)
         return out
 
@@ -261,6 +271,55 @@ def _tools(raw: object) -> list[str]:
     except (ValueError, TypeError):
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def tool_health(path: Path, limit: int = 500) -> list[dict]:
+    """Per tool: how often it ran and how often it failed, worst first.
+
+    The question this whole column exists to make cheap. Before it, "which of my tools are
+    broken" meant parsing every conversation transcript on disk — which is how `edit_files`
+    went on failing 29% of the time for weeks without anyone knowing.
+
+    Sorted by how many failures, then by how bad the rate is. Count leads because one tool
+    failing 600 times matters more than a rarely-used one failing its only call. Rate breaks
+    the tie, because at one failure each a tool that has failed every call it ever got is more
+    broken than one that failed once in nine, and sorting those by call count puts the healthy
+    one on top.
+    """
+    calls: dict[str, int] = {}
+    broke: dict[str, int] = {}
+    for row in list_turn_log(path, limit):
+        for name in row.get("tools") or []:
+            calls[name] = calls.get(name, 0) + 1
+        for name in row.get("failed") or []:
+            broke[name] = broke.get(name, 0) + 1
+    out = [
+        {
+            "tool": name,
+            "calls": total,
+            "failed": broke.get(name, 0),
+            "rate": round(broke.get(name, 0) / total, 4) if total else 0.0,
+        }
+        for name, total in calls.items()
+    ]
+    out.sort(key=lambda row: (-row["failed"], -row["rate"], -row["calls"], row["tool"]))
+    return out
+
+
+def _composition(raw: object) -> dict | None:
+    """The ledger breakdown, or None.
+
+    None rather than ``{}`` for every failure, and the distinction is the point: a row from
+    before v48, a turn on a model that reports no window, and a row whose JSON is corrupt all
+    mean "no reading", which is not the same claim as "the window held nothing".
+    """
+    if not isinstance(raw, str | bytes):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def turn_log_summary(path: Path, limit: int = _SUMMARY_WINDOW) -> dict:

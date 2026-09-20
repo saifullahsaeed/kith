@@ -885,6 +885,42 @@ def _migrations():
         # repository root *is* the project's folder — a project_id there would be a second,
         # weaker spelling of something already exact.
 
+    def v48_turn_composition(conn):
+        # The flight recorder has always said how *big* a turn was and never what was in it.
+        # The ledger computes that breakdown every round and the chat route already holds the
+        # first and last readings of every turn; they were simply dropped when it ended, so
+        # "did the memory block actually shrink" had no history to answer from.
+        #
+        # One JSON column rather than a column per category: the ledger's categories are not a
+        # schema. They have been renamed and re-split several times, and a table that needs a
+        # migration every time someone adds a line to a breakdown is a table nobody adds lines
+        # to. Querying still works — sqlite has json_extract, and this is read by a dashboard
+        # and by hand, never in a hot path.
+        #
+        # Guarded, because a migration here has to survive being reapplied: an existing install
+        # receives one by having its `user_version` wound back and `init` run again, which is
+        # how `test_the_doing_layer_knows_its_project` exercises v47 and why v47 carries the
+        # same tolerance. An additive ALTER that raises on a column it already added does not
+        # just fail itself — it stops the list, and every migration behind it never runs.
+        held = {row[1] for row in conn.execute("PRAGMA table_info(turn_log)")}
+        if "context" not in held:
+            conn.execute("ALTER TABLE turn_log ADD COLUMN context TEXT")
+
+    def v49_turn_failures(conn):
+        # The flight recorder said which tools ran and never whether they worked. `run_tool`
+        # never raises — it answers with an error the model reads — so from the outside a tool
+        # failing every call looked exactly like one that never failed.
+        #
+        # Found the expensive way: `edit_files` was failing 29% of the time, 682 of 2,392 calls
+        # across 120 transcripts, and had been for weeks. Answering "which of my tools are
+        # broken" required parsing every conversation file on disk, so nobody asked.
+        #
+        # Names, one per failed call, rather than a count: `Counter(tools)` against
+        # `Counter(failed)` gives the rate per tool with no second schema to keep in step.
+        held = {row[1] for row in conn.execute("PRAGMA table_info(turn_log)")}
+        if "failed" not in held:
+            conn.execute("ALTER TABLE turn_log ADD COLUMN failed TEXT")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -933,6 +969,8 @@ def _migrations():
         v45_workers,
         v46_conversation_hosts,
         v47_the_doing_layer_has_a_project,
+        v48_turn_composition,
+        v49_turn_failures,
     ]
 
 

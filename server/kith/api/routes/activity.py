@@ -81,5 +81,9 @@ def activity():
             # server-side only. What it carries is turns, and always was.
             "ticks": repo.messages.list_turn_log(AGENT_DB_PATH, limit),
             "summary": repo.messages.turn_log_summary(AGENT_DB_PATH),
+            # Which tools are failing, worst first. Here because the alternative was reading
+            # every conversation transcript on disk, which is how `edit_files` went on failing
+            # 29% of its 2,392 calls for weeks with nothing anywhere saying so.
+            "toolHealth": repo.messages.tool_health(AGENT_DB_PATH),
         }
     )

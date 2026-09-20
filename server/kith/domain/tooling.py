@@ -95,3 +95,31 @@ def many(args: dict, plural: str, singular: str) -> list[str]:
     if isinstance(found, list):
         return [str(one) for one in found if str(one).strip()]
     return [str(found)]
+
+
+def call_failed(envelope: object) -> bool:
+    """Did this tool call fail? Reads `run_tool`'s answer, at both levels.
+
+    **Two levels, and the second is the one that hides things.** `run_tool` wraps a handler's
+    return as ``{"ok": True, "result": …}``, and several handlers report their own failures
+    inside that rather than raising — `edit_files` answers a malformed call with
+    ``{"error": "pass `edits` as a list…"}`` and `ok` stays true. Counting only the envelope
+    would miss exactly the class of failure this exists to catch.
+
+    Why it exists at all: `turn_log` recorded which tools ran and never whether they worked, so
+    a tool failing every call looked identical to one that never failed. Measured by hand across
+    120 transcripts, `edit_files` was failing 29% of the time — 682 of 2,392 calls — and had
+    been for weeks, because answering "which of my tools are broken" meant parsing every
+    transcript on disk.
+
+    Deliberately narrow: only an ``error`` key or an explicit ``ok: False``. `run_tests` reports
+    failing tests under ``errors``, and a suite with failures in it is the tool *working*.
+    """
+    if not isinstance(envelope, dict):
+        return False
+    if envelope.get("ok") is False:
+        return True
+    inner = envelope.get("result")
+    if not isinstance(inner, dict):
+        return False
+    return inner.get("ok") is False or "error" in inner

@@ -18,6 +18,7 @@ from kith.config import (
     merge_overrides,
     ollama_host,
 )
+from kith.domain import tooling
 from kith.infra import permissions
 from kith.infra.db import repositories as repo
 from kith.kernel import changes, clock, live_turns, session_context, stopping
@@ -905,11 +906,25 @@ class _MindFeed:
         #: stop keeping going — and there is no keeping going to stop.
         self.stop_switch = stop_switch
         self.tools: list[str] = []
+        #: Names of the calls that came back a failure, one entry per failed call. Counted
+        #: against `tools` this is the per-tool failure rate — the number that was missing when
+        #: `edit_files` spent weeks failing 29% of the time with nothing to say so.
+        self.failed: list[str] = []
         self.rounds = 0
         self.tokens_in = 0
         self.tokens_out = 0
         self.tokens_uncached = 0
         self.said = ""
+        #: The ledger's first and last readings of this turn, kept for the flight recorder.
+        #:
+        #: Both, because they answer different questions and the row needs to tell them apart.
+        #: The first is what arrived *before* this turn did anything — persona, tool schemas,
+        #: injected memory and project state — so it is the number the context-injection work
+        #: moves. The last is what the turn grew to under its own tool results, which is the
+        #: number the trimming work moves. `_Recorder` keeps the same pair for the transcript;
+        #: this one is for the durable row, and neither is worth deriving from the other.
+        self.context: dict = {}
+        self.baseline_context: dict = {}
         self.error: str | None = None
         self.started = time.monotonic()
         self._publish("reply", f"you: {opening.strip()[:80]}" if opening.strip() else "you: (attachment)")
@@ -933,6 +948,20 @@ class _MindFeed:
             )
         elif kind == "delta" and event.get("role") == "text":
             self.said += event.get("text") or ""
+        elif kind == "tool_result":
+            # Whether it worked, which the row never used to carry. `domain.tooling.call_failed`
+            # reads both levels of `run_tool`'s answer: several handlers report their own
+            # failures inside a successful envelope, and those are the ones worth catching.
+            if tooling.call_failed(event.get("result")):
+                self.failed.append(str(event.get("name") or ""))
+        elif kind == "context":
+            # One lands every round. Each is a *reading* rather than something that happened,
+            # so only the first and the last are kept — see the fields' own note for why both.
+            reading = event.get("context") or {}
+            if reading:
+                if not self.baseline_context:
+                    self.baseline_context = reading
+                self.context = reading
         elif kind == "stats":
             stats = event.get("stats") or {}
             fresh = int(stats.get("uncachedTokens") or 0)
@@ -969,6 +998,21 @@ class _MindFeed:
             self.error = event.get("message")
             self._publish("error", str(self.error))
 
+    def _composition(self) -> dict | None:
+        """The two readings, reduced to the only part worth keeping forever.
+
+        Just the `lines`. `window`, `used`, `free` and `share` are either constant for the
+        model or already on the row as `tokens_in`, and a row that restates them is a row that
+        can disagree with itself. None when no reading arrived — a local model reports no
+        window, and "no reading" must stay distinct from "the window held nothing".
+        """
+        if not self.baseline_context:
+            return None
+        return {
+            "baseline": self.baseline_context.get("lines") or [],
+            "final": (self.context or self.baseline_context).get("lines") or [],
+        }
+
     def finish(self) -> None:
         self._publish("done", "turn complete")
         outcome = f"error: {self.error}" if self.error else (self.said.strip()[:280] or "answered")
@@ -984,6 +1028,8 @@ class _MindFeed:
                 round(time.monotonic() - self.started, 2),
                 outcome,
                 tokens_uncached=self.tokens_uncached,
+                context=self._composition(),
+                failed=self.failed,
             )
         except Exception:
             # Accounting. The turn already happened and the person already has the answer;
