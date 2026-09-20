@@ -378,6 +378,25 @@ def edit_files(path: Path, args: dict):
     edits = [one for one in raw if isinstance(one, dict)]
     if not edits:
         return {"error": "no edits given — pass at least one {path, old, new}"}
+
+    # A `path` beside the edits is the default for any edit that does not name its own, and
+    # this was the most expensive missing line in the tool surface.
+    #
+    # Measured over 120 transcripts: `edit_files` is the second most-used tool at 2,392 calls
+    # and 682 of them failed — 29% — of which 566 were the single message "edit N has no path".
+    # Most of those calls carried a perfectly good path at the top level:
+    # `{"path": "app/rag/store.py", "edits": [{"old": …, "new": …}]}`, which is how anyone would
+    # say "edit this file, here are the changes" and is exactly the shape the retired
+    # `edit_file` taught. The fallback above only consulted `path` when `edits` was *absent*, so
+    # sending both — the natural thing — ignored it and refused the batch.
+    #
+    # An explicit path on an entry always wins: a batch spanning two files where only one entry
+    # names itself is precisely the case where inheriting over the top would write to the wrong
+    # file. And an edit with no path anywhere is still refused, because there is nothing to
+    # infer from and guessing which file to write to is worth failing a round over.
+    fallback = str(args.get("path") or "").strip()
+    if fallback:
+        edits = [{**one, "path": one.get("path") or fallback} for one in edits]
     return _reporting_lost_definitions(
         [str(one.get("path") or "") for one in edits],
         lambda: sandbox.edit_files(edits),
