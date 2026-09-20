@@ -252,8 +252,49 @@ def _tool_result_message(convo: list[dict[str, Any]], name: str, payload: str) -
     }
 
 
-def _compact_tool_history(convo: list[dict[str, Any]], offload=None) -> None:
-    """Stub the oldest tool outputs once the live set outgrows its char budget.
+#: What share of the window's worth of characters may be tool output held whole.
+#:
+#: **Sized against what a turn actually uses, not against the window's capacity, and the
+#: difference is most of the number.** A quarter of a 1M window is 971,000 characters — about
+#: 262,000 tokens — and the p90 turn on this install runs 400,000 tokens per round in total, so
+#: a quarter would have been generous enough never to bind on the very turns it exists for. The
+#: window says what the model may be *billed* for; it says nothing about how much old shell
+#: output can sit in front of a question before the question stops being the loudest thing in
+#: the prompt.
+#:
+#: Twelve per cent is ~466,000 characters on a million-token model: roughly fifty nine-thousand
+#: character reads held whole before anything is let go, and **5.8x the old absolute budget**,
+#: which is the margin that matters — 80,000 characters is what caused the re-reading, and
+#: nothing here is trimmed until nearly six times that much is live.
+#:
+#: **A share rather than a constant, and that is the whole fix.** `live_tool_chars` is 80,000,
+#: which was right for the model this loop was written against and is 1.9% of a million-token
+#: window. Trimming to it made Kith re-read `ModelsSettings.tsx` fifteen times — 54% of every
+#: read he made was of a file he had already read — so in September compaction was gated behind
+#: "actually short of room" and stopped running at all. That left two states and no middle:
+#: below 80% of the window nothing is trimmed ever, above it the live set is slammed to 1.9%.
+#: Measured across 478 real turns, only the first state ever occurs; the median turn is 16
+#: rounds and the p90 is 83, and none of them reach 838,860 tokens in a single round. So the
+#: sixty rounds of shell output are all still there, and the machinery for that has never run.
+_LIVE_TOOL_SHARE = 0.12
+
+
+def live_tool_budget(window: int) -> int:
+    """How many characters of tool output may stay whole, for this model.
+
+    ``window`` is the model's context in tokens, or 0 when nobody knows — load-bearing here
+    exactly as in `_room_is_tight` and `config.context_window`. An unknown window falls back to
+    the absolute setting, because guessing is worse in both directions: guess high and a small
+    model 400s mid-turn, guess low and every turn is trimmed for nothing.
+    """
+    absolute = tuning.value("live_tool_chars")
+    if window <= 0:
+        return absolute
+    return int(window * _CHARS_PER_TOKEN * _LIVE_TOOL_SHARE)
+
+
+def _compact_tool_history(convo: list[dict[str, Any]], offload=None, window: int = 0) -> None:
+    """Stub the oldest tool outputs once the live set outgrows its budget.
 
     Tool output re-sends in full on every subsequent round, so a long research turn
     would balloon without pruning. The pruning has to be sized to the model actually
@@ -261,9 +302,16 @@ def _compact_tool_history(convo: list[dict[str, Any]], offload=None) -> None:
     forgets the six searches he ran two rounds ago and re-runs them, round after round.
 
     So the live set is bounded by characters rather than by count — keep the newest
-    results whole until the budget is spent, and only then start stubbing. All three
-    numbers are settings, read here rather than at import so raising them for a
-    bigger model takes effect on the next turn instead of the next restart.
+    results whole until the budget is spent, and only then start stubbing. The budget
+    now follows the window (see `live_tool_budget`); the rest are settings, read here
+    rather than at import so raising them takes effect on the next turn.
+
+    **Cache safety is a property of the budget being big enough**, not of this never running.
+    Below the budget nothing is rewritten at all, so round N+1 still contains round N as a
+    byte-identical prefix and the breakpoint written last round is read this round. Above it
+    the eviction frontier advances and the prefix does break there — that is the real cost of
+    trimming, paid only by turns that have genuinely run away, which are the turns where
+    carrying everything costs more than re-billing the tail.
 
     ``offload(name, content) -> path`` spills an evicted result to a file first, so the
     stub can point him at the full text rather than truncating it away. Optional and
@@ -271,7 +319,7 @@ def _compact_tool_history(convo: list[dict[str, Any]], offload=None) -> None:
     the stub is the older, lossy trim, unchanged.
     """
     keep_whole = tuning.value("keep_full_tool_results")
-    char_budget = tuning.value("live_tool_chars")
+    char_budget = live_tool_budget(window)
     stub_chars = tuning.value("tool_stub_chars")
     tool_positions = [i for i, m in enumerate(convo) if m.get("role") == "tool"]
 

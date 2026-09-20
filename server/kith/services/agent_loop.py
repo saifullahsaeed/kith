@@ -278,7 +278,7 @@ _GATHERING_TOOLS = frozenset(
 # inverting it: a turn that is finishing must not open a new front. Widening what landing may do
 # so he can finish the work must not turn the reserve back into an unbounded turn.
 #
-# The line is *new* work, not work. `update_task`, `check_item`, `add_checklist_item` and
+# The line is *new* work, not work. `update_task`, `checklist` and
 # `add_deliverable` all describe what this turn did and are exactly what landing is for; a task,
 # a project or a milestone is a commitment to do something else later, which is the thing the
 # budget is trying to stop.
@@ -362,7 +362,7 @@ _EMPTY_ROUND_DIRECTIVE = (
 _LANDING_DIRECTIVE = (
     "(You're near the end of this turn's tool budget, so stop gathering — you have enough. "
     "Spend what's left LANDING the work: write what you've found into your working file, "
-    "add_deliverable for anything finished, check_item the checklist steps you've actually "
+    "add_deliverable for anything finished, `checklist` to tick off the steps you've actually "
     "completed, and `ask` if you need something from your person — it waits for the answer. "
     "Research you never wrote down is research you'll have to redo next time.)"
 )
@@ -552,6 +552,23 @@ def _make_room(
     40-round turn would remove shell and every file tool for the remaining 37 and leave him
     structurally unable to do what he was asked. Trim the history; leave the capability alone.
     """
+    # Age out old tool results first, every round, before anything asks whether there is room.
+    #
+    # **This used to be gated, and the gate is why it never ran.** Reaching it required 80% of
+    # the window — 838,860 tokens on the model this install uses — and across 478 real turns
+    # nothing came close: the median turn is 16 rounds and the p90 is 83, at 193k and ~400k
+    # tokens a round. So a sixty-round turn carried sixty rounds of shell output, all of it
+    # equally present, and the machinery for exactly that had never once fired.
+    #
+    # The gate was right about its own problem and wrong about the cause. It went in because
+    # trimming to `live_tool_chars` — 80,000 characters, 1.9% of this window — made him re-read
+    # files he had already read, 54% of all reads. That is a budget sized for a small model, not
+    # evidence against trimming, and `live_tool_budget` now scales it with the window: nearly
+    # six times the old allowance before anything is let go, and nothing at all is rewritten
+    # below it, so the cached prefix a normal turn depends on is untouched. See
+    # `test_the_live_set_is_sized_to_the_window`.
+    _compact_tool_history(convo, offload, window=config.context_window)
+
     book = take_reading()
 
     over = book.past(_FOLD_ABOVE_SHARE) if config.context_window > 0 else _room_is_tight(convo, 0)
@@ -565,7 +582,11 @@ def _make_room(
             # Either it has been folded as often as is worth paying for, or there was no safe
             # place to cut. Fall back to the older shaving, which is lossy and breaks the
             # prefix — and is still better than a turn that dies on a 400.
-            _compact_tool_history(convo, offload)
+            #
+            # Tool history is deliberately not re-run here: the unconditional pass above has
+            # already taken it to the live budget this round, and calling it again with the same
+            # arguments would find nothing left to do. Images and call arguments have no such
+            # pass, so this is still the only thing that trims them.
             _compact_images(convo)
             _compact_call_arguments(convo)
         book = take_reading()

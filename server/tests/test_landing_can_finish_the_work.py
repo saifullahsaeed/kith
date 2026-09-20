@@ -120,11 +120,11 @@ class TestItStillStopsGathering:
         """The reserve's second job, and the one easiest to lose when inverting the list.
 
         A task, a project or a milestone is a commitment to do something *else*, later. Recording
-        what this turn did — `update_task`, `check_item`, `add_deliverable` — is the opposite, and
+        what this turn did — `update_task`, `checklist`, `add_deliverable` — is the opposite, and
         is what landing is for.
         """
         assert not ({"add_task", "create_project", "add_milestone"} & offered_while_landing)
-        assert {"update_task", "check_item", "add_checklist_item", "add_deliverable"} <= offered_while_landing
+        assert {"update_task", "checklist", "add_deliverable"} <= offered_while_landing
 
 
 class TestEveryNameIsReal:

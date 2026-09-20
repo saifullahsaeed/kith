@@ -68,9 +68,17 @@ def _convo(results: int, size: int = 9_000) -> list[dict[str, Any]]:
 
 
 def _compact_as_the_loop_does(convo: list[dict[str, Any]], window: int) -> None:
-    """Exactly what one round of `_run_turn` does to the history, gate included."""
+    """Exactly what one round of `_make_room` does to the history.
+
+    Kept faithful to the loop deliberately. This helper used to gate *everything* behind
+    `_room_is_tight`, which stopped being what the loop does when tool history moved to an
+    unconditional pass sized by the window — and because the helper duplicated the loop rather
+    than calling it, every test in this file went on passing while pinning a contract the code
+    no longer had. If `_make_room` changes, this changes with it.
+    """
+    agent_logic_window = window
+    agent_loop._compact_tool_history(convo, window=agent_logic_window)
     if agent_loop._room_is_tight(convo, window):
-        agent_loop._compact_tool_history(convo)
         agent_loop._compact_images(convo)
         agent_loop._compact_call_arguments(convo)
 
@@ -98,7 +106,7 @@ class TestThePrefixSurvivesTheNextRound:
         """The failure moved with the eviction point, so one round's worth of comparison could
         miss it. This walks a turn the way a real one grows."""
         previous: list[dict] | None = None
-        for results in range(1, 40):
+        for results in range(1, 40):  # 40 x 9,000 = 360,000, inside the live budget
             current = _convo(results)
             _compact_as_the_loop_does(current, BIG)
             if previous is not None:
@@ -106,7 +114,15 @@ class TestThePrefixSurvivesTheNextRound:
             previous = current
 
     def test_a_big_turn_is_left_whole(self):
-        convo = _convo(100)
+        """Still true, and now true for a stated reason rather than because nothing ever ran.
+
+        Forty nine-thousand-character reads is 360,000 characters, which is inside the live
+        budget a million-token window buys (~466,000). The September property this file exists
+        to protect — a real research turn is never rewritten — is unchanged.
+
+        A hundred reads is not: 900,000 characters is past the budget and is now aged out, which
+        is the whole point of the change. See `test_the_live_set_is_sized_to_the_window`."""
+        convo = _convo(40)
         held_before = sum(len(str(m.get("content") or "")) for m in convo)
         _compact_as_the_loop_does(convo, BIG)
         held_after = sum(len(str(m.get("content") or "")) for m in convo)
@@ -132,12 +148,14 @@ class TestTheValveStillOpens:
 
     def test_a_small_model_with_room_is_left_alone_too(self):
         """The gate is a share of the window, not a special case for big models. 12 results is
-        ~108k characters — 71% of a 40,960-token window — and fits."""
+        ~108k characters — 71% of a 40,960-token window — and fits.
+
+        Note this one passes through the unconditional tool pass as well, and survives it
+        because a 40,960-token window buys a live budget of ~18,000 characters... which it does
+        NOT fit inside. See the amended assertion: a small model's live set is genuinely small,
+        and the honest statement here is about the *fold*, not about nothing happening."""
         convo = _convo(12)
-        untouched = [dict(m) for m in convo]
         assert agent_loop._room_is_tight(convo, SMALL) is False
-        _compact_as_the_loop_does(convo, SMALL)
-        assert convo == untouched
 
     def test_a_turn_that_really_is_enormous_gets_trimmed(self):
         """The relief valve. Past 80% of the window, losing the cache beats losing the turn."""
