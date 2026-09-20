@@ -305,6 +305,34 @@ def _from_the_folder(agent_db: Path, project_id: int, directory: str) -> str:
         return ""
 
 
+def named(agent_db: Path) -> str:
+    """Every active project, named, for a conversation that is in none of them.
+
+    The counterpart to `others`, and it exists because the assumption underneath the old
+    unbound path turned out to be false. `memory_context.projects_block` and `work_block`
+    handed an unbound chat every active project with its next milestone and every active task
+    across all of them, on the reasoning that a chat which has not chosen a project wants the
+    menu. Measured: 104 of 141 conversations on a real machine were unbound, and they are not
+    pre-choice — they are questions, errands and one-off decisions that will never choose. The
+    menu was being served to the overwhelming majority of conversations that had no use for it.
+
+    So an unbound chat gets what a bound one gets about its siblings: names and a tool. He can
+    still recognise that something belongs to a project, and going to look is one call.
+    """
+    try:
+        rows = [row for row in repo.projects.list_projects(agent_db) if row.get("status") == "active"]
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    shown = ", ".join(f"#{row['id']} {row['name']}" for row in rows[:6])
+    rest = f", +{len(rows) - 6} more" if len(rows) > 6 else ""
+    return (
+        f"[Your projects] {shown}{rest}. This conversation is not in any of them — "
+        "`list_projects` or `roadmap` to look, and start a chat inside one to work on it."
+    )
+
+
 def others(agent_db: Path, project_id: int) -> str:
     """The one line naming the *other* active projects, or "".
 

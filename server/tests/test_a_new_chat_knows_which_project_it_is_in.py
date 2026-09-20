@@ -260,9 +260,17 @@ class TestInTheActualPrompt:
         assert "Client portal" in tail
         assert "Something else" in tail
 
-    def test_every_task_in_the_menu_says_whose_it_is(self, never_the_real_database, tmp_path):
-        # The bug, in one line: `- #31 [working] (high) Connect the client access flows to the
-        # lifecycle API` — nothing on it says which codebase that is.
+    def test_no_task_from_any_project_reaches_an_unbound_chat(self, never_the_real_database, tmp_path):
+        """The menu used to list every active task across every project, and the bug then was
+        that no row said which codebase it belonged to: `- #31 [working] (high) Connect the
+        client access flows to the lifecycle API`. Labelling each row fixed the ambiguity and
+        left the invitation — ten labelled tasks are still ten invitations to go and work on
+        something that is not what was asked.
+
+        Measured afterwards: 104 of 141 conversations were unbound, so this was being served to
+        nearly every conversation on the machine, and almost none of them were about to choose a
+        project. The projects stay *named* (the test above), because recognising that something
+        belongs elsewhere is worth a line. Their work does not come with them."""
         db = never_the_real_database
         repo.projects.add_project(db, "Client portal", "", str(tmp_path))
         repo.projects.add_project(db, "Something else", "", str(tmp_path))
@@ -272,8 +280,9 @@ class TestInTheActualPrompt:
 
         tail = self._tail("nothing-bound-here")
 
-        assert "build the KYC views — " in tail
-        assert "filed before projects existed — not on any project" in tail
+        assert "build the KYC views" not in tail
+        assert "filed before projects existed" not in tail
+        assert "Client portal" in tail  # still named — `list_tasks` is one call away
 
     def test_the_region_rides_in_the_live_tail_block(self, never_the_real_database, tmp_path):
         # Everything here is paid for on every round and must sit after the cached prefix, or

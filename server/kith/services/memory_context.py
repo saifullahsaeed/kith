@@ -10,36 +10,63 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from kith.domain import present
 from kith.infra.db import repositories as repo
 from kith.kernel import clock, session_context
 from kith.services.local_time import clock_line
 
 
 def context_block(
-    path: Path, core_limit: int = 30, recent_limit: int = 8, project_id: int | None = None
+    path: Path,
+    core_limit: int = 30,
+    recent_limit: int = 8,
+    project_id: int | None = None,
+    about: str = "",
 ) -> str:
-    """What he is holding in mind, scoped to the conversation.
+    """What he is holding in mind, scoped to the conversation and to its subject.
 
     `project_id` is the project the conversation is in, or None. Global memories surface either
     way; a project's own memories join them only in that project's chats; another project's are
-    left for `recall`. Before this the block was the same on every turn whatever the subject —
-    so a security-testing chat carried a different project's Odoo internals and nothing of its
-    own. See `repositories.memories._scope`.
+    left for `recall`. See `repositories.memories._scope`.
+
+    **`about` is the second scope, and it is the one that was missing.** Project scoping cannot
+    help a chat that is in no project — which is most of them — and it cannot help a global
+    memory at all, since a global memory is in scope everywhere by definition. So the eight
+    most-recent non-core memories arrived on every turn regardless of subject, and with
+    `MEMORY_LEVELS = ("core", "recall")` "non-core" is exactly "recall": the level whose own
+    tool description promises it is "retrieved when you reach for it". A conversation about
+    nothing opened carrying a missile simulator's physics notes.
+
+    Now core arrives unconditionally — that is what the level means — and a recall memory has to
+    have something to do with what is being discussed. `recall` still reaches every one of them,
+    which is the whole point of the split: what arrives free is small and on-topic, and the rest
+    is one call away rather than a tax on every round.
+
+    An empty `about` therefore yields core only. That is correct rather than a degradation: the
+    first turn of a brand-new chat is precisely the conversation this exists to keep clean.
     """
     core = repo.memories.memories_by_level(path, "core", core_limit, project_id)
-    recent = repo.memories.recent_memories(path, recent_limit, project_id)
-    if not core and not recent:
+    # Fetched by recency and then *filtered* by subject, rather than fetched by subject. Recency
+    # is the cheap SQL bound that keeps this from scoring the whole table on every turn; the
+    # scoring below is what decides. Widened past `recent_limit` so the choice is made over a
+    # real candidate pool — taking the most recent eight and then scoring them would let one
+    # busy afternoon in another project push every relevant memory out of contention.
+    candidates = repo.memories.recent_memories(path, max(recent_limit * 4, 32), project_id)
+    earned = [m for m in present.eligible_memories(candidates, about) if m.get("level") != "core"]
+    earned = earned[:recent_limit]
+
+    if not core and not earned:
         return ""
 
     lines: list[str] = []
     if core:
         lines.append("At the front of your mind (always with you):")
         lines += [f"- {m['content']}" for m in core]
-    if recent:
+    if earned:
         if lines:
             lines.append("")
-        lines.append("In the back of your mind (recent):")
-        lines += [f"- {m['content']}" for m in recent]
+        lines.append("Related to what you're doing right now:")
+        lines += [f"- {m['content']}" for m in earned]
     return "\n".join(lines)
 
 

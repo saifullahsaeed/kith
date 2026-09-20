@@ -31,6 +31,7 @@ import re
 from pathlib import Path
 
 from kith.config import model_capabilities, ollama_host
+from kith.domain import present
 from kith.infra import workspace as sandbox
 from kith.services import conversations, history, memory_context, project_context, touched
 from kith.settings import AGENT_DB_PATH
@@ -243,7 +244,10 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # because it called `_with_canvas` directly.
         out.append(_with_attachments(_with_canvas(_with_diagrams(message))))
     sizes: dict[str, int] = {}
-    now = _present_state(conversation_id, sizes)
+    # The subject comes off the folded history rather than being passed in, so a preview of
+    # the prompt and the prompt itself cannot score memories differently — `as_sent` and
+    # `_build_messages` both land here with the same list.
+    now = _present_state(conversation_id, sizes, about=_subject(folded))
     if now:
         # `_live` is for the ledger, not the provider — `openai_compat._to_openai` rebuilds
         # every message from role and content alone, so nothing internal can reach a host.
@@ -529,57 +533,134 @@ def _save_attachment(attachment: dict) -> str:
     return f"{ATTACHMENT_DIR}/{target.name}"
 
 
-def _present_state(conversation_id: str = "", _sizes: dict | None = None) -> str:
-    """Everything about him that is true only at this moment, and everything about the project
-    he is in.
+#: What the whole present-state block may cost, in characters.
+#:
+#: **One number, owned here, because the absence of one was the bug.** This block used to be
+#: seven independent caps — `project_context.LIMITS` at {8, 10, 6}, thirty core memories, eight
+#: recent, eight channel messages, 600 characters of project description, three milestones
+#: ahead — every one of them defensible alone and none of them aware of the others. Nothing in
+#: the codebase could answer "and how much is all of this together", so nobody asked, and the
+#: answer on a real machine was 13,362 characters on a conversation that had been asked nothing.
+#:
+#: Roughly 1,200 tokens. Chosen against what the block is *for* rather than against the window:
+#: this is the freshest thing he knows and the last thing he reads before the request, and it
+#: has to stay small enough that it reads as orientation rather than as a second prompt. The
+#: window has nothing to do with it — there was a megabyte of room on the machine where this
+#: block reached thirteen thousand characters, and the room is exactly why nobody noticed.
+PRESENT_BUDGET = 4_800
 
-    Two regions, and the split is the whole of the fix for a conversation that wandered. The
-    first is about *him* — the clock, his memories, his channel, what he last did — and is the
-    same whatever he is working on. The second is about **one project**, and until it existed
-    there was no such region at all: every active project and every active task across all of
-    them arrived on every turn with no project named on any row, and the one thing that would
-    have grounded him — the project's own memory — was skipped whenever more than one project
-    was open, because the fallback that found it declined to guess.
+
+def _subject(messages: list[dict]) -> str:
+    """What this conversation is about, as text to score memories against.
+
+    The person's own words only. An assistant turn is mostly its own prose and would score its
+    own recollections back in — a memory he mentioned once would then keep itself resident by
+    having been mentioned, which is a feedback loop rather than a relevance signal.
+
+    Recent rather than all: a long conversation has moved on, and matching against its whole
+    history surfaces what it *used* to be about.
+    """
+    said = [
+        str(m.get("content") or "")
+        for m in messages
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+    return "\n".join(said[-_SUBJECT_TURNS:])
+
+
+#: How many of the person's recent messages define the subject. Three is a question, its
+#: correction, and the follow-up — the span over which a chat is still about one thing.
+_SUBJECT_TURNS = 3
+
+
+def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, about: str = "") -> str:
+    """Everything about him that is true only at this moment, and everything about the project
+    he is in — within one budget, with the sources competing for it.
+
+    Two regions. The first is about *him* — the clock, his memories, his channel, what he last
+    did. The second is about **one project**, and until it existed there was no such region:
+    every active project and every active task across all of them arrived on every turn with no
+    project named on any row.
 
     So the project is resolved *once*, here, and everything downstream is told the answer rather
-    than working it out again. `project_context.block` carries the project; `memory_context`
-    carries the board only when there is no project to carry instead. Never both: two blocks
-    describing the same tasks in different words is worse than either one alone.
+    than working it out again. `project_context.block` carries the project; `project_context`
+    names the rest and says no more about them. Never both descriptions: two blocks describing
+    the same tasks in different words is worse than either one alone.
+
+    **The budget is the second half of that fix, and the more important one.** Scoping decides
+    what is *eligible*; it cannot decide what is too much, because every source judged its own
+    size against its own constant. `domain.present.allocate` ranks what was gathered and returns
+    what fits — essentials unconditionally, then by tier, then by how much each has to do with
+    `about`. A block that loses is not truncated mid-sentence; it is left out, and `recall`,
+    `list_tasks` and `roadmap` reach every one of them on request.
     """
     project = project_context.resolve(AGENT_DB_PATH, conversation_id)
-    blocks = [
-        memory_context.presence_block(AGENT_DB_PATH),
-        memory_context.messages_block(AGENT_DB_PATH, int(project["id"]) if project else None),
-    ]
+    project_id = int(project["id"]) if project else None
+    candidates: list[present.Block] = []
+
+    # Essential: the clock, and anyone waiting on a reply. Wrong by their absence rather than
+    # merely poorer for it, and both are small — the budget was never the reason to drop them.
+    candidates.append(
+        present.Block("clock", memory_context.presence_block(AGENT_DB_PATH), tier=present.ESSENTIAL)
+    )
+    candidates.append(
+        present.Block(
+            "channel",
+            memory_context.messages_block(AGENT_DB_PATH, project_id),
+            tier=present.ESSENTIAL,
+        )
+    )
+
+    # Named, not described, whether or not this conversation is in one of them. He has to be
+    # able to recognise that something belongs elsewhere, and nothing more than that.
+    candidates.append(
+        present.Block(
+            "projects",
+            project_context.others(AGENT_DB_PATH, project_id)
+            if project
+            else project_context.named(AGENT_DB_PATH),
+            tier=present.NICE_TO_HAVE,
+        )
+    )
+
+    # Scoped twice now: to the project, and to what is being discussed. See `context_block` —
+    # `recall` means "reach for it", and it had been arriving unasked for every memory in the
+    # database. Worth having rather than essential: being without a memory costs a tool call.
+    # The project joins what memories are scored against, and only for a chat that is in one.
+    #
+    # The person's words alone are a signal that flickers: "can you look at that again" scores
+    # zero against every memory in the database, so a short message carries no project memory
+    # while the message that happened to name the project carries all of it. Memory that comes
+    # and goes with the phrasing of the last sentence is worse than memory that is simply
+    # absent, because it looks like it is working. A bound chat is *about* its project by
+    # construction, and the name and description are already known here.
+    #
+    # Not a free pass: the project's words widen the subject, they do not lower the bar, so a
+    # memory about something else still has to clear `RELEVANT_ENOUGH` against them.
+    subject = about
     if project:
-        # Named, not described. See `project_context.others` — he has to be able to recognise
-        # that something belongs elsewhere, and nothing more than that.
-        blocks.append(project_context.others(AGENT_DB_PATH, int(project["id"])))
-    else:
-        # Nothing has been chosen, so the menu is the right answer.
-        blocks.append(memory_context.projects_block(AGENT_DB_PATH))
-        blocks.append(memory_context.work_block(AGENT_DB_PATH))
-    # Scoped to the project in hand, like the region below it. His memories were global — the
-    # same core set and eight most-recent on every turn — so a chat in one project carried
-    # another's detail and none of its own. `recall` still reaches anything; this is only what
-    # arrives without asking.
-    present = memory_context.context_block(AGENT_DB_PATH, project_id=int(project["id"]) if project else None)
-    if present:
-        blocks.append(f"[Your memory right now]\n{present}")
+        subject = f"{about}\n{project.get('name') or ''}\n{project.get('description') or ''}"
+    remembered = memory_context.context_block(AGENT_DB_PATH, project_id=project_id, about=subject)
+    candidates.append(
+        present.Block(
+            "memory",
+            f"[Your memory right now]\n{remembered}" if remembered else "",
+            tier=present.WORTH_HAVING,
+            trimmable=True,
+        )
+    )
     # What he knows about the project he is in. Injected rather than fetched, deliberately:
     # a file he has to remember to open is a file he will not open, which is the shape of
     # nearly every failure this codebase has a comment about. That reasoning now covers the
     # whole project — its plan, its columns, its folder's standing against the remote — and not
     # just `memory.md`, for exactly the same reason.
+    #
+    # The one block that does not compete on relevance. A conversation bound to a project is
+    # *about* that project by construction, so scoring it against the last three messages would
+    # only ever punish it for being asked a question in different words than the roadmap uses.
+    # It bids in the top tier and takes what it needs.
     about_project = project_context.block(AGENT_DB_PATH, project)
-    blocks.append(about_project)
-    # Reported out rather than measured by the caller, because only this function knows which
-    # of the blocks it joined was the project one. The ledger reads it: inside "Where he is
-    # right now" the project region is indistinguishable from the clock, and it is now the
-    # largest thing in there by an order of magnitude. Same reasoning that gave the live block
-    # its own line rather than leaving it inside "System prompt".
-    if _sizes is not None:
-        _sizes["project"] = len(about_project)
+    candidates.append(present.Block("project", about_project, tier=present.WORTH_HAVING, score=1.0))
     # What his plugins are holding, one capped line each.
     #
     # **Here rather than in `config.system` beside `skills.index()`**, and that placement is the
@@ -593,11 +674,32 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None) -> str
     # This block is the one region rewritten every turn, so everything ahead of it stays cached
     # and a digest here costs one small cache write per turn and nothing else.
     from_plugins = _plugin_digest(conversation_id, project)
-    blocks.append(from_plugins)
-    if _sizes is not None:
-        _sizes["plugins"] = len(from_plugins)
+    candidates.append(present.Block("plugins", from_plugins, tier=present.NICE_TO_HAVE, trimmable=True))
     # Last, so it is the closest thing to what was just asked. Everything above is about him or
     # about the project; this is the only part that is about the conversation, and it is the part
     # that stops him opening a file he has already read — measured at 54% of every read he makes.
-    blocks.append(touched.manifest(AGENT_DB_PATH, conversation_id))
-    return "\n\n".join(block for block in blocks if block).strip()
+    #
+    # Top tier, and it earns that: every other block here is something he might want, and this
+    # one is the only block that *saves* a call rather than offering one. Trimmable, because it
+    # is a list of paths and the oldest are the ones he is least likely to open again.
+    candidates.append(
+        present.Block(
+            "touched",
+            touched.manifest(AGENT_DB_PATH, conversation_id),
+            tier=present.WORTH_HAVING,
+            score=1.0,
+            trimmable=True,
+        )
+    )
+
+    kept = present.allocate(candidates, PRESENT_BUDGET)
+    # Reported out rather than measured by the caller, because only this function knows which of
+    # the blocks it joined was which — and now, which of them survived. The ledger reads it:
+    # inside "Where he is right now" the project region is indistinguishable from the clock, and
+    # it is the largest thing in there by an order of magnitude. Measured *after* allocation, so
+    # the number is what was sent rather than what was offered.
+    if _sizes is not None:
+        by_key = {block.key: len(block.text) for block in kept}
+        _sizes["project"] = by_key.get("project", 0)
+        _sizes["plugins"] = by_key.get("plugins", 0)
+    return "\n\n".join(block.text for block in kept).strip()

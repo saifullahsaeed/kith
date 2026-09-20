@@ -31,20 +31,41 @@ def memories(db):
 
 
 class TestWhatSurfaces:
-    def test_a_project_chat_gets_its_own_and_the_global_ones(self, memories):
-        block = memory_context.context_block(memories, project_id=17)
+    """Project scope decides what is *eligible*; `about` decides which of those actually rides
+    along. A recall memory needs both — see `test_recall_means_reach_for_it`, which owns the
+    second half. These tests supply a conversation on the subject so that the scope is the only
+    thing left deciding, which is what they are about."""
 
-        assert "GitHub" in block  # global — everywhere
-        assert "JWT in a cookie" in block  # this project
+    def test_a_project_chat_gets_its_own_and_the_global_ones(self, memories):
+        block = memory_context.context_block(
+            memories, project_id=17, about="how does the portal JWT cookie work"
+        )
+
+        assert "GitHub" in block  # global core — everywhere, unconditionally
+        assert "JWT in a cookie" in block  # this project, and on the subject
 
     def test_a_project_chat_does_not_get_another_project_s(self, memories):
-        block = memory_context.context_block(memories, project_id=17)
+        block = memory_context.context_block(
+            memories, project_id=17, about="how does the portal JWT cookie work"
+        )
 
         assert "JSON-2" not in block  # project #6
         assert "27 Django apps" not in block  # project #16
 
+    def test_another_project_s_memory_stays_out_even_when_it_is_relevant(self, memories):
+        """Scope is not a tie-breaker that relevance can win. Asking project #17's chat about
+        jsonrpc must not reach into project #6, or the split does nothing on precisely the
+        question where it matters."""
+        block = memory_context.context_block(
+            memories, project_id=17, about="does odoo speak jsonrpc or JSON-2"
+        )
+
+        assert "JSON-2" not in block
+
     def test_the_other_project_gets_its_own(self, memories):
-        block = memory_context.context_block(memories, project_id=6)
+        block = memory_context.context_block(
+            memories, project_id=6, about="does odoo speak jsonrpc or JSON-2"
+        )
 
         assert "JSON-2" in block
         assert "GitHub" in block
