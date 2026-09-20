@@ -106,7 +106,7 @@ a done-condition, not a task.
 
 One call writes the step, its two-to-five tasks and every checklist item, through the same
 writers and the same rules as filing them by hand. Use it instead of `add_milestone` then an
-`add_task` each then an `add_checklist_item` each — that was a dozen rounds, and a dozen rounds is
+`add_task` each then a `checklist` each — that was a dozen rounds, and a dozen rounds is
 why plans got skipped in favour of just doing the work.
 
 Plan **one** milestone this way, shallowly. A task refused for a missing done-condition comes back
@@ -182,7 +182,7 @@ Keep one `working` task per project unless parallel work is genuinely independen
 most reduces uncertainty or unblocks the next package — priority never overrides a dependency.
 
 Build the checklist **as you go**, not up front: one written before you have looked at anything is
-a guess you will follow past the point where you know better. Tick items with `check_item` as you
+a guess you will follow past the point where you know better. Tick items with `checklist` as you
 finish them; that is the progress they actually see.
 
 Keep progress in `.kith/work/task-<id>.md` — the same file the plan lives in. What changed, what

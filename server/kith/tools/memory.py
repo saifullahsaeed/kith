@@ -22,7 +22,7 @@ from kith.tools.registry import tool
     "a log in time order, and a running narration kept here would crowd out the things you "
     "actually need to find again. "
     "NOT for where things stand. Which task is active, what its status is, what you are "
-    "working on now — the board already answers that (`list_tasks`, `view_task`) and it is "
+    "working on now — the board already answers that (`list_tasks`) and it is "
     "wrong the moment the work moves. Saving it is refused.",
     {
         "content": {**STR, "description": "The thing to remember."},

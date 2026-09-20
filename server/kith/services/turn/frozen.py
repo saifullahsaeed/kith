@@ -70,7 +70,7 @@ def begin(
     are taken from gathering and given to writing it down. A sub-agent's entire output *is*
     its final message, and `_final_answer` already forces that when the budget runs out, so
     for one of those the reserve buys nothing and the directive that comes with it — write to
-    your working file, add_deliverable, check_item — names tools it deliberately does not
+    your working file, add_deliverable, checklist — names tools it deliberately does not
     have. `0` means the whole budget is gathering; `None`, which is every other caller, means
     the knob decides.
     """

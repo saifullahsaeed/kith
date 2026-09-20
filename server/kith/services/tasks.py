@@ -234,7 +234,7 @@ def _verify_approvable(path: Path, task_id: int) -> dict | None:
         "blocked": f"Nothing to approve yet: this task has no {' and no '.join(missing)}.",
         "next": (
             "Write the plan to `.kith/work/task-<id>.md` and add the checklist with "
-            "`add_checklist_item` — every step, before you hand it over, not as you go. Then set "
+            "`checklist` — every step in one call, before you hand it over, not as you go. Then set "
             "'planning' so they can look at both together. They approve it; you do not."
         ),
     }

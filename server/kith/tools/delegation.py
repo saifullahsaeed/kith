@@ -84,7 +84,6 @@ GIVEN = frozenset(
         # to look, and none of these change anything.
         "list_projects",
         "list_tasks",
-        "view_task",
     }
 )
 
@@ -150,9 +149,8 @@ WITHHELD = frozenset(
         "add_task",
         "plan_work",
         "add_milestone",
-        "add_checklist_item",
+        "checklist",
         "add_deliverable",
-        "check_item",
         "create_project",
         "update_milestone",
         "update_project",

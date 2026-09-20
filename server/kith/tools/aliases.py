@@ -103,6 +103,15 @@ RETIRED: dict[str, Retired] = {
     "order_milestones": Retired("update_milestone"),
     "unlink_milestones": Retired("update_milestone", rename={"milestone_id": "id"}),
     "diagnostics": Retired("check_code"),
+    # The checklist pair. `text` becomes the plural `add`, which `domain.tooling.many` reads
+    # from a bare string as happily as from a list; `item_id` becomes the plural `items` the
+    # same way. `done` is deliberately unchanged — `checklist` kept it as a boolean applying to
+    # `items` precisely so that an archived `check_item(item_id=5, done=false)` translates,
+    # which a tick/untick pair of lists could not have done from here.
+    "add_checklist_item": Retired("checklist", rename={"text": "add"}),
+    "check_item": Retired("checklist", rename={"item_id": "items"}),
+    # `view_task(id)` is `list_tasks` narrowed to one row, which is what `ids` now says.
+    "view_task": Retired("list_tasks", rename={"id": "ids"}),
     "definition": Retired("find_symbol", rename={"symbol": "name"}),
     "references": Retired("find_symbol", rename={"symbol": "name"}),
 }

@@ -60,7 +60,7 @@ class TestAPlanWrittenThisTurnCannotBeApprovedThisTurn:
         task_id = _a_task_from_before(db)
 
         with session_context.a_turn():
-            task_tools.add_checklist_item(db, {"id": task_id, "text": "Add dynamic field inspection"})
+            task_tools.checklist(db, {"id": task_id, "add": "Add dynamic field inspection"})
             refusal = task_service._verify_approvable(db, task_id)
 
         assert refusal is not None
@@ -71,7 +71,7 @@ class TestAPlanWrittenThisTurnCannotBeApprovedThisTurn:
         task_id = _a_task_from_before(db)
 
         with session_context.a_turn():
-            task_tools.add_checklist_item(db, {"id": task_id, "text": "A step"})
+            task_tools.checklist(db, {"id": task_id, "add": "A step"})
             refusal = task_service._verify_approvable(db, task_id)
 
         assert "older than the plan" in refusal["blocked"]
@@ -82,7 +82,7 @@ class TestAPlanWrittenThisTurnCannotBeApprovedThisTurn:
         task_id = _a_task_from_before(db)
 
         with session_context.a_turn():
-            task_tools.add_checklist_item(db, {"id": task_id, "text": "A step"})
+            task_tools.checklist(db, {"id": task_id, "add": "A step"})
 
         with session_context.a_turn():  # the next turn — they have had a chance to read it
             assert task_service._verify_approvable(db, task_id) is None

@@ -116,7 +116,7 @@ def refuse(path: Path, content: str, level: str) -> dict | None:
             ),
             "matched": snapshot,
             "next": (
-                "If you want to know what is happening, ask: `list_tasks`, `view_task`, "
+                "If you want to know what is happening, ask: `list_tasks`, "
                 "`list_projects`. If you want to leave a note about how this stretch of work "
                 "went, that is `journal`. Remember the thing that will still be true when the "
                 "task is closed — a decision and its reason, a constraint, how they like "

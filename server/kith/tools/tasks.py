@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kith.domain import stall
+from kith.domain import stall, tooling
 from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
-from kith.services import showing
-from kith.services import board_sync, project_binding
+from kith.services import board_sync, project_binding, showing
 from kith.services.tasks import (
     FILED_THIS_TURN,
     PLANNED_THIS_TURN,
@@ -238,12 +237,50 @@ def take_in_shared_tasks(path: Path, args: dict):
 
 @tool(
     "list_tasks",
-    "List your tasks (highest priority first), optionally filtered by column. "
-    "Returns one page — check 'more' before assuming you've seen them all.",
-    {"status": {**STR, "enum": list(TASK_STATUSES)}, **PAGE_PARAMS},
+    "Your tasks, highest priority first. Pass `ids` to open those in full instead — their "
+    "description, checklist, comment thread and deliverables — several at once. Without "
+    "`ids` you get one page of summaries; check 'more' before assuming you have seen them all.",
+    {
+        "ids": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "Open these in full rather than listing.",
+        },
+        "status": {**STR, "enum": list(TASK_STATUSES)},
+        **PAGE_PARAMS,
+    },
     required=(),
 )
 def list_tasks(path: Path, args: dict):
+    """The board, or a few rows of it opened up.
+
+    `view_task` was a separate tool for the second case: 259 characters of schema, and a
+    decision for the model to make, to say what an argument says. Merged here it also becomes
+    plural, which is the half that changes behaviour — reviewing a milestone means opening the
+    three tasks under it, and that was three rounds. See `domain.tooling.many`.
+
+    **A bare listing stays a listing.** The two were separate for a real reason: a page of
+    tasks with every checklist and comment thread attached is a page that costs what reading
+    the board used to cost for the whole project. `ids` is the only thing that opens them.
+    """
+    wanted = [int(one) for one in tooling.many(args, "ids", "id") if str(one).strip()]
+    if wanted:
+        found = [(one, repo.tasks.task_detail(path, one)) for one in wanted]
+        if len(wanted) == 1:
+            # **Byte-identical to what `view_task` returned**, which is the rule
+            # `domain.tooling.many` already states for every plural tool here: "single-path
+            # results are byte-identical to before so no renderer needed a branch". Opening one
+            # task is the single path, it is what every replayed `view_task` call asks for, and
+            # the interface sniffs result *shapes* rather than tool names — so wrapping it in a
+            # list would have quietly changed which card draws a task somebody opened.
+            return found[0][1] or {"note": "No such task."}
+        out: dict = {"items": [detail for _, detail in found if detail]}
+        missing = [one for one, detail in found if not detail]
+        if missing:
+            # Named rather than silently absent: asking for three and reasoning about two is
+            # the failure this costs nothing to prevent.
+            out["missing"] = missing
+        return out
     out = paging.page(repo.tasks.list_tasks(path, args.get("status")), args)
     waiting = board_sync.waiting_here(path)
     if waiting:
@@ -303,20 +340,10 @@ def update_task(path: Path, args: dict):
 
 
 @tool(
-    "view_task",
-    "Open a task in full — its description, checklist, comment thread, and deliverables.",
-    {"id": INT},
-    required=("id",),
-)
-def view_task(path: Path, args: dict):
-    return repo.tasks.task_detail(path, args["id"]) or {"note": "No such task."}
-
-
-@tool(
     "plan_work",
     "Lay out one milestone's worth of work in a single call: the step to reach, the handful of "
     "tasks that reach it, and each task's checklist. Use this INSTEAD of add_milestone followed "
-    "by add_task followed by add_checklist_item — it is the same writes, the same rules, and one "
+    "by add_task followed by checklist — it is the same writes, the same rules, and one "
     "round rather than a dozen. Plan ONE milestone, shallowly: the next step and the two to five "
     "tasks that finish it, not the whole roadmap. Every task needs a done-condition you could "
     "check — a command that exits 0, a test that passes, a file that exists. Nothing here starts "
@@ -416,10 +443,10 @@ def plan_work(path: Path, args: dict):
             continue
         task_id = answer["id"]
         steps = one.get("checklist")
-        for step in steps if isinstance(steps, list) else []:
-            text = str(step or "").strip()
-            if text:
-                add_checklist_item(path, {"id": task_id, "text": text})
+        wanted = [str(step or "").strip() for step in (steps if isinstance(steps, list) else [])]
+        if any(wanted):
+            # One call now the tool is plural, rather than one per step.
+            checklist(path, {"id": task_id, "add": [text for text in wanted if text]})
         written.append({"id": task_id, "goal": one.get("goal"), "steps": len(steps or [])})
 
     answer: dict = {"ok": bool(written), "milestone_id": milestone_id, "tasks": written}
@@ -432,34 +459,67 @@ def plan_work(path: Path, args: dict):
 
 
 @tool(
-    "add_checklist_item",
-    "Add a sub-step to a task's checklist — break the work into concrete steps, as you learn "
-    "what they are. Writing a whole checklist for a task you are filing now? plan_work takes it "
-    "inline.",
-    {"id": {**INT, "description": "The task id."}, "text": STR},
-    required=("id", "text"),
+    "checklist",
+    "A task's checklist. Add steps and tick them off in one call: `add` is what you are "
+    "writing, `items` the ids you are ticking. Filing a task now? plan_work takes its "
+    "checklist inline.",
+    {
+        "id": {**INT, "description": "Task id. Needed to add."},
+        "add": {"type": "array", "items": {"type": "string"}, "description": "Steps to append."},
+        "items": {"type": "array", "items": {"type": "integer"}, "description": "Item ids to tick."},
+        "done": {"type": "boolean", "description": "Sets `items`. Default true; false unticks."},
+    },
+    required=(),
 )
-def add_checklist_item(path: Path, args: dict):
-    made = repo.tasks.add_checklist_item(path, args["id"], args["text"])
-    # Noted for `_verify_approvable`. Half of what gets approved is the checklist, so writing one
-    # is the moment the plan becomes something a person has not seen yet — regardless of how old
-    # the task row is. Recorded here rather than inferred from a timestamp because "this turn" is
-    # not a duration: a turn can run for an hour, and two minutes ago is still inside it.
-    session_context.turn_notes().setdefault(PLANNED_THIS_TURN, set()).add(int(args["id"]))
-    _mirror_brief(path, args["id"])
-    return made
+def checklist(path: Path, args: dict):
+    """One tool for two things that were never really different.
 
+    `add_checklist_item` and `check_item` were 747 characters of schema for 328 calls that
+    differed by a boolean, and both were resolutely singular: 165 adds and 163 ticks, one item
+    at a time. The plural shape is the half that changes behaviour — see `domain.tooling.many`,
+    where the same move is recorded as having worked when a persona paragraph asking for it
+    did not.
 
-@tool(
-    "check_item",
-    "Check a checklist item off (or back on) as you complete steps.",
-    {"item_id": INT, "done": {"type": "boolean", "description": "Defaults to true."}},
-    required=("item_id",),
-)
-def check_item(path: Path, args: dict):
-    done = repo.tasks.set_checklist_item(path, args["item_id"], args.get("done", True))
-    _mirror_brief(path, (done or {}).get("task_id"))
-    return done
+    `done` stays a boolean applying to `items`, rather than separate `tick`/`untick` lists,
+    because `aliases.Retired` can rename an argument but cannot route on its *value*: an
+    archived `check_item(item_id=5, done=false)` has to keep working, and it only can if
+    `done` means the same thing here as it did there.
+    """
+    added = [
+        repo.tasks.add_checklist_item(path, int(args["id"]), text)
+        for text in tooling.many(args, "add", "text")
+        if str(text).strip()
+    ]
+    if added:
+        # Noted for `_verify_approvable`. Half of what gets approved is the checklist, so
+        # writing one is the moment the plan becomes something a person has not seen yet —
+        # regardless of how old the task row is. Recorded here rather than inferred from a
+        # timestamp because "this turn" is not a duration: a turn can run for an hour, and two
+        # minutes ago is still inside it.
+        session_context.turn_notes().setdefault(PLANNED_THIS_TURN, set()).add(int(args["id"]))
+
+    state = args.get("done", True)
+    ticked = [
+        repo.tasks.set_checklist_item(path, int(item), state)
+        for item in tooling.many(args, "items", "item_id")
+        if str(item).strip()
+    ]
+
+    # One task to mirror, whichever half of the call found it. A tick carries its task on the
+    # row it returns; an add was given it as an argument.
+    touched = args.get("id") or next((t.get("task_id") for t in ticked if t), None)
+    if touched:
+        _mirror_brief(path, int(touched))
+    # A single path returns exactly what the tool it replaced returned — the rule
+    # `domain.tooling.many` states for every plural tool here, and the reason it matters is
+    # that the interface picks which card to draw by sniffing the result's shape rather than
+    # the tool's name. Wrapping one added step in a list would silently change how a step
+    # someone just wrote is rendered.
+    if added and ticked:
+        return {"added": added, "checked": ticked}
+    if added:
+        return added[0] if len(added) == 1 else {"added": added}
+    return ticked[0] if len(ticked) == 1 else {"checked": ticked}
 
 
 @tool(
@@ -493,6 +553,7 @@ def add_deliverable(path: Path, args: dict):
         kind="delivered",
     )
     return saved
+
 
 @tool(
     "show_board",

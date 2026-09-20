@@ -105,7 +105,12 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   add_task: { verb: "set himself", of: "goal", group: "tasks" },
   list_tasks: { verb: "looked over his tasks", group: "tasks" },
   update_task: { verb: "updated a task", group: "tasks" },
+  // `view_task` folded into `list_tasks(ids:)`. Kept so transcripts from before the merge
+  // still render — `conversations.full_messages` replays old tool calls forever.
   view_task: { verb: "opened task", of: "id", group: "tasks" },
+  checklist: { verb: "worked the checklist", group: "tasks" },
+  // The two names `checklist` replaced. Kept because `conversations.full_messages` replays old
+  // tool calls on every resumed turn, so a transcript from before the merge still renders.
   add_checklist_item: { verb: "added a step", of: "text", group: "tasks" },
   check_item: { verb: "ticked off a step", group: "tasks" },
   add_deliverable: { verb: "handed over", of: "title", group: "tasks" },

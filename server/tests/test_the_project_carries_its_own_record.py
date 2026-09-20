@@ -155,8 +155,8 @@ class TestTheBriefFollowsTheBoard:
                 "project_id": linked["id"],
             },
         )
-        registry.require("add_checklist_item").run(
-            linked["db"], {"id": int(made["id"]), "text": "the proxy port was wrong"}
+        registry.require("checklist").run(
+            linked["db"], {"id": int(made["id"]), "add": "the proxy port was wrong"}
         )
 
         brief = next(iter((linked["project"] / ".kith" / "tasks").glob("*.md"))).read_text()
