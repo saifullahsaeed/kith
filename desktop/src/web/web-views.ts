@@ -811,11 +811,16 @@ export async function shot(
     const top = Math.max(0, Math.min(pageHeight, crop.y));
     const right = Math.max(left, Math.min(pageWidth, crop.x + crop.width));
     const bottom = Math.max(top, Math.min(pageHeight, crop.y + crop.height));
+    const x = Math.round(left * scale);
+    const y = Math.round(top * scale);
+    // Held inside the widget after rounding. `capturePage` answers a region that reaches past
+    // its own bounds with an empty image, and a blank PNG written to a file is the failure this
+    // whole path is written to avoid — the model reads it and concludes the page is empty.
     region = {
-      x: Math.round(left * scale),
-      y: Math.round(top * scale),
-      width: Math.max(1, Math.round((right - left) * scale)),
-      height: Math.max(1, Math.round((bottom - top) * scale)),
+      x: Math.min(x, Math.max(0, box.width - 1)),
+      y: Math.min(y, Math.max(0, box.height - 1)),
+      width: Math.max(1, Math.min(box.width - x, Math.round((right - left) * scale))),
+      height: Math.max(1, Math.min(box.height - y, Math.round((bottom - top) * scale))),
     };
   }
 
@@ -1304,7 +1309,7 @@ function detach(one: Held): void {
  * listening to those, then mouse, then `click`. A bare `click` event is enough for a link and
  * not enough for a good deal else.
  */
-function dispatchClick(x: number, y: number): string {
+export function dispatchClick(x: number, y: number): string {
   return `(() => {
     const el = document.elementFromPoint(${x}, ${y});
     if (!el) return false;
@@ -1324,7 +1329,7 @@ function dispatchClick(x: number, y: number): string {
 
 /** Text into whatever is focused. Assigned and then announced, because a value set without an
  *  `input` event is one React overwrites and one validation never sees. */
-function dispatchType(text: string): string {
+export function dispatchType(text: string): string {
   const value = JSON.stringify(text);
   return `(() => {
     const el = document.activeElement;
@@ -1440,7 +1445,7 @@ function normalise(raw: string): string {
  * The failure path is the useful half: a model that cannot find "Sign in" gets the list of what
  * *is* clickable and can pick, rather than taking a screenshot to find out and spending a few
  * thousand tokens to read it. */
-function locate(selector: string, text: string): string {
+export function locate(selector: string, text: string): string {
   const wanted = JSON.stringify(text.toLowerCase());
   const css = JSON.stringify(selector);
   return `(() => {
@@ -1530,7 +1535,7 @@ const SELECTOR_FOR = `
  *  needs the whole box, and the two disagreeing about which element they found would be the
  *  worst kind of bug here — a crop of one component and a click on another. Same finder, same
  *  order of preference, different answer. */
-function boxOf(selector: string, text: string): string {
+export function boxOf(selector: string, text: string): string {
   const wanted = JSON.stringify(text.toLowerCase());
   const css = JSON.stringify(selector);
   return `(() => {
@@ -1582,7 +1587,7 @@ function boxOf(selector: string, text: string): string {
  * the first, and `unpick` uses it when the pane goes away. A picker with no way to be stopped
  * from outside is an outline following the pointer on a page nobody is picking from.
  */
-function picker(): string {
+export function picker(): string {
   return `(() => {
     ${SELECTOR_FOR}
     if (window.__kithPick) window.__kithPick.stop(null);
@@ -1665,10 +1670,23 @@ function picker(): string {
         window.removeEventListener("click", onClick, true);
         for (const el of chrome) el.remove();
         if (window.__kithPick && window.__kithPick.stop === stop) delete window.__kithPick;
-        // The outline has to be off the page before the capture is taken, and removing an element
-        // does not repaint before this promise's continuation runs in the main process. One frame
-        // is the difference between a picture of a component and a picture of a blue rectangle.
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve(answer)));
+        /* The outline has to be off the page before the capture is taken, and removing an
+         * element does not repaint before this promise's continuation runs in the main process.
+         * One frame is the difference between a picture of a component and a picture of a blue
+         * rectangle.
+         *
+         * The timer beside it is not belt and braces. A hidden view produces no frames at all,
+         * so if the tab is switched away from mid-pick the callbacks never run — and the promise
+         * this resolves is one the main process is awaiting, which would hang the call for ever
+         * rather than answering "cancelled". */
+        let settled = false;
+        const answered = () => {
+          if (settled) return;
+          settled = true;
+          resolve(answer);
+        };
+        requestAnimationFrame(() => requestAnimationFrame(answered));
+        setTimeout(answered, 120);
       }
 
       // A picker nobody finishes is an overlay on a page somebody walked away from.

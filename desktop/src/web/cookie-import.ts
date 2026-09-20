@@ -31,9 +31,10 @@
  * The desktop app has no runtime dependencies at all — see `package.json` — and this would
  * otherwise add two: a SQLite binding (native, rebuilt per Electron ABI, a standing tax on
  * every upgrade) and nothing for the keychain that `security` does not already do. macOS ships
- * `/usr/bin/sqlite3` and `/usr/bin/security`. Both are read-only uses, both take arguments
- * through `execFile` rather than a shell, and the one value interpolated into SQL is checked
- * against a hostname pattern first.
+ * `/usr/bin/sqlite3` and `/usr/bin/security`. Neither touches the person's profile — the cookie
+ * database is copied to a temp folder first — both take their arguments through `execFile`
+ * rather than a shell, and the one value interpolated into SQL is checked against a hostname
+ * pattern first.
  */
 
 import { execFile } from "node:child_process";
@@ -475,7 +476,11 @@ async function query(file: string, sql: string): Promise<Record<string, string |
     for (const suffix of ["-wal", "-shm"]) {
       if (existsSync(file + suffix)) copyFileSync(file + suffix, copy + suffix);
     }
-    const { stdout } = await run("/usr/bin/sqlite3", ["-readonly", "-json", copy, sql], {
+    /* Not `-readonly`, deliberately. What is being opened is a *copy* in a temp folder — the
+     * person's profile is never opened at all — and SQLite cannot replay a write-ahead log
+     * without being able to write, so a read-only open fails on exactly the profiles that
+     * matter: the ones belonging to a browser that is currently running. */
+    const { stdout } = await run("/usr/bin/sqlite3", ["-json", copy, sql], {
       maxBuffer: 16 * 1024 * 1024,
       timeout: 20_000,
     });

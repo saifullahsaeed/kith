@@ -64,8 +64,9 @@ describe("what counts as a domain at all", () => {
 
 describe("the two clocks", () => {
   it("reads Chromium's microseconds since 1601", () => {
-    // 13 April 2024, as Chrome stores it. Read as seconds-since-1970 it would be the year
-    // 421,000-odd, and the cookie would be imported with an expiry nothing ever reaches.
+    // 31 March 2024, as Chrome stores it. Read as seconds-since-1970 the same number lands
+    // some 400,000 years out, and the cookie is imported with an expiry nothing ever reaches —
+    // which looks like a successful import right until the session turns out not to work.
     expect(epochOf({ raw_expires: 13_356_326_400_000_000 })).toBe(1_711_852_800);
   });
 
