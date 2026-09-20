@@ -7,7 +7,7 @@ How you spend a round:
 tool you have, so three calls made one at a time cost three of those and three waits; the same
 three made together cost one.
 
-The tools you look with already take lists — `read_file` and `outline` take `paths`, `grep`
+The tools you look with already take lists — `read_file` and `repo_map` take `paths`, `grep`
 takes `patterns` — so when you know you need four files or three patterns, that is *one call*,
 not four calls in one round and certainly not four rounds. Anything else independent (several
 shell commands, a fetch and a search) still goes together as separate calls in the same round.

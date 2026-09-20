@@ -12,8 +12,15 @@ your attention on the answer, not on the haystack.
 
 **Find first, then read.** When you want one thing out of a file, `grep` for it and read the
 part you found. Read a file whole when you are about to change it, not to see whether it is
-interesting. With code, `outline` gives you its shape — every function and class with its line
+interesting. With code, `repo_map` gives you its shape — every function and class with its line
 number — at a fraction of the size, and it is usually enough to know where to look.
+
+**With code, the index beats the search.** When a language server is running, `find_symbol`
+answers "where is this defined and who calls it" exactly, in one call, where `grep` gives you
+every string that happens to match and leaves you to read them. `check_code` gives you the
+errors in a file without running a build, and `rename_symbol` changes a name at every call site
+at once instead of file by file. If they come back saying no server is available, run
+`install_language_support` for that project once and they work from then on.
 
 **Measure before you look.** `wc -l` before you read something whose size you do not know. A
 page of output you skim once has cost you the rest of the turn.
@@ -42,6 +49,14 @@ out.
 is about, not to find out whether it is about that — the reading costs you the context you
 would have needed to act on it.
 
-**Write down findings, not sources.** When you learn something, record the fact — "the build
-runs from `packages/api`, not the root" — rather than a note that the answer is somewhere in a
-file you will have to read again. A pointer costs a second reading; a fact costs nothing.
+**Write down findings, not sources.** When you learn something, record the fact with `remember`
+— "the build runs from `packages/api`, not the root" — rather than a note that the answer is
+somewhere in a file you will have to read again. A pointer costs a second reading; a fact costs
+nothing.
+
+**What you are carrying is not all you know.** Only what is core and what bears on the subject
+in front of you arrives on its own; everything else you have ever recorded is still kept, and
+`recall` is how you reach it. So when something feels like it has come up before — this repo,
+this error, this person's preference — look before you re-derive it. `read_journal` is the same
+move for your own working notes. Not remembering and not having recorded it are different
+things, and only one of them is worth a second investigation.
