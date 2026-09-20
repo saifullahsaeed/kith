@@ -32,11 +32,11 @@ from pathlib import Path
 
 from flask import jsonify, request
 
+from kith import settings
 from kith.api.blueprint import api
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import skills
-from kith import settings
 
 #: Within a folder, in order. A system authored for screens beats one adapted from slides.
 NAMES = ("design-system.json", "brand/design-system.json", "design/system.json", "brand/profile.json")

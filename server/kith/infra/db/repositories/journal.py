@@ -8,8 +8,8 @@ from sqlalchemy import delete, select
 
 from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import JournalEntry
-from kith.kernel import session_context
 from kith.infra.db.support import utc_now_iso
+from kith.kernel import session_context
 
 
 def add_journal(path: Path, entry: str, project_id: int | None = None) -> dict:

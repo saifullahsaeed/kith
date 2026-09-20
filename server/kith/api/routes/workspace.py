@@ -7,8 +7,7 @@ from pathlib import Path
 from flask import jsonify, request, send_file
 
 from kith.api.blueprint import api
-from kith.infra import default_app
-from kith.infra import permissions
+from kith.infra import default_app, permissions
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import handoff

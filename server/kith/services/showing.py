@@ -21,8 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Lock
 
-from kith.kernel import changes, session_context
 from kith.infra.db.support import utc_now_iso
+from kith.kernel import changes, session_context
 
 
 @dataclass(frozen=True)

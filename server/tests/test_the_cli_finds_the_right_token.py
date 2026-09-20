@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 
 import pytest
+
 from kith.cli import client as cli_client
 from kith.cli.errors import Failure
 
