@@ -391,22 +391,116 @@ _PREAMBLE = (
 )
 
 
+#: What the whole index may cost, in characters. ~1,500 tokens.
+#:
+#: `test_the_shipped_index_stays_small` caps the *bundled* skills at 600 tokens and does its
+#: job — the five that ship measure 423. But the index is not built from the bundle; it is
+#: built from everything installed, and on a real machine that is 24 skills of which 19 came
+#: from elsewhere and total 8,317 characters. So 83% of this block sat in the cached prefix of
+#: every request governed by nothing, and growing with every skill anyone ever installs.
+#:
+#: Generous rather than tight, deliberately. The cost here is cache-read after the first
+#: request, so the argument for cutting is attention rather than money, and a description that
+#: fails to trigger has wasted the whole skill. This is a ceiling that stops the block running
+#: away, not a diet.
+INDEX_BUDGET_CHARS = 6_000
+
+
 def index() -> str:
-    """The skills section of the system prompt: names and descriptions, nothing else.
+    """The skills section of the system prompt: names and descriptions, nothing else."""
+    return render_index(installed(), first=_bundled_names())
+
+
+def _bundled_names() -> set[str]:
+    """The skills this repository ships, by name.
+
+    Wrapped: a missing or unreadable bundle directory is a packaging problem, and it must cost
+    an ordering preference rather than the whole skill index.
+    """
+    try:
+        from kith import settings as live
+
+        return {p.name for p in live.BUNDLED_SKILLS_DIR.iterdir() if p.is_dir()}
+    except Exception:
+        return set()
+
+
+def render_index(skills: list[Skill], first: set[str] | None = None) -> str:
+    """The index as it reaches the prompt, within :data:`INDEX_BUDGET_CHARS`.
 
     Empty string when nothing is installed, so a fresh install pays literally nothing —
     including no heading explaining a feature it does not have.
 
     This text sits inside the cached prefix, which is what makes it cheap to keep many
     skills: it is written once per cache lifetime and read thereafter. It is also why the
-    text has to be *stable* — anything varying per request (a count, a timestamp) would move
-    the seam and invalidate the persona in front of it. See :mod:`kith.llm.caching`.
+    text has to be *stable* — anything varying per request (a count, a timestamp, or the order
+    a directory walk happened to return) would move the seam and invalidate the persona in
+    front of it. See :mod:`kith.llm.caching`. Hence the sort: `installed()` walks directories,
+    and directory order is not guaranteed between runs or between machines.
+
+    **Overflow degrades to the name, and never to nothing.** `read_skill` takes a name, so a
+    skill dropped from this list is a skill he cannot call — silent capability loss, which is
+    strictly worse than the characters it saved. A name costs a few bytes and keeps the one
+    thing that has to survive.
+
+    **The descriptions that fit are kept whole** rather than every description being shortened
+    to make room. Recorded in f2bcf64: a fuller description triggers more reliably, and
+    triggering is the entire adoption argument for the feature. Ten skills that fire beat
+    twenty-four that nearly do.
     """
-    skills = installed()
     if not skills:
         return ""
-    lines = [f"- **{skill.name}** — {skill.description}" for skill in skills]
-    return "\n\n" + _PREAMBLE + "\n" + "\n".join(lines) + "\n"
+    # Bundled skills are paid first, then everything else alphabetically.
+    #
+    # A plain a-z sort is stable, which is what the cache needs, and arbitrary about *what it
+    # sacrifices*, which nothing wants. Measured on the real install: `docx` and `code-refactor`
+    # kept their descriptions while `test-driven-development`, `verification-before-completion`
+    # and `sending-workers` were cut to names — and the last of those is one of the five this
+    # repository ships. The bundled set is the curated one, it is already budgeted by
+    # `test_the_shipped_index_stays_small`, and it is the set the persona and the other skills
+    # name by hand, which per this codebase's own measurements is what makes a skill fire at
+    # all. Losing its trigger to make room for a spreadsheet reader is the wrong trade.
+    #
+    # Still fully deterministic, so the cached prefix is undisturbed.
+    prior = first or set()
+    ordered = sorted(skills, key=lambda skill: (skill.name not in prior, skill.name))
+
+    head = "\n\n" + _PREAMBLE + "\n"
+    bare = {skill.name: f"- **{skill.name}**" for skill in ordered}
+
+    # Every name is charged first, because every name is mandatory: a skill missing from this
+    # list cannot be called, and the budget must never be the reason for that. What is left is
+    # the discretionary part, and a description is bought with the *difference* between the
+    # full line and the name already paid for.
+    #
+    # The note is reserved too, since overflow is the case being budgeted for. Reserving it
+    # when nothing overflows costs a hundred characters of headroom and keeps this one pass.
+    mandatory = len(head) + sum(len(text) + 1 for text in bare.values()) + _NAMES_ONLY_NOTE_CHARS
+    discretionary = INDEX_BUDGET_CHARS - mandatory
+
+    described: set[str] = set()
+    for skill in ordered:
+        extra = len(f"- **{skill.name}** — {skill.description}") - len(bare[skill.name])
+        if extra <= discretionary:
+            described.add(skill.name)
+            discretionary -= extra
+
+    full = [f"- **{s.name}** — {s.description}" for s in ordered if s.name in described]
+    named = [bare[s.name] for s in ordered if s.name not in described]
+
+    body = "\n".join(full)
+    if named:
+        body += ("\n" if body else "") + _NAMES_ONLY_NOTE + "\n".join(named)
+    return head + body + "\n"
+
+
+#: Said once, above the names-only tail. Without it a bare entry reads as a skill whose author
+#: wrote no description, which is not a thing worth spending a `read_skill` call on.
+_NAMES_ONLY_NOTE = (
+    "\nAlso installed, name only — their descriptions did not fit here, so `read_skill` is "
+    "the only way to find out what they do:\n"
+)
+_NAMES_ONLY_NOTE_CHARS = len(_NAMES_ONLY_NOTE)
 
 
 def _bounded(body: str, manifest: Path) -> str:
