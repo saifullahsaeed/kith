@@ -11,6 +11,7 @@ import { PluginWebView } from "@/components/shell/plugin-web-view";
 import { Sidebar, useSidebar } from "@/components/shell/sidebar";
 import { withCompanions } from "@/components/shell/companions";
 import { useHostEffects } from "@/components/shell/use-host-effects";
+import { useRoutedSurface } from "@/components/shell/routed-surface";
 
 import { ChatPane } from "@/components/chat/chat-pane";
 import { WorkPanel } from "@/components/chat/work-panel";
@@ -311,9 +312,25 @@ export function Workspace({
    * They are rendered from the route now, beside the alerts panel below, which has worked this
    * way since it stopped being a pane. `TAKEOVERS` in `layout/tree.ts` keeps them out of the
    * tree for good. */
-  useEffect(() => {
-    if (route.contextOpen) openSurface({ surface: "context", conversationId });
-  }, [openSurface, route.contextOpen]);
+  /* Both directions, not one. See `routed-surface.ts` for the whole story: this effect used to
+   * be `if (route.contextOpen) openSurface(...)`, which opens on the *transition* of a boolean
+   * derived from the pathname. `closeTab` clears the URL on the way out so the transition can
+   * happen again — but `PaneMenu`'s "Close this pane" calls the layout store's `closePane`
+   * directly and takes every tab in the pane with it, and `layout/` has nothing to tell the URL
+   * with. So `/context` stayed in the address bar with no Context tab, the boolean stayed true,
+   * and the expand button navigated to the route it was already on: no dependency change, no
+   * effect, nothing on screen, for good. */
+  const showContext = useCallback(
+    () => openSurface({ surface: "context", conversationId }),
+    [openSurface, conversationId],
+  );
+  const clearContextRoute = useCallback(() => navigate(pathForHome()), [navigate]);
+  useRoutedSurface({
+    open: route.contextOpen,
+    present: hasTab("context"),
+    show: showContext,
+    clear: clearContextRoute,
+  });
 
 
   /* The three thresholds that used to live here are gone.
