@@ -21,6 +21,7 @@ import { useServerEvent } from "@/hooks/use-live";
 import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { clearActiveComposer, setActiveComposer } from "@/lib/active-composer";
 import { alreadyGoing, draftFor, useDrafts } from "@/lib/drafts";
+import { forgetMissingPaths } from "@/lib/files";
 import { rescueHeld } from "@/lib/queued-send";
 import { useFocusedChat } from "@/lib/focused-chat";
 import { keys } from "@/lib/query-keys";
@@ -200,7 +201,14 @@ export function ChatPane({
    *  one it attached to — cannot drift into meaning different things. */
   const claim = useCallback((turnId: string) => {
     // Letting go is also the moment this pane can say it read that turn to the end.
-    if (!turnId) lastRead.current = owned.current;
+    if (!turnId) {
+      lastRead.current = owned.current;
+      // And the moment a path he named before writing the file might have stopped being a
+      // dead one. `useOpenable` caches its answers, so without this a mention written a
+      // second before the file was would stay un-clickable for the rest of the session.
+      // Only the misses are forgotten — see `forgetMissingPaths`.
+      forgetMissingPaths();
+    }
     owned.current = turnId;
   }, []);
   /* No `timeline` state.

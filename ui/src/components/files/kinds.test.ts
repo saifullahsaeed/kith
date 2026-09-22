@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { classify, looksBinary, looksTooBig, skipTextRead } from "./kinds";
+import { classify, looksBinary, looksMissing, looksTooBig, missingHint, skipTextRead } from "./kinds";
 
 describe("what the browser can show itself", () => {
   it("knows a video from its name", () => {
@@ -83,5 +83,34 @@ describe("reading the server's refusals", () => {
   it("does not mistake an ordinary failure for either", () => {
     expect(looksTooBig("there's no bg.mp4")).toBe(false);
     expect(looksBinary("there's no bg.mp4")).toBe(false);
+  });
+});
+
+describe("a file that isn't there", () => {
+  it("recognises the server saying so", () => {
+    expect(looksMissing("there's no screens/home.html")).toBe(true);
+  });
+
+  it("does not read an ambiguous name as a missing one", () => {
+    // Two files answer to the name and the server is asking which — a question, not a
+    // dead end, and it keeps the plain line rather than the panel that offers nothing.
+    expect(
+      looksMissing("there's more than one report.md: inbox/report.md, work/report.md — say which one"),
+    ).toBe(false);
+  });
+
+  it("does not claim the other two refusals", () => {
+    expect(looksMissing("binary file")).toBe(false);
+    expect(looksMissing("that file is too big to open here (3975240 bytes; max 2000000)")).toBe(false);
+  });
+
+  it("lifts out what the folder does hold", () => {
+    expect(missingHint("there's no screens/home.html — screens/ has today.html")).toBe(
+      "screens/ has today.html",
+    );
+  });
+
+  it("has nothing to lift when the server had nothing to add", () => {
+    expect(missingHint("there's no nothing.md")).toBe("");
   });
 });

@@ -1,0 +1,53 @@
+{
+  "at": "2026-09-22 13:51",
+  "cases": {
+    "recall": {
+      "uncached": 64112,
+      "out": 2274,
+      "rounds": 7,
+      "calls": 13,
+      "calls_per_round": 1.86,
+      "failures": 0,
+      "failed_tools": [],
+      "seconds": 33.4,
+      "answered": true,
+      "error": null
+    },
+    "tools": {
+      "uncached": 7040,
+      "out": 1036,
+      "rounds": 4,
+      "calls": 3,
+      "calls_per_round": 0.75,
+      "failures": 0,
+      "failed_tools": [],
+      "seconds": 16.5,
+      "answered": true,
+      "error": null
+    },
+    "reading": {
+      "uncached": 12030,
+      "out": 242,
+      "rounds": 2,
+      "calls": 1,
+      "calls_per_round": 0.5,
+      "failures": 0,
+      "failed_tools": [],
+      "seconds": 6.3,
+      "answered": true,
+      "error": null
+    },
+    "grounded": {
+      "uncached": 36812,
+      "out": 3633,
+      "rounds": 9,
+      "calls": 13,
+      "calls_per_round": 1.44,
+      "failures": 0,
+      "failed_tools": [],
+      "seconds": 47.5,
+      "answered": true,
+      "error": null
+    }
+  }
+}

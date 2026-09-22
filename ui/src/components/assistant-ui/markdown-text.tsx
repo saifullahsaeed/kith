@@ -9,14 +9,14 @@ import {
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown";
 import { MARKDOWN_PLUGINS, MARKDOWN_REHYPE } from "@/lib/markdown-plugins";
-import { type FC, memo, useState } from "react";
+import { type FC, type ReactNode, memo, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { HtmlCanvasBlock } from "@/components/assistant-ui/html-canvas";
 import { MermaidBlock } from "@/components/assistant-ui/mermaid-diagram";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { looksRenderable } from "@/lib/canvas";
-import { copyText, linkTarget, looksLikeHisFile, useFileViewer } from "@/lib/files";
+import { copyText, linkTarget, looksLikeHisFile, useFileViewer, useOpenable } from "@/lib/files";
 import { grammarFor, highlight } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 
@@ -95,6 +95,59 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
 };
 
 
+/**
+ * A path he wrote, offered as a click only once something is known to be at the end of it.
+ *
+ * Two screenshots produced this. One opened on a screen that had been written into a different
+ * trial folder; one on a design system whose name seven files answered to. Both were fixed
+ * where they landed — a panel instead of red text, a list instead of a dead sentence — and both
+ * were still a link that went nowhere, which is the complaint underneath both of them.
+ *
+ * `linkTarget` routes every path-shaped thing he writes into the viewer deliberately, because
+ * the alternative is the browser resolving it against this origin and opening a second copy of
+ * the app. That was a choice between two bad answers. Asking first is the third: `useOpenable`
+ * puts the question to the server, which is the only side that knows where his files are.
+ *
+ * Unknown renders as a link. The answer is usually yes, the window is one request wide, and
+ * starting every mention as plain text would make each one visibly become a link a moment
+ * later — a flicker on every message, to spare the rare click that was going to land on an
+ * explanation anyway.
+ */
+function FileLink({
+  path,
+  className,
+  plain,
+  children,
+}: {
+  path: string;
+  /** How it looks when it is a link. */
+  className: string;
+  /** How it looks when it is not — the same shape, without the affordance. */
+  plain: string;
+  children: ReactNode;
+}) {
+  const openFile = useFileViewer((state) => state.open);
+  const openable = useOpenable(path);
+
+  if (openable === "no") {
+    return (
+      <span className={plain} title={`There's no ${path.trim()}`}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => openFile(path)}
+      title={`Open ${path.trim()}`}
+      className={className}
+    >
+      {children}
+    </button>
+  );
+}
+
 const defaultComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => (
     <h1
@@ -148,7 +201,6 @@ const defaultComponents = memoizeMarkdownComponents({
     <p className={cn("aui-md-p my-3 leading-relaxed first:mt-0 last:mb-0", className)} {...props} />
   ),
   a: function Anchor({ className, href, children, ...props }) {
-    const openFile = useFileViewer((state) => state.open);
     const style = cn(
       "aui-md-a text-primary hover:text-primary/80 underline underline-offset-2",
       className,
@@ -171,14 +223,9 @@ const defaultComponents = memoizeMarkdownComponents({
     const target = href ? linkTarget(href) : null;
     if (target?.kind === "file") {
       return (
-        <button
-          type="button"
-          onClick={() => openFile(target.path)}
-          title={`Open ${target.path}`}
-          className={style}
-        >
+        <FileLink path={target.path} className={style} plain="aui-md-a">
           {children}
-        </button>
+        </FileLink>
       );
     }
     // A same-page jump stays in the page: `target="_blank"` on one opens a second copy of the
@@ -259,7 +306,6 @@ const defaultComponents = memoizeMarkdownComponents({
   ),
   code: function Code({ className, children, ...props }) {
     const isCodeBlock = useIsMarkdownCodeBlock();
-    const openFile = useFileViewer((state) => state.open);
     const text = typeof children === "string" ? children : "";
 
     // A path he wrote in backticks becomes something you can click. Only inline code,
@@ -267,14 +313,13 @@ const defaultComponents = memoizeMarkdownComponents({
     // fenced blocks would be worse than not doing this at all.
     if (!isCodeBlock && looksLikeHisFile(text)) {
       return (
-        <button
-          type="button"
-          onClick={() => openFile(text)}
-          title={`Open ${text.trim()}`}
+        <FileLink
+          path={text}
           className="aui-md-file-mention bg-kith-soft text-kith decoration-kith/40 hover:decoration-kith cursor-pointer rounded-md px-1.5 py-0.5 font-mono text-[0.85em] underline decoration-dotted underline-offset-2"
+          plain="aui-md-file-mention bg-muted text-muted-foreground rounded-md px-1.5 py-0.5 font-mono text-[0.85em]"
         >
           {children}
-        </button>
+        </FileLink>
       );
     }
 

@@ -12,12 +12,13 @@ import {
 } from "lucide-react";
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
+import type { Candidate } from "@/lib/backend/brain";
 import { copyText } from "@/lib/files";
 import { hasFlowScript } from "@/lib/flow-script";
 import { cn } from "@/lib/utils";
 import { Code } from "./code-block";
 import { IconAction } from "./icon-action";
-import { classify, looksBinary, looksTooBig } from "./kinds";
+import { classify, looksBinary, looksMissing, looksTooBig, missingHint } from "./kinds";
 import type { Kind } from "./kinds";
 import { HtmlCanvas } from "@/components/assistant-ui/html-canvas";
 import { Markdown } from "./markdown";
@@ -27,6 +28,8 @@ import {
   ImageBody,
   Loading,
   NeedsAnApp,
+  NotHere,
+  WhichOne,
   PdfBody,
   VideoBody,
 } from "./media";
@@ -44,6 +47,8 @@ export function FileViewer({
   title,
   content,
   error,
+  candidates,
+  onPick,
   badge,
   onDownload,
   onOpenOnHost,
@@ -58,6 +63,10 @@ export function FileViewer({
   /** `null` while loading. */
   content: string | null;
   error?: string;
+  /** Set when the failure was "several files answer to that name" — see `AmbiguousPath`. */
+  candidates?: Candidate[];
+  /** Open one of them instead. Absent where the caller has no viewer to redirect. */
+  onPick?: (path: string) => void;
   /** Extra chip beside the kind (e.g. "deliverable"). */
   badge?: ReactNode;
   onDownload?: () => void;
@@ -226,6 +235,16 @@ export function FileViewer({
             onOpenOnHost={onOpenOnHost}
             because="It's too big to read in here"
           />
+        ) : error && candidates?.length ? (
+          // Answerable, so it is offered as an answer. Ahead of `looksMissing` because the
+          // ambiguous message does not start "there's no" and must not fall through to the
+          // plain line that used to print it — see `WhichOne`.
+          <WhichOne name={base} candidates={candidates} onPick={onPick} />
+        ) : error && looksMissing(error) ? (
+          // Also not an error, and the one that was still being shown as one. Reached by design
+          // rather than by accident — every path-shaped thing he writes opens here, existing or
+          // not — so it is a state with a panel, not a red line quoting a path nobody clicked.
+          <NotHere name={base} hint={missingHint(error)} />
         ) : error ? (
           <p className="p-5 text-sm text-destructive">{error}</p>
         ) : content == null ? (

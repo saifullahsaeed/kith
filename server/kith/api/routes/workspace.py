@@ -92,7 +92,76 @@ def workspace_file():
         # line-numbered window the model reads.
         return jsonify({"path": path, "content": sandbox.read_raw(path)})
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 400
+        return jsonify(_refusal(exc)), 400
+
+
+def _refusal(exc: Exception) -> dict[str, object]:
+    """The error body, plus the matches when the failure was "several files answer to that name".
+
+    The sentence already names them and the interface could split it back apart, but a list of
+    paths reassembled from prose is a list of paths that breaks the first time one has a comma
+    in it. `locate` knows them as paths; they travel as paths. See `WorkspaceError.candidates`.
+    """
+    body: dict[str, object] = {"error": str(exc)}
+    candidates = getattr(exc, "candidates", None)
+    if candidates:
+        body["candidates"] = candidates
+    return body
+
+
+def resolution(path: str, project_id: str | None) -> dict[str, object]:
+    """Whether this path names something, and what — one entry of the batch below.
+
+    `openable` is the question the interface is really asking, and it is not "does this file
+    exist": a name that matches several files is answerable too, by picking one, so it counts.
+    Only a path that resolves to nothing at all is unopenable.
+    """
+    try:
+        return {"path": wanted(path, project_id), "openable": True}
+    except Exception as exc:
+        candidates = getattr(exc, "candidates", None) or []
+        return {"path": None, "openable": bool(candidates), "candidates": candidates}
+
+
+#: How many paths one request may ask about. A miss costs a pruned walk of his folders — tens
+#: of milliseconds each — so this is the line between "a message's worth of mentions" and a
+#: request that ties up a worker. The interface caches per path, so it is asked once either way.
+_RESOLVE_LIMIT = 64
+
+
+@api.post("/workspace/resolve")
+@api.doc(
+    summary="Which of these paths name a file",
+    description=(
+        "Answers {openable, path} for each path given, so the interface can tell a file "
+        "mention from a string that merely looks like one *before* offering it as something "
+        "to click. Body: {paths: [...], projectId?}."
+    ),
+)
+def workspace_resolve():
+    """Asked before a path in his prose is rendered as something you can click.
+
+    The interface used to offer every path-shaped thing he wrote and find out on the click — see
+    `lib/files.linkTarget`, which routes them here deliberately rather than to a browser that
+    would resolve them against this origin. That trade was between two bad answers; this is the
+    third one. A name that resolves to nothing is not a link, and a link that goes nowhere is
+    the complaint this exists to answer.
+
+    A batch rather than one call each because a single reply can mention a dozen files, and
+    twelve round trips to draw one message is its own bug.
+    """
+    body = request.get_json(silent=True) or {}
+    asked = body.get("paths")
+    if not isinstance(asked, list):
+        return jsonify({"error": "paths required"}), 400
+    project_id = body.get("projectId")
+    project = str(project_id) if project_id is not None else None
+    seen: dict[str, object] = {}
+    for item in asked[:_RESOLVE_LIMIT]:
+        path = str(item or "").strip()
+        if path and path not in seen:
+            seen[path] = resolution(path, project)
+    return jsonify({"resolved": seen})
 
 
 @api.get("/workspace/raw")

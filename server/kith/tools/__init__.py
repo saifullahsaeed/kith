@@ -25,6 +25,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     code,
     computer,
     delegation,
+    design,
     journal,
     memory,
     outreach,

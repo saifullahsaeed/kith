@@ -192,3 +192,24 @@ export function looksBinary(error: string): boolean {
 export function looksTooBig(error: string): boolean {
   return /too big to (open|show)/i.test(error);
 }
+
+/** The server saying the file is not there.
+ *
+ *  The third of these, and the last one that was still landing as a red line of raw server
+ *  prose in an empty window — a screenshot of exactly that is what prompted it. Anchored at
+ *  the start so `there's more than one report.md: …` does not match: that one is a question
+ *  with an answer, and printing it plainly is right. */
+export function looksMissing(error: string): boolean {
+  return /^there's no /i.test(error.trim());
+}
+
+/** The half of that message that says what the folder *does* hold.
+ *
+ *  `locate` writes "there's no screens/home.html — screens/ has today.html" when the folder
+ *  exists, and the em dash is its own join. Split rather than re-derived, because the folder
+ *  listing happens where the folder is; asking the interface to fetch it again would be a
+ *  second round trip to learn something the first answer already carried. Empty when the
+ *  server had nothing to add, which is every bare name. */
+export function missingHint(error: string): string {
+  return error.split(" — ")[1]?.trim() ?? "";
+}

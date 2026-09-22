@@ -25,7 +25,21 @@ _OUTPUT_LIMIT = 8_000
 
 
 class WorkspaceError(RuntimeError):
-    """Anything that went wrong doing work on the machine."""
+    """Anything that went wrong doing work on the machine.
+
+    ``candidates`` is the one piece of structure any of these carries, and only `locate` sets
+    it: the files a name matched when it matched several. It exists because the message that
+    reports them ends "say which one" and there was no way to say it — the path came out of his
+    prose, so there is nothing for a person to correct. The interface offers them as a list to
+    click instead, which it cannot do by splitting the sentence back apart.
+
+    Each entry is ``{"name": <how to show it>, "path": <absolute>}``. Empty for every other
+    failure, so a caller can read it without asking which kind it has.
+    """
+
+    def __init__(self, *args: object, candidates: list[dict[str, str]] | None = None) -> None:
+        super().__init__(*args)
+        self.candidates = candidates or []
 
 
 #: The old name. Kept because a dozen call sites catch it by name and because a tool

@@ -5,6 +5,7 @@
  * the file out.
  */
 
+import { useEffect } from "react";
 import { create } from "zustand";
 
 /** Suffixes worth treating as a file when he writes one in backticks. Not "anything
@@ -334,4 +335,122 @@ export function formatModified(epochSeconds: number): string {
     return when.toLocaleDateString(undefined, { weekday: "short" });
   }
   return when.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+// -- is it worth offering as a link at all? --------------------------------- //
+
+/**
+ * Which project the paths on screen belong to.
+ *
+ * The same answer `WorkspaceFileViewer` is handed as a prop, in a store as well, because the
+ * other thing that needs it is the markdown renderer — and threading a project id from the
+ * workspace down through every message, paragraph and code span to reach it would put the
+ * fact in a dozen components that have no other use for it. One writer (`shell/workspace`),
+ * two readers.
+ */
+export const useFileProject = create<{
+  projectId: number | null;
+  bind: (projectId: number | null) => void;
+}>((set) => ({
+  projectId: null,
+  bind: (projectId) => set({ projectId }),
+}));
+
+/** Unknown until asked; then whether the viewer has anything to show for it. */
+export type Openable = "unknown" | "yes" | "no";
+
+const keyFor = (path: string, projectId: number | null) => `${projectId ?? ""}\u0000${path.trim()}`;
+
+/**
+ * What the server has said about each path so far, and what it has not been asked yet.
+ *
+ * A store rather than a plain Map because the answer arrives after the paragraph is drawn, and
+ * the span that asked has to hear about it.
+ */
+const useAnswers = create<{
+  known: Record<string, boolean>;
+  learn: (answers: Record<string, boolean>) => void;
+  /** Forget the misses. A path he mentioned before writing the file is a miss that stops being
+   *  one, and the only thing that makes it stop is a turn doing work — so that is when this is
+   *  called. Hits are kept: a file that existed is not going to start not existing often enough
+   *  to be worth re-asking about. */
+  forgetMissing: () => void;
+}>((set) => ({
+  known: {},
+  learn: (answers) => set((state) => ({ known: { ...state.known, ...answers } })),
+  forgetMissing: () =>
+    set((state) => ({
+      known: Object.fromEntries(Object.entries(state.known).filter(([, ok]) => ok)),
+    })),
+}));
+
+export const forgetMissingPaths = () => useAnswers.getState().forgetMissing();
+
+/** Asked-for but not yet sent, and sent but not yet answered. Module-level rather than in the
+ *  store because nothing renders from them. */
+const queued = new Map<string, { path: string; projectId: number | null }>();
+const asking = new Set<string>();
+let scheduled: ReturnType<typeof setTimeout> | null = null;
+
+/** One request for a paragraph's worth of mentions rather than one each.
+ *
+ *  A miss costs a pruned walk of his folders on the server — tens of milliseconds — so a reply
+ *  naming a dozen files would otherwise be a dozen of those, in series, to draw one message. */
+function flush() {
+  scheduled = null;
+  const batch = [...queued.values()];
+  queued.clear();
+  if (!batch.length) return;
+  // One request per project, because the anchoring depends on it.
+  const byProject = new Map<number | null, string[]>();
+  for (const item of batch) {
+    const list = byProject.get(item.projectId) ?? [];
+    list.push(item.path);
+    byProject.set(item.projectId, list);
+  }
+  for (const [projectId, paths] of byProject) {
+    paths.forEach((path) => asking.add(keyFor(path, projectId)));
+    fetch("/api/workspace/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths, projectId: projectId ?? undefined }),
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((body: { resolved?: Record<string, { openable?: boolean }> }) => {
+        const answers: Record<string, boolean> = {};
+        for (const path of paths) {
+          answers[keyFor(path, projectId)] = body.resolved?.[path]?.openable ?? true;
+        }
+        useAnswers.getState().learn(answers);
+      })
+      .catch(() => {
+        // The question could not be asked, which is not an answer. Offering the link is the
+        // better failure: it lands in a viewer that says what happened, where swallowing it
+        // silently turns every file he names into plain text for no reason the person can see.
+        useAnswers
+          .getState()
+          .learn(Object.fromEntries(paths.map((path) => [keyFor(path, projectId), true])));
+      })
+      .finally(() => paths.forEach((path) => asking.delete(keyFor(path, projectId))));
+  }
+}
+
+/**
+ * Should this path be offered as something to click?
+ *
+ * "unknown" while nobody has asked yet, and callers render that as a link — the window is one
+ * request wide, the answer is usually yes, and demoting first would make every file he names
+ * flicker from text into a link a moment later.
+ */
+export function useOpenable(path: string): Openable {
+  const projectId = useFileProject((state) => state.projectId);
+  const key = keyFor(path, projectId);
+  const known = useAnswers((state) => state.known[key]);
+  useEffect(() => {
+    if (known !== undefined || asking.has(key) || queued.has(key)) return;
+    queued.set(key, { path: path.trim(), projectId });
+    scheduled ??= setTimeout(flush, 30);
+  }, [key, known, path, projectId]);
+  if (known === undefined) return "unknown";
+  return known ? "yes" : "no";
 }

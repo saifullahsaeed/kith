@@ -38,6 +38,7 @@ every round, for a choice with one real option.
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from contextvars import copy_context
 from pathlib import Path
@@ -80,6 +81,10 @@ GIVEN = frozenset(
         "read_source",
         "search_sources",
         "read_skill",
+        # The design system, read. A builder told to implement a screen needs to know which
+        # palette and which components the product already has, for the same reason it needs
+        # `read_skill`: the alternative is inventing a second one.
+        "read_design_system",
         # The board, read. A scout asked "has any of this been done before" needs to be able
         # to look, and none of these change anything.
         "list_projects",
@@ -107,6 +112,10 @@ WRITING = frozenset(
         "edit_files",
         "delete_file",
         "rename_symbol",
+        # A design system is a file in the worktree like any other, and a builder that has just
+        # been made to draw the same card twice should be able to say so in the one place that
+        # stops it happening a third time.
+        "update_design_system",
     }
 )
 
@@ -579,6 +588,7 @@ def _run_worker(
 
     started = _scratchpad(config.system or "", shape["brief"](), objective) if carried is None else carried
     report = _Watched(objective, conversation, worker_id, role)
+    began = time.monotonic()
 
     # Everything below happens with the worker pinned to its own copy of the repository, when
     # it has one. This single `with` is the entire isolation mechanism: `paths.base_dir` reads
@@ -626,9 +636,49 @@ def _run_worker(
             answer["patch"] = _patch(worktrees.diff_in(Path(worktree)), answer)
 
     repo.workers.reported(path, worker_id, _keeping(started, answer), str(answer.get("findings") or ""), 1)
+    _record_cost(path, role, objective, report, began)
     report.finished(answer)
     errands.deliver(conversation, worker_id, answer)
     return answer
+
+
+def _record_cost(path: Path, role: str, objective: str, report: _Report, began: float) -> None:
+    """Put this worker's turn on the flight recorder.
+
+    ``mode`` is the role — ``scout`` or ``builder`` — rather than a single ``worker``, because
+    the two have different shapes and averaging them hides both: a scout reads and reports, a
+    builder edits in a worktree and runs tests, and "what does a turn cost" has two answers.
+    The column already carries one value per kind of turn (``chat`` is the only other one still
+    written; ``breakout``, ``reply`` and ``start`` are the dead tick's, last seen 2026-08-07).
+
+    ``context`` is left None, unlike the chat route's row. The reading it would carry comes from
+    ``report.last_reading``, which is keyed on a conversation id — and a worker deliberately
+    runs on its *parent's* id so the persona stays a cache read, so asking here would return the
+    parent's ledger and file it against the child. A wrong reading is worse than none: the whole
+    point of the column is to be able to trust what was in the window.
+
+    Wrapped in the same ``except`` the chat route uses, and for the same reason it gives:
+    accounting must never retroactively fail work that already happened and already reported.
+    """
+    from kith.infra.db import repositories as repo
+    from kith.kernel import clock
+
+    try:
+        repo.messages.add_turn_log(
+            path,
+            clock.now_iso(),
+            role,
+            objective.strip()[:80] or None,
+            report.calls,
+            report.tokens_in,
+            report.tokens_out,
+            round(time.monotonic() - began, 2),
+            f"error: {report.error}" if report.error else ("stopped" if report.cut_short else "reported"),
+            tokens_uncached=report.tokens_uncached,
+            failed=report.failed,
+        )
+    except Exception:
+        pass
 
 
 def _source_of(worktree: str) -> Path | str:
@@ -753,6 +803,21 @@ class _Report:
         self.calls: list[str] = []
         self.error = ""
         self.cut_short = False
+        #: What the errand cost, for the flight recorder. Collected here rather than by the
+        #: caller because this is already the one object reading every event of the turn.
+        #:
+        #: Until this existed a worker's turn was invisible: `add_turn_log` had exactly one
+        #: call site, the chat route, and the loop a worker runs is reached from here instead.
+        #: Measured on the live database the day it was added — 63 `delegate_subtask` calls and
+        #: 14 `send_builder` across seven weeks, every one of them spawning a turn that spent
+        #: tokens and seconds and left no row. So the two questions the recorder exists to
+        #: answer, what does he cost and which tools are failing, were being answered from
+        #: chat turns alone while a whole second population of turns went uncounted.
+        self.rounds = 0
+        self.tokens_in = 0
+        self.tokens_out = 0
+        self.tokens_uncached = 0
+        self.failed: list[str] = []
 
     def stopped(self) -> None:
         """Someone pressed Stop while this was out."""
@@ -767,6 +832,20 @@ class _Report:
                 self.said_before = self.text
             self.text = ""
             self.calls.append(str(event.get("name") or ""))
+        elif kind == "tool_result":
+            # `call_failed` rather than a truthiness check, for the reason the chat route gives
+            # at its own copy of this line: several handlers report their own failure inside a
+            # successful envelope, and those are the ones worth catching.
+            from kith.domain import tooling
+
+            if tooling.call_failed(event.get("result")):
+                self.failed.append(str(event.get("name") or ""))
+        elif kind == "stats":
+            stats = event.get("stats") or {}
+            self.rounds += 1
+            self.tokens_in += int(stats.get("promptTokens") or 0)
+            self.tokens_out += int(stats.get("responseTokens") or 0)
+            self.tokens_uncached += int(stats.get("uncachedTokens") or 0)
         elif kind == "error":
             self.error = str(event.get("message") or "")
 

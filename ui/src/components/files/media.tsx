@@ -1,8 +1,9 @@
 /** Files the viewer shows without decoding them as text: a picture, a PDF, or a hand-off
  *  to whatever application owns the type. */
 import { useEffect, useState } from "react";
-import { ExternalLink, FileBox, FolderOpen, Loader2 } from "lucide-react";
+import { ChevronRight, Copy, ExternalLink, FileBox, FileQuestion, FolderOpen, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { Candidate } from "@/lib/backend/brain";
 import { rawFileUrl } from "@/lib/files";
 import { IconAction } from "./icon-action";
 
@@ -268,6 +269,107 @@ export function NeedsAnApp({
       <p className="text-muted-foreground/60 mt-3 text-[11px]">
         It opens where it lives, so anything you change there is the real file.
       </p>
+    </div>
+  );
+}
+
+/** The file named by the click does not exist.
+ *
+ * The third state the viewer can be in that is not an error, and the last one still being
+ * printed as one. A screenshot: a page opened on `.kith/screens/home.html`, and an otherwise
+ * empty black window with one line of red text across the top reading *there's no
+ * /Users/…/trials/sprout/.kith/screens/home.html*. The statement was true. Everything about
+ * how it was said was wrong — a raw server string, the absolute path nobody clicked, red for
+ * a thing that is not a fault, and no way on from there.
+ *
+ * It is reached often *by design*, which is the part that makes it worth a panel rather than a
+ * line. `linkTarget` deliberately sends every path-shaped href to the viewer rather than the
+ * browser, on the argument that "the viewer saying it cannot find something is a true answer,
+ * and the old behaviour was not" — the old behaviour being a second copy of Kith opening. That
+ * trade is only honest if the answer it routes to is a designed one.
+ *
+ * That screenshot no longer reaches here: the file was real, in a second trial the same session
+ * had moved on to, and `locate` was blind to it because the search skipped `.kith` wholesale.
+ * Which is the point — most of what lands in this panel is a lookup that gave up too early, so
+ * the panel has to say enough for somebody to tell the difference.
+ *
+ * `hint` is the server's other half: the folder was real and this is what it holds. It is the
+ * whole difference between a dead end and a near miss — *screens/ has today.html* names the
+ * file that was probably wanted, one line down.
+ */
+export function NotHere({ name, hint }: { name: string; hint?: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-1 px-6 py-12 text-center">
+      <span className="mb-2 flex size-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+        <FileQuestion className="size-5" />
+      </span>
+      <p className="text-sm font-medium">There's no {name}</p>
+      <p className="text-muted-foreground max-w-sm text-xs leading-relaxed">
+        {hint
+          ? `The folder is there — ${hint}.`
+          : "Nothing of that name is in his folder or in a project linked to one."}
+      </p>
+      <p className="text-muted-foreground/60 mt-3 max-w-sm text-[11px] leading-relaxed">
+        Paths he writes are opened here whether or not they exist, so a name he got wrong looks
+        exactly like this.
+      </p>
+    </div>
+  );
+}
+
+/** A name that matched several files, offered as the list it is.
+ *
+ * The server refuses to guess here, and it is right to: opening the wrong `system.json`
+ * silently is worse than asking which was meant. What it could not do is make the question
+ * answerable. It ended *say which one* and the interface printed that in red — but the path
+ * came out of his prose, so there was nothing for a person to edit and no second thing to
+ * click. Seven matches, four of them shown as the identical string `.kith/design/system.json`,
+ * and a question with no way to answer it.
+ *
+ * So the matches come back as paths (`WorkspaceError.candidates`) rather than being recovered
+ * by splitting the sentence apart, and each one is a button. The names are distinct because
+ * the server guarantees it — `_told_apart` falls back to naming them from the deepest folder
+ * they share the moment the usual short form collides.
+ */
+export function WhichOne({
+  name,
+  candidates,
+  onPick,
+}: {
+  name: string;
+  candidates: Candidate[];
+  onPick?: (path: string) => void;
+}) {
+  return (
+    <div className="mx-auto flex max-w-lg flex-col gap-1 px-6 py-12">
+      <div className="mb-3 flex flex-col items-center gap-1 text-center">
+        <span className="mb-2 flex size-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+          <Copy className="size-5" />
+        </span>
+        <p className="text-sm font-medium">
+          {candidates.length} files are called {name}
+        </p>
+        <p className="text-muted-foreground max-w-sm text-xs leading-relaxed">
+          He wrote the name without saying which folder, so pick the one you meant.
+        </p>
+      </div>
+      <ul className="flex flex-col gap-1">
+        {candidates.map((item) => (
+          <li key={item.path}>
+            <button
+              type="button"
+              onClick={() => onPick?.(item.path)}
+              disabled={!onPick}
+              className="hover:bg-muted flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors disabled:pointer-events-none"
+            >
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={item.path}>
+                {item.name}
+              </span>
+              <ChevronRight className="text-muted-foreground size-4 shrink-0" />
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -385,6 +385,13 @@ _LOOKUP_SKIP = {
     INTERNAL_DIR,
 }
 
+#: The folders inside `.kith` that hold work rather than bookkeeping, and so are searched
+#: after all. `.kith` was pruned wholesale when everything in it was a record — transcripts,
+#: tasks, memory — and the design surface then put his *output* in there, which turned the
+#: rule into "his screens are the one kind of file a click cannot find". They are products in
+#: the same sense a report in `work/` is; everything else under `.kith` still is not.
+_INTERNAL_PRODUCTS = {"screens", "design"}
+
 #: How many files a lookup will walk before it stops looking. A workspace with something the
 #: pruning above missed should make one click slow, not hang the interface on it.
 _LOOKUP_LIMIT = 40_000
@@ -419,7 +426,7 @@ def locate(path: str) -> str:
 
     name = literal.name
     if not name:
-        raise WorkspaceError(f"there's no {text}")
+        raise WorkspaceError(f"there's no {display(literal)}")
 
     found = _named(name)
     # A path with folders in it says more than a bare name does. When several files answer to
@@ -432,12 +439,128 @@ def locate(path: str) -> str:
             found = narrowed
 
     if not found:
-        raise WorkspaceError(f"there's no {text}")
+        raise _nothing_there(text, literal)
+
+    if len(found) > 1:
+        found = _nearest(literal, found)
+
     if len(found) == 1:
         return str(found[0])
-    shown = ", ".join(display(item) for item in found[:5])
+    names = _told_apart(found)
+    shown = ", ".join(names[:5])
     more = f" (and {len(found) - 5} more)" if len(found) > 5 else ""
-    raise WorkspaceError(f"there's more than one {name}: {shown}{more} — say which one")
+    raise WorkspaceError(
+        f"there's more than one {name}: {shown}{more} — say which one",
+        candidates=[{"name": n, "path": str(item)} for n, item in zip(names, found, strict=True)],
+    )
+
+
+def _nearest(literal: Path, found: list[Path]) -> list[Path]:
+    """Narrow to the matches inside the folder the request was actually pointing at.
+
+    A request can miss while still saying where it was looking, and that is the common shape
+    of a miss rather than an exotic one. `sadeef-v2/.kith/design/system.json` asked while bound
+    to the project whose folder *is* `sadeef-v2` gets the folder joined on twice by
+    `routes/workspace._anchor`, so the path is nonsense and its first few parents are nonsense
+    too — but keep walking up and you reach the project, and the file wanted is the one inside
+    it. Every project has exactly one `.kith/design/system.json`, so without this the name
+    matched seven and the answer was a list.
+
+    The existing tie-break below cannot do this: it compares the *parts* of the requested path,
+    and a machine-built absolute path shares no tail with anything.
+
+    Narrows or does nothing. If the first real folder holds none of the matches — the interface
+    bound to one project and the file living in another, which is the other screenshot — then
+    it has no opinion and the search's own answer stands. Same when it holds all of them, where
+    saying "these ones" about everything is not narrowing, it is noise.
+    """
+    folder = literal.parent
+    while True:
+        if folder.is_dir():
+            inside = [item for item in found if item.is_relative_to(folder)]
+            if 0 < len(inside) < len(found):
+                return inside
+            # A folder holding all of them is too general to mean anything, and every folder
+            # above it is more general still.
+            if len(inside) == len(found):
+                return found
+        parent = folder.parent
+        if parent == folder:
+            return found
+        folder = parent
+
+
+def _told_apart(found: list[Path]) -> list[str]:
+    """Names for a list of matches, guaranteed to differ from each other.
+
+    `display` names a path relative to the innermost root that contains it, which is the right
+    answer for one path and the wrong one for a list: four design systems in four different
+    projects are all `.kith/design/system.json`, and the sentence built from them asked somebody
+    to pick between four identical strings.
+
+    So the usual names are used only when they are actually distinct. Otherwise every match is
+    named from the deepest folder they share, which is the shortest form that can still tell
+    them apart.
+    """
+    names = [display(item) for item in found]
+    if len(set(names)) == len(names):
+        return names
+    try:
+        common = Path(os.path.commonpath([str(item) for item in found]))
+    except ValueError:
+        # No shared root at all — nothing to be relative to, so the whole path it is.
+        return [str(item) for item in found]
+    return [str(item.relative_to(common)) for item in found]
+
+
+def _nothing_there(text: str, literal: Path) -> WorkspaceError:
+    """What to say about a path that names no file.
+
+    Two separate failures of manners, both visible in one screenshot of the viewer: a page
+    opened on `.kith/screens/home.html` and showed a single red line reading *there's no
+    /Users/…/trials/sprout/.kith/screens/home.html*. The file really was missing and saying
+    so is the right answer; neither complaint is about that.
+
+    The name first. Nobody clicked that string — the interface anchors a relative path onto
+    its project's folder before asking (see `routes/workspace._anchor`), so the absolute path
+    is an internal step, and echoing it back reports the working notes of the lookup instead
+    of an answer about the file. `display` is the formatting the ambiguous branch below has
+    used all along; this branch simply never caught up.
+
+    Then: it stops there. The folder existed and held exactly one screen, `today.html`, one
+    listdir from a lookup that had already walked to the parent to find the file absent. The
+    useful half of the answer was free and went unasked.
+
+    Only when folders were written. A bare name arrives here having been searched for
+    everywhere, so there is no particular folder it was expected in and nothing to describe —
+    which is why `there's no nothing.md` is still exactly that.
+    """
+    named = display(literal)
+    if len(Path(text).parts) > 1:
+        siblings = _beside(literal.parent)
+        if siblings:
+            shown = ", ".join(siblings[:5])
+            more = f" and {len(siblings) - 5} more" if len(siblings) > 5 else ""
+            return WorkspaceError(f"there's no {named} — {display(literal.parent)}/ has {shown}{more}")
+    return WorkspaceError(f"there's no {named}")
+
+
+def _beside(folder: Path) -> list[str]:
+    """What is in the folder the file was not in. Names, folders marked with a slash.
+
+    Filtered by `_LOOKUP_SKIP` for the same reason the walk is: `node_modules` and `.git`
+    answer "what else is here" with several thousand things nobody meant. `.kith` is on that
+    list too, and hiding it here is the same call `locate` already makes about his own records
+    — a conversation named after a document is not that document.
+    """
+    try:
+        entries = sorted(folder.iterdir(), key=lambda item: item.name.lower())
+    except OSError:
+        # The folder is missing too, or unreadable. Then the plain line is the whole answer.
+        return []
+    return [
+        f"{item.name}/" if item.is_dir() else item.name for item in entries if item.name not in _LOOKUP_SKIP
+    ]
 
 
 def _named(name: str) -> list[Path]:
@@ -450,7 +573,16 @@ def _named(name: str) -> list[Path]:
             continue
         for folder, dirs, files in os.walk(base):
             # In place, because os.walk reads this list back to decide where to go next.
-            dirs[:] = [d for d in dirs if d not in _LOOKUP_SKIP and not d.startswith(".")]
+            at_internal = Path(folder).name == INTERNAL_DIR
+            if at_internal:
+                # Entered only to reach `screens/` and `design/`. Nothing else below here is
+                # a file of his, and the loose files at this level — `memory.md`,
+                # `references.md` — are the clearest case of that, so they are skipped too.
+                dirs[:] = [d for d in dirs if d in _INTERNAL_PRODUCTS]
+                continue
+            dirs[:] = [
+                d for d in dirs if d == INTERNAL_DIR or (d not in _LOOKUP_SKIP and not d.startswith("."))
+            ]
             walked += len(files)
             if name in files:
                 candidate = Path(folder) / name

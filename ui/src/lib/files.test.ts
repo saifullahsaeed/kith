@@ -22,9 +22,10 @@
  * find something is a true answer; the old one was not.
  */
 
-import { describe, expect, it } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { linkTarget, looksLikeHisFile } from "./files";
+import { forgetMissingPaths, linkTarget, looksLikeHisFile, useOpenable } from "./files";
 
 describe("what a markdown link points at", () => {
   it("sends a real address to the browser", () => {
@@ -107,5 +108,111 @@ describe("a path he wrote in backticks", () => {
     expect(looksLikeHisFile("TypeScript 5.4")).toBe(false);
     expect(looksLikeHisFile("and/or")).toBe(false);
     expect(looksLikeHisFile("https://example.com/a.md")).toBe(false);
+  });
+});
+
+/**
+ * Whether a path he wrote is worth offering as a click.
+ *
+ * The question behind two screenshots. The interface used to offer every path-shaped thing he
+ * wrote and find out on the click — a viewer saying *there's no …*, or a list of seven files
+ * of the same name — and both of those were made nicer without being made fewer. A name that
+ * leads nowhere should not have been a link.
+ *
+ * Only the server can answer it: the path is relative to a project, and it may resolve by a
+ * search rather than by existing where it was written. So the shape of this is a question sent
+ * and an answer that arrives later, which is what these are about.
+ */
+describe("offering a path as a link", () => {
+  let asked: string[][];
+
+  beforeEach(() => {
+    // The answers are cached for the life of the module, deliberately — so each case below
+    // uses a path of its own rather than a shared one it would find already answered.
+    forgetMissingPaths();
+    asked = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: { body?: string }) => {
+        const paths = (JSON.parse(init?.body ?? "{}") as { paths: string[] }).paths;
+        asked.push(paths);
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              resolved: Object.fromEntries(
+                paths.map((path) => [path, { openable: !path.includes("home.html") }]),
+              ),
+            }),
+        });
+      }),
+    );
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("offers it while nobody has asked yet", async () => {
+    // Starting at "no" would make every file he names flicker into a link a moment later.
+    const { result } = renderHook(() => useOpenable("inbox/before.xlsx"));
+    expect(result.current).toBe("unknown");
+    // Let the question it just queued settle, so its request does not land inside the next test.
+    await waitFor(() => expect(result.current).not.toBe("unknown"));
+  });
+
+  it("keeps offering one that leads somewhere", async () => {
+    const { result } = renderHook(() => useOpenable("inbox/present.xlsx"));
+    await waitFor(() => expect(result.current).toBe("yes"));
+  });
+
+  it("stops offering one that leads nowhere", async () => {
+    // The first screenshot, decided before the click instead of after it.
+    const { result } = renderHook(() => useOpenable(".kith/screens/home.html"));
+    await waitFor(() => expect(result.current).toBe("no"));
+  });
+
+  it("asks once for a paragraph's worth of mentions", async () => {
+    const { result } = renderHook(() => {
+      useOpenable("a.md");
+      useOpenable("b.md");
+      return useOpenable("c.md");
+    });
+    await waitFor(() => expect(result.current).toBe("yes"));
+    // A miss costs a walk of his folders on the server, so three of them in series to draw
+    // one message is its own bug.
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toEqual(["a.md", "b.md", "c.md"]);
+  });
+
+  it("does not ask twice about the same path", async () => {
+    const first = renderHook(() => useOpenable("inbox/asked-once.xlsx"));
+    await waitFor(() => expect(first.result.current).toBe("yes"));
+    const second = renderHook(() => useOpenable("inbox/asked-once.xlsx"));
+    expect(second.result.current).toBe("yes");
+    expect(asked).toHaveLength(1);
+  });
+
+  it("offers it anyway when the question could not be asked", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("offline"))));
+    const { result } = renderHook(() => useOpenable("whatever.md"));
+    // Not an answer, so not a refusal. Swallowing it would turn every file he names into
+    // plain text for no reason a person could see.
+    await waitFor(() => expect(result.current).toBe("yes"));
+  });
+
+  it("re-asks about a miss once a turn has done some work", async () => {
+    // He writes the path in the sentence before he writes the file.
+    const { result, rerender } = renderHook(() => useOpenable(".kith/screens/later-home.html"));
+    await waitFor(() => expect(result.current).toBe("no"));
+    act(() => forgetMissingPaths());
+    rerender();
+    await waitFor(() => expect(asked).toHaveLength(2));
+  });
+
+  it("keeps the hits when it forgets the misses", async () => {
+    const { result } = renderHook(() => useOpenable("inbox/kept.xlsx"));
+    await waitFor(() => expect(result.current).toBe("yes"));
+    act(() => forgetMissingPaths());
+    expect(result.current).toBe("yes");
+    expect(asked).toHaveLength(1);
   });
 });

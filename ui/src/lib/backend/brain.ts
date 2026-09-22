@@ -257,6 +257,35 @@ export async function fetchWorkspace(
   return (await res.json()) as { path: string; entries: WorkspaceEntry[] };
 }
 
+/** One of the files a name turned out to match. */
+export interface Candidate {
+  /** How to show it — guaranteed by the server to differ from the others in the list. */
+  name: string;
+  /** Absolute, and what to ask for to open this one rather than another. */
+  path: string;
+}
+
+/**
+ * A name that matched several files.
+ *
+ * Its own class because the answer to it is a list, not a sentence. The server refuses rather
+ * than guessing — opening the wrong `system.json` silently is worse than asking — and the
+ * question it asks, "say which one", was unanswerable in the interface: the path came out of
+ * his prose, so there is nothing for a person to correct. Carrying the matches lets the viewer
+ * offer them.
+ */
+export class AmbiguousPath extends Error {
+  // Declared and assigned rather than a constructor parameter property: this project builds
+  // with `erasableSyntaxOnly`, which rules those out.
+  candidates: Candidate[];
+
+  constructor(message: string, candidates: Candidate[]) {
+    super(message);
+    this.name = "AmbiguousPath";
+    this.candidates = candidates;
+  }
+}
+
 export async function fetchWorkspaceFile(
   path: string,
   projectId?: number | null,
@@ -265,8 +294,13 @@ export async function fetchWorkspaceFile(
   if (projectId != null) q.set("projectId", String(projectId));
   const res = await fetch(`/api/workspace/file?${q}`);
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(err.error || "couldn't read that file");
+    const err = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      candidates?: Candidate[];
+    };
+    const said = err.error || "couldn't read that file";
+    if (err.candidates?.length) throw new AmbiguousPath(said, err.candidates);
+    throw new Error(said);
   }
   return (await res.json()) as { path: string; content: string };
 }
