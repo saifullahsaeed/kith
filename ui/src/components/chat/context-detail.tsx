@@ -415,6 +415,20 @@ function Receipt({ round }: { round: LastRoundFigures | null }) {
           {round.model || "—"}
         </div>
       </div>
+      {/* Which upstream actually served it — the fact that decides the bill, and it has been on
+          the wire since the receipt was built while appearing on no screen. One model on
+          OpenRouter is many hosts at many prices, so "which model" answers less of "why did
+          this round cost that" than this does. It is also the only way to tell whether a pin
+          took effect: an unrecognised provider slug is silently ignored by the router, so
+          without this the setting could be wrong for weeks with nothing to show it. */}
+      <div className="leading-tight">
+        <div className="text-muted-foreground/40 text-[9px] tracking-[0.12em] uppercase">
+          served by
+        </div>
+        <div className="max-w-[12rem] truncate font-mono text-[11px]" title={round.provider || "—"}>
+          {round.provider || "—"}
+        </div>
+      </div>
     </div>
   );
 }

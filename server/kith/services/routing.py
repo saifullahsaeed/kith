@@ -118,7 +118,35 @@ def _order_for(config: Config, by: str) -> tuple[str, ...]:
     return order
 
 
+def table(config: Config, by: str = "") -> list[endpoint_policy.Endpoint]:
+    """Every host serving this model, in the order this install would prefer them.
+
+    The same table `_fetch` ranks, handed out whole instead of reduced to slugs — because the
+    one thing missing from pinning was ever being able to see what there was to pin *to*.
+    The setting is a provider slug and no screen in Kith has ever shown one, so naming a host
+    meant knowing it from somewhere else and spelling it right first time, with a wrong answer
+    failing silently: `provider.order` with an unrecognised name is simply ignored.
+
+    Unranked — `by` blank or unknown — is returned in OpenRouter's own order rather than ours,
+    which is what a person who set `prefer_provider_by` to blank has asked to see.
+    """
+    rows = _rows(config)
+    if by not in endpoint_policy.ORDERINGS:
+        return rows
+    order = {slug: place for place, slug in enumerate(endpoint_policy.rank(rows, by))}
+    return sorted(rows, key=lambda one: order.get(one.slug, len(order)))
+
+
 def _fetch(config: Config, by: str) -> tuple[str, ...]:
+    return endpoint_policy.rank(_rows(config), by)
+
+
+def _rows(config: Config) -> list[endpoint_policy.Endpoint]:
+    """The model's endpoint table off the network, or nothing at all.
+
+    Total on purpose, for the reason the caller's docstring gives: not knowing costs the old
+    `sort` behaviour, and raising here would cost the turn.
+    """
     url = f"{config.base_url.rstrip('/')}/models/{config.model}/endpoints"
     try:
         response = requests.get(
@@ -127,14 +155,14 @@ def _fetch(config: Config, by: str) -> tuple[str, ...]:
             timeout=_TIMEOUT_SECONDS,
         )
         if response.status_code != 200:
-            return ()
+            return []
         rows = ((response.json() or {}).get("data") or {}).get("endpoints") or []
     except (requests.exceptions.RequestException, ValueError) as error:
         # Logged rather than raised. The consequence of not knowing is "route the way we routed
         # last month", and taking a turn down over a ranking refinement is the wrong trade.
         log.debug("could not read endpoints for %s: %s", config.model, error)
-        return ()
-    return endpoint_policy.rank([endpoint_policy.from_api(row) for row in rows if row], by)
+        return []
+    return [endpoint_policy.from_api(row) for row in rows if row]
 
 
 def forget() -> None:

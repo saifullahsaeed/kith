@@ -90,9 +90,43 @@ class Endpoint:
     #: than zero: zero reads as instant, which would put an unmeasured host at the front of
     #: every band it lands in.
     latency_ms: float = float("inf")
+    #: The weights this host actually serves — "fp8", "bf16", "int4", "" when unstated.
+    #: Display-only for now: nothing here ranks on it, which is the whole of why the cheapest
+    #: host wins so often. Carried because a picker that does not show it is asking someone to
+    #: choose between two identical-looking rows that differ by a quantization step.
+    quantization: str = ""
+    #: What this host will actually accept, which is not always what the model advertises: a
+    #: 256k model is routinely served by hosts capped at 32k, and the round that overflows is
+    #: the first anyone hears of it.
+    context_length: int = 0
+    #: And what it will write back. 0 means the host did not say.
+    max_completion_tokens: int = 0
     #: OpenRouter's own health flag. Below zero means deranked or disabled.
     status: int = 0
     uptime: float = 100.0
+
+    def public(self) -> dict:
+        """This host as the picker shows it — every number it would need to justify a pin.
+
+        `effective_price` is computed here rather than left to the client because it is the
+        number the ranking is actually made on, and a picker that ordered rows by one figure
+        while displaying another would be the same silent mismatch this module exists to fix.
+        """
+        return {
+            "slug": self.slug,
+            "name": self.name or self.slug,
+            "quantization": self.quantization,
+            "contextLength": self.context_length,
+            "maxCompletionTokens": self.max_completion_tokens,
+            "promptPerMtok": _finite(self.prompt_per_mtok),
+            "completionPerMtok": _finite(self.completion_per_mtok),
+            "cacheReadPerMtok": _finite(self.cache_read_per_mtok),
+            "effectivePerMtok": _finite(effective_price(self)),
+            "throughput": self.throughput,
+            "latencyMs": _finite(self.latency_ms),
+            "uptime": self.uptime,
+            "healthy": _healthy(self),
+        }
 
 
 #: A host this far below perfect over the last half hour is not worth being first in line for,
@@ -247,6 +281,9 @@ def from_api(row: dict) -> Endpoint:
         cache_read_per_mtok=_per_million(pricing.get("input_cache_read")),
         throughput=_number(throughput.get("p50")),
         latency_ms=_number(latency.get("p50"), default=float("inf")),
+        quantization=str(row.get("quantization") or ""),
+        context_length=int(_number(row.get("context_length"))),
+        max_completion_tokens=int(_number(row.get("max_completion_tokens"))),
         status=int(row.get("status") or 0),
         uptime=_number(row.get("uptime_last_30m"), default=100.0),
     )
@@ -258,6 +295,13 @@ def _per_million(raw: object) -> float:
         return float(raw) * 1_000_000  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return float("inf")
+
+
+def _finite(value: float) -> float | None:
+    """A number the wire can carry. `inf` is how this module says "not quoted", and JSON has
+    no word for it — `Infinity` is not valid JSON and every parser disagrees about it — so it
+    crosses as null and the picker shows a dash rather than a host that looks free."""
+    return value if value not in (float("inf"), float("-inf")) else None
 
 
 def _number(raw: object, default: float = 0.0) -> float:

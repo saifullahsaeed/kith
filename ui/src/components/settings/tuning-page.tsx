@@ -11,6 +11,7 @@ import {
   Switch,
 } from "@/components/settings/setting-row";
 import { SaveBar } from "@/components/settings/save-bar";
+import { ProviderPin } from "@/components/settings/provider-pin";
 import { saveTuning, type Tunable, type TunableGroup } from "@/lib/backend";
 
 /**
@@ -147,6 +148,35 @@ function Knob({
   const held = draft ?? knob.value;
   const edited = draft !== undefined && String(draft) !== String(knob.value);
   const error = typeof held === "string" ? boundError(knob, held) : "";
+
+  // A knob whose legal values are a network call away gets its own control, declared by the
+  // server rather than special-cased on the key. The row keeps its label, help and changed dot
+  // — everything that makes it read as one of the settings — and only the *answering* moves
+  // below it, because the answer is a table and a table does not fit at the right-hand edge.
+  if (knob.source === "openrouter-endpoints") {
+    return (
+      <>
+        <SettingRow
+          label={knob.label}
+          help={knob.help + defaultNote(knob)}
+          changed={!knob.isDefault || edited}
+          disabled={knob.fromEnv}
+          disabledWhy={`Set by ${knob.env} at launch, so choosing here would do nothing.`}
+        >
+          <span className="text-muted-foreground font-mono text-[11px]">
+            {String(held) || "automatic"}
+          </span>
+        </SettingRow>
+        <div className="border-border/60 border-b">
+          <ProviderPin
+            value={String(held)}
+            disabled={knob.fromEnv}
+            onChange={(slug) => onChange(slug)}
+          />
+        </div>
+      </>
+    );
+  }
 
   return (
     <SettingRow

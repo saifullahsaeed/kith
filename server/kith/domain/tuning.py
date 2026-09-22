@@ -56,6 +56,16 @@ class Tunable:
     #: setting reads as saved and does nothing. Empty means genuinely free text (a hostname,
     #: a model id). The blank option, where blank is meaningful, must be listed explicitly.
     choices: tuple[str, ...] = ()
+    #: Where a list of legal values comes from when it cannot be written down here because it
+    #: depends on something live. `choices` covers a knob with three fixed answers; this covers
+    #: one whose answers are a network call away — the hosts serving the configured model, which
+    #: change per model and per day.
+    #:
+    #: Declared rather than special-cased in the UI, because the settings screen is *generated*
+    #: from this list and a hand-written exception for one key is the first copy of a registry
+    #: that exists precisely so there are no copies. The UI maps a source to a control; an
+    #: unknown source falls back to the free-text box, which is what shipped.
+    source: str = ""
 
     def coerce(self, raw: object) -> int | float | str | bool:
         """Read a value of this knob's type, or raise ValueError saying why not.
@@ -111,6 +121,7 @@ class Tunable:
             "max": self.maximum,
             "unit": self.unit,
             "choices": list(self.choices),
+            "source": self.source,
         }
 
 
@@ -529,13 +540,17 @@ TUNABLES: tuple[Tunable, ...] = (
         key="openrouter_provider",
         env="KITH_OR_PROVIDER",
         label="Pin OpenRouter to one upstream",
-        help="OpenRouter spreads requests across many hosts, so rounds can miss each "
-        "other's prompt cache. Blank is now the right answer for almost everyone: he "
-        "sends a session id, which asks for the same host without giving up the "
-        "fallbacks that keep him answering. Name a provider only to force one.",
+        help="Which host serves every round, chosen from the ones that actually serve the "
+        "model you are on — price, quantization and measured speed are shown for each, because "
+        "on OpenRouter the same model at the same name can be a different set of weights at "
+        "fifty times the price. Blank routes by the preference below instead, which is the "
+        "right answer until you have a reason: a pin is one host's uptime, and it does not "
+        "move with you when you change model.",
         default="",
         group="connections",
         kind="text",
+        # The hosts are per-model and change through the day, so they cannot be `choices`.
+        source="openrouter-endpoints",
     ),
     Tunable(
         key="fallback_model",

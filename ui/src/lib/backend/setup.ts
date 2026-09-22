@@ -295,6 +295,13 @@ export interface Tunable {
    * always and after shipping is every upgrade.
    */
   choices?: string[];
+  /**
+   * Where a live list of legal values comes from, when the answers depend on something the
+   * registry cannot know — `"openrouter-endpoints"` is the hosts serving the configured model.
+   * Optional for the same reason `choices` is: an older server sends no such field, and a
+   * control keyed on it must fall back to the free-text box rather than to a blank page.
+   */
+  source?: string;
   value: number | string | boolean;
   isDefault: boolean;
   /** An environment variable is winning, so editing the field would do nothing. */
@@ -416,4 +423,50 @@ export async function removeSkill(name: string): Promise<void> {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `couldn't remove it (${response.status})`);
   }
+}
+
+/** One host serving one model, as the provider picker shows it.
+ *
+ * Nulls are "not quoted" and must never render as free or as instant — the same rule the model
+ * list already follows, and the reason the server converts its own infinities to null rather
+ * than letting JSON decide.
+ */
+export interface ModelEndpoint {
+  slug: string;
+  name: string;
+  /** "fp8", "bf16", "int4", or "" where the host does not say. The field that separates two
+   *  otherwise identical rows, and the one a price sort cannot see. */
+  quantization: string;
+  contextLength: number;
+  maxCompletionTokens: number;
+  promptPerMtok: number | null;
+  completionPerMtok: number | null;
+  cacheReadPerMtok: number | null;
+  /** Prompt, cache-read and completion rates blended at the share each actually arrives in.
+   *  This is what the router ranks on, so it is what the picker sorts and shows. */
+  effectivePerMtok: number | null;
+  throughput: number;
+  latencyMs: number | null;
+  uptime: number;
+  healthy: boolean;
+}
+
+export interface ModelEndpoints {
+  model: string;
+  /** False for a connection that is not OpenRouter. Different sentence from an empty list. */
+  supported: boolean;
+  pinned: string;
+  /** False when a pin names a host that does not serve this model — a setting that reads as
+   *  live and is doing nothing, which is the failure this whole screen exists to end. */
+  pinnedServesModel: boolean;
+  rankedBy: string;
+  rows: ModelEndpoint[];
+}
+
+/** The hosts serving a model. Never throws for "there are none": an empty list is an answer. */
+export async function fetchModelEndpoints(model?: string): Promise<ModelEndpoints> {
+  const query = model ? `?model=${encodeURIComponent(model)}` : "";
+  const response = await fetch(`/api/models/endpoints${query}`);
+  if (!response.ok) throw new Error(`could not read hosts (${response.status})`);
+  return (await response.json()) as ModelEndpoints;
 }
