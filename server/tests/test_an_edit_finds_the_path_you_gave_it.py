@@ -42,9 +42,7 @@ def _file(tmp_path: Path, name: str, body: str) -> Path:
 class TestATopLevelPathIsTheDefault:
     def test_one_edit_beside_a_top_level_path(self, db, never_the_real_workspace, tmp_path):
         one = _file(never_the_real_workspace, "store.py", "alpha\nbeta\n")
-        out = require("edit_files").run(
-            db, {"path": str(one), "edits": [{"old": "alpha", "new": "ALPHA"}]}
-        )
+        out = require("edit_files").run(db, {"path": str(one), "edits": [{"old": "alpha", "new": "ALPHA"}]})
         assert "error" not in out, out
         assert one.read_text() == "ALPHA\nbeta\n"
 

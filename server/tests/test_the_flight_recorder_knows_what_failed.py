@@ -67,8 +67,15 @@ class TestItRidesHomeOnTheRow:
     def test_the_failures_are_stored_and_come_back(self, tmp_path: Path):
         path = _db(tmp_path)
         repo.messages.add_turn_log(
-            path, "2026-09-20T00:00:00+00:00", "chat", "a question",
-            ["shell", "edit_files", "edit_files"], 900, 40, 1.0, "answered",
+            path,
+            "2026-09-20T00:00:00+00:00",
+            "chat",
+            "a question",
+            ["shell", "edit_files", "edit_files"],
+            900,
+            40,
+            1.0,
+            "answered",
             failed=["edit_files"],
         )
         assert repo.messages.list_turn_log(path)[0]["failed"] == ["edit_files"]
@@ -103,8 +110,16 @@ class TestTheQuestionBecomesAQuery:
         path = _db(tmp_path)
         for _ in range(3):
             repo.messages.add_turn_log(
-                path, "2026-09-20T00:00:00+00:00", "chat", None,
-                ["shell", "edit_files"], 0, 0, 0.0, "ok", failed=["edit_files"],
+                path,
+                "2026-09-20T00:00:00+00:00",
+                "chat",
+                None,
+                ["shell", "edit_files"],
+                0,
+                0,
+                0.0,
+                "ok",
+                failed=["edit_files"],
             )
         health = {row["tool"]: row for row in repo.messages.tool_health(path)}
         assert health["edit_files"]["calls"] == 3
@@ -115,8 +130,16 @@ class TestTheQuestionBecomesAQuery:
         """Sorted by how much is going wrong, because that is the question being asked."""
         path = _db(tmp_path)
         repo.messages.add_turn_log(
-            path, "2026-09-20T00:00:00+00:00", "chat", None,
-            ["shell"] * 9 + ["edit_files"], 0, 0, 0.0, "ok", failed=["edit_files", "shell"],
+            path,
+            "2026-09-20T00:00:00+00:00",
+            "chat",
+            None,
+            ["shell"] * 9 + ["edit_files"],
+            0,
+            0,
+            0.0,
+            "ok",
+            failed=["edit_files", "shell"],
         )
         assert repo.messages.tool_health(path)[0]["tool"] == "edit_files"
 

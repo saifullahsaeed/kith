@@ -616,8 +616,12 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, abo
     candidates.append(
         present.Block(
             "projects",
+            # Narrowed on `project_id` rather than on `project`, so the type follows the value
+            # the call actually takes. Branching on `project` left `project_id` as `int | None`
+            # to a parameter that takes an `int` — true at runtime, and not something a reader
+            # or a checker should have to prove.
             project_context.others(AGENT_DB_PATH, project_id)
-            if project
+            if project_id is not None
             else project_context.named(AGENT_DB_PATH),
             tier=present.NICE_TO_HAVE,
         )
