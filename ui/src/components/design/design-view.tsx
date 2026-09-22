@@ -85,7 +85,29 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
   // `useId` is stable across renders and unique per mounted view, so two designs open at once
   // cannot restyle each other. Punctuation out, because the result is going into a selector.
   const scope = `design-${useId().replace(/[^\w-]/g, "")}`;
-  const sheet = useMemo(() => scopeStyleSheet(parsed.sheet, `.${scope}`), [parsed.sheet, scope]);
+  /* A document's defaults first, then his sheet.
+   *
+   * Everything in here inherits from the app, which in dark mode means a pale `color` and the
+   * app's own font — so any colour a design leaves unnamed, or names and fails to resolve,
+   * rendered pale-on-white and read as blank. The checker opens the same file in a plain
+   * Chromium and sees black on white; the two renderers disagreeing is the whole class of bug
+   * this surface keeps producing. Literal rather than themed for that reason: the artboard is
+   * a sheet of paper, and it does not change colour because the room did.
+   *
+   * In the sheet under `:where()` rather than inline, because inline would beat the design's
+   * own `body { background: var(--paper) }` — zero specificity loses to every rule he wrote. */
+  const sheet = useMemo(
+    () =>
+      [
+        `:where(.${scope}) { color: #000; background: #fff; color-scheme: light; ` +
+          `font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 16px; ` +
+          `font-weight: 400; line-height: normal; letter-spacing: normal; text-align: left; }`,
+        scopeStyleSheet(parsed.sheet, `.${scope}`),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    [parsed.sheet, scope],
+  );
 
   /* The tokens the dialect is written in, defined where the design can see them.
    *
@@ -229,8 +251,15 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
     if (VOID_TAGS.has(node.tag)) return createElement(elementName(node.tag), props);
 
     const children: ReactNode[] = [];
-    if (node.text) children.push(node.text);
-    for (const [at, child] of node.children.entries()) children.push(render(child, node.id, at));
+    if (node.segments) {
+      // In the file's order, so the space in "Arrived <strong>9:31</strong>" survives.
+      for (const one of node.segments) {
+        children.push(typeof one === "string" ? one : render(node.children[one], node.id, one));
+      }
+    } else {
+      if (node.text) children.push(node.text);
+      for (const [at, child] of node.children.entries()) children.push(render(child, node.id, at));
+    }
 
     return createElement(elementName(node.tag), props, children.length ? children : undefined);
   };

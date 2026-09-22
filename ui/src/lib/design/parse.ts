@@ -40,6 +40,15 @@ export interface DesignNode {
   classes: string[];
   /** The node's own text, when it has any of its own. */
   text?: string;
+  /**
+   * Text and children in the order the file has them, for a node that has both — strings are
+   * text, numbers index `children`. Absent for the ordinary node that has one or the other.
+   *
+   * `text` alone rendered before every child, so `<span>Arrived <strong>9:31</strong></span>`
+   * came out "Arrived9:31" and `<span><strong>10:30</strong> Open slot</span>` came out
+   * "Open slot10:30": the space and the order both lost, on the board and nowhere else.
+   */
+  segments?: Array<string | number>;
   children: DesignNode[];
   /** Opted into free positioning with `data-k-absolute`, so drag means x/y here. */
   absolute: boolean;
@@ -327,13 +336,55 @@ function safeUrl(raw: string): string | null {
 // ── the stylesheet ──────────────────────────────────────────────────────────────────────────
 
 /**
+ * A selector naming the document itself: `html`, `body`, `:root`, or those chained.
+ *
+ * Rewritten to `:scope` — the design root — rather than refused. The refusal was right about
+ * scoping and wrong about frequency: `body { --ink: #18322E; display: flex; width: 390px }` is
+ * where anybody writing a whole-document design puts the tokens and the page box, and dropping
+ * the rule dropped every custom property in it. Every colour in the design resolved to nothing,
+ * the text took the app's own dark-mode foreground, and a clinic screen whose checker shot was
+ * perfect arrived on the board as pale beige on white.
+ *
+ * Kept as a *rule* rather than lifted onto the root's inline style, because inline wins
+ * everything: `@media (max-width: 600px) { body { padding: 12px } }` would lose to the base rule
+ * it exists to override, which is the cascade a real browser runs and the checker sees.
+ * `scopeStyleSheet` turns `:scope` into the root's own class.
+ */
+// One of the document's names, ending at a space, a `>` or the end — so `body.dark` (a compound
+// on the document, refused) and a class called `.bodycopy` are not mistaken for it.
+const DOCUMENT = /^(?:html|body|:root)(?=$|[\s>])\s*/i;
+
+function documentSelector(selector: string): string | null {
+  // The original spelling, not a lowercased copy: class names are case-sensitive.
+  let rest = selector.trim();
+  let named = false;
+  let child = false;
+  for (let head = rest.match(DOCUMENT); head; head = rest.match(DOCUMENT)) {
+    named = true;
+    child = false;
+    rest = rest.slice(head[0].length);
+    if (rest.startsWith(">")) {
+      child = true;
+      rest = rest.slice(1).trim();
+    }
+  }
+  if (!named) return null;
+  if (!rest) return child ? null : ":scope";
+  // `body > .app` is a child of the root; `body .card` is anything inside it, which every
+  // scoped selector already is. Siblings of the document are not a thing.
+  if (/^[+~]/.test(rest) || !safeSelector(rest)) return null;
+  return child ? `:scope > ${rest}` : rest;
+}
+
+/**
  * A selector that stays inside the design when the sheet is scoped to its root.
  *
- * `html`, `body` and `:root` are refused rather than rewritten: scoping prepends an ancestor, and
- * a selector naming an ancestor of that ancestor either matches nothing (confusing) or, if the
- * scoping is ever done differently, matches the app (dangerous). `*` is refused because a
- * universal rule under a scope is still a rule over every node in the design, which is not
- * something he means often enough to be worth allowing.
+ * `html`, `body` and `:root` are refused *here*: scoping prepends an ancestor, and a selector
+ * naming an ancestor of that ancestor either matches nothing (confusing) or, if the scoping is
+ * ever done differently, matches the app (dangerous). `documentSelector` above is the one place
+ * they are let back in, rewritten to name the root. `*` is refused because a universal rule
+ * under a scope is still a rule over every node in the design, which is not something he means
+ * often enough to be worth allowing.
  */
 function safeSelector(selector: string): boolean {
   const one = selector.trim().toLowerCase();
@@ -449,9 +500,11 @@ export function sanitiseStyleSheet(css: string, dropped: string[]): string {
     }
 
     const selectors = prelude.split(",").map((one) => one.trim()).filter(Boolean);
-    const safe = selectors.filter(safeSelector);
-    for (const refused of selectors.filter((one) => !safe.includes(one))) {
-      dropped.push(`selector ${refused.slice(0, 40)}`);
+    const safe: string[] = [];
+    for (const one of selectors) {
+      const kept = documentSelector(one) ?? (safeSelector(one) ? one : null);
+      if (kept) safe.push(kept);
+      else dropped.push(`selector ${one.slice(0, 40)}`);
     }
     if (!safe.length) continue;
 
@@ -479,13 +532,20 @@ export const ROOT_ID = "root";
 /** Names an id can take without needing quoting anywhere downstream. */
 const ID = /^[\w.:-]{1,60}$/;
 
+/**
+ * HTML's collapsible whitespace, which is not JavaScript's `\s`: that also matches the
+ * non-breaking space, so `Chart ready&nbsp; ✓` lost the one space the author insisted on.
+ */
+const COLLAPSIBLE = /[ \t\n\r\f]+/g;
+const EDGES = /^[ \t\n\r\f]+|[ \t\n\r\f]+$/g;
+
 /** The text a node owns, as opposed to the text its children own. */
 function ownText(element: Element): string {
   let text = "";
   for (const node of Array.from(element.childNodes)) {
     if (node.nodeType === 3) text += node.nodeValue ?? "";
   }
-  return text.replace(/\s+/g, " ").trim();
+  return text.replace(COLLAPSIBLE, " ").replace(EDGES, "");
 }
 
 function convert(element: Element, mint: () => string, taken: Set<string>, dropped: string[]): DesignNode | DesignNode[] {
@@ -597,9 +657,31 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
    * is pre-order. Any minted id past the first nesting would have been written onto a different
    * node than the one the editor thought it had selected, which is a patch landing silently on
    * the wrong element. */
-  const children = Array.from(element.children).flatMap((child) => convert(child, mint, taken, dropped));
+  const children: DesignNode[] = [];
+  const order: Array<string | number> = [];
+  for (const child of Array.from(element.childNodes)) {
+    if (child.nodeType === 3) {
+      order.push((child.nodeValue ?? "").replace(COLLAPSIBLE, " "));
+    } else if (child.nodeType === 1) {
+      for (const one of [convert(child as Element, mint, taken, dropped)].flat()) {
+        order.push(children.length);
+        children.push(one);
+      }
+    }
+  }
 
   const text = ownText(element);
+  // Only for mixed content. A node of pure children keeps rendering exactly as it did — the
+  // indentation between block children is not text anyone wrote.
+  let segments: Array<string | number> | undefined;
+  if (text && children.length) {
+    segments = order.filter((one) => one !== "");
+    const first = segments[0];
+    const last = segments[segments.length - 1];
+    if (typeof first === "string") segments[0] = first.replace(/^[ \t\n\r\f]+/, "");
+    if (typeof last === "string") segments[segments.length - 1] = last.replace(/[ \t\n\r\f]+$/, "");
+    segments = segments.filter((one) => one !== "");
+  }
   return {
     id,
     tag: unknown ? "div" : tag,
@@ -607,6 +689,7 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     style,
     classes,
     ...(text ? { text } : {}),
+    ...(segments ? { segments } : {}),
     children,
     absolute,
     component,

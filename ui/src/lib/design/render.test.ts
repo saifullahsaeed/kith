@@ -78,3 +78,11 @@ describe("svg, which the html parser lowercased on the way in", () => {
     expect(attrsToProps({ class: "card", alt: "x" })).toEqual({ alt: "x" });
   });
 });
+
+describe("the design root in a scoped sheet", () => {
+  it("is the scope itself, not something inside it", () => {
+    expect(scopeStyleSheet(":scope { color: red }", ".d1")).toBe(".d1 { color: red }");
+    expect(scopeStyleSheet(":scope > .app { margin: 0 }", ".d1")).toBe(".d1 > .app { margin: 0 }");
+    expect(scopeStyleSheet(":scope, .card { margin: 0 }", ".d1")).toBe(".d1, .d1 .card { margin: 0 }");
+  });
+});

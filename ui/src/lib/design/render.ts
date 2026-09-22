@@ -71,7 +71,12 @@ export function scopeStyleSheet(sheet: string, scope: string): string {
       .split(",")
       .map((one) => one.trim())
       .filter(Boolean)
-      .map((one) => `${scope} ${one}`)
+      // `:scope` is the design root itself — what `body { }` became in `sanitiseStyleSheet` —
+      // so it is replaced rather than prefixed. Prefixed, it would name a `:scope` *inside* the
+      // root, which matches nothing, and the design's page box and tokens would vanish again.
+      .map((one) =>
+        one === ":scope" ? scope : one.startsWith(":scope ") ? `${scope}${one.slice(6)}` : `${scope} ${one}`,
+      )
       .join(", ");
     out.push(`${selectors} { ${body.trim()} }`);
   }
