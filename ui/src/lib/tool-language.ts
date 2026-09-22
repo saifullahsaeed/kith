@@ -146,6 +146,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   shell: { verb: "ran", of: "command", group: "shell" },
   read_design_system: { verb: "read the design system", group: "files" },
   update_design_system: { verb: "changed the design system", group: "files" },
+  find_icons: { verb: "found icons", group: "files" },
   read_file: { verb: "read", of: "paths", group: "files" },
   write_file: { verb: "wrote", of: "path", group: "files" },
   edit_file: { verb: "edited", of: "path", group: "files" },

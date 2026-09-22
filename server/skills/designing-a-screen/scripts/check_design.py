@@ -476,6 +476,34 @@ _HEIGHT = """
 #: editor happens to be in. This script renders into a 900px page and gets one answer; the board
 #: renders into a frame inside the app and gets another; neither is the screen. It is the single
 #: cause of a mockup that is right at the top and then a thousand pixels of nothing.
+#: Symbols standing in for icons, found in the rendered text rather than the source, so a
+#: glyph in a comment or a `content:` string a sheet never applies does not count.
+#:
+#: The ranges are where the stand-ins actually came from — Misc Technical (⌂ ⌕ ⌘), Geometric
+#: Shapes (▦ ▾ ▶), Misc Symbols (☰ ★ ♧), Dingbats (✓ ✚ ✕), the arrows block and emoji. An arrow
+#: only counts when it is the whole of its text: "See all →" is punctuation, a lone ↕ in a
+#: table header is an icon. Box drawing is left alone; it is how people draw rules in comments.
+_GLYPHS = r"""
+() => {
+  const icon = /[\u2300-\u23FF\u25A0-\u25FF\u2600-\u26FF\u2700-\u27BF\u2B00-\u2BFF]|[\u{1F300}-\u{1FAFF}]/u;
+  const arrow = /^[\u2190-\u21FF\s]+$/;
+  const found = [];
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+    const parent = node.parentElement;
+    if (!parent || parent.closest("style, script, svg")) continue;
+    const text = node.nodeValue.trim();
+    if (!text) continue;
+    const hit = text.match(icon) ?? (arrow.test(text) ? [text.replace(/\s+/g, "")] : null);
+    if (!hit) continue;
+    const named = parent.closest("[data-k]");
+    const where = named ? named.getAttribute("data-k") : parent.tagName.toLowerCase();
+    found.push(`${hit[0]} (${where})`);
+  }
+  return found;
+}
+"""
+
 _VIEWPORT = re.compile(r"\b\d[\d.]*(vh|vw|vmin|vmax|dvh|svh|lvh)\b")
 
 
@@ -535,6 +563,7 @@ def check(path: Path) -> int:
         measure = _MEASURE.replace("SCALE", repr(scale))
         found = page.evaluate(measure)
         wide = page.evaluate(_HEIGHT)
+        glyphs = sorted(set(page.evaluate(_GLYPHS)))
         shots = []
         try:
             SHOTS.mkdir(parents=True, exist_ok=True)
@@ -591,6 +620,13 @@ def check(path: Path) -> int:
         print(f"parts    none used; {len(system['components'])} available — {', '.join(sorted(system['components']))}")
     report("overflow", overflow)
     report("viewport", viewport)
+    if glyphs:
+        # Said with the fix, because the fix is one call: the reason these are here at all is
+        # that there was nothing else to reach for.
+        report("icons", glyphs)
+        print("         symbols standing in for icons — get real ones with find_icons")
+    else:
+        print(f"{'icons':<9}ok")
     print(f"frame    {frame_name} · {wide_px}\u00d7{frame_h}" + ("" if frame_name != "default" else " (not declared — say `data-k-frame` on <body>)"))
     if narrow_px:
         print(f"height   {wide}px at {wide_px}, {narrow}px at {narrow_px}")
@@ -603,7 +639,7 @@ def check(path: Path) -> int:
         print("shot     none — could not write the pictures")
 
     failing = any(
-        [found["editable"], literals, found["spacing"], found["contrast"], overflow, unknown_parts, viewport]
+        [found["editable"], literals, found["spacing"], found["contrast"], overflow, unknown_parts, viewport, glyphs]
     )
     if not failing:
         # The last line of a clean run, because a clean run is the moment the mistake gets made.

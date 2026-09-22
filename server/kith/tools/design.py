@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.services import design_system as systems
-from kith.tools.params import BOOL, INT, STR
+from kith.tools.params import BOOL, INT, LIST_STR, STR
 from kith.tools.registry import tool
 
 
@@ -187,4 +187,63 @@ def update_design_system(path: Path, args: dict):
         "conventions": bool(system.conventions),
         "note": "Screens in this project resolve this now. Re-run the design checker on anything "
         "already drawn — a screen written against the old palette may now be off the scale.",
+    }
+
+
+@tool(
+    "find_icons",
+    "Icons for a screen, as finished inline SVG to paste where the icon goes. Ask for several "
+    "at once by what each is for — [\"search\", \"calendar\", \"patients\", \"inbox\", \"more\"] "
+    "— and each comes back as the best match plus a few alternatives by name. One consistent set "
+    "(Lucide: 24px grid, one stroke weight), coloured by the surrounding text, so an icon in a "
+    "button or a nav item takes the button's colour. Use these instead of Unicode symbols "
+    "(⌂ ▦ ☰ ✚) or hand-written path data, which render in whatever font the machine has and "
+    "never match each other.",
+    {
+        "names": {
+            **LIST_STR,
+            "description": "What each icon is for, in plain words or as an exact icon name: "
+            "\"search\", \"user plus\", \"chevron-down\", \"bell\".",
+        },
+        "size": {
+            **INT,
+            "description": "Pixels. 16 in dense rows and inline with small text, 20 in buttons "
+            "and nav (the default), 24 for a tab bar. Keep one size per context.",
+        },
+    },
+)
+def find_icons(path: Path, args: dict):
+    from kith.domain.tooling import many
+    from kith.services import icons
+
+    wanted = [one.strip() for one in many(args, "names", "name") if one and one.strip()]
+    if not wanted:
+        return {"error": "Say what each icon is for — names: [\"home\", \"calendar\"]."}
+    if not icons.icons():
+        return {"error": "The icon set is not installed — designing-a-screen/icons/lucide.json is missing."}
+
+    try:
+        size = int(args.get("size") or icons.DEFAULT_SIZE)
+    except (TypeError, ValueError):
+        size = icons.DEFAULT_SIZE
+    size = max(8, min(size, 64))
+
+    found = []
+    for query in wanted[:40]:
+        names = icons.search(query)
+        if not names:
+            found.append({"for": query, "icon": None, "note": "Nothing in the set — try a plainer word."})
+            continue
+        found.append(
+            {
+                "for": query,
+                "icon": names[0],
+                "svg": icons.markup(names[0], size),
+                "alternatives": names[1:],
+            }
+        )
+    return {
+        "icons": found,
+        "note": "Paste each svg where the icon goes; it takes `color` from its parent. For an "
+        "alternative, ask again with its exact name.",
     }

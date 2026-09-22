@@ -187,9 +187,11 @@ Where the brief pins a direction, follow it exactly; the brief's own words alway
 
 ## How a design gets made
 
-Write the file and attach it. There is no design tool and no special deliverable kind:
+Get the icons, write the file, attach it. There is no design tool and no special deliverable
+kind:
 
 ```
+find_icons(names=["back", "search", "bell", "user", "settings"])
 write_file(".kith/screens/settings.html", ...)
 add_deliverable(id=41, kind="file", title="Settings screen", content=".kith/screens/settings.html")
 ```
@@ -318,16 +320,34 @@ below it, which is the most common way a good design arrives looking unfinished.
 stylesheet. Two things are worth knowing because they are where a whole-document design loses
 its looks:
 
-* `html { ... }` and `body { ... }` **rules** are dropped — they name ancestors of the design
-  rather than the design. Put those declarations in the **`style` attribute on `<body>`**, which
-  is read and becomes the root's own style. That is also the right place for the custom
-  properties a design declares for itself.
+* `html`, `body` and `:root` rules apply to the design root, so `body { --ink: #18322E;
+  background: var(--paper) }` works the way it does in a browser, media queries included. The
+  `style` attribute on `<body>` works too and wins over the rule.
 * An `id` is kept and prefixed, and the stylesheet's `#selectors` are rewritten to match, so
   `#auth { display: flex }` works. Classes are simpler and are what to reach for.
 
 **Pictures work.** `<img src="assets/logo.svg">` — a workspace-relative path, resolved for you.
 Not an http URL: a design cannot reach the network, by construction. A `data:` URI is fine for
 something small.
+
+**Icons come from the set.** Call `find_icons` with what each one is for — `["home",
+"calendar", "patients", "inbox", "more"]` in one call — and paste the `<svg>` each answer gives
+you where the icon goes. They are one family (24px grid, one stroke weight) and take `color`
+from their parent, so an icon inside a pine button is pine-on-white or white-on-pine without
+you touching it. Then:
+
+* **One size per context.** 16 inline with small text and in dense rows, 20 in buttons and
+  toolbars, 24 in a tab bar. Pass `size`; do not scale them with CSS.
+* **An icon sits in a flex row with its label** — `display:flex; align-items:center; gap:8px`
+  — which is what puts it on the text's centre line instead of its baseline.
+* **Navigation gets a label under or beside every icon.** An icon alone is for actions whose
+  meaning is universal: close, search, more, a chevron.
+* **The active item changes colour, not icon.** Same glyph, the accent colour, the label
+  weighted up.
+
+A Unicode symbol is not an icon — `⌂ ▦ ☰ ✚ ▾` render in whatever font the machine has, and no two
+match. The checker's `icons` row names every one it finds. Neither is path data you wrote
+yourself; if the set has nothing close, use a plainer word, or a text label.
 
 **Name the parts.** `data-k="hero.title"`, `data-k="settings.save"`. Any node you do not name is
 given a number, which works but tells nobody anything — a layers panel full of `k14` is a layers

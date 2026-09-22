@@ -85,6 +85,9 @@ GIVEN = frozenset(
         # palette and which components the product already has, for the same reason it needs
         # `read_skill`: the alternative is inventing a second one.
         "read_design_system",
+        # And the icons it is drawn with, for the same reason: a builder with no set to reach
+        # for draws its own, and hand-written path data is the part of a screen models get wrong.
+        "find_icons",
         # The board, read. A scout asked "has any of this been done before" needs to be able
         # to look, and none of these change anything.
         "list_projects",
