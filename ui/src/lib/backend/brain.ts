@@ -293,12 +293,15 @@ export async function saveWorkspaceFile(
  *  reachable. An empty path is the ordinary answer for a workspace with no system. */
 export async function fetchDesignSystem(
   projectId?: number | null,
-): Promise<{ path: string; content: string }> {
+): Promise<{ path: string; content: string; conventions: string }> {
   const q = new URLSearchParams();
   if (projectId != null) q.set("projectId", String(projectId));
   const res = await fetch(`/api/design-system?${q}`);
-  if (!res.ok) return { path: "", content: "" };
-  return (await res.json()) as { path: string; content: string };
+  if (!res.ok) return { path: "", content: "", conventions: "" };
+  // `conventions` is prose from a file beside the system. It cannot be derived from `content`,
+  // which is why the route returns it rather than leaving the interface to find it.
+  const body = (await res.json()) as { path: string; content: string; conventions?: string };
+  return { ...body, conventions: body.conventions ?? "" };
 }
 
 /** What he last asked you to look at — a board, so far — or null. */

@@ -70,7 +70,11 @@ export function BoardOverlay() {
 
   return (
     <div className="absolute inset-0 z-40 flex flex-col bg-background">
-      <div className="flex shrink-0 items-center gap-3 border-b border-border/70 px-4 py-2">
+      {/* A full-window overlay covers the app header, so it inherits the header's obligation:
+          reserve the traffic lights' room, and be draggable like a title bar. See the contract
+          in `index.css` — "New full-window overlay? It needs .window-controls-gap on its top
+          bar." This one did not, and the lights sat on top of the design's title. */}
+      <div className="window-drag-region window-controls-gap flex shrink-0 items-center gap-3 border-b border-border/70 px-4 py-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{task.data?.goal ?? open.title ?? "Designs"}</div>
           <div className="truncate text-xs text-muted-foreground">
@@ -92,7 +96,6 @@ export function BoardOverlay() {
           taskId={open.taskId}
           projectId={task.data?.project_id ?? open.projectId}
           designs={designs}
-          onBack={hide}
         />
       </div>
     </div>

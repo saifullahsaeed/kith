@@ -164,3 +164,57 @@ def test_an_unknown_prefix_says_so():
 
     with pytest.raises(Failure):
         context.resolve_id("nope", ["20260916-1-aaaaaa"])
+
+
+class TestHisWorkspaceIsNotAProjectRoot:
+    """Two folders under his workspace must not share one conversation.
+
+    The workspace has a `.kith` like any project Kith has worked in, so the walk up matched it
+    and every folder beneath it that was not itself a project collapsed onto one sticky key.
+    Two trial products, designed one after the other, went into the same conversation: the
+    second inherited the first's project binding, `create_project` refused it because a
+    conversation keeps the project it started on, and the second product's palette was one step
+    from being written into the first product's design system.
+    """
+
+    def _workspace(self, tmp_path: Path) -> Path:
+        home = tmp_path / "Kith"
+        (home / ".kith").mkdir(parents=True)
+        (home / ".kith" / "agent.db").write_text("")
+        (home / ".kith" / "tasks").mkdir()
+        (home / ".kith" / "skills").mkdir()
+        return home
+
+    def test_two_folders_under_it_get_their_own_roots(self, tmp_path: Path):
+        home = self._workspace(tmp_path)
+        one = home / "trials" / "sprout"
+        two = home / "trials" / "oregon"
+        one.mkdir(parents=True)
+        two.mkdir(parents=True)
+
+        assert context.project_root(one) != context.project_root(two)
+        assert context.project_root(one) == one.resolve()
+
+    def test_the_workspace_itself_is_still_its_own_root(self, tmp_path: Path):
+        home = self._workspace(tmp_path)
+        assert context.project_root(home) == home.resolve()
+
+    def test_a_project_under_it_is_still_found_from_within(self, tmp_path: Path):
+        # A folder Kith has actually worked in has a `.kith` with no database in it, and that
+        # is a real root: its subdirectories should share its thread.
+        home = self._workspace(tmp_path)
+        project = home / "missile-sim"
+        (project / ".kith").mkdir(parents=True)
+        (project / ".kith" / "memory.md").write_text("")
+        inside = project / "src" / "deep"
+        inside.mkdir(parents=True)
+
+        assert context.project_root(inside) == project.resolve()
+
+    def test_an_ordinary_checkout_outside_the_workspace_is_unaffected(self, tmp_path: Path):
+        repo = tmp_path / "elsewhere" / "app"
+        (repo / ".git").mkdir(parents=True)
+        inside = repo / "src"
+        inside.mkdir()
+
+        assert context.project_root(inside) == repo.resolve()

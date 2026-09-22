@@ -86,15 +86,41 @@ def _at_or_under(root: Path, here: Path) -> bool:
     return _comparable(here).startswith(root_key + os.sep)
 
 
+#: What tells his *workspace* apart from a project that Kith has worked in. Both have a
+#: ``.kith``; only the workspace's holds the agent database and the folders the app itself
+#: keeps. Named by the database because that one is unambiguous — a project will never have it.
+WORKSPACE_MARKERS = ("agent.db", "tasks", "skills")
+
+
+def _is_workspace(directory: Path) -> bool:
+    """Is this his own folder rather than a project's?"""
+    inside = directory / ".kith"
+    return sum((inside / one).exists() for one in WORKSPACE_MARKERS) >= 2
+
+
 def project_root(start: Path | None = None) -> Path:
     """The directory this work belongs to — the nearest ancestor holding a root marker.
 
     Falls back to the starting directory rather than to the home directory. A sticky session
     keyed on ``$HOME`` would be shared by every unrelated command run outside a repository,
     which is the one way this could silently put a message in the wrong conversation.
+
+    **His workspace is not a root, and skipping it is the whole of this function's history.**
+    The workspace has a ``.kith`` of its own, so every folder under it that was not already a
+    project matched on the way up and collapsed onto one key — which is precisely the failure
+    the paragraph above says must not happen, arriving through the marker instead of through
+    ``$HOME``. Two new folders under it, designed one after the other, went into *one*
+    conversation: the second inherited the first's project binding, ``create_project`` refused
+    it on the grounds that a conversation keeps the project it started on, and the design work
+    for the second product was very nearly written into the first one's design system.
+
+    The two are told apart by what is inside the ``.kith``: the workspace's holds the agent
+    database and the app's own folders, and a project's never does.
     """
     here = (start or Path.cwd()).resolve()
     for directory in (here, *here.parents):
+        if _is_workspace(directory):
+            break
         if any((directory / marker).exists() for marker in ROOTS):
             return directory
     return here

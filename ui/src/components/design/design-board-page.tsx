@@ -10,13 +10,12 @@
  * editor is where you change — so opening one from the other keeps the task page's state and
  * comes straight back.
  */
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import {RefreshCw} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import { type BoardDesign, DesignBoard } from "@/components/design/design-board";
 import { DesignPage } from "@/components/design/design-page";
-import { Button } from "@/components/ui/button";
 import { fetchWorkspaceFile, saveWorkspaceFile } from "@/lib/backend/brain";
 import { type Board, boardPath, EMPTY, readBoard, writeBoard } from "@/lib/design/board";
 
@@ -25,7 +24,9 @@ export interface DesignBoardPageProps {
   projectId: number | null;
   /** The task's design deliverables, already filtered by `looksLikeADesign`. */
   designs: { file: string; title: string }[];
-  onBack: () => void;
+  /** Somewhere to go back to, when there is one. The overlay has its own close and
+   *  passes nothing; the task panel has no other way out and passes a handler. */
+  onBack?: () => void;
 }
 
 export function DesignBoardPage({ taskId, projectId, designs, onBack }: DesignBoardPageProps) {
@@ -134,22 +135,24 @@ export function DesignBoardPage({ taskId, projectId, designs, onBack }: DesignBo
   });
 
   return (
+    /* No header of its own.
+     *
+     * There was one — "Back · Designs · N on this board" — and every word of it was already on
+     * the overlay bar directly above: the same count, and a close. Two bars saying one thing,
+     * and the board itself, which is the whole point of the surface, started 96px further
+     * down. The one part that was not a duplicate — that a double-click opens a frame — moved
+     * into the toolbar, next to the tools it is about. `Back` belonged to the editor, not
+     * here; from the board there is nothing behind but the overlay's own close. */
     <div className="flex h-full flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-border/70 px-6 py-3">
-        <Button variant="ghost" size="sm" onClick={onBack} className="gap-1.5">
-          <ArrowLeft className="size-4" />
-          Back
-        </Button>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">Designs</div>
-          <div className="truncate text-xs text-muted-foreground">
-            {designs.length} on this board · double-click a frame to edit it
-          </div>
-        </div>
-      </header>
-
       <div className="min-h-0 flex-1">
-        <DesignBoard designs={loaded} board={board} onChange={change} onOpen={setOpen} />
+        <DesignBoard
+          designs={loaded}
+          board={board}
+          onChange={change}
+          onOpen={setOpen}
+          projectId={projectId}
+          onBack={onBack}
+        />
       </div>
     </div>
   );

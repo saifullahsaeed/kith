@@ -61,8 +61,15 @@ const GAP = 64;
 /** Enough room for a screen; frames are clipped to it and scroll inside on the board. */
 export const FRAME_H = 560;
 
-/** How far the board can be zoomed. Below the floor nothing is legible; above it, pointless. */
-export const ZOOM_RANGE = [0.08, 2] as const;
+/** How far the board can be zoomed.
+ *
+ * The ceiling was 2, on the reasoning that past it there was nothing to see. That is true of a
+ * board being used to *compare* screens and false of one being used to check a screen: at 2x a
+ * 1600px dense table is still 8px type, and "is that column clipping" is exactly the question
+ * you open a board to answer. 8 is the point where a hairline border is unmistakable.
+ *
+ * The floor stays where it is — below it nothing is legible and the board is a map. */
+export const ZOOM_RANGE = [0.08, 8] as const;
 
 export const EMPTY: Board = { frames: {}, notes: [] };
 

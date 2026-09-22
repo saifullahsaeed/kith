@@ -20,8 +20,16 @@
  * The arithmetic that keeps the point under the cursor fixed is four lines and is the difference
  * between a canvas and a scroll area.
  */
-import { Hand, Maximize2, MousePointer2, Plus, StickyNote } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent } from "react";
+import { ArrowLeft, Hand, Maximize2, MousePointer2, Plus, StickyNote } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type WheelEvent,
+} from "react";
 
 import { DesignView } from "@/components/design/design-view";
 import {
@@ -33,10 +41,19 @@ import {
   layout,
   ZOOM_RANGE,
 } from "@/lib/design/board";
+import { asFile, pictureName, pngOfDesign, savePicture } from "@/lib/design/export";
+import { frameAttribute, readFrame } from "@/lib/design/frame";
+import { attachPicture, referenceInChat } from "@/lib/design/reference";
 import { cn } from "@/lib/utils";
 
-/** The width a design is authored against, and therefore what a frame scales down from. */
-const DESIGN_W = 1200;
+/*
+ * A design's authored size comes from the design, not from here.
+ *
+ * This was `const DESIGN_W = 1200` with a fixed `FRAME_H` box, which is why a phone could not
+ * be drawn: a mobile screen was rendered 1200 wide and scaled down, and a short screen got the
+ * same tall box as a long one and arrived with a third of the frame empty. Both sizes now come
+ * from `data-k-frame` — see `lib/design/frame.ts`.
+ */
 
 export interface BoardDesign {
   /** The deliverable's path — the board's key for this frame. */
@@ -50,15 +67,40 @@ export interface BoardDesign {
 
 export interface DesignBoardProps {
   designs: BoardDesign[];
+  /**
+   * Whose design system these are drawn in.
+   *
+   * Not optional and not inferable. Every frame here is a live `DesignView`, and a `DesignView`
+   * with no project resolves the *workspace* system — so a board of one product's screens was
+   * painted in another product's palette. A plant-care app drawn in warm paper and green came
+   * up on the board teal on near-black, because that is what the workspace above it uses, and
+   * its own `--ds-canvas` did not exist there so the page had no background at all.
+   *
+   * The editor next door was always given this. The board was not, and the two surfaces
+   * disagreed about the same file.
+   */
+  projectId: number | null;
   board: Board;
   onChange: (board: Board) => void;
   /** Open one design in the editor. */
   onOpen: (file: string) => void;
+  /** Shown in the toolbar when the board is not inside something with its own close. */
+  onBack?: () => void;
 }
 
 type Tool = "select" | "hand" | "note";
 
-export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardProps) {
+export function DesignBoard({ designs, board, onChange, onOpen, projectId, onBack }: DesignBoardProps) {
+  /* Which designs are already waiting in the composer.
+   *
+   * Kept for as long as the board is open, and shown in the toolbar as a count, because the
+   * alternative he asked me not to build was closing the board on the first one. Adding three
+   * screens to one message is the ordinary case; the feedback has to survive long enough to
+   * tell you which ones you have already picked up. */
+  const [inChat, setInChat] = useState<Set<string>>(() => new Set());
+  const added = useCallback((file: string) => {
+    setInChat((held) => new Set(held).add(file));
+  }, []);
   const surface = useRef<HTMLDivElement | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [view, setView] = useState(board.view ?? { x: 48, y: 48, zoom: 0.45 });
@@ -297,7 +339,7 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
 
   return (
     <div className="relative flex h-full flex-col">
-      <Toolbar tool={tool} setTool={setTool} zoom={view.zoom} onFit={fit} />
+      <Toolbar tool={tool} setTool={setTool} zoom={view.zoom} onFit={fit} onBack={onBack} waiting={inChat.size} />
 
       <div
         ref={surface}
@@ -326,10 +368,13 @@ export function DesignBoard({ designs, board, onChange, onOpen }: DesignBoardPro
               key={file}
               frame={frame}
               design={byFile.get(file)}
+              projectId={projectId}
               picked={picked === file}
               zoom={view.zoom}
               onPointerDown={(event) => startItemDrag(event, "frame", file, frame)}
               onOpen={() => onOpen(file)}
+              onAdded={added}
+              inChat={inChat.has(file)}
             />
           ))}
 
@@ -369,14 +414,27 @@ function Toolbar({
   setTool,
   zoom,
   onFit,
+  onBack,
+  waiting,
 }: {
   tool: Tool;
   setTool: (tool: Tool) => void;
   zoom: number;
   onFit: () => void;
+  onBack?: () => void;
+  /** How many designs are sitting in the composer, unsent. */
+  waiting: number;
 }) {
   return (
     <div className="flex shrink-0 items-center gap-1 border-b border-border/70 px-3 py-2">
+      {onBack ? (
+        <>
+          <ToolButton label="Back" onClick={onBack}>
+            <ArrowLeft className="size-4" />
+          </ToolButton>
+          <div className="mx-1 h-5 w-px bg-border/70" />
+        </>
+      ) : null}
       <ToolButton label="Select — V" active={tool === "select"} onClick={() => setTool("select")}>
         <MousePointer2 className="size-4" />
       </ToolButton>
@@ -395,6 +453,18 @@ function Toolbar({
       <span className="ms-1 w-12 text-center text-xs tabular-nums text-muted-foreground">
         {Math.round(zoom * 100)}%
       </span>
+
+      {/* The one part of the header that was not a duplicate, kept next to the tools it is
+          about rather than in a bar of its own. */}
+      <span className="ms-auto hidden pe-1 text-xs text-muted-foreground sm:inline">
+        double-click a frame to edit it
+      </span>
+
+      {waiting ? (
+        <span className="ms-2 rounded-full bg-kith/15 px-2.5 py-1 text-xs font-medium text-kith">
+          {waiting} in the chat
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -429,19 +499,60 @@ function ToolButton({
 function Frame({
   frame,
   design,
+  projectId,
   picked,
   zoom,
   onPointerDown,
   onOpen,
+  onAdded,
+  inChat,
 }: {
   frame: BoardFrame;
   design?: BoardDesign;
+  projectId: number | null;
   picked: boolean;
   zoom: number;
   onPointerDown: (event: ReactPointerEvent) => void;
   onOpen: () => void;
+  onAdded: (file: string) => void;
+  inChat: boolean;
 }) {
-  const scale = frame.w / DESIGN_W;
+  const artboard = useRef<HTMLDivElement>(null);
+  const [asked, setAsked] = useState("");
+  const [saved, setSaved] = useState("");
+  const authored = readFrame(frameAttribute(design?.html ?? ""));
+
+  /* The picture is taken from the *unscaled* design, not from this frame's scaled copy — see
+   * `pngOfDesign`. The node handed over is the artboard, so nothing around it is in the shot. */
+  const picture = async () => {
+    const node = artboard.current;
+    if (!node || !design?.html) return null;
+    const blob = await pngOfDesign(node, authored);
+    return blob ? { blob, name: pictureName(design.title, authored) } : null;
+  };
+
+  const ask = async () => {
+    if (!design) return;
+    const landed = referenceInChat(design.file, design.title);
+    const shot = await picture();
+    if (shot) await attachPicture(asFile(shot.blob, shot.name));
+    // Marked, and left marked. The board stays open on purpose: adding three screens to one
+    // message is the ordinary case, and a surface that closed itself after the first would
+    // make the second a navigation exercise.
+    setAsked(landed ? "Added" : "No chat open");
+    if (landed) onAdded(design.file);
+  };
+
+  const download = async () => {
+    const shot = await picture();
+    if (shot) savePicture(shot.blob, shot.name);
+    setSaved(shot ? "Saved" : "Couldn't");
+    setTimeout(() => setSaved(""), 2500);
+  };
+  const scale = frame.w / authored.width;
+  // The frame's own proportions, so a phone is tall and narrow on the board and a wide screen
+  // is wide. Clamped so one very long page cannot make every other frame unreadably small.
+  const boxHeight = Math.min(FRAME_H * 3, Math.round(frame.w * (authored.height / authored.width)));
 
   /* The counter-scale that keeps a name readable at 26%.
    *
@@ -465,30 +576,54 @@ function Frame({
         <span className="truncate text-[11px] font-medium text-muted-foreground">
           {design?.title ?? frame.w}
         </span>
-        <button
-          type="button"
-          onClick={onOpen}
-          className="rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
-        >
-          Edit
-        </button>
+        {/* Every one of these stops its own pointerdown.
+            The row carries the frame's drag handler, so a press on a button started a drag and
+            the drag swallowed the click — which is why "Edit" appeared to do nothing and the
+            only way in was a double-click on the frame itself. */}
+        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <FrameAction onPointerDown={swallow} onClick={onOpen}>
+            Edit
+          </FrameAction>
+          <FrameAction
+            onPointerDown={swallow}
+            onClick={() => void ask()}
+            title="Put this design in the chat, with a picture of it"
+          >
+            {asked || (inChat ? "✓ in the chat" : "Ask about this")}
+          </FrameAction>
+          <FrameAction onPointerDown={swallow} onClick={() => void download()} title="Save a PNG">
+            {saved || "PNG"}
+          </FrameAction>
+        </div>
       </div>
 
       <div
         onPointerDown={onPointerDown}
         onDoubleClick={onOpen}
         className={cn(
-          "relative overflow-hidden rounded-lg border bg-background shadow-sm",
+          // Square, and backed in paper rather than in the app's own colour — the frame is a
+        // window onto the design, and a rounded corner here reads as part of the design to
+        // anyone looking at it.
+        "relative overflow-hidden border bg-white shadow-sm",
           picked ? "border-kith ring-2 ring-kith/40" : "border-border/70",
         )}
-        style={{ width: frame.w, height: FRAME_H }}
+        style={{ width: frame.w, height: boxHeight }}
       >
         {/* Nothing inside a frame is interactive on the board — a click there is a click on the
             frame. Otherwise dragging a card would mean dragging whatever button is under the
             pointer, and selecting a variant would select a node inside it. */}
-        <div className="pointer-events-none origin-top-left" style={{ transform: `scale(${scale})`, width: DESIGN_W }}>
+        {/* The export captures *this* node, not the frame around it.
+            The frame is board-sized and vertically clamped, so capturing it produced a picture
+            cropped at both the right edge and the fold — the buttons and the times were simply
+            missing. This box is the design at its authored size; `pngOfDesign` overrides the
+            transform on the clone, so what comes out is 390x844 whatever the board is showing. */}
+        <div
+          ref={artboard}
+          className="pointer-events-none origin-top-left"
+          style={{ transform: `scale(${scale})`, width: authored.width }}
+        >
           {design?.html ? (
-            <DesignView html={design.html} />
+            <DesignView html={design.html} projectId={projectId} />
           ) : (
             <div className="flex h-40 items-center justify-center px-6 text-center text-sm text-muted-foreground">
               {design?.failed ?? "Opening…"}
@@ -497,6 +632,36 @@ function Frame({
         </div>
       </div>
     </div>
+  );
+}
+
+/** A press that must not become a frame drag. */
+function swallow(event: ReactPointerEvent) {
+  event.stopPropagation();
+}
+
+/** One of the small actions on a frame's label row. */
+function FrameAction({
+  children,
+  onClick,
+  onPointerDown,
+  title,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  onPointerDown: (event: ReactPointerEvent) => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      onPointerDown={onPointerDown}
+      className="rounded-md px-1.5 py-0.5 text-[10px] whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      {children}
+    </button>
   );
 }
 

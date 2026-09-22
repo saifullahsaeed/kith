@@ -1,9 +1,8 @@
-"""Which design system a screen is drawn in, resolved in one place.
+"""Which design system a screen is drawn in, served to the interface.
 
-A design references `var(--ds-accent)` and something has to say what that is. Three things need
-the same answer — the renderer that draws the design, the inspector that offers its swatches, and
-the checker that says whether a screen obeys it — and the one thing worse than no system is three
-of them disagreeing.
+A design references `var(--ds-accent)` and something has to say what that is. The renderer, the
+inspector's swatches and the checker all need the same answer, and the one thing worse than no
+system is three of them disagreeing.
 
 **Why the server and not the interface.** The obvious place was the browser: fetch a
 `design-system.json` from the workspace the way everything else is fetched. That works for a
@@ -15,77 +14,19 @@ to copy it into the workspace, which is how two files come to disagree by next m
 So resolution happens here, where every folder is reachable, and the file stays where it was
 authored. Nothing is copied and nothing goes stale.
 
-**Order, and why.** A project's own folder first, because a design system belongs to a product
-and he works on several; then the workspace root, for a person with one; then the installed
-skills, which is where a brand authored for something else (a deck, a report) already lives. A
-file written *for screens* outranks one adapted *into* them, so within each folder the search
-tries `design-system.json` before `brand/profile.json`.
-
-The file is returned as text. It is not parsed here: the interface already has both readers, with
-tests, and the checker has its own — a third parser in Python would be a third opinion about what
-a token means.
+Resolution, parsing and validation all live in :mod:`kith.services.design_system` — see that
+module for the search order and for why the Python reader exists at all now. This route is the
+HTTP shape over it. The raw text is still returned under `content`, because the interface parses
+it itself and must keep doing so; the parsed view alongside it is what the interface cannot
+cheaply work out, namely the component inventory and the conventions prose.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from flask import jsonify, request
 
-from kith import settings
 from kith.api.blueprint import api
-from kith.infra import workspace as sandbox
-from kith.infra.db import repositories as repo
-from kith.services import skills
-
-#: Within a folder, in order. A system authored for screens beats one adapted from slides.
-NAMES = ("design-system.json", "brand/design-system.json", "design/system.json", "brand/profile.json")
-
-#: Enough to be a system rather than any JSON that happens to sit at the path.
-def _is_system(text: str) -> bool:
-    import json
-
-    try:
-        doc = json.loads(text)
-    except ValueError:
-        return False
-    if not isinstance(doc, dict):
-        return False
-    colours = doc.get("colors") or (doc.get("tokens") or {}).get("colors")
-    return isinstance(colours, dict) and bool(colours)
-
-
-def _folders(project_id: str | None) -> list[Path]:
-    """Where to look, nearest first."""
-    places: list[Path] = []
-
-    if project_id:
-        try:
-            # Read live rather than bound at import: this module is imported while the app is
-            # being created, which is after anything that redirects the database has run, so a
-            # captured constant here is the pre-redirect path.
-            project = repo.projects.get_project(settings.AGENT_DB_PATH, int(project_id))
-            directory = str((project or {}).get("directory") or "").strip()
-            if directory:
-                places.append(Path(directory).expanduser())
-        except Exception:
-            # A project whose folder cannot be read is not a reason to have no system at all.
-            pass
-
-    try:
-        places.append(sandbox.root())
-    except Exception:
-        pass
-
-    # Installed skills, which is where a brand profile authored for something else already lives.
-    try:
-        for skill in sorted(skills.root().iterdir()):
-            if skill.is_dir():
-                places.append(skill)
-    except OSError:
-        pass
-
-    return places
+from kith.services import design_system as systems
 
 
 @api.get("/design-system")
@@ -93,21 +34,30 @@ def _folders(project_id: str | None) -> list[Path]:
     summary="The design system a screen is drawn in",
     description=(
         "Finds the nearest design system — a project's folder, then the workspace, then the "
-        "installed skills — and returns it as text for the caller to read. ?projectId= scopes "
-        "the search to one project. Answers with an empty path when there is none, which is the "
+        "installed skills — and returns it as text for the caller to parse, alongside the "
+        "component inventory and the conventions prose beside it. ?projectId= scopes the "
+        "search to one project. Answers with an empty path when there is none, which is the "
         "ordinary case rather than an error."
     ),
 )
 def design_system():
-    for folder in _folders(request.args.get("projectId")):
-        for name in NAMES:
-            candidate = folder / name
-            try:
-                if not candidate.is_file():
-                    continue
-                text = candidate.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            if _is_system(text):
-                return jsonify({"path": str(candidate), "content": text})
-    return jsonify({"path": "", "content": ""})
+    project_id = request.args.get("projectId")
+    found = systems.find(project_id)
+    if not found:
+        return jsonify({"path": "", "content": "", "components": {}, "conventions": ""})
+
+    path, text = found
+    resolved = systems.resolve(project_id)
+    return jsonify(
+        {
+            "path": str(path),
+            "content": text,
+            # What the interface would otherwise have to resolve for itself, and could not:
+            # conventions live in a file beside the system, and finding it means knowing which
+            # folder the system came from.
+            "components": {name: part.as_dict() for name, part in resolved.components.items()},
+            "conventions": resolved.conventions,
+            "conventionsPath": str(resolved.conventions_path) if resolved.conventions_path else "",
+            "shared": resolved.shared,
+        }
+    )

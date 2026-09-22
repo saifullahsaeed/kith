@@ -39,6 +39,14 @@ export interface TextRole {
   font?: string;
 }
 
+/** One named part of the project's inventory: markup written once and composed with. */
+export interface Component {
+  name: string;
+  html: string;
+  /** When to reach for it, in one line. */
+  use: string;
+}
+
 export interface System {
   name: string;
   /** Token name to CSS colour. Emitted as `--ds-<name>`. */
@@ -52,10 +60,40 @@ export interface System {
   fonts: Record<string, string>;
   /** True when the numbers were converted from another format rather than authored. */
   derived?: boolean;
+  /**
+   * The parts this product is built out of. Empty for a system that has not grown one yet,
+   * which is every system on its first day.
+   */
+  components: Record<string, Component>;
+  /**
+   * How screens are built for this product, in prose. Lives in a markdown file beside the
+   * system and is resolved with it, so a project cannot end up with its conventions attached
+   * to somebody else's palette.
+   */
+  conventions: string;
 }
 
-/** Where a system is looked for, in order. The first that parses wins. */
-export const SYSTEM_FILES = ["design-system.json", "brand/design-system.json", "brand/profile.json"];
+/**
+ * The inventory, validated.
+ *
+ * A component is markup that will be rendered into a design, so the same thinking that governs
+ * `parse.ts` governs what may be stored. Mirrors `_components` in
+ * `server/kith/services/design_system.py`; if the two refuse different things, a part the
+ * server accepted is a part the editor silently will not draw.
+ */
+function components(raw: unknown): Record<string, Component> {
+  const out: Record<string, Component> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [name, spec] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^[\w.-]{1,60}$/.test(name)) continue;
+    const entry = (typeof spec === "string" ? { html: spec } : spec) as Record<string, unknown>;
+    const html = String(entry?.html ?? "").trim();
+    if (!html || html.length > 4000) continue;
+    if (/<\s*script|javascript:|\son\w+\s*=|src\s*=\s*['"]?https?:/i.test(html)) continue;
+    out[name] = { name, html, use: String(entry?.use ?? "").trim().slice(0, 200) };
+  }
+  return out;
+}
 
 /** A colour as written in a profile: bare hex, `#hex`, or any CSS colour. */
 function colour(raw: unknown): string | null {
@@ -127,6 +165,8 @@ function fromDesignSystem(doc: Record<string, unknown>): System | null {
     radius,
     fonts,
     space: space.length ? space : [4, 8, 12, 16, 24, 32, 48, 64],
+    components: components(doc.components),
+    conventions: "",
   };
 }
 
@@ -190,6 +230,8 @@ function fromBrandProfile(doc: Record<string, unknown>): System | null {
     fonts,
     space: [4, 8, 12, 16, 24, 32, 48, 64],
     derived: true,
+    components: components(doc.components),
+    conventions: "",
   };
 }
 
@@ -213,7 +255,7 @@ const WEIGHTS: Record<string, number> = {
  * Sniffed rather than declared, for the same reason the editor is offered by detection: a file
  * that has to announce its own format is a file somebody has to remember to label.
  */
-export function readSystem(text: string): System | null {
+export function readSystem(text: string, conventions = ""): System | null {
   let doc: unknown;
   try {
     doc = JSON.parse(text);
@@ -222,7 +264,9 @@ export function readSystem(text: string): System | null {
   }
   if (!doc || typeof doc !== "object") return null;
   const record = doc as Record<string, unknown>;
-  return fromDesignSystem(record) ?? fromBrandProfile(record);
+  const system = fromDesignSystem(record) ?? fromBrandProfile(record);
+  if (system && conventions) system.conventions = conventions;
+  return system;
 }
 
 /**
@@ -254,6 +298,8 @@ export function kithSystem(palette: Record<string, string>): System {
     radius: { chip: "8px", card: "12px" },
     fonts: { body: "ui-sans-serif, system-ui, sans-serif" },
     space: [4, 8, 12, 16, 24, 32, 48, 64],
+    components: {},
+    conventions: "",
   };
 }
 

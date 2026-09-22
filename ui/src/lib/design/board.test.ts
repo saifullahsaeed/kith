@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { EMPTY, extent, FRAME_H, FRAME_W, layout, readBoard, writeBoard } from "@/lib/design/board";
+import { EMPTY, extent, FRAME_H, FRAME_W, layout, readBoard, writeBoard, ZOOM_RANGE } from "@/lib/design/board";
 
 describe("reading a board someone else wrote", () => {
   it("round-trips what it wrote", () => {
@@ -42,7 +42,7 @@ describe("reading a board someone else wrote", () => {
   });
 
   it("clamps a zoom that would leave nothing on screen", () => {
-    expect(readBoard(JSON.stringify({ view: { x: 0, y: 0, zoom: 900 } })).view!.zoom).toBeLessThanOrEqual(2);
+    expect(readBoard(JSON.stringify({ view: { x: 0, y: 0, zoom: 900 } })).view!.zoom).toBeLessThanOrEqual(ZOOM_RANGE[1]);
     expect(readBoard(JSON.stringify({ view: { x: 0, y: 0, zoom: 0 } })).view!.zoom).toBeGreaterThan(0);
   });
 

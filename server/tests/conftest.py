@@ -162,6 +162,65 @@ def never_the_real_workspace(tmp_path_factory, monkeypatch):
     yield safe
 
 
+@pytest.fixture(scope="session")
+def _safe_skills_dir(tmp_path_factory) -> Path:
+    """One skills folder for the whole run, filled by copy rather than by the reconciler.
+
+    `services.skills.root()` seeds through `infra.seed`, whose whole job is telling a file
+    somebody deleted from a file that never existed — and it answers that from `seeded.json` in
+    the data directory and `shipped.json` in the build. Pointed at a fresh folder mid-run, it
+    correctly concludes that every *released* skill absent from it was deleted on purpose and
+    leaves it out, which is how a redirect produced an install missing `drawing-a-canvas` and
+    `running-a-project` and nothing else.
+
+    That state machine is right and this is not the place to argue with it, so the folder is
+    filled directly from what the repository ships. A test that wants a different set still
+    points `KITH_SKILLS_DIR` at its own folder.
+    """
+    import shutil
+
+    safe = tmp_path_factory.mktemp("never-real-skills")
+    for skill in kith.settings.BUNDLED_SKILLS_DIR.iterdir():
+        if skill.is_dir() and not skill.name.startswith((".", "__")):
+            shutil.copytree(skill, safe / skill.name, dirs_exist_ok=True)
+    return safe
+
+
+@pytest.fixture(autouse=True)
+def never_the_real_skills(_safe_skills_dir, monkeypatch):
+    """No test reads — or seeds into — the skills folder he actually has installed.
+
+    The same hole as `never_the_real_workspace`, one directory over, and found the same way.
+    `settings.skills_dir()` reads `KITH_SKILLS_DIR` and falls back to the real install, and
+    exactly two fixtures in this suite set that variable, so every other test that touched a
+    skill was reading his. Harmless while skills were only read; not harmless now that the
+    design system resolves through them, because his real `sadeef-design-engine` brand answered
+    questions no test had asked.
+
+    The failure is the worst kind: a test asserting "there is no design system here" passed on
+    a clean machine and failed on his, because on his there is one, twenty-one colours deep,
+    inside a skill. And `services.skills.root()` *seeds* the bundled skills into whatever
+    folder it resolves — so a test that merely called it was writing into his install.
+
+    **One folder for the session, redirected per test.** `services.skills.root()` seeds the
+    bundled skills behind a module-level `_seeded` flag, so it does the work exactly once per
+    process. A fresh temp directory per test therefore gets seeded for the first test that asks
+    and left empty for every test after it — which showed up as
+    `test_the_real_install_keeps_every_shipped_description` reporting two shipped skills "cut to
+    a name" when they were simply not on disk. The directory is session-scoped so the one seed
+    stays true; the environment variable is still set per test, because a test that points it
+    somewhere of its own must not leak that to the next one.
+    """
+    monkeypatch.setenv("KITH_SKILLS_DIR", str(_safe_skills_dir))
+
+    # The folder is already filled, so the reconciler has nothing to do and must not be given
+    # the chance: pointed at a folder it did not place, it reads released-but-absent as deleted.
+    from kith.services import skills as _skills
+
+    monkeypatch.setattr(_skills, "_seeded", True, raising=False)
+    yield _safe_skills_dir
+
+
 @pytest.fixture(autouse=True)
 def never_the_real_config(tmp_path_factory, monkeypatch):
     """No test can read `server/data/config.db`, which holds the developer's API key.

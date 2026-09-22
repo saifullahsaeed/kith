@@ -161,3 +161,40 @@ describe("dragging, which reorders rather than moves", () => {
     expect(container.querySelector('[data-k="a"]')!.getAttribute("draggable")).toBeNull();
   });
 });
+
+describe("a whole-document design, end to end", () => {
+  const WHOLE = `<!doctype html><html><head><style>
+      body { margin: 0 }
+      #auth { display: flex }
+      .col { flex: 1 }
+    </style></head>
+    <body style="--mk-bg:#05080a; --mk-ink:#e6e9ea; background:var(--mk-bg); color:var(--mk-ink)">
+      <div id="auth" data-k="auth">
+        <div class="col" data-k="brief">Know its reach</div>
+        <div class="col" data-k="form">Sign in</div>
+      </div>
+    </body></html>`;
+
+  it("declares the tokens the design invented for itself", () => {
+    // These lived on <body>, which nothing read, so `var(--mk-bg)` resolved to nothing and a
+    // dark screen arrived light with no colour in it.
+    const { container } = render(<DesignView html={WHOLE} />);
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.style.getPropertyValue("--mk-bg")).toBe("#05080a");
+    expect(root.style.background).toContain("var(--mk-bg)");
+  });
+
+  it("keeps the hook an id selector hangs on", () => {
+    // `#auth { display: flex }` survived the sanitiser while `id="auth"` was dropped, so the
+    // rule matched nothing and a two-column screen rendered as one column, silently.
+    const { container } = render(<DesignView html={WHOLE} />);
+    const node = container.querySelector('[data-k="auth"]') as HTMLElement;
+    expect(node.id).toBe("k-auth");
+    expect(container.querySelector("style")?.textContent).toContain("#k-auth");
+  });
+
+  it("does not report the id as something it threw away", () => {
+    render(<DesignView html={WHOLE} />);
+    expect(screen.queryByText(/id attribute/i)).toBeNull();
+  });
+});

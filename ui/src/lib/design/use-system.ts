@@ -29,5 +29,6 @@ export function useDesignSystem(projectId: number | null): System {
   });
 
   const content = found.data?.content;
-  return (content ? readSystem(content) : null) ?? kithSystem(paletteFor(dark));
+  const conventions = found.data?.conventions ?? "";
+  return (content ? readSystem(content, conventions) : null) ?? kithSystem(paletteFor(dark));
 }

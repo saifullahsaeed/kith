@@ -201,6 +201,31 @@ def _cut_off(config: Config) -> str:
     )
 
 
+#: Tools that change what is on disk. A call repeated after one of these ran is asking about
+#: different files, which is why the epoch above exists.
+#:
+#: `shell` is deliberately **not** here, though a script can obviously write. Including it would
+#: not widen the guard, it would switch it off: a repeated shell command bumps the epoch itself,
+#: so every repeat would land under a fresh signature and running `ls` forty times would never
+#: be caught. The loop worth rescuing — check, edit, check — passes through `edit_files`, and
+#: that is enough to move the epoch.
+_CHANGES_FILES = frozenset(
+    {"write_file", "edit_files", "delete_file", "rename_symbol", "apply_patch", "update_design_system"}
+)
+
+#: Tools the thrash-guard never blocks, because being wrong about them is not symmetrical.
+#:
+#: Blocking a repeated *read* costs a round. Blocking a repeated *write* loses the write — and
+#: the refusal below is a `note`, which reads as an acknowledgement, so the model is told
+#: something that sounds like "fine" and the file is not on disk. That is exactly what happened:
+#: `update_design_system` called twice in a turn "reported success and wrote nothing", and it
+#: was only caught because Kith grepped the file rather than believing the answer.
+#:
+#: Two identical writes are idempotent, and the round budget already bounds any real loop. So a
+#: write is never a stall.
+_NEVER_A_STALL = _CHANGES_FILES
+
+
 def _is_repeat(name: str, seen: int, dispatched: Dispatched = itself) -> bool:
     """Has this exact call been made enough times already to be a stall, not progress?
 
@@ -210,8 +235,14 @@ def _is_repeat(name: str, seen: int, dispatched: Dispatched = itself) -> bool:
     after two checks would mean a test suite or a build that takes ten minutes can only ever
     be checked on twice before the model is told to stop trying and answer without knowing
     the result.
+
+    `_NEVER_A_STALL` is the other exemption and it is about cost rather than legitimacy: a
+    blocked read wastes a round, a blocked write loses the write. "Nothing changed in between"
+    is also carried in the signature now, as a write epoch, so the check-edit-check loop the
+    design work is built on is three questions rather than one asked three times.
     """
-    return seen >= 2 and dispatched(name) not in _POLL_TOOLS
+    resolved = dispatched(name)
+    return seen >= 2 and resolved not in _POLL_TOOLS and resolved not in _NEVER_A_STALL
 
 
 # Rounds held back at the end of every turn for *landing* the work. Without a
@@ -730,7 +761,18 @@ def _run_turn(
     dispatched = tool_host.dispatched
 
     call_index = 0
-    seen_calls: dict[str, int] = {}  # (name+args) -> times run, to stop thrashing
+    seen_calls: dict[str, int] = {}  # (name+args+epoch) -> times run, to stop thrashing
+    #: How many times the files have changed this turn. Part of a call's signature, so the same
+    #: call asked again *after an edit* is a new question rather than a repeat.
+    #:
+    #: Without it the thrash-guard fought the one loop the design work is built on. The skill
+    #: says to run the checker, fix what it names, and run it again — so the third identical
+    #: `check_design.py screens/x.html` is not a stall, it is the method, and the file under it
+    #: is different every time. Watched twice in one session: the guard refused, and the answer
+    #: was to disguise the command (`python3 - <<PY` around the same script) to get past it.
+    #: A guard that teaches evasion is worse than no guard, because the evasion also loses the
+    #: cases the guard was right about.
+    write_epoch = 0
     # The tool list as the last round actually saw it, kept for the forced final answer.
     # That request used to build its own with `tool_schemas()` and no `only`,
     # so a narrowed round offering six tools ended by sending all fifty-nine — a different
@@ -1043,11 +1085,16 @@ def _run_turn(
 
             # Thrash-guard: if the model repeats the exact same call, don't keep
             # running it — feed back a nudge to change approach or wrap up.
-            sig = f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+            sig = f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}@{write_epoch}"
             seen = seen_calls.get(sig, 0)
             seen_calls[sig] = seen + 1
             repeat = _is_repeat(name, seen, dispatched)
             planned.append({"id": call_id, "name": name, "arguments": arguments, "repeat": repeat})
+
+        # Anything in this round that changes files moves the epoch on, so a call repeated
+        # after it is judged against the new state rather than the old.
+        if any(dispatched(step["name"]) in _CHANGES_FILES for step in planned):
+            write_epoch += 1
 
         for batch in _batches(planned, dispatched):
             for step in batch:
@@ -1218,9 +1265,12 @@ _SHOWN = "(shown to you as a picture below)"
 
 def _run(step: dict, run: Callable[..., Any], allow: set[str] | None = None) -> Any:
     if step["repeat"]:
+        # `error`, not `note`. A note reads as an acknowledgement, and the one thing this reply
+        # must not be mistaken for is the call having happened.
         return {
-            "note": "You've already made this exact call twice and it didn't move things "
-            "forward. Stop repeating it — take a different approach, or give your final answer."
+            "error": "Not run — you have already made this exact call twice with nothing "
+            "changing in between, so nothing was done this time either. Take a different "
+            "approach, or give your final answer."
         }
     return run(step["name"], step["arguments"], allow)
 

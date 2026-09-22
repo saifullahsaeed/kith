@@ -70,7 +70,11 @@ class TestFinding:
     def test_no_system_anywhere_is_an_answer_not_an_error(self, client, headers):
         answer = client.get("/api/design-system", headers=headers)
         assert answer.status_code == 200
-        assert answer.get_json() == {"path": "", "content": ""}
+        body = answer.get_json()
+        assert body["path"] == "" and body["content"] == ""
+        # The inventory and the conventions are empty rather than absent, so nothing downstream
+        # has to tell "no system" apart from "a system with no parts".
+        assert body["components"] == {} and body["conventions"] == ""
 
     def test_a_system_in_his_workspace(self, client, headers, never_the_real_workspace):
         _write(never_the_real_workspace, "design-system.json", SCREENS)

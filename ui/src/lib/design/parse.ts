@@ -27,6 +27,8 @@
  * in an attack.
  */
 
+import { type Frame, readFrame } from "@/lib/design/frame";
+
 /** A node the editor can select, measure and patch. */
 export interface DesignNode {
   /** `data-k`, or minted in document order. Every patch addresses one of these. */
@@ -41,10 +43,22 @@ export interface DesignNode {
   children: DesignNode[];
   /** Opted into free positioning with `data-k-absolute`, so drag means x/y here. */
   absolute: boolean;
+  /**
+   * `data-k-component` — the name of the inventory part this node is an instance of, when it
+   * says it is one. Empty for the ordinary case of a node that is just a node.
+   *
+   * Read rather than dropped because the alternative is worse than losing the link: the
+   * whitelist reports what it drops into the editor's warning strip, so a screen composed
+   * correctly out of the project's own components would have arrived covered in warnings about
+   * doing it.
+   */
+  component: string;
 }
 
 export interface ParsedDesign {
   root: DesignNode;
+  /** How big the screen is, as the design declared it. See `frame.ts`. */
+  frame: Frame;
   /** His `<style>`, sanitised. Rendered, never written to — see the spec's Layer 0. */
   sheet: string;
   /** What did not survive, in words, for the layout report and the editor's warning strip. */
@@ -75,6 +89,23 @@ export const ALLOWED_TAGS = new Set([
   "svg", "g", "path", "circle", "ellipse", "rect", "line", "polyline", "polygon", "text",
   "tspan", "defs", "use", "clippath", "mask", "lineargradient", "radialgradient", "stop",
 ]);
+
+/**
+ * What an authored `id` becomes in the rendered design.
+ *
+ * `id` used to be dropped while the stylesheet kept its `#foo` selectors, which is the worst
+ * possible pair: `#auth { display: flex }` survived the sanitiser and then matched nothing,
+ * so a two-column screen rendered as one column with no warning anywhere. The sheet said the
+ * layout existed and the DOM had removed the hook it hung on.
+ *
+ * Keeping the id verbatim would be the obvious fix and is the wrong one: the design renders in
+ * the app's own document, so an `id="root"` in a mockup would start matching the app's `#root`
+ * rules. Prefixing costs nothing, cannot collide, and keeps the design's own selectors working.
+ */
+const ID_PREFIX = "k-";
+
+/** An authored id we are willing to carry. Narrow, because it becomes a real DOM id. */
+const SAFE_ID = /^[A-Za-z][\w-]{0,60}$/;
 
 /** Attributes worth keeping. `data-k*` is handled by rule; everything else is named. */
 const ALLOWED_ATTRS = new Set([
@@ -425,7 +456,10 @@ export function sanitiseStyleSheet(css: string, dropped: string[]): string {
     if (!safe.length) continue;
 
     const declarations = ruleBody(body, dropped);
-    if (declarations) out.push(`${safe.join(", ")} { ${declarations} }`);
+    // The same prefix the tree applies to `id`. Done here rather than at the call site so a
+    // selector and the attribute it targets can never be rewritten by different rules.
+    const scoped = safe.map((one) => one.replace(/#([A-Za-z][\w-]*)/g, `#${ID_PREFIX}$1`));
+    if (declarations) out.push(`${scoped.join(", ")} { ${declarations} }`);
   }
 
   return out.join("\n");
@@ -462,16 +496,28 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     return [];
   }
 
-  if (!ALLOWED_TAGS.has(tag)) {
-    // Unwrapped, not deleted. See DROP_SUBTREE for why these two are different.
-    dropped.push(`${tag} tag`);
-    return Array.from(element.children).flatMap((child) => convert(child, mint, taken, dropped));
-  }
+  /*
+   * An unknown tag becomes a `div`. It used to be spliced away, and that was the same mistake
+   * as dropping `id` while keeping `#id` selectors: it removed the element the layout hung on.
+   *
+   * The case that found it is the ordinary one. `form` is not on the list, and a form is where
+   * anybody puts the column: `<form style="display:flex; flex-direction:column; gap:24px">`.
+   * Splicing its children into the parent — a centring `display:flex` with no direction —
+   * turned a stacked sign-in form into a single horizontal band of labels and fields, on every
+   * auth screen ever drawn here, with nothing in the warning strip but "form tag".
+   *
+   * Renaming keeps the box, its whitelisted style and its `data-k`, and renders something
+   * inert. That is better than adding `form` to the list, because a real `<form>` in the app's
+   * own document submits on Enter; a div looks identical and cannot.
+   */
+  const unknown = !ALLOWED_TAGS.has(tag);
+  if (unknown) dropped.push(`${tag} tag`);
 
   const attrs: Record<string, string> = {};
   let style: Record<string, string> = {};
   let classes: string[] = [];
   let absolute = false;
+  let component = "";
   let authored = "";
 
   for (const attribute of Array.from(element.attributes)) {
@@ -484,6 +530,19 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     }
     if (name === "data-k-absolute") {
       absolute = true;
+      continue;
+    }
+    if (name === "id") {
+      // Prefixed rather than kept or dropped — see ID_PREFIX. The sheet is rewritten to match
+      // in `sanitiseStyleSheet`, so the two halves cannot come apart again.
+      if (SAFE_ID.test(value)) attrs.id = ID_PREFIX + value;
+      else dropped.push(`id ${value.slice(0, 20)}`);
+      continue;
+    }
+    if (name === "data-k-component") {
+      // Same shape the service and the checker accept, so a part named one way in the system
+      // is the same part here. See `_components` in kith/services/design_system.py.
+      component = /^[\w.-]{1,60}$/.test(value) ? value : "";
       continue;
     }
     if (name.startsWith("on")) {
@@ -543,13 +602,14 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
   const text = ownText(element);
   return {
     id,
-    tag,
+    tag: unknown ? "div" : tag,
     attrs,
     style,
     classes,
     ...(text ? { text } : {}),
     children,
     absolute,
+    component,
   };
 }
 
@@ -579,8 +639,30 @@ export function parseDesign(html: string): ParsedDesign {
   const body = document.body ?? document.createElement("body");
   const children = Array.from(body.children).flatMap((child) => convert(child, mint, taken, dropped));
 
+  /*
+   * `<body style="...">` is the design root's style, and it was being thrown away.
+   *
+   * The dialect tells him a design may declare the values the system has not named — `<div
+   * data-k="page" style="--brand-shadow: ...">` — and a whole-document design puts exactly that
+   * on `<body>`, which is where anyone writing HTML would put it. The parse started at
+   * `body.children`, so every one of those custom properties was undefined by the time the tree
+   * rendered, and `background: var(--mk-bg)` resolved to nothing: a dark screen arrived as a
+   * light one with no colour in it and nothing in the warning strip to say why.
+   *
+   * The declarations go through the same whitelist as any other inline style, so this widens
+   * what is *read*, not what is allowed.
+   */
+  const rootStyle = inlineStyle(body.getAttribute("style") ?? "", dropped);
+
+  // On `<body>` first, because that is the design as a whole. On the outermost element as a
+  // fallback, because a fragment written without a document still has one frame.
+  const frame = readFrame(
+    body.getAttribute("data-k-frame") ?? body.firstElementChild?.getAttribute("data-k-frame"),
+  );
+
   return {
-    root: { id: ROOT_ID, tag: "root", attrs: {}, style: {}, classes: [], children, absolute: false },
+    frame,
+    root: { id: ROOT_ID, tag: "root", attrs: {}, style: rootStyle, classes: [], children, absolute: false, component: "" },
     sheet,
     dropped,
   };

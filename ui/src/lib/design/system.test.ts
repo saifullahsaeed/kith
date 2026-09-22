@@ -143,3 +143,55 @@ describe("Kith's own nine, as one system among others", () => {
     expect(swatches(system).map((one) => one.reference)).toContain("var(--ds-accent)");
   });
 });
+
+/**
+ * The shared fixture, read by the third reader.
+ *
+ * There are three readers of a design system and no way to get to one: this, the service in
+ * `server/kith/services/design_system.py`, and the standalone `check_design.py` handed to the
+ * model as a path. The Python pair are held to each other by
+ * `server/tests/test_three_readers_agree_on_one_system.py`; this block is the same fixture,
+ * with the same expected values, so a change to what a colour or a component *means* fails in
+ * both languages instead of in somebody's mockup.
+ *
+ * Keep the object below byte-identical to `FIXTURE` in that file.
+ */
+const SHARED = JSON.stringify({
+  name: "Vigil",
+  colors: { ink: "1b1f23", panel: "#ffffff", accent: "rgb(47, 111, 79)" },
+  text: { hero: { size: 44, weight: 700 }, body: { size: 16 } },
+  radius: { card: 12 },
+  space: [4, 8, 12, 16, 24, 40],
+  components: {
+    "button.primary": { html: '<button data-k-component="button.primary">Save</button>', use: "Commit." },
+    "bad name!": { html: "<div>never</div>" },
+    scripted: { html: "<div><script>x</script></div>" },
+  },
+});
+
+describe("the fixture the Python readers are also held to", () => {
+  const system = readSystem(SHARED)!;
+
+  it("turns a bare hex into a colour the same way", () => {
+    expect(system.colors.ink).toBe("#1b1f23");
+  });
+
+  it("keeps a CSS colour function as written", () => {
+    expect(system.colors.accent).toBe("rgb(47, 111, 79)");
+  });
+
+  it("measures against the system's own spacing scale", () => {
+    expect(system.space).toEqual([4, 8, 12, 16, 24, 40]);
+  });
+
+  it("refuses exactly the components the service refuses", () => {
+    // A part one reader stores and the other ignores is a part that renders in the app and
+    // fails the check, for a reason nobody can see.
+    expect(Object.keys(system.components)).toEqual(["button.primary"]);
+    expect(system.components["button.primary"].use).toBe("Commit.");
+  });
+
+  it("carries the conventions handed to it beside the file", () => {
+    expect(readSystem(SHARED, "Borders, never shadows.")!.conventions).toBe("Borders, never shadows.");
+  });
+});

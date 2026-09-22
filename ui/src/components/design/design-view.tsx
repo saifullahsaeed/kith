@@ -238,7 +238,33 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
   return (
     <div
       className={`${scope}${className ? ` ${className}` : ""}`}
-      style={tokens}
+      /* The design's own root declarations last, so they win.
+       *
+       * `<body style="--mk-bg:#05080a; background:var(--mk-bg); color:var(--mk-ink)">` is where
+       * a whole-document design puts the values it invented, and until `parseDesign` started
+       * reading it those values did not exist by the time anything referenced them. They go
+       * after the palette and the system because they are the most specific thing the author
+       * said, and they cannot reach `--kith-*`, which `safeDeclaration` still refuses. */
+      /* The declared frame is the design's own size. Without it every design was laid out at
+       * whatever width its container happened to be, so a phone screen was measured as a
+       * desktop and the columns that should have stacked did not. */
+      /* An artboard, not a column of HTML.
+       *
+       * This was `minHeight`, which let the design grow to whatever the panel was and stop
+       * wherever the content did — so a 390x844 phone rendered as a 390-wide strip running the
+       * full height of the window, and nothing on screen said what size the screen was. A
+       * design file is a fixed rectangle; that is most of what makes one feel like a design
+       * file rather than a web page in a narrow frame.
+       *
+       * `auto` rather than `hidden` because this is also the editor: a design that overruns its
+       * frame has to stay reachable, and the checker already reports the real height. */
+      style={{
+        width: parsed.frame.width,
+        height: parsed.frame.height,
+        overflow: "auto",
+        ...tokens,
+        ...styleToReact(parsed.root.style),
+      }}
       onClick={onSelect ? () => onSelect(null) : undefined}
       onDragOver={onMove ? (event) => event.preventDefault() : undefined}
       onDrop={onMove ? land : undefined}

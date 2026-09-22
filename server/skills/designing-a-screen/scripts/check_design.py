@@ -9,12 +9,16 @@ are not, and they are exactly the defects that survive a self-review and reach t
 So this renders the file the way the editor renders it and reports the measurable half:
 
     editable   nodes the design editor cannot give handles to, and why
-    tokens     colours written as literals instead of var(--kith-…)
+    tokens     colours written as literals instead of var(--ds-…)
     spacing    padding/gap/margin values that are off the 4px scale
     contrast   text that does not meet 4.5:1 against what is behind it
+    parts      components used from the project's inventory, and any named that do not exist
     overflow   anything wider than what contains it
+    viewport   vh/vw lengths, which measure a window the design is not in
+    frame      the size the design declared with data-k-frame, and what it rendered at
     height     what the screen comes to, at a narrow and a wide column
     shot       two PNGs — wide and narrow — that you can open with read_file
+    next       on a clean run, the part this script cannot check: go and look
 
 It writes the pictures because it already has the page open. There is no screenshot tool in
 Kith: `read_file` will *show* you a PNG, but nothing on the machine produces one — the window's
@@ -50,8 +54,43 @@ from pathlib import Path
 SHOTS = Path(os.environ.get("KITH_SCRATCH") or Path.home() / "Kith" / ".kith" / "scratch" / "shots")
 
 #: The two column widths a design is looked at in: the editor with both panels, and without.
+#: The size a design gets when it does not say. 1200 because that is what every design on this
+#: machine was implicitly authored against before `data-k-frame` existed; changing it would
+#: resize work nobody touched.
 WIDE = 1200
 NARROW = 720
+
+#: The named sizes, kept identical to `PRESETS` in `ui/src/lib/design/frame.ts`. A design that
+#: renders at one size here and another in the editor is the failure this whole file exists to
+#: prevent, one level up.
+_PRESETS = {
+    "desktop": (1440, 900),
+    "laptop": (1280, 800),
+    "tablet": (834, 1112),
+    "mobile": (390, 844),
+}
+
+#: Below this a design is a phone and the narrow pass is the same render twice.
+_NARROW_WORTH_DOING_ABOVE = 600
+
+
+def _frame(source: str) -> tuple[int, int, str]:
+    """How big the screen is, as the design declared it.
+
+    Without this the checker rendered everything at 1200 and reported a second pass at 720 —
+    which for a screen designed as a phone is a desktop render and a slightly narrower desktop
+    render, neither of them the thing being designed.
+    """
+    hit = re.search(r"""data-k-frame\s*=\s*["']([^"']{1,40})["']""", source, re.I)
+    declared = (hit.group(1).strip().lower() if hit else "")
+    if declared in _PRESETS:
+        return (*_PRESETS[declared], declared)
+    exact = re.fullmatch(r"(\d{2,4})\s*[x\u00d7]\s*(\d{2,4})", declared)
+    if exact:
+        width, height = int(exact.group(1)), int(exact.group(2))
+        if 240 <= width <= 4000 and 240 <= height <= 4000:
+            return width, height, "custom"
+    return WIDE, 800, "default"
 
 #: How far off the grid a value may be before it is worth saying. Four, because that is the scale
 #: the dialect asks for; a 6px gap among 8s and 12s is the kind of thing nobody sees and everybody
@@ -71,7 +110,13 @@ html{background:var(--kith-bg)} body{margin:0;color:var(--kith-text)}"""
 
 #: A literal colour in the source. Hex or an rgb()/hsl() call — the two ways a token gets
 #: bypassed. Inside a `var(...)` fallback is still a literal, and still stops following the theme.
-_LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
+#:
+#: `(?<!&)` is the whole of a bug worth remembering. An HTML numeric entity is a `#` followed
+#: by digits — `&#9906;` is ⌕, `&#10003;` is ✓ — so every icon written the way HTML has always
+#: written them was reported as a hardcoded colour. The design was correct, the report said it
+#: was not, and the workaround it drove was to stop using entities: a real defect invented by
+#: the thing that exists to find them. A hex colour is never preceded by an ampersand.
+_LITERAL = re.compile(r"(?<!&)#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
 
 #: A line that is *defining* a token rather than bypassing one.
 #:
@@ -84,13 +129,20 @@ _DECLARES_TOKEN = re.compile(r"--[A-Za-z0-9_-]+\s*:")
 #: Where a design system is looked for, in order. A file written *for screens* outranks one
 #: adapted *into* them, so `design-system.json` is tried before `brand/profile.json`.
 #:
-#: The same order the server's /api/design-system route uses, so the picture this script renders
+#: The same order `kith.services.design_system.NAMES` uses, so the picture this script renders
 #: and the picture the editor renders are the same design. If they disagree, one of them is
-#: lying about the brand.
+#: lying about the brand — which is why `test_three_readers_agree_on_one_system.py` feeds the
+#: same fixture to this script and to the service and asserts they resolve identically.
+#:
+#: This script keeps its own reader rather than importing the service, and that is deliberate:
+#: it is handed to the model as a path and run with whatever `python3` is on PATH, so a
+#: dependency on the `kith` package would make it fail in exactly the situation it exists for.
+#: The duplication is real; the test is what keeps it from drifting.
 _SYSTEM_FILES = (
+    ".kith/design/system.json",
+    "design/system.json",
     "design-system.json",
     "brand/design-system.json",
-    "design/system.json",
     "brand/profile.json",
 )
 
@@ -98,6 +150,37 @@ _SYSTEM_FILES = (
 #: `KITH_SKILLS_DIR` is how the app names that folder; the default is where a normal install puts
 #: it. `KITH_DESIGN_SYSTEM` short-circuits everything for a one-off.
 _SKILLS_DIR = os.environ.get("KITH_SKILLS_DIR") or ""
+
+
+def _font_stack(value) -> str:
+    """One font role, as a CSS value.
+
+    This used to be `f'"{family}", {stack}'` unconditionally, which is right for exactly one
+    of the two shapes a system can be written in and wrong for the other. A `brand/profile.json`
+    names a bare family and a separate fallback stack, so quoting is correct. A
+    `design-system.json` gives the whole stack in one string — `ui-rounded, "SF Pro Rounded",
+    system-ui, sans-serif` — and wrapping *that* in quotes produces
+    `"ui-rounded, "SF Pro Rounded", ..."`, which is not a font value at all.
+
+    The damage was invisible and total. A malformed custom property makes any `font:` shorthand
+    referring to it an invalid declaration, and the browser drops the *whole* declaration — so
+    a 44px/600 heading came out at inherited size and weight, in the screenshot the model was
+    told to judge the design by. Every screen using `var(--ds-font-*)` in a shorthand has been
+    rendered with its type scale silently discarded.
+    """
+    if isinstance(value, dict):
+        family = str(value.get("family") or "").strip()
+        stack = str(value.get("stack") or "").strip()
+        if not family:
+            return stack
+        # A bare family name needs quoting; one that already carries quotes or commas is a
+        # stack somebody wrote and must be passed through as written.
+        quoted = family if ('"' in family or "'" in family or "," in family) else f'"{family}"'
+        return f"{quoted}, {stack}" if stack else quoted
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text if ('"' in text or "'" in text or "," in text) else f'"{text}", system-ui, sans-serif'
 
 
 def _with_tokens(source: str, system: dict | None = None) -> str:
@@ -118,10 +201,9 @@ def _with_tokens(source: str, system: dict | None = None) -> str:
         for name, value in (system.get("radius") or {}).items():
             declared.append(f"--ds-radius-{name}:{_px(value)};")
         for role, value in (system.get("fonts") or {}).items():
-            family = value.get("family") if isinstance(value, dict) else value
-            stack = (value.get("stack") if isinstance(value, dict) else "") or "system-ui, sans-serif"
-            if family:
-                declared.append(f'--ds-font-{role}:"{family}", {stack};')
+            emitted = _font_stack(value)
+            if emitted:
+                declared.append(f"--ds-font-{role}:{emitted};")
         for role, spec in (system.get("text") or {}).items():
             if not isinstance(spec, dict):
                 continue
@@ -191,6 +273,7 @@ def _system(start: Path) -> dict:
         "radius": {},
         "fonts": {},
         "space": [4, 8, 12, 16, 24, 32, 48, 64],
+        "components": {},
     }
 
 
@@ -224,6 +307,7 @@ def _read_system(candidate: Path) -> dict | None:
         "space": [int(n) for n in space if isinstance(n, (int, float))]
         if isinstance(space, list) and space
         else [4, 8, 12, 16, 24, 32, 48, 64],
+        "components": doc.get("components") if isinstance(doc.get("components"), dict) else {},
     }
 
 
@@ -245,10 +329,20 @@ def _literal_colours(source: str) -> list[str]:
     return found
 
 
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:  # pragma: no cover - the message is the whole point
-    sys.exit("playwright is not installed here: pip install playwright && playwright install chromium")
+def _playwright():
+    """Imported when a page is about to be opened, not when this module is.
+
+    It used to be a module-level import guarded by `sys.exit`, which made the whole script
+    unimportable anywhere playwright is not installed — including the test suite, whose venv
+    does not have it, and which is the one place that can check this script's idea of the
+    design system against the service's. A rendering dependency should not decide whether the
+    pure functions above can be read.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:  # pragma: no cover - the message is the whole point
+        sys.exit("playwright is not installed here: pip install playwright && playwright install chromium")
+    return sync_playwright
 
 
 #: Everything measured inside the page, in one pass, because a round trip per node is slow enough
@@ -378,14 +472,52 @@ _HEIGHT = """
 """
 
 
+#: `100vh` in a design is not the design's height — it is the height of whatever window the
+#: editor happens to be in. This script renders into a 900px page and gets one answer; the board
+#: renders into a frame inside the app and gets another; neither is the screen. It is the single
+#: cause of a mockup that is right at the top and then a thousand pixels of nothing.
+_VIEWPORT = re.compile(r"\b\d[\d.]*(vh|vw|vmin|vmax|dvh|svh|lvh)\b")
+
+
+def _viewport_units(source: str) -> list[str]:
+    """Lengths measured against a window the design is not in."""
+    found = []
+    for number, line in enumerate(source.splitlines(), start=1):
+        for hit in _VIEWPORT.finditer(line):
+            found.append(f"line {number}: {hit.group(0)}")
+    return found
+
+
+def _parts(source: str, inventory: dict) -> tuple[list[str], list[str]]:
+    """Which of the project's components this screen is built out of, and which it invents.
+
+    A `data-k-component="button.primary"` says this block is an instance of a part the product
+    already has. Naming one that is not in the system is the interesting case and the reason
+    this is a failure rather than a note: it is either a typo, or a part somebody meant to add
+    to the inventory and did not, and both end with the next screen drawing its own version.
+
+    What this deliberately does not do is complain about a screen with no components in it at
+    all. A one-off does not owe the inventory anything, and a checker that nagged about it would
+    be making an aesthetic judgement, which is the one thing this script is not for.
+    """
+    used = sorted(set(re.findall(r'data-k-component\s*=\s*["\']([^"\']{1,60})["\']', source)))
+    unknown = [name for name in used if name not in inventory]
+    return used, unknown
+
+
 def check(path: Path) -> int:
     source = path.read_text(encoding="utf-8", errors="replace")
+    wide_px, frame_h, frame_name = _frame(source)
+    # A phone has no second, narrower pass to do — it is already the narrow one.
+    narrow_px = NARROW if wide_px > _NARROW_WORTH_DOING_ABOVE else 0
     system = _system(path)
     literals = _literal_colours(source)
+    used_parts, unknown_parts = _parts(source, system.get("components") or {})
+    viewport = _viewport_units(source)
 
-    with sync_playwright() as p:
+    with _playwright()() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": WIDE, "height": 900})
+        page = browser.new_page(viewport={"width": wide_px, "height": frame_h})
         # Offline, because the editor is. A design that needs the network is a design that will
         # arrive with holes in it.
         page.context.route(
@@ -406,28 +538,35 @@ def check(path: Path) -> int:
         shots = []
         try:
             SHOTS.mkdir(parents=True, exist_ok=True)
-            wide_shot = SHOTS / f"{path.stem}-{WIDE}.png"
+            wide_shot = SHOTS / f"{path.stem}-{wide_px}.png"
             page.screenshot(path=str(wide_shot), full_page=True)
             shots.append(wide_shot)
         except Exception:
             # A picture that could not be written is not a reason to lose the measurements.
             pass
 
-        page.set_viewport_size({"width": NARROW, "height": 900})
-        page.wait_for_timeout(200)
-        narrow_found = page.evaluate(measure)
-        narrow = page.evaluate(_HEIGHT)
-        try:
-            narrow_shot = SHOTS / f"{path.stem}-{NARROW}.png"
-            page.screenshot(path=str(narrow_shot), full_page=True)
-            shots.append(narrow_shot)
-        except Exception:
-            pass
+        # A design already narrower than a phone has no second pass to do: rendering it twice
+        # produces the same picture under a second name and invites looking at the wrong one.
+        narrow_found = {"editable": [], "spacing": [], "contrast": [], "overflow": []}
+        narrow = wide
+        if narrow_px:
+            page.set_viewport_size({"width": narrow_px, "height": frame_h})
+            page.wait_for_timeout(200)
+            narrow_found = page.evaluate(measure)
+            narrow = page.evaluate(_HEIGHT)
+            try:
+                narrow_shot = SHOTS / f"{path.stem}-{narrow_px}.png"
+                page.screenshot(path=str(narrow_shot), full_page=True)
+                shots.append(narrow_shot)
+            except Exception:
+                pass
         browser.close()
 
     # Overflow at the narrow width is the one that matters most and the one a single render
     # never shows: a row that fits at 1200 and breaks at 720 looks perfect in a screenshot.
-    overflow = sorted({*found["overflow"], *(f"{one} (at {NARROW}px)" for one in narrow_found["overflow"])})
+    overflow = sorted(
+        {*found["overflow"], *(f"{one} (at {narrow_px}px)" for one in narrow_found["overflow"] if narrow_px)}
+    )
 
     def report(label: str, items: list[str], limit: int = 6) -> None:
         if not items:
@@ -442,15 +581,42 @@ def check(path: Path) -> int:
     report("tokens", literals)
     report("spacing", found["spacing"])
     report("contrast", found["contrast"])
+    if unknown_parts:
+        print(f"parts    {len(unknown_parts)} not in the system — {', '.join(unknown_parts)}")
+    elif used_parts:
+        print(f"parts    {len(used_parts)} from the system — {', '.join(used_parts)}")
+    elif system.get("components"):
+        # The inventory exists and this screen used none of it. Said, not failed: a screen can
+        # legitimately be the one that is not made of the usual parts.
+        print(f"parts    none used; {len(system['components'])} available — {', '.join(sorted(system['components']))}")
     report("overflow", overflow)
-    print(f"height   {wide}px at {WIDE}, {narrow}px at {NARROW}")
+    report("viewport", viewport)
+    print(f"frame    {frame_name} · {wide_px}\u00d7{frame_h}" + ("" if frame_name != "default" else " (not declared — say `data-k-frame` on <body>)"))
+    if narrow_px:
+        print(f"height   {wide}px at {wide_px}, {narrow}px at {narrow_px}")
+    else:
+        print(f"height   {wide}px at {wide_px}")
     if shots:
         # Named so they can be opened directly: `read_file` shows a PNG as a picture.
         print("shot     " + "  ".join(str(one) for one in shots))
     else:
         print("shot     none — could not write the pictures")
 
-    return 1 if any([found["editable"], literals, found["spacing"], found["contrast"], overflow]) else 0
+    failing = any(
+        [found["editable"], literals, found["spacing"], found["contrast"], overflow, unknown_parts, viewport]
+    )
+    if not failing:
+        # The last line of a clean run, because a clean run is the moment the mistake gets made.
+        # Everything above is hygiene — on the grid, on the palette, above 4.5:1 — and none of it
+        # is an opinion about whether the screen is any good. This is the only thing here with a
+        # green light attached, so if it is left as the last word it becomes the goal, and what
+        # gets shipped is a forgettable screen that measures perfectly. Say what is still owed.
+        print(
+            "next     nothing measurable is wrong, which is not the same as right. "
+            "Open the shots above and name what your eye hits first, whether that is what you "
+            "intended, and the one thing you will change."
+        )
+    return 1 if failing else 0
 
 
 if __name__ == "__main__":

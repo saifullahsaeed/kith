@@ -32,6 +32,7 @@ import { useAuiState } from "@assistant-ui/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { DesignView } from "@/components/design/design-view";
+import { frameAttribute, readFrame } from "@/lib/design/frame";
 import { fetchWorkspaceFile } from "@/lib/backend/brain";
 import { useBoardOverlay } from "@/lib/design/board-overlay";
 import { looksLikeADesign } from "@/lib/design/detect";
@@ -45,8 +46,18 @@ interface Made {
   projectId: number | null;
 }
 
-/** The scale a 1200px design is drawn at in a thumbnail. */
-const THUMB = 0.22;
+/** The card's own width, in px. `w-66` in the class list below, named here because the
+ *  thumbnail has to scale to it. */
+const CARD_W = 264;
+
+/** How tall a thumbnail is when the design is a wide one, and the most it may grow to.
+ *
+ *  A phone is more than twice as tall as it is wide, so its true aspect would make one card
+ *  taller than the reply it sits in. Capped, which crops the bottom of a long screen — the
+ *  same thing the board does, and the right half to keep: a thumbnail is for recognising a
+ *  screen, and what identifies one is its top. */
+const THUMB_H = 124;
+const THUMB_H_MAX = 232;
 
 export function DesignsInTurn() {
   /* One subscription returning one string, for the reason `ActivityRun` gives a few files over:
@@ -111,6 +122,12 @@ function Thumb({ made }: { made: Made }) {
     queryFn: () => fetchWorkspaceFile(made.file, made.projectId),
   });
 
+  const frame = readFrame(frameAttribute(file.data?.content ?? ""));
+  const box = Math.min(
+    THUMB_H_MAX,
+    Math.max(THUMB_H, Math.round(CARD_W * (frame.height / frame.width))),
+  );
+
   return (
     <button
       type="button"
@@ -118,10 +135,18 @@ function Thumb({ made }: { made: Made }) {
       title={`${made.title} — open the board`}
       className="group w-66 overflow-hidden rounded-xl text-start ring-1 ring-border/60 transition-shadow hover:shadow-md"
     >
-      <div className="relative h-31 overflow-hidden bg-muted/30">
+      <div className="relative overflow-hidden bg-muted/30" style={{ height: box }}>
         {file.data?.content ? (
           // Inert. This is a picture of the design; the click belongs to the button around it.
-          <div className="pointer-events-none origin-top-left" style={{ transform: `scale(${THUMB})`, width: 1200 }}>
+          //
+          // Scaled from the design's *own* width. It used to be a constant 1200, so anything
+          // not authored at that width was wrong in the one place these are actually looked
+          // at: a 390-wide phone drew at 86px and sat crammed against the left edge of a
+          // 264px card with the rest of it empty.
+          <div
+            className="pointer-events-none origin-top-left"
+            style={{ transform: `scale(${CARD_W / frame.width})`, width: frame.width }}
+          >
             <DesignView html={file.data.content} projectId={made.projectId} />
           </div>
         ) : (
