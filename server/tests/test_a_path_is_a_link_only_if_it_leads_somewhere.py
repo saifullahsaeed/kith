@@ -54,7 +54,9 @@ class TestWhatCountsAsALink:
         answer = resolution("system.json", None)
         assert answer["openable"] is True
         assert answer["path"] is None
-        assert len(answer["candidates"]) == 2
+        candidates = answer["candidates"]
+        assert isinstance(candidates, list)
+        assert len(candidates) == 2
 
     def test_a_path_that_leads_nowhere_is_not(self, workspace):
         """The screenshot. This is the one that must stop being offered."""
