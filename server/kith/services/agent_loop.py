@@ -245,6 +245,27 @@ def _is_repeat(name: str, seen: int, dispatched: Dispatched = itself) -> bool:
     return seen >= 2 and resolved not in _POLL_TOOLS and resolved not in _NEVER_A_STALL
 
 
+def _plugin_moved(name: str, bare: str, last: dict[str, str]) -> bool:
+    """Has the plugin's state changed since this call was last made? Records the call as well.
+
+    The epoch only counted file writes, and a plugin's state is not in the files. So
+    `look → resize → look` was the same `look` asked twice with "nothing changing in between",
+    and the third look in a turn was refused right after a resize had changed the whole page —
+    watched in the Asterion UI turn, where the one screenshot that mattered never ran.
+
+    Any *different* call to the same plugin since counts as a change: which commands mutate is
+    not declared in a manifest, and guessing from names is how `_CHANGES_FILES` missed this. A
+    call identical to the one before it does not, so `look` forty times is still caught — the
+    same reason `shell` is kept out of `_CHANGES_FILES`.
+    """
+    if not name.startswith("plugin__"):
+        return False
+    plugin = name.split("__", 2)[1]
+    previous = last.get(plugin)
+    last[plugin] = bare
+    return previous is not None and previous != bare
+
+
 # Rounds held back at the end of every turn for *landing* the work. Without a
 # reserve, research expands to fill the entire budget: he spends all 40 rounds
 # gathering, gets cut off mid-sentence, and the turn ends having produced nothing
@@ -773,6 +794,9 @@ def _run_turn(
     #: A guard that teaches evasion is worse than no guard, because the evasion also loses the
     #: cases the guard was right about.
     write_epoch = 0
+    #: Each plugin's most recent call, name and arguments. A plugin holds state the files do not
+    #: — a browser page — so a different call to it moves the epoch too; see `_plugin_moved`.
+    last_plugin_call: dict[str, str] = {}
     # The tool list as the last round actually saw it, kept for the forced final answer.
     # That request used to build its own with `tool_schemas()` and no `only`,
     # so a narrowed round offering six tools ended by sending all fifty-nine — a different
@@ -1085,7 +1109,10 @@ def _run_turn(
 
             # Thrash-guard: if the model repeats the exact same call, don't keep
             # running it — feed back a nudge to change approach or wrap up.
-            sig = f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}@{write_epoch}"
+            bare = f"{name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+            if _plugin_moved(name, bare, last_plugin_call):
+                write_epoch += 1
+            sig = f"{bare}@{write_epoch}"
             seen = seen_calls.get(sig, 0)
             seen_calls[sig] = seen + 1
             repeat = _is_repeat(name, seen, dispatched)

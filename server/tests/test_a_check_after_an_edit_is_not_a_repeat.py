@@ -84,3 +84,33 @@ class TestAWriteIsNeverAStall:
         answer = agent_loop._run({"repeat": True, "name": "grep", "arguments": {}}, run=None)
         assert "error" in answer and "note" not in answer
         assert "nothing was done" in answer["error"]
+
+
+class TestAPluginsStateIsAChangeToo:
+    """`look → resize → look` was refused as a repeat: a resize changes the page, not a file."""
+
+    def _run(self, *calls):
+        last: dict[str, str] = {}
+        return [agent_loop._plugin_moved(name, f"{name}:{args}", last) for name, args in calls]
+
+    def test_a_different_call_to_the_plugin_moves_the_epoch(self):
+        moved = self._run(
+            ("plugin__browser__look", "{}"),
+            ("plugin__browser__resize", '{"preset": "laptop"}'),
+            ("plugin__browser__look", "{}"),
+        )
+        assert moved == [False, True, True]
+
+    def test_the_same_call_again_does_not(self):
+        """Otherwise `look` forty times would never be caught — the `shell` argument again."""
+        look = ("plugin__browser__look", "{}")
+        assert self._run(look, look, look) == [False, False, False]
+
+    def test_other_tools_and_other_plugins_are_untouched(self):
+        moved = self._run(
+            ("plugin__browser__look", "{}"),
+            ("grep", '{"pattern": "x"}'),
+            ("plugin__sketchpad__draw", "{}"),
+            ("plugin__browser__look", "{}"),
+        )
+        assert moved == [False, False, False, False]
