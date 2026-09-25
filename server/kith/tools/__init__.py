@@ -24,7 +24,6 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     asking,
     code,
     computer,
-    delegation,
     design,
     journal,
     memory,
@@ -37,6 +36,8 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     tasks,
     time,
     web,
+    workers,
+    workflow,
 )
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas
@@ -109,8 +110,8 @@ def run_tool(name: str, arguments: dict, agent_db_path: Path, allow: set[str] | 
     because here is where execution happens. It used to be enforced nowhere.
 
     Every allow-list in the codebase — the
-    landing reserve that takes work tools away for the last rounds, the narrower set after a
-    delegation — was only ever passed to `tool_schemas(only=...)`, which decides what the
+    landing reserve that takes work tools away for the last rounds, the narrower set a
+    worker is given — was only ever passed to `tool_schemas(only=...)`, which decides what the
     model is *shown*. This function resolved any name against the whole registry and ran it.
     Measured: in `breakout` mode, which offers six tools, calling `remember` and `add_task`
     both succeeded.

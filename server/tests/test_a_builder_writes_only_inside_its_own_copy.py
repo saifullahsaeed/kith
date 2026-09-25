@@ -2,7 +2,7 @@
 
 The whole case for letting a sub-agent write is that it writes somewhere else. Take that away
 and a builder is a second agent editing the codebase in the dark, which is the thing
-`tools/delegation`'s docstring has refused from the beginning — the main agent holds the plan,
+`tools/workers` has refused from the beginning — the main agent holds the plan,
 and it cannot hold a plan for a tree that changed underneath it.
 
 The isolation is one context variable, which makes it cheap and makes it fragile in a specific
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -246,6 +247,15 @@ class TestTheCopyItself:
         assert worktrees.open_for("w11") is None
 
 
+def _build(db: Path, objective: str) -> dict:
+    """One builder, the way a workflow sends one: its own copy, then the agent run in it."""
+    from kith.tools import workers
+
+    copy = workers.open_copy(f"test-{uuid.uuid4().hex[:6]}")
+    answer, _report = workers.run_agent(db, "builder", objective, "", worktree=copy)
+    return answer
+
+
 class TestABuilderEndToEnd:
     """The whole stack at once, against a real repository and a real `git worktree`.
 
@@ -258,7 +268,6 @@ class TestABuilderEndToEnd:
 
     def test_it_edits_its_copy_and_hands_back_a_patch(self, repo: Path, db: Path, monkeypatch):
         from kith.services import agent_loop
-        from kith.tools import delegation
 
         rounds: list[int] = []
 
@@ -278,7 +287,7 @@ class TestABuilderEndToEnd:
 
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.send_builder(db, {"objective": "rewrite kept.py"})
+        answer = _build(db, "rewrite kept.py")
 
         # It did the work, and the work is in the patch.
         assert "kept.py" in answer["patch"]
@@ -294,7 +303,6 @@ class TestABuilderEndToEnd:
         """An empty patch is a real answer — and is also what a builder that only *described*
         its edits produces, so the note points at the one thing that tells them apart."""
         from kith.services import agent_loop
-        from kith.tools import delegation
 
         def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
             yield {"type": "delta", "role": "text", "text": "Nothing needed changing."}
@@ -302,21 +310,22 @@ class TestABuilderEndToEnd:
 
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.send_builder(db, {"objective": "fix the thing"})
+        answer = _build(db, "fix the thing")
         assert answer["patch"] == ""
         assert "changed nothing" in answer["note"]
 
     def test_there_is_no_builder_without_a_repository(self, tmp_path: Path, db: Path, monkeypatch):
         """Refused, not run unisolated. "He could not be isolated, so he edited your files
         instead" is the one outcome this design exists to prevent."""
-        from kith.tools import delegation
 
         bare = tmp_path / "not-a-repo"
         bare.mkdir()
         monkeypatch.setattr(paths, "root", lambda: bare)
 
-        answer = delegation.send_builder(db, {"objective": "change something"})
-        assert "nowhere safe to work" in answer["error"]
+        from kith.tools import workers
+
+        with pytest.raises(workers.WorkerError, match="nowhere safe to work"):
+            workers.open_copy("no-repo")
 
 
 class TestAnAbsolutePathCannotEscapeTheCopy:
@@ -324,7 +333,7 @@ class TestAnAbsolutePathCannotEscapeTheCopy:
 
     Every test above pins a context and checks a *relative* path lands in the copy. That was
     the whole of the isolation, and it was not enough for a reason nothing in the design
-    predicted: the agent that sends a builder writes the objective, `send_builder` tells it to
+    predicted: the agent that sends a builder writes the objective, the brief tells it to
     include the paths it has, and the paths it has are absolute. The worker did as it was told,
     `resolve` honoured the absolute path as written, and two builders put 224 lines into the
     real repository while their copies sat empty. In bypass mode the permission layer never
@@ -404,7 +413,6 @@ class TestABuilderEndToEndWithAnAbsoluteObjective:
         """The original failure, reproduced: the worker is handed the project's absolute path
         exactly as the real objective handed it one."""
         from kith.services import agent_loop
-        from kith.tools import delegation
 
         rounds: list[int] = []
 
@@ -426,7 +434,7 @@ class TestABuilderEndToEndWithAnAbsoluteObjective:
 
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.send_builder(db, {"objective": f"rewrite kept.py in the repo at {repo}"})
+        answer = _build(db, f"rewrite kept.py in the repo at {repo}")
 
         assert "builder wrote this" in answer["patch"]
         assert (repo / "kept.py").read_text() == "original\n"
@@ -435,7 +443,7 @@ class TestABuilderEndToEndWithAnAbsoluteObjective:
 class TestTwoBuildersInOneRound:
     """Making a copy is not the read-only operation it looks like.
 
-    `send_builder` is in `_PARALLEL_SAFE` precisely so several can share a round — and the
+    A workflow runs builders in parallel precisely so several can work at once — and the
     setup for that was racing against itself. `git stash create` refreshes the *source*
     repository's index and takes `.git/index.lock`; `worktree add` then writes the shared
     `.git/worktrees` registry. Two at once, and one dies with "could not write index" before it
@@ -457,7 +465,7 @@ class TestTwoBuildersInOneRound:
             assert (one / "kept.py").read_text() == "original\n"
 
     def test_they_do_not_share_a_working_tree(self, repo: Path):
-        """The claim `_PARALLEL_SAFE` rests on: two builders share an object store and nothing
+        """The claim parallel builders rest on: two builders share an object store and nothing
         that either can change."""
         import concurrent.futures
 

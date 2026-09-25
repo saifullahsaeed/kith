@@ -26,10 +26,10 @@ from typing import Any
 from kith.domain.chat import Config
 from kith.domain.tool_markup import ToolMarkupFilter
 from kith.domain.tooling import ToolHost, itself
-from kith.kernel import session_context, stopping
+from kith.kernel import session_context
 from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
-from kith.services import compaction, errands, tuning
+from kith.services import compaction, tuning
 from kith.services.turn import frozen
 from kith.services.turn.history import (
     _FOLD_ABOVE_SHARE,
@@ -53,24 +53,6 @@ _PARALLEL_SAFE = frozenset(
         "web_search",
         "browse_page",
         "search_sources",
-        # A sub-agent clears the same bar, and it is the one tool where clearing it is the
-        # whole point. It is network-bound to the exclusion of everything else — its cost is
-        # its own model calls — it is read-only by construction (`tools/delegation.py` hands
-        # it a set that cannot write, run, file or ask), and two of them share nothing but the
-        # files they read. Three scouts sent at one subsystem each in a single round is the
-        # thing this makes possible; serialised they are three times the wall-clock for the
-        # same answer.
-        "delegate_subtask",
-        # And a builder, which *writes* — and clears the bar anyway, because of where it
-        # writes. Each one gets its own `git worktree` (`infra/workspace/worktrees`), so two
-        # builders in one round share an object store and nothing else: no file either can
-        # see is a file the other can change. This is the one entry here where the
-        # side-effect-free test is passed by construction rather than by the tool doing
-        # nothing, and it is the payoff for the whole isolation mechanism — without the
-        # separate copies, builders would have to be serial.
-        "send_builder",
-        # Resuming one is the same work as sending one, on the same copy it already had.
-        "follow_up",
     }
 )
 
@@ -315,14 +297,6 @@ _GATHERING_TOOLS = frozenset(
         "web_search",
         "browse_page",
         "search_sources",
-        # Sending someone else to look is still looking, and it is the most expensive kind: an
-        # errand's cost is its own model calls. A turn that is landing must not open a new one.
-        "delegate_subtask",
-        # A builder is the same argument twice over: its own model calls, and a patch that
-        # still has to be read and applied afterwards. A turn with just enough budget left to
-        # finish has nowhere near enough to start one.
-        "send_builder",
-        "follow_up",
     }
 )
 
@@ -334,7 +308,9 @@ _GATHERING_TOOLS = frozenset(
 # `add_deliverable` all describe what this turn did and are exactly what landing is for; a task
 # or a project is a commitment to do something else later, which is the thing the budget is
 # trying to stop.
-_STARTING_TOOLS = frozenset({"add_task", "create_project"})
+# A workflow is new work at its largest — a fan-out of agents, each with a budget of its own — so
+# a turn with just enough left to finish must not start one.
+_STARTING_TOOLS = frozenset({"add_task", "create_project", "run_workflow"})
 
 #: What landing takes away. Everything else he keeps, which is the inversion: a tool built
 #: tomorrow is usable while finishing unless it goes and looks or opens new work.
@@ -679,25 +655,18 @@ def stream_agent(
     """
 
     with session_context.a_turn():
-        try:
-            yield from _run_turn(
-                messages,
-                config,
-                host,
-                agent_db_path,
-                tool_host,
-                max_rounds=max_rounds,
-                allow=allow,
-                conversation_id=conversation_id,
-                steer=steer,
-                landing_reserve=landing_reserve,
-            )
-        finally:
-            # Every way a turn ends — finished, errored, stopped, or the reader gave up on the
-            # generator — clears its errand board. An answer that arrives after the turn that
-            # asked has no question in front of it, and keeping it would put a finding into the
-            # *next* turn's prompt out of nowhere.
-            errands.forget(conversation_id)
+        yield from _run_turn(
+            messages,
+            config,
+            host,
+            agent_db_path,
+            tool_host,
+            max_rounds=max_rounds,
+            allow=allow,
+            conversation_id=conversation_id,
+            steer=steer,
+            landing_reserve=landing_reserve,
+        )
 
 
 def _directive(convo: list[dict[str, Any]], text: str) -> dict:
@@ -731,8 +700,8 @@ def _directive(convo: list[dict[str, Any]], text: str) -> dict:
     underscore key is internal and travels the same way `_live` already does.
 
     Not everything injected becomes a directive, and the line is content versus instruction. An
-    errand's findings and an image both stay `user`, because they are things to *read* — arriving
-    as a system message they would be read as orders rather than as material. What the harness
+    image stays `user`, because it is a thing to *read* — arriving
+    as a system message it would be read as an order rather than as material. What the harness
     tells him to do is a directive; what the harness hands him is conversation.
     """
     convo.append({"role": "system", "content": text, "_directive": True})
@@ -834,14 +803,6 @@ def _run_turn(
             if said:
                 convo.append({"role": "user", "content": said})
                 yield {"type": "steered", "text": said}
-
-        # And anything an errand has come back with since the last round — see
-        # `services/errands.py`. The same boundary as a steer and for the same reason, but not
-        # the same channel: a steer is his person changing the subject, and this is a result he
-        # asked for arriving late. Two sources, one moment.
-        for finding in errands.collect(conversation_id):
-            convo.append({"role": "user", "content": finding})
-            yield {"type": "errand_back", "text": finding}
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:
@@ -1026,50 +987,6 @@ def _run_turn(
             # made no sense: "I haven't been researching anything this turn."
             #
             # Nothing runs unattended now, so the case it existed for cannot occur.
-            #
-            # Unless he sent an errand and has not heard back. That is work this turn asked
-            # for, so ending on it would throw it away — and worse, would throw it away
-            # invisibly, since a background errand's findings are not in the transcript. So
-            # the turn waits, and then goes round again with what came back in front of it.
-            #
-            # Bounded, and it reads the stop switch, so this cannot be the thing that makes
-            # Stop feel broken. If the wait times out, the loop comes back here next round with
-            # nothing new and ends for real — a hung errand delays a turn once, not forever.
-            #
-            # `has_ready` is asked FIRST, and asking it second is a bug this shipped with. The
-            # drain that puts findings into the prompt runs at the *top* of a round; an errand
-            # that reports while that round's own model call is streaming is therefore back,
-            # collected by nobody, and no longer "outstanding" — so the check below saw zero,
-            # the turn ended, and `forget` in the finally dropped it.
-            #
-            # Measured on the run that found it: three errands sent with `wait=false`, the next
-            # round wrote "their results will arrive automatically as they finish", all three
-            # finished while it was writing that sentence, and every one of them was thrown
-            # away. Three sub-agents' worth of model calls, paid for, gone — and the reply
-            # promising the findings was the last thing the turn ever said.
-            #
-            # The two conditions together are exhaustive: nothing ready and nothing out means
-            # the board really is drained, and there is no third state.
-
-            # What he just said, kept. This round produced prose and called nothing, and the
-            # only place an assistant message is ever appended is the tool-calling branch below
-            # — so a turn that goes round again for an errand went round with its own last reply
-            # missing from the list. Measured: round two's history was `user: go` followed
-            # straight by `user: (the errand has come back)`, two user messages back to back and
-            # no sign he had answered at all. He then answered again, and the person watched the
-            # same reply arrive twice.
-            #
-            # Appended before the checks rather than inside each branch that continues: the
-            # `return` below throws `convo` away, so this costs nothing on the path that ends.
-            convo.append({"role": "assistant", "content": content})
-
-            if errands.has_ready(conversation_id):
-                continue
-            if errands.outstanding(conversation_id):
-                yield {"type": "waiting_on_errands", "count": errands.outstanding(conversation_id)}
-                errands.wait_for_all(conversation_id, stopped=lambda: stopping.asked_to_stop(conversation_id))
-                if errands.has_ready(conversation_id):
-                    continue
             return
 
         # Record the assistant's tool-calling turn so the model has context.
@@ -1197,15 +1114,6 @@ def _run_turn(
                 convo.append(_tool_result_message(convo, step["name"], json.dumps(result)))
 
     # Out of tool budget — force a final answer so there's always a reply.
-    #
-    # Anything an errand has reported goes in first. The same hole as the one at the end of the
-    # round loop, in the one place that has no next round to drain into: a finding that arrived
-    # during the last round would otherwise be dropped by `forget` while the answer it belongs
-    # in was being written. Not waited on — the budget is gone, and waiting here would hold a
-    # turn that has already been told to stop working — but what is back is free to include.
-    for finding in errands.collect(conversation_id):
-        convo.append({"role": "user", "content": finding})
-        yield {"type": "errand_back", "text": finding}
     yield from _final_answer(convo, config, host, schemas, routing=routing)
 
 

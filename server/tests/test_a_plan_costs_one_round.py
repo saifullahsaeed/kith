@@ -162,7 +162,7 @@ class TestAWorkerCannotPlan:
     def test_plan_work_is_withheld(self):
         """A sub-agent that lays out work is a sub-agent making plans, and the plan is the
         one thing that must stay in the conversation a person can see."""
-        from kith.tools import delegation
+        from kith.tools import workers
 
-        for role in delegation.ROLES:
-            assert "plan_work" not in delegation.ROLES[role]["given"]()
+        for role in workers.ROLES:
+            assert "plan_work" not in workers.ROLES[role]["given"]()

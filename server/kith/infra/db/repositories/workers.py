@@ -2,7 +2,7 @@
 
 A row is the whole worker — see :class:`~kith.infra.db.models.Worker`. This module is
 deliberately thin: it stores and fetches, and every decision about *what a worker may do* is
-in `tools/delegation.py`, where the tool sets that enforce it also live. A storage layer that
+in `tools/workers.py`, where the tool sets that enforce it also live. A storage layer that
 knew a scout from a builder would be a second place to keep that list correct.
 """
 

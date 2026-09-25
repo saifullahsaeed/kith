@@ -242,7 +242,7 @@ def _run_case(case: dict) -> dict:
     """One turn, from its own fresh conversation, scored.
 
     The timeout is checked *between* events, which is the same granularity the errand loop in
-    `tools/delegation.py` settles for and for the same reason: the generator yields nothing
+    `tools/workers.py` settles for and for the same reason: the generator yields nothing
     while a tool call or a provider read is in flight, so a single wedged call is not
     interruptible from here. It bounds a turn that keeps going, not one that has stopped dead —
     for that there is the process, and now a number on the screen saying how long it has been.

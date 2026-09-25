@@ -112,9 +112,9 @@ class TestItStillStopsGathering:
         reserve exists because research expands to fill whatever it is given."""
         assert not ({"web_search", "fetch_url", "browse_page", "search_sources"} & offered_while_landing)
 
-    def test_it_cannot_send_someone_else_to_look(self, offered_while_landing):
-        """The most expensive kind of looking: an errand's cost is its own model calls."""
-        assert "delegate_subtask" not in offered_while_landing
+    def test_it_cannot_start_a_workflow(self, offered_while_landing):
+        """New work at its largest: a fan-out of agents, each with a budget of its own."""
+        assert "run_workflow" not in offered_while_landing
 
     def test_and_it_cannot_start_new_work(self, offered_while_landing):
         """The reserve's second job, and the one easiest to lose when inverting the list.

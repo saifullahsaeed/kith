@@ -6,9 +6,9 @@ description: Use before building anything that does not yet exist — a feature,
 # Brainstorming
 
 > **Adapted for Kith.** Upstream this skill tests itself by spawning subagents with and without
-> it. Your workers can read and can edit a copy, but they cannot hold a conversation with your
-> person — so that half is replaced here by the thing you do have: `ask`, which holds the turn
-> until they answer.
+> it. A workflow's agents can read and can edit a copy, but they cannot hold a conversation with
+> your person — so that half is replaced here by the thing you do have: `ask`, which holds the
+> turn until they answer.
 
 The work you are about to do is cheap to redo *before* you start and expensive after. One
 question now beats a day of building the wrong thing well.
@@ -85,5 +85,5 @@ Not for work they have already specified precisely — when they have told you e
 build, build it.
 
 And not a substitute for reading. A design written on top of a codebase you have not opened is a
-guess with structure. If you do not know the area, `delegate_subtask` first — the finding out
-costs you its answer instead of its search.
+guess with structure. If you do not know the area, read it first — `repo_map`, then the files
+that matter.

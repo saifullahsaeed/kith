@@ -78,11 +78,6 @@ def _aside(kind: str, event: dict) -> str:
         return f"steered: {' '.join(str(event.get('text') or '').split())[:70]}"
     if kind == "directive":
         return f"· {' '.join(str(event.get('text') or '').split())[:70]}"
-    if kind == "waiting_on_errands":
-        count = int(event.get("count") or 0)
-        return f"waiting on {count} errand{'s' if count != 1 else ''}"
-    if kind == "errand_back":
-        return f"errand reported ({len(str(event.get('text') or ''))} chars)"
     return kind
 
 
@@ -239,10 +234,10 @@ def human(
                     style.dim(f"    ↳ {event.get('name')}: ") + style.red(" ".join(str(problem).split())[:96])
                 )
 
-        elif kind in ("compacting", "retrying", "steered", "directive", "waiting_on_errands", "errand_back"):
+        elif kind in ("compacting", "retrying", "steered", "directive"):
             # The turn changing shape. Every one of these is the answer to "why has nothing
-            # happened for thirty seconds" — a fold, a retry after a provider hiccup, a pause
-            # for sub-agents — and a client that drops them shows a turn that appears to hang.
+            # happened for thirty seconds" — a fold, a retry after a provider hiccup, a steer
+            # landing — and a client that drops them shows a turn that appears to hang.
             # On stderr with everything else, so they never contaminate the answer.
             if quiet:
                 continue

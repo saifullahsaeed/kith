@@ -75,10 +75,7 @@ def _outline_one(wanted: str) -> dict:
     "with the line it starts on. Do that BEFORE read_file on anything you do not know: a "
     "2,000-line module costs you the whole module for the rest of the turn, and its shape "
     "costs a paragraph. Then read_file the part you want with offset and limit. "
-    "Needs nothing installed either way. "
-    "Mapping a codebase you do not know, or outlining a whole subsystem to get your bearings, "
-    "is an errand: delegate_subtask gets its bearings and tells you the shape, and none of it "
-    "lands in your window.",
+    "Needs nothing installed either way.",
     {
         "path": {**STR, "description": "The project folder (default: your whole folder)."},
         "paths": {

@@ -286,3 +286,32 @@ def working_from(directory: str | None, mirror_of: str | None = None) -> Iterato
         yield
     finally:
         _isolated.reset(token)
+
+
+#: Whether the person asked for a workflow on this turn. Set by the turn from its opening
+#: message and read by exactly one handler, `run_workflow`, which refuses without it.
+_workflows: ContextVar[bool] = ContextVar("kith_workflows_allowed", default=False)
+
+
+def workflows_allowed() -> bool:
+    """Did the message that opened this turn start with ``/workflow``?
+
+    A fact about the turn rather than a parameter, for the same reason as :func:`unattended`: a
+    tool handler is called as ``run(path, args)``, and the one handler that cares cannot be
+    handed anything. False in a test, in a script, and in every turn the scheduler opens — the
+    honest default, because only a person typing the prefix can truthfully claim otherwise.
+    """
+    return _workflows.get()
+
+
+@contextmanager
+def may_run_workflows(allowed: bool) -> Iterator[None]:
+    """Run a block as a turn the person opted into workflows on, when ``allowed``."""
+    if not allowed:
+        yield
+        return
+    token = _workflows.set(True)
+    try:
+        yield
+    finally:
+        _workflows.reset(token)

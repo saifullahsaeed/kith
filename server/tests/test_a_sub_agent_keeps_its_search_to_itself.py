@@ -16,7 +16,11 @@ from pathlib import Path
 
 from kith.services import agent_loop
 from kith.services.turn import frozen
-from kith.tools import delegation
+from kith.tools import workers
+
+
+def _scout(db: Path, objective: str) -> dict:
+    return workers.run_agent(db, "scout", objective, "")[0]
 
 
 def _rounds(*script):
@@ -53,7 +57,7 @@ class TestOnlyTheFindingsComeBack:
         )
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.delegate_subtask(db, {"objective": "is anything filed about ledgers"})
+        answer = _scout(db, "is anything filed about ledgers")
 
         assert answer["findings"] == "Nothing is filed under that name."
         assert "Let me look" not in answer["findings"]
@@ -68,7 +72,7 @@ class TestOnlyTheFindingsComeBack:
         )
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.delegate_subtask(db, {"objective": "look at something"})
+        answer = _scout(db, "look at something")
 
         assert answer["looked_at"] == "list_projects x2"
 
@@ -88,7 +92,7 @@ class TestOnlyTheFindingsComeBack:
         )
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.delegate_subtask(db, {"objective": "where does the ledger live"})
+        answer = _scout(db, "where does the ledger live")
 
         assert "meter.py:96" in answer["findings"]
 
@@ -98,7 +102,7 @@ class TestOnlyTheFindingsComeBack:
         fake, _ = _rounds(("", [_a_call("list_projects")]), ("", []))
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.delegate_subtask(db, {"objective": "x"})
+        answer = _scout(db, "x")
 
         assert "failure rather than a finding" in answer["findings"]
         assert "calls" in answer["findings"]
@@ -112,20 +116,10 @@ class TestOnlyTheFindingsComeBack:
 
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
 
-        answer = delegation.delegate_subtask(db, {"objective": "look at something"})
+        answer = _scout(db, "look at something")
 
         assert "401" in answer["error"]
         assert "partial" in answer["note"]
-
-    def test_an_empty_objective_is_refused_before_a_model_is_paid(self, db: Path, monkeypatch):
-        def explode(*a, **k):
-            raise AssertionError("no model call should have been made")
-
-        monkeypatch.setattr(agent_loop, "_stream_once", explode)
-
-        answer = delegation.delegate_subtask(db, {"objective": "   "})
-
-        assert "objective" in answer["error"]
 
 
 class TestItStartsFromNothing:
@@ -133,7 +127,7 @@ class TestItStartsFromNothing:
         """Two messages. The caller's context does not leak in — which is what makes this
         cheap — and so the objective has to stand on its own, which is what the tool
         description asks the caller for."""
-        pad = delegation._scratchpad("PERSONA", delegation.SCOUT_BRIEF, "find the ledger")
+        pad = workers._scratchpad("PERSONA", workers.SCOUT_BRIEF, "find the ledger")
 
         assert [m["role"] for m in pad] == ["system", "user"]
         assert pad[1]["content"] == "find the ledger"
@@ -146,10 +140,10 @@ class TestItStartsFromNothing:
         already has warm. A worker whose brief went first would share none of it and write its
         own copy on every call.
         """
-        pad = delegation._scratchpad("PERSONA", delegation.SCOUT_BRIEF, "find the ledger")
+        pad = workers._scratchpad("PERSONA", workers.SCOUT_BRIEF, "find the ledger")
 
         assert pad[0]["content"].startswith("PERSONA")
-        assert delegation.SCOUT_BRIEF in pad[0]["content"]
+        assert workers.SCOUT_BRIEF in pad[0]["content"]
 
 
 class TestItHasNoLandingPhase:

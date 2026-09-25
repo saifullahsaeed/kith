@@ -106,6 +106,7 @@ class Feed:
         tool: str | None = None,
         args: dict | None = None,
         errand: dict | None = None,
+        workflow: dict | None = None,
         conversation: str = "",
     ) -> None:
         """Push one line onto the live Mind feed.
@@ -121,6 +122,10 @@ class Feed:
         chat thread: a worker's searching is discarded by design, so if it is not here it is
         nowhere. The panel counts these out of its round count, because they are not the
         turn's rounds.
+
+        ``workflow`` marks a line as a workflow run's own state — ``{run, state, ...}`` — which the
+        Work panel folds into one header per run, with that run's agents (``errand`` lines that
+        carry the same ``run``) under it.
 
         ``conversation`` is which session the line belongs to, and it is what lets the Mind
         panel show *this* session's work instead of everything at once. Absent on the global
@@ -140,6 +145,8 @@ class Feed:
             item["args"] = args
         if errand:
             item["errand"] = errand
+        if workflow:
+            item["workflow"] = workflow
         if conversation:
             item["conversation"] = conversation
         with self._state_lock:

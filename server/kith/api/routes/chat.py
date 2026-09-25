@@ -19,6 +19,7 @@ from kith.config import (
     ollama_host,
 )
 from kith.domain import tooling
+from kith.domain.workflows import asks_for_workflow
 from kith.infra import permissions
 from kith.infra.db import repositories as repo
 from kith.kernel import changes, clock, live_turns, session_context, stopping
@@ -534,6 +535,9 @@ def begin_turn(
                 session_context.working_in(conversation_id),
                 session_context.arriving_from(sent_from),
                 _watching(unattended),
+                # Read off the opening message, so only a person typing `/workflow` opts a turn
+                # in — a turn the scheduler opens starts with the scheduler's words, never theirs.
+                session_context.may_run_workflows(asks_for_workflow(opening)),
             ):
                 # Reading the transcript and building the prompt happen *here*, not on the
                 # request path, because building it can fold — and a fold is a summarisation
@@ -1074,9 +1078,7 @@ class _MindFeed:
         '- `{"type":"steered","text":"..."}` — something you sent mid-turn was delivered at a '
         "round boundary\n"
         '- `{"type":"directive","text":"..."}` — the loop told itself something (a budget '
-        "reached, a reserve entered)\n"
-        '- `{"type":"waiting_on_errands","count":N}` — paused for sub-agents to report\n'
-        '- `{"type":"errand_back","text":"..."}` — a sub-agent reported'
+        "reached, a reserve entered)"
     ),
     responses={200: "NDJSON stream of agent events"},
 )

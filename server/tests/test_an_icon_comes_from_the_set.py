@@ -18,8 +18,8 @@ import pytest
 
 from kith import settings
 from kith.services import icons
-from kith.tools.delegation import GIVEN
 from kith.tools.design import find_icons
+from kith.tools.workers import GIVEN
 
 #: The SVG elements the board's parser keeps (`ui/src/lib/design/parse.ts`). An icon made of
 #: anything else would render in the checker and vanish on the board.

@@ -19,13 +19,13 @@ import pytest
 from kith import tools
 
 #: Tools whose whole value is that something *else* suggests them. A person asks for a shell
-#: command directly; nobody asks for an errand by name, so if `shell` does not mention one, one
-#: is never sent. Listed rather than inferred, because "would he think of this unprompted" is a
-#: judgement and the list is where that judgement is written down.
+#: command directly; nobody asks for a plan by name, so if the board tools do not mention one,
+#: one is never made. Listed rather than inferred, because "would he think of this unprompted"
+#: is a judgement and the list is where that judgement is written down.
+#:
+#: `run_workflow` is deliberately not here. It runs only when the person's message asks for it,
+#: so it is reached for by being named in that message, never by being suggested.
 MUST_BE_SUGGESTED = {
-    "delegate_subtask": "the tools whose output it replaces",
-    "send_builder": "the tools you hold when you notice repetition",
-    "follow_up": "the tools that produce the report it follows up",
     "plan_work": "the board tools it replaces a dozen calls of",
 }
 

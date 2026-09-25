@@ -12,9 +12,10 @@ and checked it between events. Then a tool needed to read it, and a tool cannot 
 — `kith.tools` is an adapter and so is `kith.api`, and the route imports the tool layer, so the
 edge would be a cycle as well as an inversion.
 
-The tool that needed it is `delegate_subtask`. A sub-agent runs a whole second loop inside one
-tool call, and the parent loop emits nothing at all while it does, so the route's between-events
-check cannot fire — Stop did nothing for the length of an errand. That is the same shape of
+The tool that first needed it was `delegate_subtask`, since retired for workflows: a sub-agent
+ran a whole second loop inside one tool call, and the parent loop emitted nothing at all while it
+did, so the route's between-events check could not fire — Stop did nothing for the length of an
+errand. That is the same shape of
 problem `session_context` and `live_turns` are here for: a fact about the running turn that code
 fifty frames down needs and cannot be passed.
 

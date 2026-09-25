@@ -50,16 +50,7 @@ def _shell(command: str) -> dict:
     "account. Put it in `.kith/scratch/` and run it by name: a heredoc runs the moment you send "
     "it, so there is nothing to read first and nothing to run again, while a file can be checked, "
     "fixed and shown to them. Put credentials in that file once and import it, rather than "
-    "writing the key into the record on every command."
-    "\n\n"
-    "SHELLING AROUND TO FIND OUT WHERE SOMETHING IS, is an errand. `find`, `ls -R`, a `grep` "
-    "across a tree you have not read, a script that counts what is in a package — that is "
-    "looking, and every line of output it prints stays in this conversation and is re-sent on "
-    "every round after it. `delegate_subtask` does the same looking somewhere that is thrown "
-    "away, and hands you back the answer. And when the job splits into parts that touch "
-    "different files — four packages, six call sites — `send_builder` does one part each, in "
-    "parallel, in its own copy of the repository, and hands you a patch. Decide the shape "
-    "first; do not walk it yourself one command at a time.",
+    "writing the key into the record on every command.",
     {"command": {**STR, "description": "The shell command to run."}},
     required=("command",),
 )
@@ -78,10 +69,7 @@ def shell(path: Path, args: dict):
     "with `offset`/`limit`, which window every file you asked for. `symbol` is the exception "
     "and needs a single path — a name can be defined in several of them and there would be no "
     "right answer. A read without a range returns the first 400 lines and tells you if there's "
-    "more. "
-    "If you are about to list four files you have not read before just to work out where "
-    "something lives, that is an errand: delegate_subtask reads them somewhere else and hands "
-    "you the answer, so your window ends up holding the answer instead of the files.",
+    "more.",
     {
         "paths": {
             **LIST_STR,
@@ -245,9 +233,7 @@ def _read_symbol(wanted: str, symbol: str, offset=None, limit=None) -> str:
     "Write (or overwrite) a file on your computer, creating parent folders as needed. For a "
     "file that already exists, use edit_files instead: rewriting a whole file to alter one "
     "line costs you the file again in output, silently loses anything you did not retype, "
-    "and flattens its formatting a little more each time. Writing the same shape of file into "
-    "several places is an errand — send_builder does a group each, in parallel, and hands you "
-    "patches.",
+    "and flattens its formatting a little more each time.",
     {"path": STR, "content": STR},
     required=("path", "content"),
 )
@@ -338,9 +324,7 @@ _EDIT = {
     "or pass replace_all. All or nothing — a batch that fails leaves every file untouched and "
     "names the edit that was wrong. Edits to the same file apply in the order given, so a later "
     "one can build on an earlier one. You get back a combined diff: read it, that is how you "
-    "check you changed what you intended. When the SAME edit has to land across files you have "
-    "not read — a rename in eleven places, one fix at six call sites — that is send_builder's "
-    "job, a group of files each and in parallel; this is for the changes you make yourself.",
+    "check you changed what you intended.",
     {
         "edits": {
             "type": "array",
@@ -603,9 +587,6 @@ def commit(path: Path, args: dict):
     "file:line numbers — your way to find the needle without loading whole "
     "haystacks into your head. Then read_file just that slice. Supports a glob "
     "filter like '*.py'. "
-    "Grepping around a codebase you do not know, to build a picture rather than to find a "
-    "line you already expect, is an errand: delegate_subtask does that searching without any "
-    "of it landing here. "
     "If the thing you are looking for is the NAME of a function, class or method, use "
     "find_symbol instead: this matches characters, so it also returns the word in comments, "
     "in strings, inside longer names, and every unrelated variable that happens to share it — "

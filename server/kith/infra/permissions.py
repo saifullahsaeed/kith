@@ -1148,7 +1148,7 @@ def _inside_pinned_worktree(resolved: Path) -> bool:
     **Why a worker needs one at all.** A worktree is not the linked folder, so without this
     every write a worker makes lands here as an anonymous out-of-folder path and raises a
     prompt. That prompt would be raised of an empty room: a worker has no `ask` and no
-    `reach_out` by construction (`tools/delegation.WITHHELD`), and nobody is watching a
+    `reach_out` by construction (`tools/workers.WITHHELD`), and nobody is watching a
     scratchpad — so in ask-mode the turn that sent the worker would block on a tool call that
     never returns, which is indistinguishable from a hang.
 

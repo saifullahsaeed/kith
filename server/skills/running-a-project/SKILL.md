@@ -140,19 +140,13 @@ index, not as truth.
 Do not trust a title, a status or an old comment over current files. Do not discard an existing
 board because it is incomplete — repair it only where evidence shows what is wrong.
 
-## Send workers at the parts, instead of walking them
+## Notice when the parts could run at once
 
-A task whose checklist is the same kind of work in several places is the shape a worker is for,
-and **this is the moment to notice it** — while you are planning the task, not later, one file at
-a time. That is the whole of it that belongs here:
-
-- `delegate_subtask` when finding out where something lives would cost you a dozen reads.
-- `send_builder` when the change is decided but long — one group of files each, in parallel, each
-  in its own copy, and it hands you a patch you apply.
-- `follow_up` to push on either without starting it over.
-
-How to brief one, what comes back, and the three ways a brief wastes a whole worker are in
-**`sending-workers`**. Read it the first time a task splits this way, not now.
+A task whose checklist is the same kind of work in several places — four packages, six call
+sites — is the shape a workflow is for, and **this is the moment to notice it**, while you are
+planning the task rather than later, one file at a time. Workflows run only when they ask for
+one, so say so: "this splits into four independent parts; send it as a `/workflow` request and
+I'll fan it out." Then carry on with the work yourself unless they do.
 
 ## Working one through
 
@@ -252,9 +246,7 @@ warning about, one level up.
 |---|---|
 | Work needs to survive this sitting | `plan_work` — the next 2–5 tasks, with checklists |
 | B cannot start until A is done | A gets the higher priority, or B stays in `planning` with the blocker written |
-| Finding out where something lives | `delegate_subtask` |
-| Same decided change across many files | `send_builder`, one per file group, same round |
-| A worker's answer is nearly right | `follow_up` |
+| Same decided change across many files | Say it splits; with `/workflow`, `run_workflow` |
 | Blocked | `ask` in chat — never a column |
 | Others work on this repo | `publish(direction="check")` before trusting `.kith/` |
 | The work is finished | Green suite first, then `ask`: commit / commit and publish / leave it |
@@ -269,7 +261,7 @@ warning about, one level up.
 - **A task with no nameable source.** Valid sources: their request, a project decision, a discovered
   requirement, a failed check.
 - **Walking a repetitive checklist yourself** when it splits cleanly across files.
-- **Briefing a worker from memory.** Verify the file, the function and the constant first.
+- **Briefing an agent from memory.** Verify the file, the function and the constant first.
 - **Closing on a passing build.** It proves the thing compiles, not that it does what was asked.
 - **Evidencing a close on top of a red suite.** The failures come first; nothing below them counts.
 - **Tidying up.** Deleting a branch, pruning a worktree, clearing a folder — none of that follows

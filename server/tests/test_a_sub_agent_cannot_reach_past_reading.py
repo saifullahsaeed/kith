@@ -22,30 +22,30 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith import tools
-from kith.tools import delegation
+from kith.tools import workers
 
 
 class TestEveryToolIsClassified:
     def test_nothing_is_left_unclassified(self):
         """Add a tool, and this asks you which side of the wall it is on."""
         registry = set(tools.names())
-        missing = sorted(registry - delegation.GIVEN - delegation.WRITING - delegation.WITHHELD)
+        missing = sorted(registry - workers.GIVEN - workers.WRITING - workers.WITHHELD)
         assert not missing, (
             f"{missing} are registered but classified nowhere. Add each to GIVEN, WRITING or "
-            "WITHHELD in tools/delegation.py — a tool that edits a file in the worktree belongs "
+            "WITHHELD in tools/workers.py — a tool that edits a file in the worktree belongs "
             "in WRITING, and anything with an effect outside the worktree belongs in WITHHELD."
         )
 
     def test_nothing_classified_has_since_disappeared(self):
         """The other direction: a renamed or deleted tool leaves a name here that means nothing."""
         registry = set(tools.names())
-        stale = sorted((delegation.GIVEN | delegation.WRITING | delegation.WITHHELD) - registry)
-        assert not stale, f"{stale} are classified in tools/delegation.py but no longer registered"
+        stale = sorted((workers.GIVEN | workers.WRITING | workers.WITHHELD) - registry)
+        assert not stale, f"{stale} are classified in tools/workers.py but no longer registered"
 
     def test_the_three_lists_do_not_overlap(self):
-        assert not (delegation.GIVEN & delegation.WITHHELD)
-        assert not (delegation.GIVEN & delegation.WRITING)
-        assert not (delegation.WRITING & delegation.WITHHELD)
+        assert not (workers.GIVEN & workers.WITHHELD)
+        assert not (workers.GIVEN & workers.WRITING)
+        assert not (workers.WRITING & workers.WITHHELD)
 
 
 class TestTheWallHolds:
@@ -66,20 +66,20 @@ class TestTheWallHolds:
             "create_project",
             "remember",
         ):
-            assert name not in delegation.GIVEN, f"a sub-agent must not be able to {name}"
+            assert name not in workers.GIVEN, f"a sub-agent must not be able to {name}"
 
-    def test_a_sub_agent_cannot_spawn_another(self):
-        """The calls that turn a worker into an unbounded tree of them — all three spellings."""
-        for name in ("delegate_subtask", "send_builder", "follow_up"):
-            assert name not in delegation.GIVEN
-            assert name not in delegation.WRITING
+    def test_an_agent_cannot_start_a_workflow(self):
+        """The one call that would turn a workflow's agent into an unbounded tree of them."""
+        assert "run_workflow" in workers.WITHHELD
+        assert "run_workflow" not in workers.GIVEN
+        assert "run_workflow" not in workers.WRITING
 
     def test_a_sub_agent_cannot_ask_anybody_anything(self):
         """`ask` holds a turn open until someone answers, and nobody is watching a scratchpad —
         the question would be put to an empty room while the main turn waits on a tool call
         that never comes back."""
-        assert "ask" not in delegation.GIVEN
-        assert "reach_out" not in delegation.GIVEN
+        assert "ask" not in workers.GIVEN
+        assert "reach_out" not in workers.GIVEN
 
 
 class TestTheWallIsEnforcedAndNotMerelyDeclared:
@@ -96,14 +96,14 @@ class TestTheWallIsEnforcedAndNotMerelyDeclared:
             "write_file",
             {"path": "escaped.txt", "content": "hello"},
             db,
-            allow=set(delegation.GIVEN),
+            allow=set(workers.GIVEN),
         )
         assert answer["ok"] is False
         assert "not available" in answer["error"]
 
     def test_a_given_tool_still_runs_under_the_same_gate(self, db: Path):
         """The gate has to be a gate and not a wall: the read tools must still work."""
-        answer = tools.run_tool("list_projects", {}, db, allow=set(delegation.GIVEN))
+        answer = tools.run_tool("list_projects", {}, db, allow=set(workers.GIVEN))
         assert answer["ok"] is True
 
 
@@ -116,16 +116,16 @@ class TestABuilderIsAScoutPlusFourTools:
     """
 
     def test_a_builder_gets_everything_a_scout_gets(self):
-        builder = delegation.ROLES["builder"]["given"]()
-        assert builder >= delegation.GIVEN
+        builder = workers.ROLES["builder"]["given"]()
+        assert builder >= workers.GIVEN
 
     def test_the_only_difference_is_writing(self):
-        builder = delegation.ROLES["builder"]["given"]()
-        assert builder - delegation.GIVEN == set(delegation.WRITING)
+        builder = workers.ROLES["builder"]["given"]()
+        assert builder - workers.GIVEN == set(workers.WRITING)
 
     def test_a_scout_still_cannot_write(self):
-        scout = delegation.ROLES["scout"]["given"]()
-        assert not (scout & delegation.WRITING)
+        scout = workers.ROLES["scout"]["given"]()
+        assert not (scout & workers.WRITING)
 
     def test_no_role_reaches_past_its_worktree(self):
         """Nothing with an effect outside the private copy, for either role.
@@ -135,7 +135,7 @@ class TestABuilderIsAScoutPlusFourTools:
         nobody will ever look at; one that could `shell` would have side effects, which is
         what stops two of them sharing a round.
         """
-        for role in delegation.ROLES:
-            given = delegation.ROLES[role]["given"]()
+        for role in workers.ROLES:
+            given = workers.ROLES[role]["given"]()
             for name in ("commit", "publish", "shell", "start_process", "run_tests", "ask", "remember"):
                 assert name not in given, f"a {role} must not be able to {name}"

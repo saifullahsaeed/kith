@@ -1,54 +1,39 @@
-"""Sending someone else to look, so the looking does not land in this conversation.
+"""One agent a workflow sent, from brief to report.
 
-Finding out where something lives is expensive in exactly the way that hurts most. Twelve
-greps, eight outlines and four partial reads to answer *which file throws this* is a couple
-of thousand tokens of answer buried in forty thousand tokens of search — and once it is in
-the turn it is in every later round of the turn, re-sent and re-billed, crowding out the work
-it was supposed to enable. The finding is small. The finding out is not.
+A workflow script (`tools/workflow`) decides *what* to send and in what order; this is what
+running one of them means. It used to be the body of three tools the model could reach for on
+any round — `delegate_subtask`, `send_builder` and `follow_up` — and the record says the model
+never chose to: 25 scouts in all history, every one right after being told to, and zero
+builders across two runs whose prompts named parallel work. So the choice moved to the person
+(`/workflow`) and the decomposition moved into code, and what is left here is the part that was
+always right.
 
-So the finding out happens somewhere else. `delegate_subtask` runs a whole second agent loop
-on a private message list that nobody ever sees, and hands back the last thing it said. The
-greps are real, the files are really read, and none of it exists afterwards.
+Two kinds, and the difference between them is entirely in the tables below — what each may
+use, what it is told, how many rounds it gets, and which model it runs on:
 
-Three things make this safe rather than merely clever, and each is enforced here rather than
-asked for in the tool description:
+**A scout reads.** It is given :data:`GIVEN` and `run_tool` enforces that set as well as showing
+it, so naming `write_file` anyway gets a refusal rather than a write.
 
-**It cannot change anything.** The sub-agent is given :data:`GIVEN` — reading, searching,
-looking things up — and `run_tool` enforces that set as well as showing it, so naming
-`write_file` anyway gets a refusal rather than a write. This is not only about damage: the
-main agent holds the plan, and a worker editing files in the dark is a main agent that no
-longer knows what its own codebase looks like. The sub-agent finds out; the main agent acts.
+**A builder edits a private copy.** :data:`GIVEN` plus :data:`WRITING`, pinned to its own `git
+worktree` by one context variable (`session_context.working_from`), so every path it touches is
+bent into the copy and no tool knows it moved. What comes back is a unified diff, and the agent
+holding the conversation applies it — a changed worktree left for someone to integrate is not
+an option for a program that often runs with nobody there.
 
-**It cannot delegate.** `delegate_subtask` is not in its set, so the one call that could turn
-one worker into an unbounded tree of them is the one call it does not have.
-
-**It cannot run forever.** `subtask_rounds` rounds, then `_final_answer` makes it report with
-what it has. The landing reserve is switched off for it, which is a real decision and not a
-detail — see :func:`_scratchpad`.
-
-**Deliberately not built: a verifier role.** The obvious second worker runs the tests and the
-linter after an edit, and it is left out for two reasons that both point the same way. It
-would have side effects, which is what lets several of these run in one round; and running
-the tests on work you just did is not a thing to hear about second-hand — the main agent made
-the change, so the main agent should read the failure. A role parameter can be added the day
-something needs one. Adding it now would mean a schema the model has to choose between on
-every round, for a choice with one real option.
+**Neither can start a workflow**, so one run cannot become a tree of them, and neither can ask
+anyone anything — nobody is watching an agent's scratchpad.
 """
 
 from __future__ import annotations
 
-import threading
 import time
-import uuid
-from contextvars import copy_context
+from collections.abc import Callable
 from pathlib import Path
 
 from kith.kernel import session_context, stopping
-from kith.services import errands, tuning
-from kith.tools.params import BOOL, STR
-from kith.tools.registry import tool
+from kith.services import tuning
 
-#: What a sub-agent may do: read, search, look up. Nothing here writes a file, starts a
+#: What a scout may do: read, search, look up. Nothing here writes a file, starts a
 #: process, files anything on the board, or reaches a person.
 #:
 #: A list rather than a rule, and an exhaustive one — see :data:`WITHHELD` for the other half
@@ -107,8 +92,7 @@ GIVEN = frozenset(
 #: effects outside the worktree — a package installed, a port bound, a database migrated — and
 #: side effects are precisely what would stop two builders sharing a round. The parallelism is
 #: worth more than the convenience, and the main agent can run the tests on the patch it just
-#: applied, which is the reading `tools/delegation`'s module docstring has always argued for:
-#: the agent that made the change should read the failure.
+#: applied — the agent that made the change should read the failure.
 WRITING = frozenset(
     {
         "write_file",
@@ -122,7 +106,7 @@ WRITING = frozenset(
     }
 )
 
-#: What a sub-agent is deliberately not given, and why. Kept as a real list rather than "the
+#: What an agent is deliberately not given, and why. Kept as a real list rather than "the
 #: rest of the registry" so that adding a tool forces the question — the test pairs this with
 #: :data:`GIVEN` and :data:`WRITING` and fails on any name in none of the three.
 #:
@@ -172,7 +156,9 @@ WITHHELD = frozenset(
         "list_schedules",
         # Runs things. Withheld for two reasons at once: they have side effects, and side
         # effects are exactly what would stop several of these sharing a round. `run_tests`
-        # is the one that will keep being asked for — see the module docstring.
+        # is the one that will keep being asked for, and the answer is that the agent holding
+        # the conversation runs them on the patch it applies — the one who made the change
+        # should read the failure.
         "shell",
         "start_process",
         "stop_process",
@@ -186,12 +172,9 @@ WITHHELD = frozenset(
         # decide whether that is worth interrupting anyone for.
         "ask",
         "reach_out",
-        # Itself, in all three of its spellings. One worker cannot become a tree of them, and
-        # `follow_up` is on this list for a second reason as well as that one: a worker has no
-        # id to follow up, because ids are handed to the agent holding the conversation.
-        "delegate_subtask",
-        "send_builder",
-        "follow_up",
+        # Starting a workflow. One run cannot become a tree of them, and the opt-in that permits
+        # one belongs to the person's message, which no agent has.
+        "run_workflow",
     }
 )
 
@@ -200,8 +183,9 @@ WITHHELD = frozenset(
 #: stable head, so a sub-agent whose system prompt *starts* with the same persona reads the
 #: same cached prefix every other request in the install reads, instead of writing its own.
 SCOUT_BRIEF = (
-    "You are working as an isolated sub-agent right now. Someone — you, a moment ago, in the "
-    "conversation this came from — handed you one thing to find out, and the only part of "
+    "You are working as an isolated sub-agent right now. A workflow — a script you wrote a "
+    "moment ago, in the conversation this came from — handed you one thing to find out, and "
+    "the only part of "
     "this that survives is your final message. Everything else here (what you grep, what you "
     "read, what turns out to be a dead end) is discarded the moment you finish, and is never "
     "seen by anyone.\n\n"
@@ -238,8 +222,9 @@ SCOUT_BRIEF = (
 #: found code as built, it is a builder describing intended code as built. Its patch is the
 #: only evidence that survives, so the brief points at the patch rather than at prose.
 BUILDER_BRIEF = (
-    "You are working as an isolated builder right now. Someone — you, a moment ago, in the "
-    "conversation this came from — handed you one thing to change, and you are working in a "
+    "You are working as an isolated builder right now. A workflow — a script you wrote a "
+    "moment ago, in the conversation this came from — handed you one thing to change, and "
+    "you are working in a "
     "private copy of the repository that nobody else can see. Everything you read on the way "
     "is discarded when you finish. What survives is your patch and a few hundred words.\n\n"
     "So read as much as you need, and do not summarise as you go.\n\n"
@@ -260,266 +245,6 @@ BUILDER_BRIEF = (
     "- If you changed nothing, say so and say why — that is a real answer, not a failure.\n"
     "No preamble, no restating the objective, no offers to do more."
 )
-
-
-@tool(
-    "delegate_subtask",
-    "Send an isolated sub-agent to find something out. It reads and searches in a private "
-    "scratchpad that never enters this conversation, and comes back with a few hundred words. "
-    "WHAT IT SAVES YOU IS CONTEXT, NOT ROUNDS. Doing it yourself is already cheap in rounds — "
-    "read_file and repo_map take a list of paths, grep takes a list of patterns — but twelve "
-    "files you open yourself are in your window for the rest of the turn and re-sent on every "
-    "round after it, and twelve files an errand opens cost you its summary and nothing else. "
-    "REACH FOR ONE WHEN: you are about to open more than three or four files you have not read "
-    "before just to find out where something lives; you need to understand a subsystem you do "
-    "not already know; or the answer is one paragraph buried in long documentation. Give it "
-    "one self-contained objective in plain language with any paths or names you have, since it "
-    "starts knowing nothing about what you are doing. It can read, search and browse; it "
-    "cannot change anything, run anything, or ask you a question — send the finding out and "
-    "keep the doing. Send several in ONE round to cover several areas: they run in parallel, "
-    "and sent in separate rounds they do not. A report that answers most of what you asked is a "
-    "follow_up, not a fresh errand.",
-    {
-        "objective": {
-            **STR,
-            "description": (
-                "What to find out, and enough context to start: what you already know, where "
-                "to look, and what a useful answer would contain."
-            ),
-        },
-        "wait": {
-            **BOOL,
-            "description": (
-                "Whether to wait for the answer. True by default, and usually right — you "
-                "asked because you need the answer to decide what to do next. Pass false only "
-                "when the errand is long AND you have real work to get on with meanwhile: it "
-                "returns immediately, and the findings arrive between rounds when they are "
-                "ready. You will not finish the turn without them either way."
-            ),
-        },
-    },
-    required=("objective",),
-)
-def delegate_subtask(path: Path, args: dict):
-    return _send(path, "scout", args)
-
-
-@tool(
-    "send_builder",
-    "Send an isolated builder to make a change, and get back a patch. It works in a private "
-    "copy of the repository that nobody else touches, and hands back a unified diff plus a "
-    "few hundred words — the diff is taken from its copy automatically, and YOU apply it. "
-    "USE ONE WHEN the change is well understood but long: a rename across eleven files, the "
-    "same fix in six call sites, a migration written from a schema you have already read. "
-    "DO NOT use one to decide what to do — it starts knowing nothing about your plan, so a "
-    "vague objective comes back as a confident patch built on a guess. Say exactly what to "
-    "change, in which files, and what done looks like. It can read, search and edit; it "
-    "cannot commit, run anything, run the tests, or ask you a question, so anything that "
-    "needs running comes back to you. Send several in ONE round for separate areas: each gets "
-    "its own copy, so they run in parallel and cannot collide — but two builders given "
-    "overlapping files produce two patches that will not both apply. A patch that is nearly "
-    "right is a follow_up, not a second builder: it still has its copy and its brief.",
-    {
-        "objective": {
-            **STR,
-            "description": (
-                "What to change, precisely: the files, the change, and what done looks like. "
-                "It has none of your context and cannot ask, so anything you leave out it "
-                "will invent."
-            ),
-        },
-        "wait": {
-            **BOOL,
-            "description": (
-                "Whether to wait for the patch. True by default. Pass false only when the "
-                "change is long AND you have unrelated work to get on with: it returns "
-                "immediately and the patch arrives between rounds."
-            ),
-        },
-    },
-    required=("objective",),
-)
-def send_builder(path: Path, args: dict):
-    return _send(path, "builder", args)
-
-
-@tool(
-    "follow_up",
-    "Ask a worker you already sent one more thing, without making it start over. It still has "
-    "its brief and its own last report, and a builder still has the copy of the repository it "
-    "edited — so 'your patch misses the test file' costs it a couple of rounds instead of the "
-    "whole search again. Use the id that came back with the report. What it does NOT still "
-    "have is every file it read on the way: those are gone, which is the point of an errand. "
-    "So a follow-up that needs the same ground covered again is cheaper sent as a fresh "
-    "errand with a sharper objective.",
-    {
-        "worker_id": {**STR, "description": "The id that came back with the report."},
-        "ask": {
-            **STR,
-            "description": (
-                "The one more thing. Self-contained, like the original: it knows what it was "
-                "sent to do and what it said, and nothing about the rounds you have had since."
-            ),
-        },
-    },
-    required=("worker_id", "ask"),
-)
-def follow_up(path: Path, args: dict):
-    from kith.infra.db import repositories as repo
-
-    worker_id = str(args.get("worker_id") or "").strip()
-    ask = str(args.get("ask") or "").strip()
-    if not worker_id or not ask:
-        return {"error": "Say which worker, and what else you want from it."}
-
-    row = repo.workers.get(path, worker_id)
-    if row is None:
-        return {"error": f"No worker {worker_id}. The id comes back with the report."}
-    if str(row.get("state")) == "out":
-        return {"error": f"Worker {worker_id} has not reported yet — wait for it."}
-    if str(row.get("state")) == "spent":
-        return {
-            "error": (
-                f"Worker {worker_id} has been cleared away, so there is nothing left to ask. "
-                "Send a fresh one with what you know now."
-            )
-        }
-
-    carried = repo.workers.scratchpad(path, worker_id)
-    if not carried:
-        return {"error": f"Worker {worker_id} kept nothing that can be resumed."}
-
-    role = str(row.get("role") or "scout")
-    worktree = str(row.get("worktree") or "")
-    conversation = session_context.current()
-    return _run_worker(
-        path,
-        role=role,
-        objective=ask,
-        conversation=conversation,
-        worker_id=worker_id,
-        worktree=worktree,
-        give_up=lambda: stopping.asked_to_stop(conversation),
-        carried=[*carried, {"role": "user", "content": ask}],
-    )
-
-
-def _send(path: Path, role: str, args: dict):
-    """Open a worker of one role and run it, waited on or not. The two tools' whole bodies.
-
-    One function rather than one per role, because the difference between a scout and a
-    builder is entirely in the tables above — the set it is given, the brief it is told, the
-    model it runs on, how many rounds it gets, and whether it needs a copy of the tree. None
-    of that is control flow, so none of it should be a second copy of this.
-    """
-    from kith.infra.db import repositories as repo
-    from kith.infra.workspace import worktrees
-    from kith.infra.workspace.base import WorkspaceError
-
-    objective = str(args.get("objective") or "").strip()
-    if not objective:
-        return {"error": "A sub-agent needs an objective — say what you want done."}
-
-    # One id per worker, so the panel can tell three sent in the same round apart, and so the
-    # report carries something `follow_up` can name. A conversation carried through by hand
-    # rather than read off the context inside `_Watched`: a backgrounded worker runs on a
-    # thread of its own, and `current()` read from in there is read at the wrong moment.
-    conversation = session_context.current()
-    worker_id = uuid.uuid4().hex[:8]
-
-    worktree = ""
-    if role == "builder":
-        # Tidying happens here rather than on a timer, and here is the only place it can
-        # honestly happen: there is no housekeeping pass in this application, and a scheduler
-        # tick that swept worktrees would be a second mechanism built for one caller. Opening
-        # a builder is the moment that both cares about the answer and knows the database.
-        for stale in worktrees.prune():
-            repo.workers.spend(path, stale)
-        try:
-            made = worktrees.open_for(worker_id)
-        except WorkspaceError as exc:
-            return {"error": str(exc)}
-        if made is None:
-            # Refused rather than run without isolation. A builder that cannot be given its
-            # own copy would have to edit the real tree, and "he could not be isolated, so he
-            # changed your files instead" is the one outcome this design exists to prevent.
-            return {
-                "error": (
-                    "There is no repository here to make a private copy of, so a builder has "
-                    "nowhere safe to work. Make the change yourself, or delegate_subtask to "
-                    "find out what it should be."
-                )
-            }
-        worktree = str(made)
-
-    repo.workers.start(path, worker_id, conversation, role, objective, worktree)
-
-    if not _wanted(args.get("wait")):
-        if not errands.sent(conversation, worker_id, objective):
-            return {
-                "error": (
-                    f"You already have {errands.MAX_OUT} errands out. Wait for those to come "
-                    "back before sending more, or send this one with wait=true."
-                )
-            }
-        # The context is copied here, on the thread that has one, for the same reason the round
-        # loop copies it before handing work to its pool: a thread starts on the defaults, and
-        # every tool the worker runs resolves its paths, its project and its permissions through
-        # `session_context`. A worker that lost it would read the wrong folder.
-        carried_context = copy_context()
-        worker = threading.Thread(
-            target=lambda: carried_context.run(
-                _run_worker,
-                path,
-                role,
-                objective,
-                conversation,
-                worker_id,
-                worktree,
-                # A backgrounded worker can outlive the turn that sent it — `wait_for_all` gives
-                # up after `errands.WAIT_SECONDS` — and once that happens nothing else would
-                # ever tell it to stop, because the turn's stop switch is disarmed on the way
-                # out. See `errands.abandoned`.
-                lambda: stopping.asked_to_stop(conversation) or errands.abandoned(conversation, worker_id),
-            ),
-            name=f"worker-{worker_id}",
-            daemon=True,
-        )
-        worker.start()
-        return {
-            "worker_id": worker_id,
-            "sent": objective,
-            "note": (
-                "The errand is out. Carry on with something else — its findings will arrive "
-                "between rounds, and this turn will not end before they do."
-            ),
-        }
-
-    # Waited on, so it cannot be abandoned — the caller is this frame, and it is still here.
-    return _run_worker(
-        path,
-        role,
-        objective,
-        conversation,
-        worker_id,
-        worktree,
-        lambda: stopping.asked_to_stop(conversation),
-    )
-
-
-def _wanted(value) -> bool:
-    """Whether to wait, from whatever the model actually sent.
-
-    True unless it clearly said otherwise. A missing argument, `None`, and the string "true"
-    all mean wait — models send booleans as strings often enough that reading `"false"` as
-    truthy would silently background an errand the caller meant to wait for, which is the one
-    failure here that looks like the tool ignoring its own contract.
-    """
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return value.strip().lower() not in ("false", "no", "0", "")
-    return bool(value)
 
 
 #: What each role is: what it may do, what it is told, how long it gets, and what it runs on.
@@ -543,43 +268,71 @@ ROLES: dict[str, dict] = {
 }
 
 
-def _run_worker(
+class WorkerError(RuntimeError):
+    """An agent could not be started at all, with a reason worth reading."""
+
+
+def open_copy(agent_id: str) -> str:
+    """A private checkout for one builder, or :class:`WorkerError` saying why there is none.
+
+    Refused rather than run without isolation. A builder that cannot be given its own copy would
+    have to edit the real tree, and "it could not be isolated, so it changed your files instead"
+    is the one outcome builders exist to prevent.
+
+    Tidying happens here rather than on a timer, and here is the only place it can honestly
+    happen: there is no housekeeping pass in this application, and opening a copy is the moment
+    that both cares about the answer and knows where the copies live.
+    """
+    from kith.infra.workspace import worktrees
+    from kith.infra.workspace.base import WorkspaceError
+
+    worktrees.prune()
+    try:
+        made = worktrees.open_for(agent_id)
+    except WorkspaceError as exc:
+        raise WorkerError(str(exc)) from None
+    if made is None:
+        raise WorkerError(
+            "There is no repository here to make a private copy of, so a builder has nowhere "
+            "safe to work. Send a scout to find out what the change should be instead."
+        )
+    return str(made)
+
+
+def run_agent(
     path: Path,
-    role: str,
+    kind: str,
     objective: str,
     conversation: str,
-    worker_id: str,
+    *,
     worktree: str = "",
-    give_up=None,
+    give_up: Callable[[], bool] | None = None,
+    watch: Callable[[dict], None] | None = None,
     carried: list[dict] | None = None,
-) -> dict:
-    """One worker, start to finish. The same code whether it is waited on, backgrounded, or resumed.
+    tools: set[str] | None = None,
+    rounds: int | None = None,
+) -> tuple[dict, _Report]:
+    """One agent, start to finish. Returns its answer and the report it was assembled from.
 
-    ``give_up`` is asked between the worker's events and is the only way this stops early. A
-    predicate rather than a flag because the callers have different reasons to stop: a
-    waited-on worker ends when someone presses Stop, and a backgrounded one ends for that *or*
-    because the turn that sent it has already gone.
+    ``give_up`` is asked between the agent's events and is the only way this stops early —
+    between events is the only place a loop can be interrupted without abandoning a tool call
+    half-done. ``watch`` sees every event as it happens; a workflow uses it to put the agent's
+    steps in the Work panel, since they are thrown away on purpose and reach nothing else.
 
-    ``carried`` is a resumed worker's stored scratchpad with the new question already on the
-    end; None means a fresh one, which gets :func:`_scratchpad` instead. That one parameter is
-    the whole of "a worker persists": there is no thread to revive, because a worker was never
-    a thread — it is a message list and this function.
-
-    Split out so that backgrounding and resuming are only a question of *who calls this*. Two
-    copies of the worker setup, one of which is exercised far less than the other, is how the
-    rarely-taken path drifts until it is quietly broken.
+    ``carried``, ``tools`` and ``rounds`` exist for one caller: the repair round a workflow runs
+    when an agent was asked for JSON and did not end with any. It is handed the agent's brief,
+    objective and report plus one more question, with no tools and a single round.
     """
     # Imported here, not at module scope. `kith.tools.host` lives in this package's `__init__`,
-    # which imports this module to register the tool, so the edge only exists at call time.
-    # `agent_loop` is the other direction of the same knot: it is handed a `ToolHost` precisely
-    # so it never imports the tool layer, and this is the one tool that needs the loop back.
+    # which imports the workflow tool, which imports this module, so the edge only exists at
+    # call time. `agent_loop` is the other direction of the same knot: it is handed a `ToolHost`
+    # precisely so it never imports the tool layer, and this is where the loop is needed back.
     from kith.config import default_config, merge_overrides, ollama_host
-    from kith.infra.db import repositories as repo
     from kith.infra.workspace import worktrees
     from kith.services.agent_loop import stream_agent
     from kith.tools import host as tool_host
 
-    shape = ROLES.get(role) or ROLES["scout"]
+    shape = ROLES.get(kind) or ROLES["scout"]
     give_up = give_up or (lambda: stopping.asked_to_stop(conversation))
 
     config = default_config()
@@ -588,59 +341,56 @@ def _run_worker(
         config = merge_overrides(config, {"model": chosen})
 
     started = _scratchpad(config.system or "", shape["brief"](), objective) if carried is None else carried
-    report = _Watched(objective, conversation, worker_id, role)
+    report = _Report()
     began = time.monotonic()
 
-    # Everything below happens with the worker pinned to its own copy of the repository, when
-    # it has one. This single `with` is the entire isolation mechanism: `paths.base_dir` reads
-    # it, every path in the application goes through `paths.resolve` to get there, and
-    # `permissions` reads it to know the copy is a folder he may write in. No tool knows it
-    # moved. For a scout `worktree` is "" and this is a no-op, which is the honest shape —
-    # a worker that cannot write needs nowhere private to write in.
-    # `mirror_of` is not optional here and the comment is the receipt for why: without it an
-    # absolute path into the real project is honoured as written, and a builder edits your
-    # files while its copy sits empty. See `paths._bent_into_the_copy`.
+    # Everything below happens with a builder pinned to its own copy. This single `with` is the
+    # entire isolation mechanism: `paths.base_dir` reads it, every path in the application goes
+    # through `paths.resolve` to get there, and `permissions` reads it to know the copy is a
+    # folder it may write in. For a scout `worktree` is "" and this is a no-op, which is the
+    # honest shape — an agent that cannot write needs nowhere private to write in.
+    # `mirror_of` is not optional: without it an absolute path into the real project is honoured
+    # as written, and a builder edits your files while its copy sits empty. See
+    # `paths._bent_into_the_copy`.
     with session_context.working_from(worktree, mirror_of=str(_source_of(worktree)) if worktree else ""):
         for event in stream_agent(
             started,
             config,
             ollama_host(),
             path,
-            # No MCP. `tool_schemas` adds every MCP tool regardless of `only`, so a scout built
-            # from the ordinary host would be *shown* tools that `run_tool` then refuses — and an
-            # arbitrary server's tools have not been through the read-only classification above,
-            # so showing them is not the fix either.
+            # No MCP. `tool_schemas` adds every MCP tool regardless of `only`, and an arbitrary
+            # server's tools have not been through the classification above.
             tool_host(path, mcp=[]),
-            max_rounds=shape["rounds"](),
-            allow=shape["given"](),
+            max_rounds=rounds if rounds is not None else shape["rounds"](),
+            allow=tools if tools is not None else shape["given"](),
             # The parent's conversation, which is not about recording anything — nothing here
-            # reaches the transcript. It is what keeps this on the same upstream as the turn that
-            # called it, so the persona it shares with that turn is a cache read and not a write.
-            conversation_id=session_context.current(),
-            # See `frozen.begin`: a worker's output is its final message, so rounds spent being
-            # told to write files it cannot write are rounds thrown away.
+            # reaches the transcript. It keeps this on the same upstream as the conversation that
+            # sent it, so the persona it shares with that conversation is a cache read.
+            conversation_id=conversation,
+            # See `frozen.begin`: an agent's output is its final message, so rounds spent being
+            # told to write files and file deliverables are rounds thrown away.
             landing_reserve=0,
         ):
             report.saw(event)
-            # Between the worker's own events, which is the only place an errand can be interrupted
-            # without abandoning a tool call half-done — the same granularity the route already
-            # applies to the turn. Before this, Stop did nothing for the length of an errand: the
-            # parent loop emits no events while a tool call is running, so its own check could not
-            # fire, and a person clicking Stop watched four scouts carry on regardless.
+            if watch is not None:
+                try:
+                    watch(event)
+                except Exception:
+                    pass  # a progress line must never be the thing that takes an agent down
             if give_up():
                 report.stopped()
                 break
 
         answer = report.done()
-        answer["worker_id"] = worker_id
-        if role == "builder" and worktree:
-            answer["patch"] = _patch(worktrees.diff_in(Path(worktree)), answer)
+        if kind == "builder":
+            # A builder did change things, so the scout's "this describes the code as found"
+            # would be false of its report — the one sentence that must never be.
+            answer.pop("describes", None)
+            if worktree:
+                answer["patch"] = _patch(worktrees.diff_in(Path(worktree)), answer)
 
-    repo.workers.reported(path, worker_id, _keeping(started, answer), str(answer.get("findings") or ""), 1)
-    _record_cost(path, role, objective, report, began)
-    report.finished(answer)
-    errands.deliver(conversation, worker_id, answer)
-    return answer
+    _record_cost(path, kind, objective, report, began)
+    return answer, report
 
 
 def _record_cost(path: Path, role: str, objective: str, report: _Report, began: float) -> None:
@@ -736,24 +486,22 @@ def _patch(diff: str, answer: dict) -> str:
     return ""
 
 
-def _keeping(started: list[dict], answer: dict) -> list[dict]:
-    """The scratchpad worth storing for a follow-up: the brief, the objective, and the report.
+def follow_on(kind: str, objective: str, said: str, ask: str) -> list[dict]:
+    """An agent's conversation so far — brief, objective, report — with one more question on the end.
 
-    **Not the rounds in between, and that is a real limit rather than an oversight.** The loop
-    copies the message list it is handed (`agent_loop._run_turn`: ``convo = list(messages)``),
-    so what the worker actually read is not reachable from out here without changing the loop's
-    contract for every caller — and the files it opened are exactly what delegation exists to
-    keep out of anybody's context. Storing them would put the expensive thing back.
-
-    So a resumed worker knows what it was sent to do and what it concluded, not how it got
-    there. That is weak for a scout — a follow-up needing the same ground covered is better
-    sent as a fresh errand, which is what `follow_up`'s description says — and strong for a
-    builder, because a builder's real state is not in its transcript at all. It is the edits
-    sitting in its copy of the repository, which are still there, and which it can read back
-    with the same tools it wrote them with.
+    For the repair round a workflow runs when an agent asked for JSON ended without any: the
+    agent is handed back exactly what it was told and what it said, and asked only for the
+    object. Built here, not by the caller, so the brief and persona match the original run and
+    the repair reads the same cached prefix.
     """
-    kept = [message for message in started if message.get("role") in ("system", "user")][:2]
-    return [*kept, {"role": "assistant", "content": str(answer.get("findings") or "")}]
+    from kith.config import default_config
+
+    shape = ROLES.get(kind) or ROLES["scout"]
+    return [
+        *_scratchpad(default_config().system or "", shape["brief"](), objective),
+        {"role": "assistant", "content": said},
+        {"role": "user", "content": ask},
+    ]
 
 
 def _scratchpad(persona: str, brief: str, objective: str) -> list[dict]:
@@ -818,6 +566,9 @@ class _Report:
         self.tokens_in = 0
         self.tokens_out = 0
         self.tokens_uncached = 0
+        #: What the provider said this agent cost, summed over its requests. For the workflow's
+        #: closing note, which is the one place a person sees what a fan-out spent.
+        self.cost = 0.0
         self.failed: list[str] = []
 
     def stopped(self) -> None:
@@ -847,6 +598,7 @@ class _Report:
             self.tokens_in += int(stats.get("promptTokens") or 0)
             self.tokens_out += int(stats.get("responseTokens") or 0)
             self.tokens_uncached += int(stats.get("uncachedTokens") or 0)
+            self.cost += float(stats.get("costUsd") or 0.0)
         elif kind == "error":
             self.error = str(event.get("message") or "")
 
@@ -884,70 +636,6 @@ class _Report:
             answer["error"] = self.error
             answer["note"] = "The sub-agent was cut short — treat what it did report as partial."
         return answer
-
-
-class _Watched(_Report):
-    """A report that also says, as it happens, what the worker is doing.
-
-    The one thing in the Work panel with no second copy anywhere. That panel used to be a
-    round-by-round list of tool calls and it was deliberately deleted — it was the same list
-    the thread already renders, four hundred pixels away from where you read it. This is the
-    exception the deletion left room for: a worker's greps and reads are thrown away on
-    purpose and never reach the thread, so a panel that does not show them means nobody ever
-    sees them. Without it, sending three scouts out looks like the interface hanging.
-
-    Published rather than yielded, and that is what keeps it cheap. The feed is a live push
-    that never touches the transcript, so nothing here is stored, re-sent to a model, or
-    billed — and the tool contract is unchanged: a handler still returns one value.
-
-    A feed line must never be the thing that takes a turn down, so every publish is guarded.
-    """
-
-    def __init__(self, objective: str, conversation: str, errand_id: str, role: str = "scout") -> None:
-        super().__init__()
-        self.objective = objective
-        self.conversation = conversation
-        self.id = errand_id
-        #: Which kind is out. Carried on the feed line rather than inferred from the objective,
-        #: because the panel's whole job here is to say what is happening to your files: "2 out"
-        #: reads the same whether both are reading or both are editing your repository, and only
-        #: one of those is worth interrupting.
-        self.role = role
-        self._say("running", objective)
-
-    def _say(self, state: str, text: str, tool: str = "", arguments: dict | None = None) -> None:
-        try:
-            from kith.services.activity import feed, short_args
-
-            feed.publish(
-                "errand",
-                text,
-                tool=tool or None,
-                args=short_args(arguments or {}) or None,
-                errand={"id": self.id, "state": state, "objective": self.objective, "role": self.role},
-                conversation=self.conversation,
-            )
-        except Exception:
-            pass
-
-    def saw(self, event: dict) -> None:
-        super().saw(event)
-        if event.get("type") == "tool_call":
-            name = str(event.get("name") or "")
-            # `tool` and `args` rather than a formatted sentence, so the interface picks the
-            # wording. It already holds the only table of phrases there is, and a second one
-            # here would be a second thing to keep in step with the registry.
-            self._say("step", name, tool=name, arguments=event.get("arguments") or {})
-
-    def finished(self, answer: dict) -> None:
-        """The closing line, carrying what the errand cost rather than what it found.
-
-        The findings themselves stay out of the feed on purpose. They are already going into
-        the conversation as the tool result, rendered properly, and a second copy in a 400px
-        column would be a paragraph squeezed into a gutter — the panel's job here is to say
-        that the looking is over and how much of it there was.
-        """
-        self._say("done", str(answer.get("looked_at") or "nothing to report"))
 
 
 def _nothing_came_back(calls: list[str]) -> str:

@@ -99,10 +99,11 @@ what follows is the shape of it, not an inventory to keep in step:
   `rename_symbol`, `diagnostics`, backed by real language servers.
 - **Reaching out** — `web_search`, `fetch_url`, `browse_page`, `read_source`, `ask`,
   `reach_out`.
-- **Sending someone else** — `delegate_subtask` finds something out in a scratchpad nobody
-  reads; `send_builder` makes a change in its own `git worktree` and hands back a patch;
-  `follow_up` asks either of them one more thing without starting over. What each may do is
-  an exhaustive list in `tools/delegation.py`, enforced by `run_tool` rather than asked for.
+- **Workflows** — when a message starts with `/workflow`, `run_workflow` runs a Python script
+  he writes that fans the work out to agents (`agent`, `parallel`, `pipeline`), confined with
+  no network and no home folder, in the background. Scouts read; builders edit their own `git
+  worktree` and hand back a `.patch` he applies. What each kind may do is an exhaustive list in
+  `tools/workers.py`, enforced by `run_tool` rather than asked for.
 
 Servers configured over MCP contribute more, namespaced `mcp__<label>__<tool>` so a built-in
 can never be shadowed.

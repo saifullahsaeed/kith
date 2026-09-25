@@ -162,11 +162,11 @@ WORKSPACE_DIR = _text("KITH_WORKSPACE")
 #: a fresh install still files tasks — it just files them badly, and the failure is the quiet kind,
 #: a board that hands him the wrong thing and is convincing about it.
 #:
-#: ``brainstorming`` and ``sending-workers`` for the same reason as each other: both name the way
-#: out of a failure he does not otherwise recognise as one. A brief vague enough to invent around
-#: comes back as a confident patch, and it reads exactly like a good one — there is no moment at
-#: which that goes wrong loudly, so it has to be said before the work starts rather than caught
-#: after.
+#: ``brainstorming`` because it names the way out of a failure he does not otherwise recognise as
+#: one. A brief vague enough to invent around comes back as confident work, and it reads exactly
+#: like good work — there is no moment at which that goes wrong loudly, so it has to be said before
+#: the work starts rather than caught after. (``sending-workers`` stood beside it for the same
+#: reason and went with the worker tools; a workflow's API lives in `run_workflow`'s description.)
 #:
 #: They are seeded on first run and updated afterwards only while nobody has edited them — see
 #: ``infra/seed.py``, which is what makes a correction to a shipped skill reach the people who

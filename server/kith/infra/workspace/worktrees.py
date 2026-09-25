@@ -82,9 +82,9 @@ _TIMEOUT = 60
 #:
 #: Making one is not the read-only operation it looks like. ``git stash create`` runs against
 #: the *source* repository and refreshes its index, so it takes `.git/index.lock`; `worktree
-#: add` then writes the shared `.git/worktrees` registry. Two builders sent in the same round —
-#: which is the whole point of `send_builder` being parallel-safe — hit both at once, and one of
-#: them dies with "could not write index" before it has read a single file.
+#: add` then writes the shared `.git/worktrees` registry. Two builders started together — which
+#: is the whole point of a workflow's `parallel()` — hit both at once, and one of them dies with
+#: "could not write index" before it has read a single file.
 #:
 #: Found in use on 2026-09-15: builder 2 won the race, builder 1 died at startup, and the agent
 #: that sent them diagnosed it from the lock files and retried. It should not have had to.
