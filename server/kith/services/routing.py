@@ -52,7 +52,8 @@ def for_conversation(config: Config, agent_db: Path, conversation_id: str) -> Ro
     """Settings routing, plus the host order this conversation settled on when it began.
 
     The first turn of a conversation ranks and writes the answer down; every turn after it
-    reads that row. A conversation that predates the column, or one started while the endpoint
+    reads that row — until the model changes, because the row is a ranking of one model's hosts
+    and the next model's are different slugs. A conversation that predates the column, or one started while the endpoint
     table could not be read, has nothing stored and ranks again next turn — which is the right
     behaviour and not a retry loop, because the write happens as soon as one succeeds.
     """
@@ -62,14 +63,14 @@ def for_conversation(config: Config, agent_db: Path, conversation_id: str) -> Ro
 
     from kith.services import conversations
 
-    settled = conversations.provider_order(agent_db, conversation_id)
+    settled = conversations.provider_order(agent_db, conversation_id, config.model)
     if settled:
         return replace(base, order=settled)
 
     order = _fetch(config, base.prefer_by)
     if not order:
         return base
-    conversations.remember_provider_order(agent_db, conversation_id, order)
+    conversations.remember_provider_order(agent_db, conversation_id, order, config.model)
     return replace(base, order=order)
 
 

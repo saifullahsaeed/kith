@@ -921,6 +921,18 @@ def _migrations():
         if "failed" not in held:
             conn.execute("ALTER TABLE turn_log ADD COLUMN failed TEXT")
 
+    def v50_conversation_hosts_are_per_model(conn):
+        # A host order is a ranking of one model's endpoints, and v46 stored it with no word of
+        # which model. Switch model mid-conversation and the order kept naming the old model's
+        # hosts: a conversation opened on gpt-6-luna-pro carried `openai/fast,azure/eu,...` into
+        # 360 rounds of deepseek-v4.1-flash, where `provider.order` ignores names it does not
+        # know, so every round fell back to unranked balancing — and 43 of them landed on an fp4
+        # host that lost the thread in 33. Blank on every older row, which reads as "ranked for
+        # nothing" and re-ranks once.
+        held = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
+        if "provider_model" not in held:
+            conn.execute("ALTER TABLE conversations ADD COLUMN provider_model TEXT NOT NULL DEFAULT ''")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -971,6 +983,7 @@ def _migrations():
         v47_the_doing_layer_has_a_project,
         v48_turn_composition,
         v49_turn_failures,
+        v50_conversation_hosts_are_per_model,
     ]
 
 

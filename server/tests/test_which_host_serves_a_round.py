@@ -128,6 +128,15 @@ class TestHealth:
         pool = [_endpoint("flaky", 0.100, 0.0010, 200, uptime=86.6), _endpoint("steady", 0.300, 0.0300, 50)]
         assert policy.rank(pool) == ("steady", "flaky")
 
+    def test_a_four_bit_host_never_leads_however_cheap(self):
+        """33 of 43 rounds on `open-inference/fp4` at 500k+ tokens lost the conversation."""
+        pool = [
+            _endpoint("open-inference/fp4", 0.100, 0.0010, 200, quantization="fp4"),
+            _endpoint("fine", 0.300, 0.0300, 50),
+            _endpoint("broken", 0.100, 0.0010, 200, status=-2),
+        ]
+        assert policy.rank(pool) == ("fine", "open-inference/fp4", "broken")
+
     def test_a_host_listed_twice_is_ordered_once(self):
         """`baseten/fp8` really does appear twice on this model. A repeat in `order` is a list
         that says something we did not mean."""
@@ -334,7 +343,7 @@ class TestSettledOnceNotPerRound:
         monkeypatch.setattr(routing_policy, "_fetch", lambda config, by: ("deepseek", "alibaba"))
         tuning.apply({"openrouter_provider": "", "prefer_provider_by": "price"})
         assert routing_policy.for_conversation(self._config(), db, "c1").order == ("deepseek", "alibaba")
-        assert conversations.provider_order(db, "c1") == ("deepseek", "alibaba")
+        assert conversations.provider_order(db, "c1", "deepseek/deepseek-v4.1-flash") == ("deepseek", "alibaba")
 
     def test_later_turns_read_the_row_and_never_re_rank(self, tmp_path, monkeypatch):
         """The network call is the tell: a second fetch means a second chance to move."""
@@ -372,7 +381,7 @@ class TestSettledOnceNotPerRound:
         monkeypatch.setattr(routing_policy, "_fetch", lambda config, by: ())
         tuning.apply({"openrouter_provider": "", "prefer_provider_by": "price"})
         assert routing_policy.for_conversation(self._config(), db, "c1").order == ()
-        assert conversations.provider_order(db, "c1") == ()
+        assert conversations.provider_order(db, "c1", "deepseek/deepseek-v4.1-flash") == ()
         monkeypatch.setattr(routing_policy, "_fetch", lambda config, by: ("deepseek",))
         assert routing_policy.for_conversation(self._config(), db, "c1").order == ("deepseek",)
 
@@ -381,9 +390,26 @@ class TestSettledOnceNotPerRound:
         from kith.services import conversations
 
         db = self._db(tmp_path)
-        conversations.remember_provider_order(db, "c1", ("deepseek",))
-        conversations.remember_provider_order(db, "c1", ("morph/fp8",))
-        assert conversations.provider_order(db, "c1") == ("deepseek",)
+        conversations.remember_provider_order(db, "c1", ("deepseek",), "m")
+        conversations.remember_provider_order(db, "c1", ("morph/fp8",), "m")
+        assert conversations.provider_order(db, "c1", "m") == ("deepseek",)
+
+    def test_switching_model_re_ranks_for_the_new_one(self, tmp_path, monkeypatch):
+        """The order is a ranking of one model's hosts. Kept across a switch, it named OpenAI's
+        hosts to deepseek's pool, `provider.order` ignored every one, and routing went unranked."""
+        from dataclasses import replace
+
+        from kith.services import conversations
+        from kith.services import routing as routing_policy
+
+        db = self._db(tmp_path)
+        tuning.apply({"openrouter_provider": "", "prefer_provider_by": "price"})
+        openai = replace(self._config(), model="openai/gpt-6-luna-pro")
+        monkeypatch.setattr(routing_policy, "_fetch", lambda config, by: ("openai/fast", "azure/eu"))
+        assert routing_policy.for_conversation(openai, db, "c1").order == ("openai/fast", "azure/eu")
+        monkeypatch.setattr(routing_policy, "_fetch", lambda config, by: ("morph", "deepseek"))
+        assert routing_policy.for_conversation(self._config(), db, "c1").order == ("morph", "deepseek")
+        assert conversations.provider_order(db, "c1", "openai/gpt-6-luna-pro") == ()
 
     def test_a_pin_is_still_not_second_guessed(self, tmp_path, monkeypatch):
         from kith.services import routing as routing_policy

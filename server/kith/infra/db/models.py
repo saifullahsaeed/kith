@@ -265,6 +265,9 @@ class Conversation(Base):
     #: when it started and kept, because moving hosts costs a cold prompt cache. Empty on rows
     #: older than the column and where the endpoint table could not be read.
     provider_order: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: The model `provider_order` ranks the hosts of. An order is only meaningful for the model
+    #: it was worked out for; blank on rows older than the column.
+    provider_model: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class TurnLog(Base):

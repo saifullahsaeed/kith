@@ -91,9 +91,7 @@ class Endpoint:
     #: every band it lands in.
     latency_ms: float = float("inf")
     #: The weights this host actually serves — "fp8", "bf16", "int4", "" when unstated.
-    #: Display-only for now: nothing here ranks on it, which is the whole of why the cheapest
-    #: host wins so often. Carried because a picker that does not show it is asking someone to
-    #: choose between two identical-looking rows that differ by a quantization step.
+    #: Four-bit weights rank behind everything else that is healthy; see `LOSSY`.
     quantization: str = ""
     #: What this host will actually accept, which is not always what the model advertises: a
     #: 256k model is routinely served by hosts capped at 32k, and the round that overflows is
@@ -135,6 +133,15 @@ class Endpoint:
 MIN_UPTIME = 95.0
 
 
+#: Quantizations that do not hold a long conversation together, so they never lead. Measured on
+#: `deepseek/deepseek-v4.1-flash` at 500k-800k prompt tokens: 33 of 43 rounds served by
+#: `open-inference/fp4` reasoned as if the conversation had just begun — "the user asked a vague
+#: question", re-reading the first message as the current one — against 6 of 306 on Morph, from
+#: the same transcript. Cheap enough to rank third on price, which is how it got the rounds.
+#: Like an unhealthy host it stays in the list, below the rest: a preference, not a ban.
+LOSSY = frozenset({"fp4", "int4"})
+
+
 def effective_price(endpoint: Endpoint) -> float:
     """What a round on this host actually costs, in dollars per million tokens.
 
@@ -173,17 +180,18 @@ def rank(endpoints: list[Endpoint], by: str = "price") -> tuple[str, ...]:
     asks for throughput has said speed matters more than money, not that money stopped
     mattering.
 
-    Unhealthy hosts sink to the bottom rather than being dropped: taking a host off the list
-    entirely is a decision about availability, and this function is only making one about
-    preference. OpenRouter is free to reach them once everything above has failed.
+    Unhealthy hosts sink to the bottom rather than being dropped, and four-bit hosts sink just
+    above them: taking a host off the list entirely is a decision about availability, and this
+    function is only making one about preference. OpenRouter is free to reach them once everything above has failed.
 
     Every host is listed, not a top few. A short list means the fallback past the end of it is
     unranked again, which is the behaviour this replaces.
     """
     keys = _KEYS.get(by) or _KEYS["price"]
-    healthy = [one for one in endpoints if _healthy(one)]
+    healthy = [one for one in endpoints if _healthy(one) and one.quantization not in LOSSY]
+    lossy = [one for one in endpoints if _healthy(one) and one.quantization in LOSSY]
     rest = [one for one in endpoints if not _healthy(one)]
-    return _deduped(one.slug for one in _banded(healthy, keys) + _banded(rest, keys))
+    return _deduped(one.slug for one in _banded(healthy, keys) + _banded(lossy, keys) + _banded(rest, keys))
 
 
 def _deduped(slugs) -> tuple[str, ...]:

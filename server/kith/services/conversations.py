@@ -161,17 +161,22 @@ def session_id(agent_db: Path, conversation_id: str) -> str:
     return str(row.get("session_id") or "") if row else ""
 
 
-def provider_order(agent_db: Path, conversation_id: str) -> tuple[str, ...]:
-    """The upstreams this conversation prefers, best first, or empty if never settled."""
+def provider_order(agent_db: Path, conversation_id: str, model: str) -> tuple[str, ...]:
+    """The upstreams this conversation prefers for `model`, best first, or empty if never
+    settled for it. An order ranked for another model names that model's hosts, which
+    `provider.order` silently ignores — so it is not an order at all here."""
     row = repo.conversations.get(agent_db, conversation_id)
-    raw = str(row.get("provider_order") or "") if row else ""
+    if not row or str(row.get("provider_model") or "") != model:
+        return ()
+    raw = str(row.get("provider_order") or "")
     return tuple(slug for slug in raw.split(",") if slug)
 
 
-def remember_provider_order(agent_db: Path, conversation_id: str, order: tuple[str, ...]) -> None:
-    """Settle it, once. A conversation that already has one is left where it is."""
+def remember_provider_order(agent_db: Path, conversation_id: str, order: tuple[str, ...], model: str) -> None:
+    """Settle it, once per model. A conversation that already has one for this model is left
+    where it is."""
     if conversation_id and order:
-        repo.conversations.remember_provider_order(agent_db, conversation_id, ",".join(order))
+        repo.conversations.remember_provider_order(agent_db, conversation_id, ",".join(order), model)
 
 
 def record(agent_db: Path, conversation_id: str, role: str, content: str, extra: dict | None = None) -> None:
