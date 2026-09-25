@@ -29,16 +29,18 @@ export interface ActivityItem {
     | "status"
     | "tokens"
     | "retrying"
-    /** A sub-agent's own work — see `errand` below. */
-    | "errand";
+    /** One of a workflow's agents at work — see `errand` below. */
+    | "errand"
+    /** A workflow run's own state — see `workflow` below. */
+    | "workflow";
   text: string;
   at: string;
   tokens?: { round: number; uncached: number; cached: number; out: number };
   tool?: string;
   args?: Record<string, string>;
-  /** Present on `errand` lines: which sub-agent this is, and where it has got to.
+  /** Present on `errand` lines: which of a workflow's agents this is, and where it has got to.
    *  `running` opens one, `step` is a tool call inside it, `done` closes it. The id is what
-   *  keeps three scouts sent in the same round from reading as one confused list. */
+   *  keeps six agents running at once from reading as one confused list. */
   errand?: {
     id: string;
     state: "running" | "step" | "done";
@@ -46,6 +48,18 @@ export interface ActivityItem {
     /** `scout` reads, `builder` edits in its own copy of the repository. Absent on lines from
      *  before roles existed, which read as a scout — the safer of the two to be wrong about. */
     role?: string;
+    /** The workflow run that sent it. */
+    run?: string;
+  };
+  /** Present on `workflow` lines: a run's own state. `started` carries the plan, `phase` and
+   *  `log` are the script's progress, and `finished` / `failed` / `stopped` end it. */
+  workflow?: {
+    run: string;
+    state: "started" | "phase" | "log" | "finished" | "failed" | "stopped";
+    name?: string;
+    description?: string;
+    phases?: string[];
+    folder?: string;
   };
   /** Which session this line belongs to. Absent on the genuinely global lines — a status
    *  change — which every session shows, because they are about the machine rather than

@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 import { useAuiState, useComposerRuntime, type Unstable_SlashCommand } from "@assistant-ui/react";
 
 import type { ContextLedger } from "@/lib/backend/types";
-import { DESIGN_PROMPT, foldNow, listSkills, stopTurn, type SkillSummary } from "@/lib/commands";
+import {
+  DESIGN_PROMPT,
+  foldNow,
+  listSkills,
+  stopTurn,
+  WORKFLOW_PREFIX,
+  type SkillSummary,
+} from "@/lib/commands";
 
 /**
  * The `/` commands, and the line that says what one did.
@@ -88,6 +95,19 @@ export function useSlashCommands(conversationId?: string) {
       icon: "Frame",
       execute: () => {
         composer.setText(DESIGN_PROMPT);
+      },
+    },
+    /* The opt-in for a fan-out, written into the composer and left there. The prefix travels
+     * as part of the message — the transcript keeps it and he reads it — so it is the whole
+     * mechanism: a message starting `/workflow` lets him write a workflow script for it, and
+     * without it `run_workflow` refuses. */
+    {
+      id: "workflow",
+      label: "workflow",
+      description: "Have him split this into agents that run in parallel, in the background",
+      icon: "Workflow",
+      execute: () => {
+        composer.setText(WORKFLOW_PREFIX);
       },
     },
     ...skills.map(

@@ -18,12 +18,23 @@ import type { FC } from "react";
 import ReactMarkdown from "react-markdown";
 import { useAuiState } from "@assistant-ui/react";
 import { MARKDOWN_PLUGINS, MARKDOWN_REHYPE } from "@/lib/markdown-plugins";
+import { splitWorkflowPrefix } from "@/lib/workflow-prefix";
 
 export const UserMarkdownText: FC = () => {
-  const text = useAuiState((s) => (s.part.type === "text" ? s.part.text : ""));
-  if (!text) return null;
+  const said = useAuiState((s) => (s.part.type === "text" ? s.part.text : ""));
+  if (!said) return null;
+  // A message that opted into a workflow says so as a chip, not as a word that reads like a typo.
+  const { workflow, rest: text } = splitWorkflowPrefix(said);
   return (
     <div className="kith-user-markdown">
+      {workflow ? (
+        <span
+          className="mb-1 inline-flex items-center rounded bg-teal-400/15 px-1.5 py-px font-mono text-[10.5px] text-teal-700 dark:text-teal-300"
+          title="Sent as a workflow: he may split this into agents that run in the background"
+        >
+          /workflow
+        </span>
+      ) : null}
       <ReactMarkdown
         remarkPlugins={MARKDOWN_PLUGINS} rehypePlugins={MARKDOWN_REHYPE}
         components={{

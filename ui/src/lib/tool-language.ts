@@ -69,10 +69,9 @@ export const GROUP: Record<string, WorkKind> = {
   search: { icon: Search, tone: "text-sky-400/70", noun: "searches", one: "search" },
   tools: { icon: Wrench, tone: "text-muted-foreground/70", noun: "tools", one: "tool" },
   skills: { icon: Puzzle, tone: "text-kith/80", noun: "skills", one: "skill" },
-  // Its own kind rather than another "search". A run of six searches is him looking; one of
-  // these is a whole second agent's worth of looking that happened somewhere you cannot see,
-  // and collapsing the two into "7 searches" would hide exactly the part worth knowing about.
-  delegation: { icon: Radar, tone: "text-teal-400/80", noun: "errands", one: "errand" },
+  // Its own kind rather than another "tool". One of these is a whole fan-out of agents working
+  // somewhere you cannot see, and folding it into "7 tools" would hide the part worth knowing.
+  workflow: { icon: Radar, tone: "text-teal-400/80", noun: "workflows", one: "workflow" },
 };
 
 /**
@@ -179,10 +178,8 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   read_skill: { verb: "opened the skill", of: "name", group: "skills" },
   plugin_state: { verb: "read what the plugin is holding", of: "plugin", group: "skills" },
   plan_work: { verb: "laid out the next tasks", group: "tasks" },
-  // sending someone else to look, and someone else to build
-  delegate_subtask: { verb: "sent someone to find out", of: "objective", group: "delegation" },
-  send_builder: { verb: "sent someone to change", of: "objective", group: "delegation" },
-  follow_up: { verb: "asked them one more thing", of: "ask", group: "delegation" },
+  // a fan-out of agents, in the background
+  run_workflow: { verb: "started a workflow", group: "workflow" },
 };
 
 /** What each plural argument used to be called, for reading back old tool calls. */

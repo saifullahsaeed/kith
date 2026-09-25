@@ -2,7 +2,7 @@ import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { BackgroundTasks } from "@/components/chat/background-tasks";
 import { StandingWork } from "@/components/chat/standing-work";
 import { ContextSection } from "@/components/chat/context-section";
-import { Errands, isErrandLine } from "@/components/chat/errands";
+import { isWorkflowLine, Workflows } from "@/components/chat/workflows";
 import { formatTokens } from "@/lib/tokens";
 import type { useActivity } from "@/hooks/use-activity";
 import type { ActivityItem } from "@/lib/backend/activity";
@@ -19,8 +19,8 @@ type Activity = ReturnType<typeof useActivity>;
  * Gone, and what is left is the three things a conversation genuinely cannot say:
  *
  * * **what he is working on**, and how far through its checklist;
- * * **what a sub-agent is finding out for him** — the one tool feed that is not a second copy,
- *   because a worker's searching is discarded by design and reaches the thread nowhere;
+ * * **what a workflow's agents are doing** — the one tool feed that is not a second copy, because
+ *   a run outlives the turn that started it and its agents' searching reaches the thread nowhere;
  * * **what is in his head**, itemised, with the button that shrinks it;
  * * **what is running in the background** while he does something else.
  *
@@ -38,7 +38,7 @@ export function WorkPanel({
   const { status, activity: lines } = activity;
   // Rounds this session, counted off the activity lines. The feed used to group them into blocks and
   // count those; there are no blocks any more.
-  const steps = lines.filter((item) => !isControlLine(item) && !isErrandLine(item)).length;
+  const steps = lines.filter((item) => !isControlLine(item) && !isWorkflowLine(item)).length;
   const lifetime = (status?.tokensUncached ?? 0) + (status?.tokensOut ?? 0);
   // Whether the counters row has anything to say. It used to render regardless and fill itself with
   // "no steps yet" — an empty bar is better removed than captioned.
@@ -61,7 +61,7 @@ export function WorkPanel({
           The sections start at the top now. */}
       {/* Everything between the header and the counters scrolls, and until now nothing did.
           The column is `h-full` with five stacked sections in it, so whatever did not fit was
-          simply unreachable — one task with a nine-step checklist was enough to put the errands,
+          simply unreachable — one task with a nine-step checklist was enough to put the workflows,
           the context and the background work below the fold with no way to get to them.
 
           `min-h-0` is the half that is easy to leave out and the half that makes it work: a flex
@@ -72,10 +72,10 @@ export function WorkPanel({
             "what is he doing" in the middle of the thing you type into. */}
         <WorkingOn conversationId={conversationId} />
 
-        {/* Who he has sent to find something out, and how far they have got. Directly under
-            what he is working on, because while an errand is out it *is* what is happening —
-            the thread shows one spinning row and nothing else until it comes back. */}
-        <Errands lines={lines} conversationId={conversationId} />
+        {/* The workflows he has running, and how far their agents have got. Directly under what
+            he is working on, because while one is running it *is* what is happening — the turn
+            that started it has ended and the thread says nothing more until it reports. */}
+        <Workflows lines={lines} conversationId={conversationId} />
 
         {/* What is in his head, itemised, and the Fold button. */}
         <ContextSection conversationId={conversationId} />

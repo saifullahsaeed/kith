@@ -171,36 +171,11 @@ export function summarise(name: string, args: Args, wrapped: unknown): string {
         ? `${asked.length} questions`
         : short(String(one?.question ?? ""), 56);
     }
-    case "send_builder":
-    case "follow_up":
-    case "delegate_subtask": {
-      // Two halves, and neither works without the other. The brief tells the worker to answer
-      // the objective in its first sentence, so the first sentence is the summary. The call
-      // count is what the prose cannot tell you: a confident paragraph built on two calls and
-      // one built on nineteen read identically, and this is the only surviving trace of which
-      // you are looking at — everything else the worker did was thrown away by design.
-      const looked = s(r.looked_at).trim();
-      const total = looked
-        ? looked
-            .split(",")
-            .reduce((n, part) => n + (Number(/\sx(\d+)$/.exec(part.trim())?.[1]) || 1), 0)
-        : 0;
-      const first = short(s(r.findings).split(/(?<=[.!?])\s/)[0], 56);
-      const cut = r.error ? "cut short" : "";
-      // A builder's summary leads with the size of its patch, because that is the thing its
-      // prose cannot be trusted about: "I updated the ledger" and an empty diff look identical
-      // in words, and are the one failure downstream cannot catch.
-      const patch = typeof r.patch === "string" ? r.patch : "";
-      const changed = patch ? patch.split("\n").filter((l) => /^diff --git /.test(l)).length : 0;
-      const edits =
-        name === "send_builder" || patch
-          ? changed
-            ? `${changed} file${changed === 1 ? "" : "s"} changed`
-            : "no changes"
-          : "";
-      return [cut, edits, total ? `${total} call${total === 1 ? "" : "s"}` : "", first]
-        .filter(Boolean)
-        .join(" \u00b7 ");
+    case "run_workflow": {
+      // Its name and its plan, which is what was started — the result itself arrives later, in
+      // the turn the finished run wakes, so there is nothing to summarise from here but intent.
+      const phases = Array.isArray(r.phases) ? (r.phases as unknown[]).map(String) : [];
+      return [s(r.name), phases.join(" → ")].filter(Boolean).join(" · ");
     }
     case "read_skill":
       return s(args.name);
@@ -474,63 +449,53 @@ function looksLikeSkill(value: Record<string, unknown>): boolean {
   );
 }
 
-/** What a sub-agent came back with — the result of `delegate_subtask`, `send_builder` or
- *  `follow_up`.
+/** A workflow he started — the result of `run_workflow`.
  *
- *  Its own card because its result is the one that is *deliberately* not a record of what
- *  happened. Everything the worker actually did — the greps, the files, the dead ends — was
- *  thrown away on purpose, and what is left is a written report meant to be read as prose.
- *  Rendered as JSON it reads as machine output from a machine that did nothing, which is the
- *  opposite of true: `looked_at` is the only trace left of a whole second agent's work, and
- *  it is what tells you whether to believe the paragraph above it.
- *
- *  A builder adds `patch`, and it is shown *below* the prose rather than above it on purpose.
- *  The report says what the worker meant to do and the patch says what it did, and those are
- *  not always the same thing — reading the claim first is what makes the difference visible.
+ *  Not a result in the usual sense: the run happens after this turn ends, and what it finds comes
+ *  back in the turn it wakes. So the card says what was *started* — the name and the plan — and
+ *  keeps the script one click away, because the script is the plan written down, and reading it
+ *  is how you check he split the work the way you would have. Live progress is in the Work panel.
  */
-function looksLikeFindings(value: Record<string, unknown>): boolean {
-  return typeof value.findings === "string";
+function looksLikeWorkflow(value: Record<string, unknown>): boolean {
+  return typeof value.run === "string";
 }
 
-const Findings: FC<{ value: Record<string, unknown>; objective: string }> = ({
-  value,
-  objective,
-}) => {
-  const findings = typeof value.findings === "string" ? value.findings : "";
-  const lookedAt = typeof value.looked_at === "string" ? value.looked_at : "";
-  const note = typeof value.note === "string" ? value.note : "";
-  const patch = typeof value.patch === "string" ? value.patch.trim() : "";
+const WorkflowStarted: FC<{ value: Record<string, unknown>; script: string }> = ({ value, script }) => {
+  const [open, setOpen] = useState(false);
+  const phases = Array.isArray(value.phases) ? (value.phases as unknown[]).map(String) : [];
 
   return (
     <div className="flex flex-col gap-2 rounded-lg p-2.5 ring-1 ring-border/60">
-      {objective ? (
-        <div className="flex items-start gap-1.5">
-          <Radar className="mt-0.5 size-3.5 shrink-0 text-teal-400/80" />
-          <span className="text-xs leading-relaxed text-muted-foreground">{objective}</span>
-        </div>
+      <div className="flex items-center gap-1.5">
+        <Radar className="size-3.5 shrink-0 text-teal-400/80" />
+        <span className="text-sm font-medium text-foreground">{String(value.name ?? "workflow")}</span>
+        <span className="text-muted-foreground/60 font-mono text-[10px]">{String(value.run)}</span>
+      </div>
+      {phases.length ? (
+        <ol className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+          {phases.map((phase, i) => (
+            <li key={`${phase}-${i}`} className="flex items-center gap-1">
+              {i ? <span className="text-muted-foreground/40">→</span> : null}
+              {phase}
+            </li>
+          ))}
+        </ol>
       ) : null}
-      {note ? (
-        <p className="rounded-md bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
-          {note}
-        </p>
-      ) : null}
-      {findings ? (
-        <div className="max-h-96 overflow-auto rounded-md bg-muted/30 p-2.5 ring-1 ring-border/40">
-          <Prose text={findings} />
-        </div>
-      ) : null}
-      {patch ? (
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        Running in the background — follow it in the Work panel. He picks the result up in a new
+        turn when it finishes.
+      </p>
+      {script ? (
         <div className="flex flex-col gap-1">
-          <Label>patch</Label>
-          <div className="max-h-96 overflow-auto rounded-md ring-1 ring-border/40">
-            <Diff text={patch} />
-          </div>
-        </div>
-      ) : null}
-      {lookedAt ? (
-        <div className="flex flex-col gap-1">
-          <Label>looked at</Label>
-          <span className="text-[11px] text-muted-foreground">{lookedAt}</span>
+          <button
+            type="button"
+            onClick={() => setOpen((was) => !was)}
+            aria-expanded={open}
+            className="text-muted-foreground hover:text-foreground w-fit cursor-pointer text-left text-[11px]"
+          >
+            {open ? "Hide the script" : "Show the script"}
+          </button>
+          {open ? <CodeBlock code={script} language="python" label="workflow" /> : null}
         </div>
       ) : null}
     </div>
@@ -1533,16 +1498,13 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     }
 
     if (
-      (name === "delegate_subtask" || name === "send_builder" || name === "follow_up") &&
+      name === "run_workflow" &&
       result &&
       typeof result === "object" &&
-      looksLikeFindings(result as Record<string, unknown>)
+      looksLikeWorkflow(result as Record<string, unknown>)
     ) {
       return (
-        <Findings
-          value={result as Record<string, unknown>}
-          objective={String(args.objective ?? "")}
-        />
+        <WorkflowStarted value={result as Record<string, unknown>} script={String(args.script ?? "")} />
       );
     }
 

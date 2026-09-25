@@ -71,6 +71,21 @@ export async function stopTurn(conversationId: string): Promise<CommandResult> {
 }
 
 /**
+ * Stop a workflow run. Its script ends and every agent stops at its next event; he is still woken
+ * with whatever finished, so the agents that did finish are not thrown away.
+ */
+export async function stopWorkflow(runId: string): Promise<boolean> {
+  if (!runId) return false;
+  const response = await fetch(`/api/workflows/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+  const body = response.ok ? ((await response.json()) as { stopping?: boolean }) : {};
+  return Boolean(body.stopping);
+}
+
+/** What `/workflow` writes into the composer. The prefix *is* the opt-in: a message that starts
+ *  with it lets him write and run a workflow for that one request, and nothing else can. */
+export const WORKFLOW_PREFIX = "/workflow ";
+
+/**
  * Say something to the turn already running, instead of killing it.
  *
  * Returns whether it landed. `false` means nothing was running — not a failure, and the caller
