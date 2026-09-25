@@ -524,16 +524,21 @@ class TestTheWorkerCanReadTheNotesItWasBriefedOn:
         assert copy is not None
         assert (copy / ".kith" / "plan.md").read_text() == "the plan\n"
 
-    def test_scratch_is_left_behind(self, repo: Path):
-        """Throwaway by definition, the largest thing under there, and never a brief."""
-        (repo / ".kith" / "scratch").mkdir(parents=True)
-        (repo / ".kith" / "scratch" / "huge.json").write_text("[]")
-        (repo / ".kith" / "keep.md").write_text("keep\n")
+    def test_scratch_is_carried_but_not_its_runs_or_its_big_files(self, repo: Path):
+        """Scratch is where the check scripts a worker is told to copy live — a workflow sent a
+        builder to "follow .kith/scratch/check_surface.py" and it searched its whole budget for a
+        file its copy did not have. A workflow's own run folder and generated data stay out."""
+        scratch = repo / ".kith" / "scratch"
+        (scratch / "workflows" / "wf-1").mkdir(parents=True)
+        (scratch / "workflows" / "wf-1" / "a.patch").write_text("x")
+        (scratch / "check_surface.py").write_text("print('check')\n")
+        (scratch / "huge.json").write_text("x" * (worktrees._LARGEST_NOTE + 1))
 
-        copy = worktrees.open_for("noscratch")
+        copy = worktrees.open_for("scratch")
         assert copy is not None
-        assert (copy / ".kith" / "keep.md").exists()
-        assert not (copy / ".kith" / "scratch").exists()
+        assert (copy / ".kith" / "scratch" / "check_surface.py").read_text() == "print('check')\n"
+        assert not (copy / ".kith" / "scratch" / "workflows").exists()
+        assert not (copy / ".kith" / "scratch" / "huge.json").exists()
 
     def test_writing_to_the_notes_does_not_reach_the_real_ones(self, repo: Path):
         """Copied, not symlinked: `.kith` is the main agent's own memory and a worker must not
@@ -560,6 +565,62 @@ class TestTheWorkerCanReadTheNotesItWasBriefedOn:
         patch = worktrees.diff_in(copy)
         assert "real work" in patch
         assert ".kith" not in patch
+
+    def test_what_the_worker_writes_under_the_notes_does_come_back(self, repo: Path):
+        """The other half of the rule above, and the half that was missing. Carried notes stay
+        out of the patch; a design mockup or a check script the worker was asked to write there
+        comes back — tracked `.kith/screens/` and gitignored `.kith/scratch/` alike."""
+        (repo / ".kith" / "screens").mkdir(parents=True)
+        (repo / ".kith" / "screens" / "old.html").write_text("<p>old</p>\n")
+        (repo / ".kith" / ".gitignore").write_text("scratch/\n")
+        import subprocess
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "screens"], cwd=repo, check=True)
+        (repo / ".kith" / "plan.md").write_text("an uncommitted note\n")
+
+        copy = worktrees.open_for("writes-notes")
+        assert copy is not None
+        (copy / ".kith" / "screens" / "devices.html").write_text("<p>new screen</p>\n")
+        (copy / ".kith" / "scratch").mkdir(exist_ok=True)
+        (copy / ".kith" / "scratch" / "check_devices.py").write_text("print('ok')\n")
+
+        patch = worktrees.diff_in(copy)
+        assert ".kith/screens/devices.html" in patch
+        assert ".kith/scratch/check_devices.py" in patch
+        assert "plan.md" not in patch, "a note carried in is not the worker's work"
+        assert "old.html" not in patch
+
+    def test_earlier_patches_can_be_applied_into_a_copy_and_stay_separate(self, repo: Path):
+        """A review or an integration step has to see what earlier builders made. Applied into
+        its copy and re-baselined, so its own patch is only its own work and the two stack."""
+        first = worktrees.open_for("first")
+        assert first is not None
+        (first / "added.py").write_text("from the first builder\n")
+        earlier = worktrees.diff_in(first)
+
+        second = worktrees.open_for("second")
+        assert second is not None
+        assert worktrees.apply_in(second, [earlier]) == ""
+        assert (second / "added.py").read_text() == "from the first builder\n"
+        (second / "kept.py").write_text("from the second builder\n")
+        mine = worktrees.diff_in(second)
+        assert "from the second builder" in mine
+        assert "added.py" not in mine
+
+        # And they stack on the real tree, in order.
+        for patch in (earlier, mine):
+            holder = repo.parent / "p.patch"
+            holder.write_text(patch)
+            subprocess.run(["git", "apply", str(holder)], cwd=repo, check=True)
+        assert (repo / "added.py").read_text() == "from the first builder\n"
+        assert (repo / "kept.py").read_text() == "from the second builder\n"
+
+    def test_a_patch_that_does_not_apply_says_so(self, repo: Path):
+        copy = worktrees.open_for("bad-patch")
+        assert copy is not None
+        broken = "--- a/nothing.py\n+++ b/nothing.py\n@@ -1 +1 @@\n-not there\n+x\n"
+        assert "did not apply" in worktrees.apply_in(copy, [broken])
 
     def test_a_repo_with_no_notes_is_fine(self, repo: Path):
         copy = worktrees.open_for("nonotes")

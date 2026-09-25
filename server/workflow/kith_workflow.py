@@ -101,17 +101,28 @@ def _speak() -> _Channel:
     return _channel
 
 
-def agent(prompt: str, kind: str = "scout", label: str | None = None, schema=None):
+def agent(prompt: str, kind: str = "scout", label: str | None = None, schema=None, after=None):
     """Send one agent and wait for it.
 
     ``kind="scout"`` reads, searches and reports, and returns its report as a string.
     ``kind="builder"`` edits a private copy of the repository and returns
-    ``{"report", "diff", "patch_file"}``. With ``schema`` (a JSON-shaped example such as
+    ``{"report", "diff", "patch_file", "label"}``. With ``schema`` (a JSON-shaped example such as
     ``{"files": ["str"]}``) the report comes back as that parsed JSON instead of prose.
+
+    Every agent starts from the repository as it is — it does NOT see what earlier builders in
+    this workflow changed. ``after=[built, ...]`` (builder results, or diff strings) starts it
+    from a copy with those patches applied, in order: that is how an integration step or a
+    review sees the new code. A ``None`` in the list (a builder that failed) is skipped.
 
     The prompt is everything the agent knows. It starts with none of the conversation, so say
     what to look at, what you already know, and what a useful answer contains.
     """
+    earlier = []
+    for one in after or []:
+        if isinstance(one, dict) and str(one.get("diff") or "").strip():
+            earlier.append({"diff": str(one["diff"]), "label": str(one.get("label") or "")})
+        elif isinstance(one, str) and one.strip():
+            earlier.append({"diff": one, "label": ""})
     reply = _speak().ask(
         {
             "op": "agent",
@@ -119,6 +130,7 @@ def agent(prompt: str, kind: str = "scout", label: str | None = None, schema=Non
             "kind": str(kind or "scout"),
             "label": None if label is None else str(label),
             "schema": schema,
+            "after": earlier,
         }
     )
     if not reply.get("ok"):

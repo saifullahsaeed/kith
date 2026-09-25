@@ -463,3 +463,96 @@ finish({"seen": seen, "report": built["report"], "patch_file": built["patch_file
         copies = tmp_path / "data" / "workers"
         assert not copies.exists() or not any(copies.iterdir())
         workflows.forget_all()
+
+
+@needs_confinement
+class TestALaterAgentSeesWhatEarlierBuildersMade:
+    """Every agent starts from the repository as it is, which made the first real workflow's
+    review step read a tree where the new module did not exist. `after=` starts an agent from a
+    copy with the earlier patches applied — and its own patch stays only its own work."""
+
+    def test_a_review_reads_the_new_file_and_a_second_builder_stacks(
+        self, db: Path, tmp_path: Path, monkeypatch
+    ):
+        import json
+        import subprocess
+
+        from kith.services import agent_loop
+
+        repo = tmp_path / "project"
+        repo.mkdir()
+        for line in (
+            ["git", "init", "-q"],
+            ["git", "config", "user.email", "t@t"],
+            ["git", "config", "user.name", "t"],
+        ):
+            subprocess.run(line, cwd=repo, check=True)
+        (repo / "kept.py").write_text("original\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "first"], cwd=repo, check=True)
+        monkeypatch.setattr(paths, "root", lambda: repo)
+        monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
+        workflows.forget_all()
+
+        def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
+            asked = str(convo[1].get("content"))
+            results = [m for m in convo if m.get("role") == "tool"]
+            if "write the module" in asked and not results:
+                arguments = json.dumps({"path": "discover.py", "content": "def probe(): pass\n"})
+            elif "wire it" in asked and not results:
+                arguments = json.dumps({"path": "app.py", "content": "import discover\n"})
+            elif "review" in asked and not results:
+                call = {
+                    "function": {"name": "read_file", "arguments": json.dumps({"paths": ["discover.py"]})}
+                }
+                yield {"type": "turn", "content": "", "tool_calls": [call], "stats": {}}
+                return
+            else:
+                said = "saw: " + (str(results[-1].get("content"))[:200] if results else "nothing")
+                yield {"type": "delta", "role": "text", "text": said}
+                yield {"type": "turn", "content": said, "tool_calls": [], "stats": {}}
+                return
+            call = {"function": {"name": "write_file", "arguments": arguments}}
+            yield {"type": "turn", "content": "", "tool_calls": [call], "stats": {}}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", fake)
+        script = """
+META = {"name": "stack"}
+module = agent("write the module", kind="builder", label="module")
+wired = agent("wire it", kind="builder", label="wiring", after=[module])
+review = agent("review discover.py", after=[module, wired, None])
+finish({"review": review, "wired": wired["diff"]})
+"""
+        run = _wait(_start(db, script, conversation="conv-stack")["run"])
+        assert run.state == workflows.FINISHED, run.note
+        result = _result(run)
+        assert "def probe" in result["review"], "the reviewer read a file that exists only as a patch"
+        assert "app.py" in result["wired"] and "discover.py" not in result["wired"]
+        assert "made on top of module — apply those first" in run.note
+        assert (repo / "kept.py").read_text() == "original\n"
+        assert not (repo / "discover.py").exists()
+        workflows.forget_all()
+
+
+class TestAnAgentIsNeverHandedPluginCommands:
+    def test_the_tool_host_it_runs_on_has_no_plugins_and_no_mcp(self, db: Path, monkeypatch):
+        """A builder asked for a mockup opened a real browser window through a plugin command:
+        the loop allows whatever it offers, and plugins were being offered."""
+        from kith import tools as tool_layer
+        from kith.services import agent_loop
+
+        seen: dict = {}
+        real = tool_layer.host
+
+        def spy(path, **kw):
+            seen.update(kw)
+            return real(path, **kw)
+
+        def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
+            yield {"type": "delta", "role": "text", "text": "done"}
+            yield {"type": "turn", "content": "done", "tool_calls": [], "stats": {}}
+
+        monkeypatch.setattr(tool_layer, "host", spy)
+        monkeypatch.setattr(agent_loop, "_stream_once", fake)
+        workers.run_agent(db, "scout", "look", "")
+        assert seen.get("mcp") == [] and seen.get("plugin") == []

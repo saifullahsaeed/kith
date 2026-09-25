@@ -83,9 +83,12 @@ DESCRIPTION = (
     '"Review"]}  — required.\n'
     'agent(prompt, kind="scout"|"builder", label=None, schema=None) — scout: reads and searches, '
     'returns its report (str). builder: edits a private copy of the repo, returns {"report", '
-    '"diff", "patch_file"}. With schema (e.g. {"files": ["str"]}) the report comes back as that '
-    "JSON. Every agent starts knowing NOTHING about this conversation: each prompt must stand "
-    "alone — paths, names, what done looks like. Raises AgentFailed.\n"
+    '"diff", "patch_file", "label"}. With schema (e.g. {"files": ["str"]}) the report comes back '
+    "as that JSON. Every agent starts knowing NOTHING about this conversation: each prompt must "
+    "stand alone — paths, names, what done looks like. Raises AgentFailed.\n"
+    "Every agent starts from the repo AS IT IS, not from earlier builders' edits. To build on "
+    "them or review them, pass after=[built1, built2]: the agent starts from a copy with those "
+    "patches applied.\n"
     "parallel([fn, ...]) — results in order, None where one failed. In a loop bind the variable: "
     '[lambda p=p: agent(f"... {p}") for p in parts].\n'
     "pipeline(items, stage1, stage2, ...) — each item through the stages on its own; a stage "
@@ -410,13 +413,30 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
             name = str(event.get("name") or "")
             mark("step", name, tool_name=name, arguments=event.get("arguments") or {})
 
+    # What earlier builders made, if this agent was sent `after` them. Any kind may be: a review
+    # is a scout that has to read code which so far exists only as patches.
+    earlier = [
+        one
+        for one in (message.get("after") or [])
+        if isinstance(one, dict) and str(one.get("diff") or "").strip()
+    ]
+    on_top_of = [str(one.get("label") or "").strip() or "an earlier patch" for one in earlier]
+
     worktree = ""
-    if kind == "builder":
+    if kind == "builder" or earlier:
         try:
             worktree = workers.open_copy(f"{run.id}-{agent_id}")
         except workers.WorkerError as exc:
-            agents.record(f'- builder "{label}" — could not start: {exc}', 0.0)
+            agents.record(f'- {kind} "{label}" — could not start: {exc}', 0.0)
             raise _Failed(str(exc)) from None
+        if earlier:
+            from kith.infra.workspace import worktrees
+
+            refused = worktrees.apply_in(Path(worktree), [str(one["diff"]) for one in earlier])
+            if refused:
+                worktrees.close(Path(worktree))
+                agents.record(f'- {kind} "{label}" — could not start: {refused}', 0.0)
+                raise _Failed(f"the earlier patches do not apply together — {refused}")
 
     mark("running", label)
     try:
@@ -460,11 +480,15 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
             patch_file = str(patch)
             added, removed = _diffstat(diff)
             outcome = f"patch {patch_file} (+{added} −{removed})"
+            if on_top_of:
+                # Said, because order now matters: this patch was made against a tree with
+                # those applied, so it goes on after them.
+                outcome += f", made on top of {', '.join(on_top_of)} — apply those first"
         else:
             outcome = "changed nothing"
         mark("done", tally or outcome)
         agents.record(f'- builder "{label}" — {outcome}', cost)
-        return {"report": shaped, "diff": diff, "patch_file": patch_file}
+        return {"report": shaped, "diff": diff, "patch_file": patch_file, "label": label}
     finally:
         if worktree:
             from kith.infra.workspace import worktrees

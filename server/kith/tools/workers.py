@@ -358,9 +358,11 @@ def run_agent(
             config,
             ollama_host(),
             path,
-            # No MCP. `tool_schemas` adds every MCP tool regardless of `only`, and an arbitrary
-            # server's tools have not been through the classification above.
-            tool_host(path, mcp=[]),
+            # No MCP and no plugins. `tool_schemas` appends both regardless of `only`, and the
+            # loop allows whatever it offered — so an agent was being handed every plugin
+            # command, and a builder asked for a mockup opened a real browser window with one.
+            # Neither has been through the classification above.
+            tool_host(path, mcp=[], plugin=[]),
             max_rounds=rounds if rounds is not None else shape["rounds"](),
             allow=tools if tools is not None else shape["given"](),
             # The parent's conversation, which is not about recording anything — nothing here

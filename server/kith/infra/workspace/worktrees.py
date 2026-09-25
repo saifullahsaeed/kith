@@ -134,6 +134,7 @@ def open_for(worker_id: str) -> Path | None:
         made = _git("worktree", "add", "--detach", str(where), start, cwd=source, timeout=_TIMEOUT)
         if made.exit_code == 0:
             _carry_notes(source, where)
+            _baseline(where)
 
     if made.exit_code != 0:
         # Left as a failure rather than a silent fall back to the real tree. "He could not be
@@ -145,11 +146,15 @@ def open_for(worker_id: str) -> Path | None:
 
 #: What is under `.kith` but is not a note. Skipped when carrying it into a worker's copy.
 #:
-#: `scratch` is throwaway by definition. The rest is build output — he writes little web apps
-#: into `.kith/work/`, and they bring what a web app brings. See :func:`_carry_notes` for the
-#: 150 MB this was measured at before the list existed.
+#: Build output — he writes little web apps into `.kith/work/`, and they bring what a web app
+#: brings. See :func:`_carry_notes` for the 150 MB this was measured at before the list existed.
+#:
+#: `scratch` used to be here too, as throwaway by definition, and that turned out to be wrong for
+#: the files that matter most: it is where he keeps the check scripts and reference files he
+#: points a worker at. A workflow told a builder to "follow the structure of
+#: .kith/scratch/check_surface.py" and the builder spent its whole budget searching for a file
+#: its copy did not have. So scratch is carried now, minus what is big or is itself a run.
 _NOT_NOTES = (
-    "scratch",
     "node_modules",
     ".venv",
     "venv",
@@ -187,14 +192,111 @@ def _carry_notes(source: Path, copy: Path) -> None:
     if not notes.is_dir():
         return
     try:
-        shutil.copytree(
-            notes,
-            copy / ".kith",
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(*_NOT_NOTES),
-        )
+        shutil.copytree(notes, copy / ".kith", dirs_exist_ok=True, ignore=_not_a_note)
     except Exception:
         pass
+
+
+#: The largest single file carried from `.kith`. A note, a brief or a check script is a few
+#: kilobytes; a file past this is data somebody generated, and copying it per builder is the
+#: 150 MB problem again one file at a time.
+_LARGEST_NOTE = 1_000_000
+
+
+def _not_a_note(directory: str, names: list[str]) -> set[str]:
+    """What `copytree` should skip in one directory of `.kith`.
+
+    Build output anywhere; a workflow's own run folder (``scratch/workflows``), which holds the
+    patches of the very run that is opening this copy; and any file too big to be a note.
+    """
+    skipped = {name for name in names if name in _NOT_NOTES}
+    here = Path(directory)
+    if here.name == "scratch":
+        skipped.add("workflows")
+    for name in names:
+        try:
+            if (here / name).is_file() and (here / name).stat().st_size > _LARGEST_NOTE:
+                skipped.add(name)
+        except OSError:
+            skipped.add(name)
+    return skipped
+
+
+def _stage_everything(worktree: Path) -> None:
+    """Stage the copy as it stands, `.kith` included even where the project ignores it.
+
+    Bare ``add -A`` first — no pathspec, so an ignored path is skipped silently instead of
+    failing the whole add (see :func:`diff_in` for the builders that cost). Then ``.kith`` again
+    with ``-f``, because a note the worker writes into an ignored `.kith/scratch/` is still the
+    worker's work, and a check script it was told to write there came back as nothing.
+    """
+    _git("add", "-A", cwd=worktree, timeout=_TIMEOUT)
+    if (worktree / ".kith").is_dir():
+        _git("add", "-A", "-f", "--", ".kith", cwd=worktree, timeout=_TIMEOUT)
+
+
+def _baseline(worktree: Path) -> None:
+    """Record the copy as it was handed over, so its diff is only what the worker did.
+
+    The copy is the seeded tree plus notes carried in by hand, and those notes are not the
+    worker's work. The diff used to keep them out by excluding `.kith` wholesale — which also
+    threw away every file a worker *wrote* there. A builder asked for a design mockup in
+    `.kith/screens/` wrote it, edited it four times, and came back "changed nothing"; so did one
+    asked for a check script in `.kith/scratch/`.
+
+    So the handed-over state is committed inside the copy — a detached commit in the copy's own
+    history, invisible to every branch of the real repository — and :func:`diff_in` diffs against
+    it. Carried notes are in the baseline and never come back; whatever the worker adds or
+    changes, anywhere, does. Also called again after earlier patches are applied into a copy
+    (:func:`apply_in`), for the same reason.
+
+    Never raises: a copy without a baseline diffs against its seed, which is the old behaviour.
+    """
+    try:
+        _stage_everything(worktree)
+        tree = _git("write-tree", cwd=worktree, timeout=_TIMEOUT).output.strip()
+        if not tree:
+            return
+        made = _git(
+            "commit-tree",
+            tree,
+            "-p",
+            "HEAD",
+            "-m",
+            "what the worker was handed",
+            cwd=worktree,
+            timeout=_TIMEOUT,
+        )
+        commit = made.output.strip().splitlines()[-1].strip() if made.exit_code == 0 else ""
+        if commit:
+            _git("reset", "-q", "--soft", commit, cwd=worktree, timeout=_TIMEOUT)
+    except Exception:
+        pass
+
+
+def apply_in(worktree: Path, patches: list[str]) -> str:
+    """Apply earlier workers' patches inside a copy, then re-baseline. Returns "" or what failed.
+
+    For a workflow step that has to see what earlier builders made — an integration step, or a
+    review. Without this every agent starts from the original tree, and a reviewer sent to read
+    `discover.py` finds a file that exists only as a patch in a folder it was never told about.
+
+    Re-baselined afterwards, so the new worker's own diff is only its own work and the patches
+    stay independent: applied in order, they stack.
+    """
+    for number, patch in enumerate(patches, start=1):
+        if not patch.strip():
+            continue
+        holder = worktree.parent / f".{worktree.name}.incoming-{number}.patch"
+        try:
+            holder.write_text(patch if patch.endswith("\n") else patch + "\n", encoding="utf-8")
+            done = _git("apply", "--whitespace=nowarn", str(holder), cwd=worktree, timeout=_TIMEOUT)
+        finally:
+            holder.unlink(missing_ok=True)
+        if done.exit_code != 0:
+            return f"patch {number} of {len(patches)} did not apply: {done.output.strip()[:300]}"
+    _baseline(worktree)
+    return ""
 
 
 def diff_in(worktree: Path) -> str:
@@ -207,11 +309,11 @@ def diff_in(worktree: Path) -> str:
     ``--binary`` so an image or a compiled fixture survives the round trip, and no ``--stat``
     or colour: the reader is `git apply`, and after it a language model. Both want the patch.
 
-    ``.kith`` is excluded from the diff. It was copied in by :func:`_carry_notes` rather than
-    checked out, so it is not the worker's work and must not come back as a patch. Usually it is
-    gitignored and would never appear — but a project that tracks it would otherwise hand the
-    main agent a diff that writes its own notes back over itself, so the answer does not depend
-    on someone's ignore file.
+    Diffed against the copy's baseline (:func:`_baseline`), not its seed. The notes carried into
+    `.kith` are in that baseline, so they never come back as a patch — a project that tracks
+    `.kith` would otherwise get a diff writing its own notes back over itself — while a file the
+    worker writes under `.kith` does come back. That used to be excluded wholesale, which lost a
+    design mockup and a check script in the first real workflow.
 
     **The add takes no pathspec, and that is the fix for a bug that made every builder look
     broken.** It was ``add -A -- . ':(exclude).kith'``, and naming `.` explicitly makes git
@@ -225,10 +327,8 @@ def diff_in(worktree: Path) -> str:
     an advisory into "this worker produced nothing" is the worst available reading — an empty
     diff below is the honest answer, and it is empty only when nothing is really there.
     """
-    _git("add", "-A", cwd=worktree, timeout=_TIMEOUT)
-    return _git(
-        "diff", "--cached", "--binary", "--", ".", ":(exclude).kith", cwd=worktree, timeout=_TIMEOUT
-    ).output
+    _stage_everything(worktree)
+    return _git("diff", "--cached", "--binary", cwd=worktree, timeout=_TIMEOUT).output
 
 
 def close(worktree: Path) -> None:
