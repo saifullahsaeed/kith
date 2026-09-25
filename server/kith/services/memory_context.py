@@ -71,33 +71,27 @@ def context_block(
 
 
 def projects_block(path: Path) -> str:
-    """His active projects and the next step on each roadmap — so he follows the
-    plan and knows when a project is complete.
+    """His active projects and where each one's board stands.
 
     **For a conversation that is not in a project**, where a menu is the right answer because
     nothing has been chosen yet. A conversation that *is* in one gets `project_context.others`
-    instead: the same projects, named and no more. This block's closing nudge — "all milestones
-    met and no active tasks, consider marking this project done" — was appearing on every turn
-    of every conversation whatever it was about, which is an invitation to go and work on
-    something else, repeated on every round.
+    instead: the same projects, named and no more. This block used to close with a nudge — "all
+    milestones met and no active tasks, consider marking this project done" — which appeared on
+    every turn of every conversation whatever it was about, an invitation to go and work on
+    something else repeated on every round. It is not coming back with milestones gone.
     """
     active = [p for p in repo.projects.project_overview(path) if p["status"] == "active"]
     if not active:
         return ""
     lines = ["[Your projects — the bigger goals you're driving]"]
     for p in active:
-        prog = (
-            f"{p['milestones_done']}/{p['milestones_total']} milestones"
-            if p["milestones_total"]
-            else "no milestones yet"
+        board = (
+            f"{p['tasks_done']} done, {p['tasks_working']} working, {p['tasks_approved']} approved, "
+            f"{p['tasks_planning']} planning"
+            if p["tasks_total"]
+            else "no tasks yet"
         )
-        lines.append(f"- #{p['id']} {p['name']} — {prog}, {p['tasks_active']} active task(s)")
-        nxt = next((m for m in p["milestones"] if m["status"] != "done"), None)
-        if nxt:
-            due = f" (target {nxt['target_at'][:10]})" if nxt.get("target_at") else ""
-            lines.append(f"    next milestone: {nxt['title']}{due}")
-        elif p["milestones_total"] and p["tasks_active"] == 0:
-            lines.append("    all milestones met and no active tasks — consider marking this project done.")
+        lines.append(f"- #{p['id']} {p['name']} — {board}")
     return "\n".join(lines)
 
 

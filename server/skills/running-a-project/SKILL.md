@@ -1,11 +1,11 @@
 ---
 name: running-a-project
-description: Use whenever work is bigger than a single errand and needs durable state that survives being put down — setting up, resuming, triaging, sequencing, unblocking, reconciling or closing a project. Use it when a board may be stale or contradictory, when a roadmap has left nothing available, when a job is too big for one sitting, or when deciding whether something is a project, a milestone or a task.
+description: Use whenever work is bigger than a single errand and needs durable state that survives being put down — setting up, resuming, triaging, sequencing, unblocking, reconciling or closing a project. Use it when a board may be stale or contradictory, when a job is too big for one sitting, or when deciding whether something is a project or a task.
 ---
 
 # Running a project
 
-Your projects, milestones and tasks are not a list you keep for your person's benefit. They are
+Your projects and tasks are not a list you keep for your person's benefit. They are
 how you decide what to work on next, and how work survives being put down and picked up in a
 later conversation that remembers none of it. Set up badly they hand you the wrong thing, or
 nothing at all, and are convincing about it.
@@ -17,7 +17,7 @@ contradictory notes.
 ## Is this even a project
 
 A one-off — read this, fix that, write one document, answer one question — is a task with no
-project and no milestone. A project is work with a concrete deliverable, several work packages,
+project. A project is work with a concrete deliverable, several work packages,
 real dependencies, spanning sittings. Do not create one because a task sounds important.
 
 A project ends when its deliverable is done. It is not a promise to keep producing work, so do
@@ -31,7 +31,7 @@ unrelated project cannot be followed here.
 
 1. **Their current decisions** define accepted scope and override an obsolete plan.
 2. **Current files and fresh runnable checks** define what exists.
-3. **The approved brief and milestone contract** define what was asked for.
+3. **The approved brief and each task's plan** define what was asked for.
 4. **Status, dependencies, checklists, deliverables** describe control state and evidence.
 5. **Comments and `.kith/memory.md`** are history and indexes, never proof.
 
@@ -73,69 +73,51 @@ is a submission, not a close.
 Never jump a status to hide missing work. Once `done` or `dropped`, leave it — a regression is a
 new task.
 
-## Cutting a project into milestones
+## Cutting a project into tasks
 
-**A milestone is a bounded work package with a completion condition that is a state of the
-artifact, never a state of your own thinking.** "The payments ledger reconciles against the bank
-feed" is a milestone. "Architecture is planned", "the codebase is understood" are tasks —
-milestoning your own planning is how a project reads 100% complete while nothing was built.
+**A task is one sitting's outcome, and its description says how completion will be known**: a
+command exits 0, a test passes, a file exists. "The payments ledger reconciles against the bank
+feed" is a task. "Architecture is planned" and "the codebase is understood" are not — filing your
+own thinking as work is how a board reads 100% complete while nothing was built. "Verify the
+schema" is a done-condition, not a task.
 
 Cut along **deliverable boundaries** ("users can sign up"), **handoffs** (spec → build → release),
 and **trust boundaries** ("the schema is migrated and verified" before anything reads it). Phases
-(frontend/backend/testing), sessions, and activity nouns are not milestones. Each one is a thing
-that could be handed to someone as done.
+(frontend/backend/testing), sessions, and activity nouns are not tasks.
 
-**Plan the near horizon only.** Two to four milestones with real exit criteria; record the
-intended shape of the rest as a note, not as milestones. Milestones planned before their work is
-understood are fiction that reads as authoritative.
+**Plan the near horizon only.** The next two to five tasks, each with a real done-condition; record
+the intended shape of the rest as a note in `.kith/memory.md`, not as tasks. Tasks written before
+their work is understood are fiction that reads as authoritative.
 
-For any non-trivial milestone write its contract to `.kith/work/milestone-<id>.md`: scope, out of
-scope, dependencies, exit criteria, required evidence, open decisions. A title is not a completion
-contract. Keep it there and nowhere else — a contract duplicated in the index will drift.
+The steps inside a task are its **checklist**, and that is the only nesting there is: project →
+task → checklist. There are no milestones. They were a layer between project and task, with a graph
+of which one waited for which deciding what you were allowed to pick up, and they were removed
+because they hid available work more often than they ordered it.
 
-**A task is one sitting's outcome toward a milestone**, and its description must say how
-completion will be known: a command exits 0, a test passes, a file exists. "Verify the schema" is
-a done-condition, not a task.
+## Lay out the next stretch in one call
 
-## Lay out a milestone in one call
-
-    plan_work(project_id, milestone="<the step to reach>", tasks=[
-        {goal, description, checklist: [...]},
+    plan_work(project_id, tasks=[
+        {goal, description, priority, checklist: [...]},
         ...
     ])
 
-One call writes the step, its two-to-five tasks and every checklist item, through the same
-writers and the same rules as filing them by hand. Use it instead of `add_milestone` then an
-`add_task` each then a `checklist` each — that was a dozen rounds, and a dozen rounds is
-why plans got skipped in favour of just doing the work.
+One call writes two-to-five tasks and every checklist item, through the same writers and the same
+rules as filing them by hand. Use it instead of an `add_task` each then a `checklist` each — that
+was a dozen rounds, and a dozen rounds is why plans got skipped in favour of just doing the work.
 
-Plan **one** milestone this way, shallowly. A task refused for a missing done-condition comes back
-named with the rest filed — fix that one, not the batch.
+A task refused for a missing done-condition comes back named with the rest filed — fix that one,
+not the batch.
 
-A task filed into a project that already has a roadmap must say which milestone it delivers. Pass
-none and you are handed the open milestones to choose from. That is the difference between a
-roadmap and a pile.
+## Order is priority and approval
 
-## Say what waits for what
+There is no dependency graph. What you are offered is every `approved` or `working` task on an
+active project, high priority first. So when order matters, say it with what exists:
 
-    add_milestone(project_id, title, after=[<ids it waits for>])
-    update_milestone(ids=[id1, id2, id3])              # a straight line, in that order
-    update_milestone(id=<id>, no_longer_waits_for=<id>) # undo one link
-
-A waiting milestone keeps its tasks **out of your way entirely** — you are not offered them. That
-is what stops you packaging a release before the feature exists, and it only works if you said
-what waits for what.
-
-Order what actually blocks and leave the rest parallel. A chain is easy to write and it makes work
-you could be doing invisible.
-
-**The silent failure is the opposite one.** Sequenced wrongly, every milestone waits on something,
-nothing is available, and the board still looks full. If a project has open tasks and you are
-handed none, suspect the graph before you suspect yourself: find the milestone nothing is waiting
-on, and if there isn't one, that is the bug.
-
-There is no task-to-task dependency graph. If B truly cannot start until A finishes, put B in a
-later milestone, or keep it in `planning` with a written blocker. A checklist order is not an edge.
+- B truly cannot start until A is finished → give A the higher priority, or keep B in `planning`
+  with the blocker written in its plan, and say so when you hand the plans over.
+- A checklist's order is the order within one task, not between tasks.
+- Nothing you file is pickable until they approve its plan. That gate is the real sequencing
+  control, and it is theirs.
 
 ## Cold-start before choosing work
 
@@ -150,14 +132,13 @@ index, not as truth.
    Everything in `.kith/` arrives through git; a folder nobody has fetched and a quiet folder look
    identical and mean opposite things.
 4. Inspect the repository itself, focused by those pointers. Do not read the whole tree.
-5. Read milestone order and dependencies, then every relevant task state — `planning`, `approved`
-   and `working`. Follow pagination; an empty first page is not evidence of no work.
+5. Read every relevant task state — `planning`, `approved` and `working`. Follow pagination; an empty first page is not evidence of no work.
 6. Read recent comments, checklists and deliverables for the task you might resume. Look for
-   contradictory statuses, stale briefs, duplicates, tasks that outlived their milestone.
+   contradictory statuses, stale briefs, duplicates, tasks that outlived their purpose.
 7. Record corrections in the one current index so the next cold start does not repeat this.
 
 Do not trust a title, a status or an old comment over current files. Do not discard an existing
-roadmap because it is incomplete — repair it only where evidence shows what is wrong.
+board because it is incomplete — repair it only where evidence shows what is wrong.
 
 ## Send workers at the parts, instead of walking them
 
@@ -175,11 +156,12 @@ How to brief one, what comes back, and the three ways a brief wastes a whole wor
 
 ## Working one through
 
-Confirm the task is selectable: project active, milestone ready, task `approved`, brief still
+Confirm the task is selectable: project active, task `approved`, brief still
 matching accepted scope. Not merely that it looks urgent.
 
 Keep one `working` task per project unless parallel work is genuinely independent. Choose what
-most reduces uncertainty or unblocks the next package — priority never overrides a dependency.
+most reduces uncertainty or unblocks the next task — and if one task needs another finished
+first, that outranks priority.
 
 Build the checklist **as you go**, not up front: one written before you have looked at anything is
 a guess you will follow past the point where you know better. Tick items with `checklist` as you
@@ -242,37 +224,34 @@ would destroy has no Trash at all.
 
 ### The project itself
 
-A project does not auto-close, deliberately: an empty roadmap is evidence a project *looks*
+A project does not auto-close, deliberately: an empty board is evidence a project *looks*
 finished, not a decision that it is. Report **ready for owner closure** with final evidence and
 known limitations. `update_project` refuses `status: "done"` — that is theirs.
 
-## Growing the roadmap without inventing work
+## Growing the board without inventing work
 
-When the current milestone nears completion, cold-start again and ask: did the work reveal a
-clearly required missing task? Is the next package now clear enough to define? Is it already
-represented?
+When the tasks in flight near completion, cold-start again and ask: did the work reveal a clearly
+required missing task? Is the next piece now clear enough to define? Is it already represented?
 
 Add only evidenced work, and record why. No speculative polish, no edge cases nobody named, no
-tasks because a conventional project would have them. If the next milestone is unclear, finish this
+tasks because a conventional project would have them. If the next piece is unclear, finish this
 one and stop — an empty future beats fictional work.
 
-A milestone becoming ready is a trigger to plan, not a licence to start coding: seed its tasks from
-what the finished work actually revealed, and plan each non-trivial one through `planning-a-task`.
+The last approved task finishing is a trigger to plan, not a licence to start coding: seed the next
+tasks from what the finished work actually revealed, and plan each non-trivial one through
+`planning-a-task`.
 
-When the next package is something that does not exist yet rather than a continuation of what
-does — a new subsystem, a new surface, a change to how parts fit — that is `brainstorming` before
-it is a roadmap. A milestone written for work nobody has agreed the shape of is the fiction this
-skill keeps warning about, one level up.
+When the next piece is something that does not exist yet rather than a continuation of what does —
+a new subsystem, a new surface, a change to how parts fit — that is `brainstorming` before it is a
+task. A task written for work nobody has agreed the shape of is the fiction this skill keeps
+warning about, one level up.
 
 ## Quick reference
 
 | Situation | Do this |
 |---|---|
-| Work needs to survive this sitting | `plan_work` — one milestone, 2–5 tasks, checklists |
-| A roadmap exists and you are filing a task | Name the milestone; you are handed the candidates if not |
-| Ordering the roadmap | `add_milestone(after=[...])`, or `update_milestone(ids=[...])` |
-| The order is wrong | `update_milestone(id=, no_longer_waits_for=)` |
-| Open tasks but nothing offered | Suspect the dependency graph, not yourself |
+| Work needs to survive this sitting | `plan_work` — the next 2–5 tasks, with checklists |
+| B cannot start until A is done | A gets the higher priority, or B stays in `planning` with the blocker written |
 | Finding out where something lives | `delegate_subtask` |
 | Same decided change across many files | `send_builder`, one per file group, same round |
 | A worker's answer is nearly right | `follow_up` |
@@ -283,13 +262,12 @@ skill keeps warning about, one level up.
 
 ## Common mistakes
 
-- **Milestoning your own thinking.** "Architecture planned" completes, auto-completes the project,
-  and nothing was built.
-- **Planning the whole roadmap for a codebase you have not read.** Later tasks written before
+- **Filing your own thinking as work.** "Architecture planned" completes, the board reads further
+  along, and nothing was built.
+- **Planning the whole project for a codebase you have not read.** Later tasks written before
   discovery are fiction that looks authoritative next time.
-- **Chaining everything.** Silent, and it hides work you could be doing.
-- **A task with no nameable source.** Valid sources: their request, a project decision, a milestone
-  dependency, a discovered requirement, a failed check.
+- **A task with no nameable source.** Valid sources: their request, a project decision, a discovered
+  requirement, a failed check.
 - **Walking a repetitive checklist yourself** when it splits cleanly across files.
 - **Briefing a worker from memory.** Verify the file, the function and the constant first.
 - **Closing on a passing build.** It proves the thing compiles, not that it does what was asked.

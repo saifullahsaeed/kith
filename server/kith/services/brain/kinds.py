@@ -57,19 +57,7 @@ class Kind:
 
 
 def _task_edit(path, task_id, data: dict):
-    """Update a task, including where it sits on the roadmap.
-
-    Milestone is a separate call rather than another column on update_task because moving a
-    task between milestones also has to keep its project straight — a task cannot belong to a
-    milestone of a different project. Handled here so the interface can offer it as one field
-    like any other.
-    """
-    if "milestone_id" in data:
-        # A blank selection arrives as None, "", "none" or 0 depending on who is calling.
-        # All of them mean "no milestone"; the first version of this let 0 through as an id.
-        raw = data.get("milestone_id")
-        chosen = None if raw in (None, "", "none", 0, "0") else int(raw)
-        repo.tasks.set_task_milestone(path, task_id, chosen)
+    """Update a task from the panel — a card dragged between columns, or a field edited."""
     return repo.tasks.update_task(
         path,
         task_id,
@@ -94,12 +82,6 @@ def _make_reminder(path, data: dict) -> dict:
 def _make_schedule(path, data: dict) -> dict:
     """A schedule from the panel, through the same code his own tool uses."""
     return reminder_service.schedule(path, data)
-
-
-def _milestone_add(path: Path, data: dict) -> dict:
-    return repo.projects.add_milestone(
-        path, int(data["project_id"]), data.get("title", ""), data.get("target_at")
-    )
 
 
 def _memory_add(path: Path, data: dict) -> dict:
@@ -168,14 +150,6 @@ KINDS: dict[str, Kind] = {
             add=lambda p, d: repo.projects.add_project(p, d.get("name", ""), d.get("description") or ""),
             edit=lambda p, k, d: repo.projects.update_project(
                 p, k, d.get("status"), d.get("name"), d.get("description")
-            ),
-        ),
-        Kind(
-            "milestone",
-            remove=repo.projects.delete_milestone,
-            add=_milestone_add,
-            edit=lambda p, k, d: repo.projects.update_milestone(
-                p, k, d.get("status"), d.get("title"), d.get("target_at")
             ),
         ),
         Kind(

@@ -4,9 +4,8 @@
 is a per-machine database that has never read them. `services/board_sync` does the reading;
 these two endpoints are how a person does it, rather than only the model.
 
-Split from `roadmap.py` rather than added to it because they answer a different question about
-the same project — the roadmap is what the work depends on, this is what has come in from
-somebody else — and one file per question is why `roadmap.py` reads the way it does.
+Their own file because they answer their own question about a project: not what is on the
+board, but what has come in from somebody else that the board has not read yet.
 """
 
 from __future__ import annotations

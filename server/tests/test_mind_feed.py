@@ -59,11 +59,13 @@ def test_the_table_has_no_entries_for_tools_that_do_not_exist() -> None:
     # conversation that called `edit_file` before it was merged into `edit_files` still has
     # those rows, and they are still read. Dropping the phrase would not tidy anything — it
     # would turn a year of history into `edit_file(path=…)` printed raw.
-    from kith.tools.aliases import RETIRED
+    from kith.tools.aliases import ALIASES, RETIRED
 
     # A stale entry is harmless at runtime but it is a lie about what he can do, and it hides
-    # a rename: the old name keeps its phrase while the new one silently has none.
-    stale = sorted(phrased_tools() - registered - set(RETIRED))
+    # a rename: the old name keeps its phrase while the new one silently has none. A name in
+    # ALIASES counts as accounted for too — the milestone tools went with nothing to translate
+    # them into, so their names point at the nearest tool instead of being retired into one.
+    stale = sorted(phrased_tools() - registered - set(RETIRED) - set(ALIASES))
     assert not stale, f"tool-language.ts describes tools that no longer exist: {stale}"
 
 

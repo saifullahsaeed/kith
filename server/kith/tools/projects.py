@@ -1,11 +1,10 @@
-"""Projects and their roadmap."""
+"""Projects: a name, a folder, and the tasks filed under it."""
 
 from __future__ import annotations
 
-import itertools
 from pathlib import Path
 
-from kith.domain.enums import MILESTONE_STATUSES, PROJECT_STATUSES
+from kith.domain.enums import PROJECT_STATUSES
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
 from kith.services import project_binding
@@ -18,12 +17,11 @@ from kith.tools.registry import tool
 
 @tool(
     "create_project",
-    "Start a project — a bigger goal that groups several tasks and a roadmap of "
-    "milestones. Use this when work is more than a single task. If it involves code or "
-    "files, give it a `directory`: that folder is where the work lives and where the "
-    "project keeps what it learns about itself, in `.kith/memory.md`, which you are shown "
-    "every time you work there. Then plan_work its first milestone — a roadmap with no tasks "
-    "under its open step has nothing to hand you when you come back to it.",
+    "Start a project — a bigger goal that groups several tasks. Use this when work is more "
+    "than a single task. If it involves code or files, give it a `directory`: that folder is "
+    "where the work lives and where the project keeps what it learns about itself, in "
+    "`.kith/memory.md`, which you are shown every time you work there. Then plan_work its first "
+    "few tasks — a project with no tasks has nothing to hand you when you come back to it.",
     {
         "name": STR,
         "description": {**STR, "description": "What the project is and what 'done' means."},
@@ -131,19 +129,12 @@ def create_project(path: Path, args: dict):
 
 @tool(
     "list_projects",
-    "See your projects with their roadmap (milestones) and how much is done.",
-    # A project carries its milestones, so a handful of them is already a large payload.
+    "See your projects and how many of their tasks are planning, approved, working and done.",
     {**PAGE_PARAMS},
     required=(),
 )
 def list_projects(path: Path, args: dict):
-    """Projects with their roadmap, and which milestones are actually available.
-
-    ``ready`` and ``blocked_by`` are included per milestone because the order is not
-    advisory: work under a waiting milestone is not offered to him at all, so a listing
-    that showed only titles and statuses would leave him unable to see why something he
-    can see is not something he can do.
-    """
+    """Projects with a count of their tasks in each column — the board, summarised."""
     return paging.page(repo.projects.project_overview(path), args, default=5)
 
 
@@ -228,177 +219,6 @@ def update_project(path: Path, args: dict):
     if linked and isinstance(out, dict):
         return {**linked, **out}
     return out or linked
-
-
-@tool(
-    "add_milestone",
-    "Add a milestone to a project's roadmap — a step to reach, optionally by a date. Milestones "
-    "are the timeline you follow, and one is reached when the CODE is in a state you can check "
-    "('the ledger reconciles against the bank feed'), never when your own thinking is finished — "
-    "'architecture planned' completes, auto-completes the project, and nothing was built. When "
-    "you already know the tasks that reach it, plan_work writes the step and all of them in one "
-    "call.",
-    {
-        "project_id": INT,
-        "title": STR,
-        "target_at": {**STR, "description": "Optional target date, ISO 8601 (local zone)."},
-        "after": {
-            "type": "array",
-            "items": INT,
-            "description": "Ids of milestones this one waits for — the numeric id a "
-            "milestone already has, NOT its position in the list you are creating. Its tasks "
-            "stay out of your way until they are all done. If you are laying out a fresh "
-            "roadmap and do not have the ids yet, add them all first and then call "
-            "update_milestone with `ids` in order.",
-        },
-    },
-    required=("project_id", "title"),
-)
-def add_milestone(path: Path, args: dict):
-    """Find or create the milestone, then apply its order either way.
-
-    Same title twice used to mean a second row: the roadmap came out with "Workout data model
-    and local persistence are defined" listed twice, the copy dangling with no order on it,
-    permanently available and looking like real work.
-
-    The obvious fix — return the existing one and stop — was worse, and it is worth writing
-    down why. Laying out a fresh roadmap he has no ids yet, so he adds the milestones first
-    with no `after`, and comes back to wire the order once he knows them. That second call is
-    the *same title* with an `after`, which the early return threw on the floor. He tried
-    three edges, got three milestones back with no order, tried the identical three again,
-    and stopped: ten calls, zero edges, and a roadmap where every milestone was available at
-    once. Silently discarding the meaningful half of a call is how you get a caller that
-    retries forever and a person who concludes the feature does not work.
-
-    So: idempotent on the milestone, and `after` is honoured whether the milestone was just
-    made or already there.
-    """
-
-    foreign = _out_of_scope(path, args.get("project_id"))
-    if foreign is not None:
-        return foreign
-    project_binding.adopt(path, args["project_id"])
-    title = str(args["title"]).strip()
-    target = next(
-        (
-            m
-            for m in repo.projects.list_milestones(path)
-            if m["project_id"] == args["project_id"] and m["title"].strip() == title
-        ),
-        None,
-    )
-    reused = target is not None
-    if target is None:
-        target = repo.projects.add_milestone(path, args["project_id"], title, args.get("target_at"))
-
-    problems = []
-    added = 0
-    for earlier in args.get("after") or []:
-        try:
-            repo.projects.add_dependency(path, target["id"], int(earlier))
-            added += 1
-        except (TypeError, ValueError) as exc:
-            problems.append(str(exc))
-
-    out = {**target}
-    if reused:
-        out["note"] = "That milestone already existed, so this is the one you have" + (
-            f" — and it now waits for {', '.join(str(a) for a in args['after'])}." if added else "."
-        )
-    if problems:
-        out["warnings"] = problems
-    return out
-
-
-def _order_milestones(path: Path, args: dict):
-    """One call for the common case, which is a straight line.
-
-    Chaining a five-step roadmap by hand is four separate calls and four chances to get a
-    direction backwards — and a backwards edge is not a visible mistake, it is work that
-    quietly never becomes available.
-    """
-    ids = [int(one) for one in (args.get("ids") or [])]
-    if len(ids) < 2:
-        return {"ordered": ids, "note": "nothing to order — pass two or more ids"}
-    problems = []
-    for earlier, later in itertools.pairwise(ids):
-        try:
-            repo.projects.add_dependency(path, later, earlier)
-        except (TypeError, ValueError) as exc:
-            problems.append(f"{earlier} -> {later}: {exc}")
-    return {
-        "ordered": ids,
-        "roadmap": repo.projects.roadmap(path, _project_of(path, ids[0])),
-        **({"warnings": problems} if problems else {}),
-    }
-
-
-def _unlink_milestones(path: Path, args: dict):
-    repo.projects.remove_dependency(path, args["id"], args["no_longer_waits_for"])
-    return {"ok": True}
-
-
-def _project_of(path: Path, milestone_id: int) -> int:
-    for milestone in repo.projects.list_milestones(path):
-        if milestone["id"] == milestone_id:
-            return int(milestone["project_id"])
-    return 0
-
-
-@tool(
-    "update_milestone",
-    "Change a milestone, or change the order of them. Mark one 'done' when reached, or edit "
-    "its title/target. Pass `ids` — every milestone id, earliest first — to lay out the order "
-    "they happen in, which is what makes a roadmap real: you are only offered work from "
-    "milestones whose predecessors are finished, so you build in the order you laid out "
-    "instead of picking whatever looks urgent. Pass `no_longer_waits_for` to undo one of "
-    "those links when the order turns out to be wrong.",
-    {
-        "id": INT,
-        "status": {**STR, "enum": list(MILESTONE_STATUSES)},
-        "title": STR,
-        "target_at": STR,
-        "ids": {
-            "type": "array",
-            "items": INT,
-            "description": "Every milestone id in the order they should happen, earliest "
-            "first — chains each to wait for the one before it.",
-        },
-        "no_longer_waits_for": {
-            **INT,
-            "description": "With `id`: stop that milestone waiting for this one.",
-        },
-    },
-    required=(),
-)
-def update_milestone(path: Path, args: dict):
-    """Editing a milestone and ordering the roadmap are the same object under one name.
-
-    They were three tools — `update_milestone`, `order_milestones`, `unlink_milestones` — and
-    the last two were a schema each for one edge of a graph. What decides which of the three
-    things this does is which argument arrived, and that was already true: `add_milestone` has
-    taken an `after` since it was written, so "the order is a field on a milestone" is the
-    shape this codebase already had.
-
-    Ordering keeps `order_milestones`' exact behaviour, scope check included — which is to say
-    without one. A chain is checked per edge by `add_dependency` and reported as a warning
-    rather than refused, and adding a project-scope gate here would be a new restriction
-    smuggled in under a merge.
-    """
-    if args.get("ids"):
-        return _order_milestones(path, args)
-    if not args.get("id"):
-        return {"error": "pass `id` for one milestone, or `ids` to order a roadmap"}
-    if args.get("no_longer_waits_for"):
-        return _unlink_milestones(path, args)
-    # The milestone's project, not an argument — a milestone id alone says nothing about scope.
-    milestone = repo.projects.get_milestone(path, int(args["id"])) or {}
-    foreign = _out_of_scope(path, milestone.get("project_id"))
-    if foreign is not None:
-        return foreign
-    return repo.projects.update_milestone(
-        path, args["id"], args.get("status"), args.get("title"), args.get("target_at")
-    )
 
 
 def _link_folder(path: Path, args: dict):

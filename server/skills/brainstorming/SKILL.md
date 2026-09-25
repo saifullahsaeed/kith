@@ -64,7 +64,7 @@ something fails, and how you will know it works.
 - **Probe** → go and find out, as cheaply as correctness allows. Say plainly that anything you
   built to find out is throwaway.
 - **Bounded** → build it, the normal way, tests first.
-- **Shaped** → `plan_work` the first milestone, and plan each non-trivial task through
+- **Shaped** → `plan_work` the first few tasks, and plan each non-trivial one through
   `planning-a-task` before touching code.
 
 ## Red flags

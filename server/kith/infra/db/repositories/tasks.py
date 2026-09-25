@@ -11,14 +11,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, func, or_, select
 
 from kith.domain import keys
-from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_SETTLED, TASK_STATUSES
+from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_STATUSES
 from kith.infra import identity, project_files
 from kith.infra.db.engine import as_dict, changed, session
-from kith.infra.db.models import ChecklistItem, Deliverable, Milestone, Project, Task
+from kith.infra.db.models import ChecklistItem, Deliverable, Project, Task
 from kith.infra.db.support import notifies, utc_now_iso
 from kith.kernel import session_context
 
@@ -51,7 +50,6 @@ def add_task(
     status: str = "planning",
     created_by: str = "kith",
     project_id: int | None = None,
-    milestone_id: int | None = None,
 ) -> dict:
     if priority not in TASK_PRIORITIES:
         priority = "normal"
@@ -59,27 +57,6 @@ def add_task(
         status = "planning"
     now = utc_now_iso()
     with session(path) as db:
-        # A task under a milestone belongs to that milestone's project. Resolved in
-        # the same transaction as the insert, so the two can't disagree.
-        #
-        # And refused if there is no such milestone, which is the hole `set_task_milestone` was
-        # closed against and this kept: it looked the milestone up only to copy the project, so a
-        # stray id fell through the `if milestone` and was stored anyway. Tasks 91, 92 and 93 on
-        # the real board all point at milestone 30, which does not exist — their project is null,
-        # the roadmap cannot gate them, and the task page renders the bare number 30 where a
-        # title belongs. Nothing said the link was broken.
-        #
-        # Zero is "no milestone" rather than an error, matching `set_task_milestone`: it is what an
-        # empty form field arrives as, and the same value must not be valid on one path and fatal
-        # on the other.
-        if milestone_id:
-            milestone = db.get(Milestone, milestone_id)
-            if milestone is None:
-                raise ValueError(f"there is no milestone {milestone_id}")
-            if not project_id:
-                project_id = milestone.project_id
-        else:
-            milestone_id = None
         row = Task(
             goal=goal,
             status=status,
@@ -93,42 +70,10 @@ def add_task(
             account=identity.whoami(_project_dir(db, project_id)),
             key=keys.new_key(),
             project_id=project_id,
-            milestone_id=milestone_id,
             created_at=now,
             updated_at=now,
         )
         db.add(row)
-        db.flush()
-        return as_dict(row)
-
-
-@notifies("task")
-def set_task_milestone(path: Path, task_id: int, milestone_id: int | None) -> dict | None:
-    """Link a task to a milestone, inheriting the milestone's project.
-
-    Refuses an id that is not a milestone. It used to store whatever it was given and only
-    look the milestone up to copy the project across, so a stray value — a 0 from a
-    `Number("")` in the interface, say — was written straight to the column. The task then
-    pointed at a milestone that does not exist: the roadmap could not gate it, the task page
-    showed an empty milestone field, and nothing anywhere said the link was broken. That
-    happened to a real task, which is why this now validates instead of trusting.
-
-    Zero is treated as "no milestone" rather than rejected, because it is what an empty form
-    field arrives as and the intent is unambiguous.
-    """
-    with session(path) as db:
-        row = db.get(Task, task_id)
-        if row is None:
-            return None
-        if not milestone_id:  # None or 0 — no milestone
-            row.milestone_id = None
-        else:
-            milestone = db.get(Milestone, milestone_id)
-            if milestone is None:
-                raise ValueError(f"there is no milestone {milestone_id}")
-            row.milestone_id = milestone_id
-            row.project_id = milestone.project_id
-        row.updated_at = utc_now_iso()
         db.flush()
         return as_dict(row)
 
@@ -163,50 +108,24 @@ def list_tasks(path: Path, status: str | None = None) -> list[dict]:
 def active_tasks(path: Path) -> list[dict]:
     """What he should actually work next, highest priority first.
 
-    Three things are excluded, and the third is the one that gives a roadmap teeth:
+    Two things are excluded:
 
-    * anything not planned/working — nothing to do on it;
-    * anything under a done or paused project, so a finished project lets him rest;
-    * anything under a milestone whose predecessors are not finished. That last one is why
-      milestones exist at all. Before it, the roadmap described progress after the fact
-      while raw task priority decided the order — so a "roadmap" imposed nothing and there
-      was no reason to keep one. Now a milestone that is waiting keeps its tasks waiting
-      with it, and the order someone laid out is the order the work happens in.
+    * anything not approved/working — nothing to do on it;
+    * anything under a done or paused project, so a finished project lets him rest.
 
-    Tasks with no milestone are unaffected: a one-off errand should not need a roadmap.
+    There used to be a third: anything under a milestone whose predecessors were not finished.
+    Milestones are gone, and that gate went with them. It was the one that sat him idle for five
+    hours with "5 ready to work" on screen, and the one a stray ``after: [0]`` could turn into a
+    deadlock nothing displayed. Priority and the approval gate decide the order now; a person
+    who wants B after A approves A first.
     """
-    return _actionable(path, held_back=False)
-
-
-def _actionable(path: Path, *, held_back: bool) -> list[dict]:
-    """Tasks that could be worked, split by whether their milestone's turn has come.
-
-    One query, because the two callers differed by a single `not` and nothing kept the rest of
-    the filter — active status, project not parked — in step between the copies.
-    """
-    from kith.infra.db.repositories.projects import blocked_milestone_ids
-
     with session(path) as db:
         parked = set(db.scalars(select(Project.id).where(Project.status != "active")).all())
-    blocked = blocked_milestone_ids(path)
     return [
         task
         for task in list_tasks(path)
-        if task["status"] in TASK_ACTIVE
-        and task.get("project_id") not in parked
-        and (task.get("milestone_id") in blocked) is held_back
+        if task["status"] in TASK_ACTIVE and task.get("project_id") not in parked
     ]
-
-
-def waiting_on_the_roadmap(path: Path) -> list[dict]:
-    """Actionable tasks held back only because their milestone is waiting.
-
-    Kept separate from ``active_tasks`` so "there is nothing to do" and "there is plenty to
-    do but it is not this milestone's turn" are different sentences. He needs to be able to
-    say which, and so does the interface — a blocked board that looks identical to an empty
-    one is how someone concludes the thing is broken.
-    """
-    return _actionable(path, held_back=True)
 
 
 @notifies("task")
@@ -241,12 +160,6 @@ def update_task(
             row.description = description
         row.updated_at = utc_now_iso()
         db.flush()
-
-        if status == "done":
-            # Same transaction as the status change: a crash between the two would
-            # otherwise leave a finished milestone whose last task looks open.
-            _roll_up(db, row)
-            db.flush()
         return as_dict(row)
 
 
@@ -259,36 +172,6 @@ def _who_is_working() -> str | None:
     """
 
     return session_context.current() or None
-
-
-def _roll_up(db: Session, task: Task) -> None:
-    """When a task is finished and it clears its milestone, mark the milestone done.
-
-    Stops there on purpose. This used to keep climbing — clearing a project's last
-    milestone marked the project itself done — but closing a project is a claim about
-    the whole thing being finished, not a status any amount of task bookkeeping should
-    make on a person's behalf. A milestone closing is a fact about the roadmap; a project
-    closing is a decision, and it stays theirs even when the board is empty.
-    """
-    now = utc_now_iso()
-    milestone_id = task.milestone_id
-
-    if milestone_id:
-        if _open_count(db, Task, Task.milestone_id == milestone_id) == 0:
-            milestone = db.get(Milestone, milestone_id)
-            if milestone and milestone.status != "done":
-                milestone.status = "done"
-                milestone.updated_at = now
-
-
-def _open_count(db: Session, model: type[Task], *conditions) -> int:
-    """How many unsettled tasks match — the roll-up's only real question."""
-    return int(
-        db.scalar(
-            select(func.count()).select_from(model).where(*conditions, model.status.not_in(TASK_SETTLED))
-        )
-        or 0
-    )
 
 
 def _newest_first(task: dict) -> str:
@@ -451,6 +334,30 @@ def list_deliverables(path: Path, task_id: int) -> list[dict]:
         return [as_dict(row) for row in db.scalars(query).all()]
 
 
+def deliverable_counts(path: Path) -> dict[int, int]:
+    """How many deliverables each task has, as {task_id: n} — one grouped query for a board."""
+    query = select(Deliverable.task_id, func.count()).group_by(Deliverable.task_id)
+    with session(path) as db:
+        return {int(task_id): int(n) for task_id, n in db.execute(query).all()}
+
+
+def project_deliverables(path: Path, project_id: int) -> list[dict]:
+    """Everything a project has produced, newest first, each with the goal of the task behind it.
+
+    By the column *or* by the task, because the column is younger than most rows: a deliverable
+    filed before v47 carries no project of its own and is only the project's through its task.
+    """
+    owned = select(Task.id).where(Task.project_id == project_id)
+    query = (
+        select(Deliverable, Task.goal)
+        .join(Task, Task.id == Deliverable.task_id, isouter=True)
+        .where(or_(Deliverable.project_id == project_id, Deliverable.task_id.in_(owned)))
+        .order_by(Deliverable.created_at.desc(), Deliverable.id.desc())
+    )
+    with session(path) as db:
+        return [{**as_dict(row), "task_goal": goal or ""} for row, goal in db.execute(query).all()]
+
+
 @notifies("task")
 def delete_deliverable(path: Path, deliverable_id: int) -> bool:
     with session(path) as db:
@@ -463,24 +370,8 @@ def task_detail(path: Path, task_id: int) -> dict | None:
         if row is None:
             return None
         task = as_dict(row)
-    # Whether this can be worked on at all, and if not, why. A task page that shows a
-    # status of "planned" while the roadmap is quietly holding it back is telling you something
-    # untrue about the most important thing on the page.
-    held_by: list[str] = []
-    milestone_title = None
-    if task.get("milestone_id"):
-        from kith.infra.db.repositories.projects import roadmap
-
-        graph = roadmap(path, int(task["project_id"] or 0))
-        node = next((one for one in graph["milestones"] if one["id"] == task["milestone_id"]), None)
-        if node:
-            milestone_title = node["title"]
-            if node["status"] != "done" and not node["ready"]:
-                held_by = list(node["blocked_by"])
     return {
         **task,
-        "milestone_title": milestone_title,
-        "held_by": held_by,
         "checklist": list_checklist(path, task_id),
         "deliverables": list_deliverables(path, task_id),
         # Read here rather than by each surface, because there are three of them — the drawer,

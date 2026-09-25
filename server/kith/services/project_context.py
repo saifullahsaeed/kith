@@ -13,7 +13,7 @@ answering the only question the context actually asked.
 
 So the fix is a region, not a nudge:
 
-* **Scoped.** Milestones, tasks, memory and references for one project, named at the top.
+* **Scoped.** Tasks, memory and references for one project, named at the top.
 * **Complete.** What is done, what is in flight, what is waiting — the three questions a person
   opening a project asks, answerable without a tool call. A task list he has to *fetch* is a
   task list he answers from memory instead, which is the failure mode this codebase has a
@@ -50,10 +50,6 @@ LIMITS = {"working": 8, "pending": 10, "done": 6}
 
 #: How much of a project's own description reaches the prompt.
 DESCRIPTION_CHARS = 600
-
-#: How many milestones are named after the ones that can be worked on now. The roadmap's whole
-#: point is order, so what is *ready* is the answer and what comes later is context.
-AHEAD = 3
 
 
 def resolve(agent_db: Path, conversation_id: str = "") -> dict | None:
@@ -111,7 +107,6 @@ def block(agent_db: Path, project: dict | None) -> str:
     directory = str(project.get("directory") or "").strip()
 
     parts = [_head(project_id, name, project, directory)]
-    parts.append(_roadmap(agent_db, project_id))
     parts.append(_tasks(agent_db, project_id, directory))
     if directory:
         # `project_memory.block` is the only one of these three that speaks when the folder is
@@ -160,62 +155,6 @@ def _head(project_id: int, name: str, project: dict, directory: str) -> str:
     return "\n".join(lines)
 
 
-def _roadmap(agent_db: Path, project_id: int) -> str:
-    """Where the project stands on its own plan, and what the plan says to do next.
-
-    `ready` rather than "the first one not done", because the order is not advisory: a milestone
-    with an unfinished predecessor is not something to pick up, and a listing that does not say
-    so leaves him choosing between things that look equally available.
-    """
-    try:
-        milestones = repo.projects.roadmap(agent_db, project_id)["milestones"]
-    except Exception:
-        return ""
-    if not milestones:
-        return (
-            "## The plan\nThis project has no milestones, so there is no order to follow and "
-            "nothing that can say it is finished. If the work is more than one sitting, give it "
-            "a roadmap — the `running-a-project` skill is how."
-        )
-
-    done = [m for m in milestones if m["status"] == "done"]
-    ready = [m for m in milestones if m.get("ready")]
-    blocked = [m for m in milestones if m["status"] != "done" and not m.get("ready")]
-
-    lines = [f"## The plan — {len(done)}/{len(milestones)} milestones done"]
-    for milestone in ready[:AHEAD]:
-        lines.append(f"- **NOW: {milestone['title']}**{_milestone_tail(milestone)}")
-    for milestone in blocked[:AHEAD]:
-        waiting = ", ".join(milestone.get("blocked_by") or [])
-        lines.append(
-            f"- later: {milestone['title']} — waiting on {waiting}"
-            if waiting
-            else f"- later: {milestone['title']}"
-        )
-    rest = max(0, len(ready) - AHEAD) + max(0, len(blocked) - AHEAD)
-    if rest:
-        lines.append(f"- (+{rest} more — `roadmap` for the whole graph)")
-    if not ready and not blocked:
-        lines.append(
-            "Every milestone is met. If the tasks are finished too, this project is done — say "
-            "so and close it rather than leaving it open."
-        )
-    return "\n".join(lines)
-
-
-def _milestone_tail(milestone: dict) -> str:
-    """The parenthetical after a milestone's title: its tasks and when it is wanted."""
-    bits = []
-    total = milestone.get("tasks_total") or 0
-    if total:
-        bits.append(f"{milestone.get('tasks_done') or 0}/{total} tasks")
-    if milestone.get("tasks_doing"):
-        bits.append(f"{milestone['tasks_doing']} in flight")
-    if milestone.get("target_at"):
-        bits.append(f"target {str(milestone['target_at'])[:10]}")
-    return f" ({', '.join(bits)})" if bits else ""
-
-
 def _tasks(agent_db: Path, project_id: int, directory: str) -> str:
     """What is done, what is in flight, and what is waiting — on this project only.
 
@@ -260,6 +199,14 @@ def _tasks(agent_db: Path, project_id: int, directory: str) -> str:
         lines.append("**Finished, most recent first:**")
         lines += [f"- #{t['id']} {t['goal']}" for t in finished[: LIMITS["done"]]]
         lines += _more(len(finished), LIMITS["done"])
+    if finished and not working and not pending:
+        # Said here because nothing else will. With milestones gone there is no roll-up that
+        # notices a project running out of work, and closing one is their call, not his.
+        lines.append("")
+        lines.append(
+            "Every task here is finished. If what the project set out to deliver is too, tell them "
+            "it looks done and let them close it; if not, file what is left."
+        )
     return "\n".join(lines)
 
 
@@ -310,7 +257,7 @@ def named(agent_db: Path) -> str:
 
     The counterpart to `others`, and it exists because the assumption underneath the old
     unbound path turned out to be false. `memory_context.projects_block` and `work_block`
-    handed an unbound chat every active project with its next milestone and every active task
+    handed an unbound chat every active project with its next step and every active task
     across all of them, on the reasoning that a chat which has not chosen a project wants the
     menu. Measured: 104 of 141 conversations on a real machine were unbound, and they are not
     pre-choice — they are questions, errands and one-off decisions that will never choose. The
@@ -329,7 +276,7 @@ def named(agent_db: Path) -> str:
     rest = f", +{len(rows) - 6} more" if len(rows) > 6 else ""
     return (
         f"[Your projects] {shown}{rest}. This conversation is not in any of them — "
-        "`list_projects` or `roadmap` to look, and start a chat inside one to work on it."
+        "`list_projects` or `list_tasks` to look, and start a chat inside one to work on it."
     )
 
 
@@ -337,8 +284,8 @@ def others(agent_db: Path, project_id: int) -> str:
     """The one line naming the *other* active projects, or "".
 
     All that is left of the old `projects_block` once a conversation is in a project, and the
-    shrinking is the point. That block listed every active project with its next milestone and,
-    when a project's milestones were all met, invited him to go and close it — every turn, in
+    shrinking is the point. That block listed every active project with its next step and, when
+    a project looked finished, invited him to go and close it — every turn, in
     every conversation, whichever project it was actually about. An invitation to work on
     something else, repeated on every round, is not neutral context.
 
@@ -361,5 +308,5 @@ def others(agent_db: Path, project_id: int) -> str:
     rest = f", +{len(rows) - 6} more" if len(rows) > 6 else ""
     return (
         f"[Your other projects] {named}{rest}. Not this conversation's work — `list_projects` or "
-        "`roadmap` if you need to look, and a new conversation if you need to *change* one."
+        "`list_tasks` if you need to look, and a new conversation if you need to *change* one."
     )

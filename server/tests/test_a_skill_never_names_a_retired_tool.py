@@ -94,10 +94,12 @@ def _one_edit_apart(word: str, name: str) -> bool:
 
 class TestTheGuardItself:
     def test_it_would_catch_the_one_that_shipped(self):
-        """The regression, pinned. `order_milestones` sat in `running-a-project` for weeks."""
+        """The regression, pinned. `check_remote` sat in `running-a-project` after it became
+        `publish` — and the milestone tools that shipped beside it are gone altogether."""
         stale = _retired()
-        assert "order_milestones" in stale
-        assert "update_milestone" in stale["order_milestones"]
+        assert "check_remote" in stale
+        assert "publish" in stale["check_remote"]
+        assert "add_milestone" in stale
 
     def test_it_does_not_flag_a_library_call(self):
         """`add_picture` is python-pptx. A guard that cries wolf gets switched off."""

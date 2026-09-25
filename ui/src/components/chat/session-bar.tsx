@@ -178,8 +178,8 @@ export function SessionBar({
       )}
       {current ? (
         <span className="text-muted-foreground/50 hidden truncate text-[11px] sm:block">
-          {current.tasks_active} open · {current.milestones_done}/{current.milestones_total}{" "}
-          milestones
+          {current.tasks_active} open · {current.tasks_done}/
+          {current.tasks_total - current.tasks_dropped} done
         </span>
       ) : null}
 

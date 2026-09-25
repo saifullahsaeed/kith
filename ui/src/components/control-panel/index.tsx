@@ -60,12 +60,15 @@ export function ControlPanel({
   openTask,
   onSelectTab,
   onOpenTask,
+  onNewConversation,
   onClose,
 }: {
   tab: Tab;
   openTask: number | null;
   onSelectTab: (tab: Tab) => void;
   onOpenTask: (id: number) => void;
+  /** Start a chat inside a project, from that project's page. */
+  onNewConversation?: (projectId: number) => void;
   onClose: () => void;
 }) {
   const confirm = useConfirm();
@@ -431,6 +434,7 @@ export function ControlPanel({
                 projectRef={openProject}
                 onBack={() => setOpenProject(null)}
                 onOpenTask={onOpenTask}
+                onNewConversation={onNewConversation}
               />
             </div>
           ) : (

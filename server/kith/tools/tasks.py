@@ -30,8 +30,8 @@ from kith.tools.registry import tool
 
 
 #: Shortest description that counts as a real "definition of done" on a task that belongs to a
-#: project or milestone. Trivial standalone errands need none, the same way _verify_done only
-#: gates a task that carries a written brief.
+#: project. Trivial standalone errands need none, the same way _verify_done only gates a task that
+#: carries a written brief.
 _MIN_DONE_CHARS = 24
 
 
@@ -41,28 +41,22 @@ _MIN_DONE_CHARS = 24
     "the thing produced (\"the seed script runs and loads fixtures\"), with a 'description' saying "
     "how you'll KNOW it's done — ideally something runnable (a command that exits 0, a test that "
     'passes, a file that exists). "Verify/inspect/consolidate X" is a done-condition, not a task '
-    "of its own. A task under a project or milestone MUST carry such a description. 'priority' is "
-    "high for what matters most. Every task starts in 'planning' and nothing is pickable until "
-    "your person has approved a plan for it — draft one with the planning-a-task skill, with the "
-    "whole checklist written, then hand it over. There are no due dates: a date you set yourself "
-    "is not a deadline anyone agreed to. Filing into a project that already has a roadmap? Name "
-    "the milestone this delivers, or you are handed the open ones to choose from. And if you are "
-    "about to file several tasks toward one step, plan_work writes the step, the tasks and every "
-    "checklist item in a single call instead of a dozen.",
+    "of its own. A task under a project MUST carry such a description. 'priority' is high for "
+    "what matters most — it is the only ordering there is. Every task starts in 'planning' and "
+    "nothing is pickable until your person has approved a plan for it — draft one with the "
+    "planning-a-task skill, with the whole checklist written, then hand it over. There are no due "
+    "dates: a date you set yourself is not a deadline anyone agreed to. About to file several "
+    "tasks at once? plan_work writes the tasks and every checklist item in a single call.",
     {
         "goal": {**STR, "description": "Short title — the outcome, not a verb like 'verify X'."},
         "description": {
             **STR,
-            "description": "How you'll know it's done — required for a task under a project or "
-            "milestone; a runnable check beats prose.",
+            "description": "How you'll know it's done — required for a task under a project; a "
+            "runnable check beats prose.",
         },
         "priority": {**STR, "enum": list(TASK_PRIORITIES), "description": "low | normal | high."},
         "status": {**STR, "enum": list(TASK_STATUSES), "description": "Defaults to 'planning'."},
         "project_id": {**INT, "description": "Optional: the project this task belongs to."},
-        "milestone_id": {
-            **INT,
-            "description": "Optional: the milestone this task delivers (it inherits that milestone's project).",
-        },
     },
     required=("goal",),
 )
@@ -72,17 +66,10 @@ def add_task(path: Path, args: dict):
     goal = (args.get("goal") or "").strip()
     description = (args.get("description") or "").strip()
     project_id = args.get("project_id")
-    milestone_id = args.get("milestone_id")
-    # A milestone carries its project, so resolve before checking scope — otherwise filing into
-    # another project by naming only its milestone walks straight past the guard.
-    if milestone_id and not project_id:
-        milestone = repo.projects.get_milestone(path, int(milestone_id))
-        if milestone:
-            project_id = milestone.get("project_id")
     foreign = _out_of_scope(path, project_id)
     if foreign is not None:
         return foreign
-    scoped = bool(project_id or milestone_id)
+    scoped = bool(project_id)
 
     # A task that belongs to real work needs a checkable finish line. Without one, "Verify the
     # Prisma foundation" can never be objectively done, so it grinds forever. Trivial standalone
@@ -98,40 +85,9 @@ def add_task(path: Path, args: dict):
             ),
         }
 
-    # A task filed into a project that HAS a roadmap, with no milestone named, is the shape of
-    # the complaint: tasks that land nowhere and a roadmap with no cohesion. It is not a
-    # judgement failure — `milestone_id` is a bare integer in the schema above, so placing one
-    # correctly means having already called `list_tasks`, held the ids, and recalled the right
-    # one at this moment. It was choosing blind, and an optional field with no candidates in
-    # front of it is a field that gets skipped.
-    #
-    # So the candidates are offered here, at the one moment the choice is actually being made.
-    # Not in the schema, which is where they belong in every other codebase: `tool_schemas` is
-    # part of the cached prefix, so a per-conversation enum of milestones would discard the whole
-    # prompt cache every time the board moved. A refusal costs one round and nothing else.
-    #
-    # Refused rather than warned, for the same reason the missing done-condition above is
-    # refused: a warning attached to a successful write is a warning nobody reads, and the row
-    # is already filed by the time it is read.
-    if project_id and not milestone_id:
-        open_milestones = [
-            one for one in repo.projects.list_milestones(path, int(project_id)) if one.get("status") != "done"
-        ]
-        if open_milestones:
-            return {
-                "ok": False,
-                "error": (
-                    "This project has a roadmap, so say which milestone this task delivers — a "
-                    "task filed beside the roadmap instead of under it is how a project stops "
-                    "adding up to anything. Pass `milestone_id`, or `add_milestone` first if "
-                    "this genuinely belongs to a step that is not there yet."
-                ),
-                "milestones": [{"id": one["id"], "title": one.get("title") or ""} for one in open_milestones],
-            }
-
     # Don't file a second copy of work already open. The 106≈110 / 107≈111 duplicates were the
-    # loop re-decomposing the same stuck milestone; merge into the existing task rather than grow
-    # the pile. Scoped to the same project so unrelated look-alikes aren't collapsed.
+    # loop re-decomposing the same stuck piece of work; merge into the existing task rather than
+    # grow the pile. Scoped to the same project so unrelated look-alikes aren't collapsed.
     new_sig = stall.signature(f"{goal} {description}")
     for existing in repo.tasks.list_tasks(path):
         if existing.get("status") in TASK_SETTLED or existing.get("project_id") != project_id:
@@ -145,30 +101,9 @@ def add_task(path: Path, args: dict):
                 "note": f"Merged into existing open task #{existing['id']} — near-identical goal.",
             }
 
-    # One milestone, a handful of concrete tasks — not the whole roadmap at once. The breakdown
-    # prompt says "one sitting each", but a prompt limit is advisory, so enforce it here: nine
-    # overlapping tasks under one milestone is exactly what this stops.
-    if milestone_id:
-        cap = int(tuning.value("milestone_task_cap"))
-        open_here = sum(
-            1
-            for t in repo.tasks.list_tasks(path)
-            if t.get("milestone_id") == milestone_id and t.get("status") not in TASK_SETTLED
-        )
-        if open_here >= cap:
-            return {
-                "ok": False,
-                "error": (
-                    f"This milestone already has {open_here} open task(s) — finish or drop some "
-                    "before adding more. Plan one milestone shallowly, not all of it at once."
-                ),
-            }
-
-    # Everything starts in `planning`, milestone or not. The old split — a standalone errand
-    # landing straight in a ready-to-pick column — has nowhere to go, because nothing is pickable
-    # until a person has approved a plan for it. The problem the separate backlog originally
-    # solved (a roadmap being laid out is not started halfway through writing it) is now true of
-    # every task by construction rather than a special case for the ones under a milestone.
+    # Everything starts in `planning`. The old split — a standalone errand landing straight in a
+    # ready-to-pick column — has nowhere to go, because nothing is pickable until a person has
+    # approved a plan for it.
     status = args.get("status") or "planning"
     # A task cannot be born approved, and the reason is stronger than "the gate would refuse it":
     # the plan lives at `.kith/work/task-<id>.md`, and the id does not exist until this row does.
@@ -188,12 +123,8 @@ def add_task(path: Path, args: dict):
         status,
         "kith",
         project_id,
-        milestone_id,
     )
-    # Filing work under a project is working on that project. Read back off the row rather than
-    # off the arguments, because a task given only a milestone still lands in a project — the
-    # repository resolves it — and a session that laid out a roadmap this way would otherwise be
-    # bound to nothing.
+    # Filing work under a project is working on that project.
     project_binding.adopt(path, made.get("project_id"))
     # Remembered so `_verify_approvable` can refuse to approve it in the same breath — see the
     # note there. Written here rather than inferred from `created_at` because the question is
@@ -256,8 +187,8 @@ def list_tasks(path: Path, args: dict):
 
     `view_task` was a separate tool for the second case: 259 characters of schema, and a
     decision for the model to make, to say what an argument says. Merged here it also becomes
-    plural, which is the half that changes behaviour — reviewing a milestone means opening the
-    three tasks under it, and that was three rounds. See `domain.tooling.many`.
+    plural, which is the half that changes behaviour — reviewing a project's work in flight means
+    opening the three tasks on it, and that was three rounds. See `domain.tooling.many`.
 
     **A bare listing stays a listing.** The two were separate for a real reason: a page of
     tasks with every checklist and comment thread attached is a page that costs what reading
@@ -291,14 +222,14 @@ def list_tasks(path: Path, args: dict):
 @tool(
     "update_task",
     "Update a task — move it between planning/approved/working/done/dropped, or change its goal, "
-    "description, priority, or which project/milestone it belongs to. Every task starts in "
+    "description, priority, or which project it belongs to. Every task starts in "
     "'planning' while you draft its plan. 'approved' is NOT yours to set: your person approves a "
     "plan in chat, and this refuses it without a plan file and a checklist. Move it to 'working' "
     "when you start, 'done' when it is genuinely finished, 'dropped' if you are giving up. "
     "There is no column meaning 'your turn' — if you are blocked or want something confirmed, use "
-    "`ask` in chat, which waits for the answer. Marking the last task of a milestone 'done' "
-    "auto-completes that milestone, and completing all of a project's milestones auto-completes "
-    "the project — so just keep tasks honest. Once a task is 'done' or 'dropped', leave it alone. "
+    "`ask` in chat, which waits for the answer. A project is never closed for you, however many "
+    "of its tasks are done — keep tasks honest and tell them when it looks finished. Once a task "
+    "is 'done' or 'dropped', leave it alone. "
     "Moving a task with a written brief to 'done' REQUIRES `verification` — see below.",
     {
         "id": INT,
@@ -307,7 +238,6 @@ def list_tasks(path: Path, args: dict):
         "description": STR,
         "priority": {**STR, "enum": list(TASK_PRIORITIES)},
         "project_id": {**INT, "description": "Move it under this project (or omit)."},
-        "milestone_id": {**INT, "description": "Link it to this milestone (or omit)."},
         "verification": {
             "type": "array",
             "description": (
@@ -341,26 +271,17 @@ def update_task(path: Path, args: dict):
 
 @tool(
     "plan_work",
-    "Lay out one milestone's worth of work in a single call: the step to reach, the handful of "
-    "tasks that reach it, and each task's checklist. Use this INSTEAD of add_milestone followed "
-    "by add_task followed by checklist — it is the same writes, the same rules, and one "
-    "round rather than a dozen. Plan ONE milestone, shallowly: the next step and the two to five "
-    "tasks that finish it, not the whole roadmap. Every task needs a done-condition you could "
-    "check — a command that exits 0, a test that passes, a file that exists. Nothing here starts "
-    "pickable; it lands in planning for your person to approve.",
+    "File several tasks on a project in a single call, each with its checklist. Use this INSTEAD "
+    "of add_task followed by checklist for each one — it is the same writes, the same rules, and "
+    "one round rather than a dozen. Plan shallowly: the next two to five tasks, not the whole "
+    "project. Every task needs a done-condition you could check — a command that exits 0, a test "
+    "that passes, a file that exists. Nothing here starts pickable; it lands in planning for your "
+    "person to approve.",
     {
         "project_id": {**INT, "description": "The project this belongs to."},
-        "milestone": {
-            **STR,
-            "description": (
-                "The step to reach, as an outcome. Leave out and pass `milestone_id` instead "
-                "when the step already exists."
-            ),
-        },
-        "milestone_id": {**INT, "description": "An existing milestone to hang these tasks on."},
         "tasks": {
             "type": "array",
-            "description": "Two to five tasks that together finish the milestone.",
+            "description": "Two to five tasks — the next stretch of work, in the order you would do them.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -380,18 +301,18 @@ def update_task(path: Path, args: dict):
     required=("project_id", "tasks"),
 )
 def plan_work(path: Path, args: dict):
-    """One milestone, its tasks and their checklists, in one call.
+    """Several tasks and their checklists, in one call.
 
-    **Why this exists, and it is not convenience.** Planning cost a dozen tool calls — a
-    milestone, then a task each, then every checklist item — and a tool that costs a dozen calls
+    **Why this exists, and it is not convenience.** Planning cost a dozen tool calls — a task
+    each, then every checklist item — and a tool that costs a dozen calls
     competes, every round, with `shell`, which costs one and can do anything. Measured over two
     sessions: told to plan, it plans well; left alone it does the work inline and files nothing.
     That is the same economics that stopped it reaching for `delegate_subtask`, and it was fixed
     there the same way — by making the cheap thing and the right thing the same thing.
 
     **It writes nothing itself.** Every task goes through :func:`add_task` and every item through
-    :func:`add_checklist_item`, so the done-condition rule, the duplicate merge, the per-milestone
-    cap and the planning gate all apply exactly as they do to a task filed by hand. A second
+    :func:`add_checklist_item`, so the done-condition rule, the duplicate merge and the planning
+    gate all apply exactly as they do to a task filed by hand. A second
     write path would be a second place for those rules to be wrong, and the rules are the reason
     the board is worth anything.
 
@@ -399,8 +320,6 @@ def plan_work(path: Path, args: dict):
     refused for a missing done-condition is four tasks of real work plus one thing to fix; a
     rollback would throw away the four and tell it to do all five again.
     """
-    milestone_id = args.get("milestone_id")
-    title = str(args.get("milestone") or "").strip()
     tasks = args.get("tasks")
 
     # Checked rather than trusted. `required=` is a hint to the model, not a gate — the argument
@@ -412,16 +331,12 @@ def plan_work(path: Path, args: dict):
         return {"ok": False, "error": "Say which project this belongs to — `project_id` is its number."}
 
     if not isinstance(tasks, list) or not tasks:
-        return {"ok": False, "error": "Say which tasks finish this milestone — at least one."}
-    if not milestone_id and not title:
-        return {
-            "ok": False,
-            "error": "Name the milestone these tasks deliver, or pass `milestone_id` for one that exists.",
-        }
-
-    if not milestone_id:
-        made = repo.projects.add_milestone(path, project_id, title)
-        milestone_id = made["id"]
+        return {"ok": False, "error": "Say which tasks to file — at least one."}
+    # Once for the batch rather than once per task: every one of them would be refused for the
+    # same reason, and five copies of "that is another conversation's project" is noise.
+    foreign = _out_of_scope(path, project_id)
+    if foreign is not None:
+        return foreign
 
     written: list[dict] = []
     refused: list[dict] = []
@@ -435,7 +350,6 @@ def plan_work(path: Path, args: dict):
                 "description": one.get("description"),
                 "priority": one.get("priority"),
                 "project_id": project_id,
-                "milestone_id": milestone_id,
             },
         )
         if not answer.get("ok", True) or not answer.get("id"):
@@ -449,7 +363,7 @@ def plan_work(path: Path, args: dict):
             checklist(path, {"id": task_id, "add": [text for text in wanted if text]})
         written.append({"id": task_id, "goal": one.get("goal"), "steps": len(steps or [])})
 
-    answer: dict = {"ok": bool(written), "milestone_id": milestone_id, "tasks": written}
+    answer: dict = {"ok": bool(written), "project_id": project_id, "tasks": written}
     if refused:
         # Named individually. "3 of 5 filed" sends it back to re-read the board to work out
         # which two; the two it has to fix are the only part it needs.

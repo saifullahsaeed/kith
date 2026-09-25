@@ -39,6 +39,17 @@ def projects():
     return jsonify({"projects": repo.projects.list_projects(AGENT_DB_PATH)})
 
 
+@api.get("/projects/<int:project_id>/tasks")
+@api.doc(
+    summary="One project's tasks",
+    description="The project's board: every task under it with checklist progress and output counts.",
+)
+def project_tasks(project_id: int):
+    """One project's board without the rest of the database — what `kith project show` prints."""
+    tasks = [t for t in brain.snapshot_tasks(AGENT_DB_PATH) if t.get("project_id") == project_id]
+    return jsonify({"tasks": tasks})
+
+
 @api.get("/schedules")
 @api.doc(
     summary="Just the standing jobs",

@@ -47,7 +47,6 @@ export * from "./conversations";
 export { USAGE_PART } from "./adapter";
 export * from "./persona";
 export * from "./updates";
-export * from "./roadmap";
 export * from "./notify";
 export * from "./mcp";
 export * from "./language-servers";

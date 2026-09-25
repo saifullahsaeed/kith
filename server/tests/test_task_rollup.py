@@ -1,16 +1,13 @@
-"""Completion cascading: task → milestone, and where it deliberately stops.
+"""What finishing tasks does to a project — which is nothing, deliberately.
 
-The most intricate logic in the data layer, and the one most likely to be broken by
-a well-meaning edit. Its job is deciding when a *milestone* is finished, and getting
-it wrong is quiet in both directions: a milestone that never closes leaves Kith
-poking at a done piece of work forever, and one that closes early makes him rest with
-work outstanding.
+This used to be the file for the completion cascade: the last task under a milestone closed the
+milestone, and once upon a time the last milestone closed the project. Milestones are gone, and
+the project half was removed before them for a better reason than tidiness: a project closing is
+a judgement about the whole thing, not a fact bookkeeping can derive from an empty board. It is a
+person's call, never Kith's — see test_only_a_person_closes_a_project.py for the tool that would
+have let him make it anyway.
 
-It used to keep climbing past the milestone and mark the *project* done too, on the
-same reasoning. That was the wrong claim for automation to make: a project closing is
-a judgement about the whole thing, not a fact bookkeeping can derive from an empty
-board, and it is a person's call now, never Kith's — see
-test_only_a_person_closes_a_project.py for the tool that would have let him make it anyway.
+What is left is the board summary a project carries, and the rule that decides what he may pick up.
 """
 
 from __future__ import annotations
@@ -20,34 +17,8 @@ from pathlib import Path
 from kith.infra.db.repositories import projects, tasks
 
 
-def test_milestone_waits_for_its_last_task(db: Path) -> None:
-    project = projects.add_project(db, "p")
-    milestone = projects.add_milestone(db, project["id"], "m")
-    first = tasks.add_task(db, "one", milestone_id=milestone["id"])
-    second = tasks.add_task(db, "two", milestone_id=milestone["id"])
-
-    tasks.update_task(db, first["id"], status="done")
-    assert projects.list_milestones(db, project["id"])[0]["status"] == "todo"
-
-    tasks.update_task(db, second["id"], status="done")
-    assert projects.list_milestones(db, project["id"])[0]["status"] == "done"
-
-
-def test_a_cleared_roadmap_does_not_close_the_project(db: Path) -> None:
-    """The one this file used to assert the other way. Clearing the last milestone is
-    evidence the project looks finished, not a decision that it is."""
-    project = projects.add_project(db, "p")
-    milestone = projects.add_milestone(db, project["id"], "m")
-    task = tasks.add_task(db, "only", milestone_id=milestone["id"])
-
-    tasks.update_task(db, task["id"], status="done")
-
-    assert projects.list_milestones(db, project["id"])[0]["status"] == "done"
-    assert projects.get_project(db, project["id"])["status"] == "active"
-
-
-def test_a_project_with_no_milestones_does_not_close_on_its_tasks_either(db: Path) -> None:
-    """No roadmap to clear does not make the claim any smaller — still not Kith's to make."""
+def test_finishing_every_task_does_not_close_the_project(db: Path) -> None:
+    """An empty board is evidence the project looks finished, not a decision that it is."""
     project = projects.add_project(db, "p")
     task = tasks.add_task(db, "only", project_id=project["id"])
 
@@ -55,20 +26,7 @@ def test_a_project_with_no_milestones_does_not_close_on_its_tasks_either(db: Pat
     assert projects.get_project(db, project["id"])["status"] == "active"
 
 
-def test_dropped_counts_as_settled(db: Path) -> None:
-    """Abandoning a task must not hold its milestone open forever."""
-    project = projects.add_project(db, "p")
-    milestone = projects.add_milestone(db, project["id"], "m")
-    dropped = tasks.add_task(db, "abandon", milestone_id=milestone["id"])
-    finished = tasks.add_task(db, "finish", milestone_id=milestone["id"])
-
-    tasks.update_task(db, dropped["id"], status="dropped")
-    tasks.update_task(db, finished["id"], status="done")
-    assert projects.list_milestones(db, project["id"])[0]["status"] == "done"
-
-
 def test_paused_project_is_left_alone(db: Path) -> None:
-    """Only 'active' rolls to 'done' — a paused project stays as its person left it."""
     project = projects.add_project(db, "p")
     task = tasks.add_task(db, "only", project_id=project["id"])
     projects.update_project(db, project["id"], status="paused")
@@ -77,11 +35,26 @@ def test_paused_project_is_left_alone(db: Path) -> None:
     assert projects.get_project(db, project["id"])["status"] == "paused"
 
 
-def test_a_task_inherits_its_milestones_project(db: Path) -> None:
+def test_active_tasks_are_the_approved_and_the_working(db: Path) -> None:
+    """Nothing gates an approved task any more but its project being parked. `planning` is not
+    pickable — a plan nobody has said yes to is not work yet."""
     project = projects.add_project(db, "p")
-    milestone = projects.add_milestone(db, project["id"], "m")
-    task = tasks.add_task(db, "t", milestone_id=milestone["id"])
-    assert task["project_id"] == project["id"]
+    planned = tasks.add_task(db, "a plan", status="planning", project_id=project["id"])
+    approved = tasks.add_task(db, "said yes", status="approved", project_id=project["id"])
+    working = tasks.add_task(db, "on it", status="working", project_id=project["id"])
+    loose = tasks.add_task(db, "an errand", status="approved")
+
+    picked = {t["id"] for t in tasks.active_tasks(db)}
+    assert {approved["id"], working["id"], loose["id"]} <= picked
+    assert planned["id"] not in picked
+
+
+def test_active_tasks_come_high_priority_first(db: Path) -> None:
+    """With no graph deciding the order, priority does."""
+    low = tasks.add_task(db, "later", priority="low", status="approved")
+    high = tasks.add_task(db, "first", priority="high", status="approved")
+    order = [t["id"] for t in tasks.active_tasks(db)]
+    assert order.index(high["id"]) < order.index(low["id"])
 
 
 def test_active_tasks_skip_a_parked_project(db: Path) -> None:
@@ -94,6 +67,20 @@ def test_active_tasks_skip_a_parked_project(db: Path) -> None:
     assert not any(t["id"] == task["id"] for t in tasks.active_tasks(db))
 
 
+def test_a_project_counts_its_tasks_by_column(db: Path) -> None:
+    """The board, summarised — what the projects list and his context both read."""
+    project = projects.add_project(db, "p")
+    for status in ("planning", "planning", "approved", "working", "done", "dropped"):
+        tasks.add_task(db, f"a {status} task", status=status, project_id=project["id"])
+
+    row = next(one for one in projects.project_overview(db) if one["id"] == project["id"])
+    assert (row["tasks_planning"], row["tasks_approved"], row["tasks_working"]) == (2, 1, 1)
+    assert (row["tasks_done"], row["tasks_dropped"]) == (1, 1)
+    assert row["tasks_active"] == 2
+    assert row["tasks_total"] == 6
+    assert "milestones" not in row
+
+
 def test_deleting_a_project_keeps_its_tasks(db: Path) -> None:
     """The work outlives the grouping — cascading here would destroy deliverables."""
     project = projects.add_project(db, "p")
@@ -103,3 +90,19 @@ def test_deleting_a_project_keeps_its_tasks(db: Path) -> None:
     survivor = tasks.task_detail(db, task["id"])
     assert survivor is not None
     assert survivor["project_id"] is None
+
+
+def test_a_project_lists_what_its_tasks_produced(db: Path) -> None:
+    """The Outputs tab: every deliverable under the project, newest first, with its task."""
+    project = projects.add_project(db, "p")
+    first = tasks.add_task(db, "write the spec", project_id=project["id"])
+    second = tasks.add_task(db, "draw the screens", project_id=project["id"])
+    elsewhere = tasks.add_task(db, "someone else's")
+    tasks.add_deliverable(db, first["id"], "file", "Spec", "docs/spec.md")
+    tasks.add_deliverable(db, second["id"], "link", "Board", "https://example.com")
+    tasks.add_deliverable(db, elsewhere["id"], "text", "Not ours", "…")
+
+    out = tasks.project_deliverables(db, project["id"])
+    assert [one["title"] for one in out] == ["Board", "Spec"]
+    assert out[1]["task_goal"] == "write the spec"
+    assert tasks.deliverable_counts(db)[first["id"]] == 1

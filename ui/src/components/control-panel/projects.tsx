@@ -1,147 +1,39 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ChevronRight, FolderKanban, ListChecks, MessageSquare, Plus } from "lucide-react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ChevronRight, Folder, FolderKanban, ListChecks, MessageSquare, Plus } from "lucide-react";
 import { MarkdownInline } from "@/components/files";
 import { Button } from "@/components/ui/button";
-import { Dropdown } from "@/components/ui/dropdown";
 import type { BrainSnapshot } from "@/lib/backend/brain";
 import { fetchConversations, type ConversationSummary } from "@/lib/backend";
 import { dayLabel } from "@/lib/dates";
-import { pathForConversation } from "@/lib/router";
+import { keys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
-import { Badge, Composer, DeleteButton, EmptyState, PageHeader } from "./chrome";
-import { matches, shortPath } from "./format";
-import { ProgressRing } from "./task-lane";
-import { FIELD, LOOSE, PROJECT_STATUSES } from "./types";
+import { Badge, EmptyState } from "./chrome";
+import { matches, shortPath, tally } from "./format";
+import { Breakdown, ProgressBar } from "./progress";
+import { FIELD, LOOSE } from "./types";
 import type { Handlers, ProjectRef } from "./types";
 
-/** How many of a project's conversations the card carries. Three is enough to recognise the one
- *  you want; the rest are behind the project itself. */
-const CHATS_ON_CARD = 3;
+type Project = BrainSnapshot["projects"][number];
 
-/**
- * Every conversation, grouped by the project it belongs to.
- *
- * The listing lives on the card because that is where someone looking for a conversation
- * actually arrives. It was on the project's own page first, at the bottom, under a workflow
- * graph and a task list — which is to say it was reachable in the sense that a thing at the end
- * of a corridor is reachable. A projects screen that cannot get you to what was said in a project
- * is a filing cabinet with the drawers welded shut.
- *
- * One fetch for the whole screen. Eight cards each asking for the same listing is eight reads of
- * the same file to draw one page.
- */
-function useProjectConversations(): Map<number, ConversationSummary[]> {
-  const [byProject, setByProject] = useState<Map<number, ConversationSummary[]>>(new Map());
-  useEffect(() => {
-    let live = true;
-    void fetchConversations(500)
-      .then((data) => {
-        if (!live) return;
-        const grouped = new Map<number, ConversationSummary[]>();
-        for (const one of data.conversations) {
-          if (one.projectId === null) continue;
-          const held = grouped.get(one.projectId);
-          if (held) held.push(one);
-          else grouped.set(one.projectId, [one]);
-        }
-        setByProject(grouped);
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-  return byProject;
-}
+/** The same ceiling the sidebar uses, and the same cache entry. */
+const CHAT_LIMIT = 500;
 
-/**
- * A project's conversations, on the card, one click from anywhere.
- *
- * The point of this whole screen, for someone who came here from the sidebar, is getting back
- * into something that was said. Everything else on the card describes the plan; this is the only
- * part that is the conversation.
- *
- * Each row stops the click from reaching the card. The card opens the project, these open a chat,
- * and a row that did both would open the project and then navigate away from it.
- */
-function CardChats({
-  chats,
-  onOpenProject,
-}: {
-  chats: ConversationSummary[];
-  onOpenProject: () => void;
-}) {
-  const navigate = useNavigate();
-  if (chats.length === 0) return null;
-  const shown = chats.slice(0, CHATS_ON_CARD);
+/** Which projects the list shows. Active is where you land; the rest are one click away rather
+ *  than stacked under it at 70% opacity, still taking a line of attention on every scan. */
+const FILTERS = [
+  { key: "active", label: "Active" },
+  { key: "paused", label: "Paused" },
+  { key: "done", label: "Done" },
+  { key: "archived", label: "Archived" },
+] as const;
 
-  return (
-    <div
-      className="border-border/50 mt-3 border-t pt-2"
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div className="text-muted-foreground/50 mb-1 flex items-center gap-1.5 text-[10px] font-semibold tracking-[0.1em] uppercase">
-        <MessageSquare className="size-3" />
-        {chats.length} conversation{chats.length === 1 ? "" : "s"}
-      </div>
-      <ul>
-        {shown.map((one) => (
-          <li key={one.id}>
-            <button
-              type="button"
-              onClick={() => navigate(pathForConversation(one.id))}
-              className="hover:bg-accent/50 -mx-1.5 flex w-[calc(100%+0.75rem)] items-baseline gap-2 rounded px-1.5 py-1 text-left transition-colors"
-            >
-              <span className="text-foreground/80 min-w-0 flex-1 truncate text-[12px]">
-                {one.title}
-              </span>
-              {one.working ? (
-                <span
-                  className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
-                  title="Still working in this conversation"
-                />
-              ) : null}
-              <span className="text-muted-foreground/40 shrink-0 text-[10px] tabular-nums">
-                {dayLabel(one.updatedAt)}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {chats.length > shown.length ? (
-        <button
-          type="button"
-          onClick={onOpenProject}
-          className="text-muted-foreground/50 hover:text-foreground mt-0.5 px-1.5 text-[11px] transition-colors"
-        >
-          {chats.length - shown.length} more in this project →
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-/** Counts of a project's tasks by where they sit. */
-function taskTally(tasks: BrainSnapshot["tasks"]) {
-  const of = (...s: string[]) => tasks.filter((t) => s.includes(t.status)).length;
-  return {
-    total: tasks.length,
-    open: of("approved"),
-    // Counted apart from `open`: a plan waiting on a decision is not the same thing as work
-    // that has been approved and simply has not started.
-    planning: of("planning"),
-    working: of("working"),
-    done: of("done"),
-  };
-}
+type Filter = (typeof FILTERS)[number]["key"];
 
 export function Projects({
   snap,
   query,
-  remove,
   create,
-  update,
   onOpenProject,
 }: {
   snap: BrainSnapshot;
@@ -149,111 +41,119 @@ export function Projects({
   onOpenProject: (ref: ProjectRef) => void;
 } & Handlers) {
   const [name, setName] = useState("");
+  const [filter, setFilter] = useState<Filter>("active");
   const searching = query.trim().length > 0;
-  // Loaded once here rather than per card: every card wants the same listing, and eight cards
-  // each fetching it is eight reads of the same file for one screen.
-  const chats = useProjectConversations();
-  const hits = (t: BrainSnapshot["tasks"][number]) =>
-    matches(query, t.goal, t.status, t.description);
-  // Searching finds work wherever it lives: a project surfaces when it matches
-  // *or* when one of its tasks does.
-  const projects = (snap.projects ?? []).filter(
+
+  // One listing for every card: eight cards each fetching it is eight reads of one file.
+  const chats = useQuery({
+    queryKey: keys.conversations(CHAT_LIMIT, ""),
+    queryFn: async () => (await fetchConversations(CHAT_LIMIT)).conversations,
+    staleTime: 30_000,
+  });
+  const chatsFor = (id: number) => (chats.data ?? []).filter((one) => one.projectId === id);
+
+  const hits = (t: BrainSnapshot["tasks"][number]) => matches(query, t.goal, t.status, t.description);
+  // Searching finds work wherever it lives: a project surfaces when it matches *or* when one of
+  // its tasks does.
+  const all = (snap.projects ?? []).filter(
     (p) =>
       matches(query, p.name, p.description, p.status) ||
       snap.tasks.some((t) => t.project_id === p.id && hits(t)),
   );
+  const shown = all.filter((p) => p.status === filter);
   const loose = snap.tasks.filter((t) => t.project_id == null && hits(t));
-  // Finished and paused work is kept, but out of the way: a done project at 70% opacity in
-  // the same list still takes a line of attention every time you scan for what is live.
-  const live = projects.filter((one) => one.status === "active");
-  const closedOnes = projects.filter((one) => one.status !== "active");
-  const all = taskTally(snap.tasks);
+  const everything = tally(snap.tasks);
 
-  // Where he is, and how much is genuinely pickup-able. Both come from the roadmap rather
-  // than from task status: a task under a waiting milestone is open but not available, and
-  // counting it as work-to-do is the misreading the whole graph exists to prevent.
-  const onNow = (snap.projects ?? [])
-    .flatMap((project) =>
-      project.milestones
-        .filter((one) => one.tasks_doing > 0)
-        .map((one) => ({ title: one.title, project: project.name })),
-    )
-    .at(0);
-  const available = (snap.projects ?? []).reduce(
-    (total, project) =>
-      total +
-      project.milestones.filter((one) => one.ready).reduce((sum, one) => sum + one.tasks_active, 0),
-    0,
-  );
   const add = () => {
     if (!name.trim()) return;
     create("project", { name });
     setName("");
   };
+
   return (
     <>
-      <PageHeader
-        icon={<FolderKanban className="size-5" />}
-        color="kith"
-        title="Projects"
-        count={projects.length}
-        subtitle="Everything he's working on. Open one to see its tasks."
-      />
-      <Composer onSubmit={add}>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Start a project — a bigger goal…"
-          className={`${FIELD} flex-1`}
-        />
-        <Button size="sm" onClick={add}>
-          <Plus className="size-4" />
-          Add project
-        </Button>
-      </Composer>
-
-      {/* What he is actually doing, then the numbers. The tally alone answered "how much
-          work is there", which is not the question anyone opens this page with. */}
-      {all.total > 0 ? (
-        <div className="border-border/60 bg-card/40 mb-4 rounded-xl border px-4 py-2.5">
-          <p className="text-sm">
-            {onNow ? (
-              <>
-                <span className="bg-kith mr-2 inline-block size-1.5 animate-pulse rounded-full align-middle" />
-                Working on <span className="text-kith">{onNow.title}</span>
-                <span className="text-muted-foreground"> in {onNow.project}</span>
-              </>
-            ) : all.planning ? (
-              <span className="text-foreground font-medium">
-                {all.planning} plan{all.planning === 1 ? "" : "s"} waiting on you
-              </span>
-            ) : available > 0 ? (
-              <span className="text-muted-foreground">
-                <span className="text-foreground">{available}</span> task
-                {available === 1 ? "" : "s"} available to pick up
-              </span>
-            ) : (
-              <span className="text-muted-foreground">
-                Nothing to pick up — he&apos;s caught up.
-              </span>
-            )}
-          </p>
-          <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
-            <span className="text-foreground font-medium">
-              {all.total} task{all.total === 1 ? "" : "s"}
+      <div className="mb-6 flex flex-wrap items-start gap-x-4 gap-y-3">
+        <span className="bg-muted/70 text-kith flex size-10 shrink-0 items-center justify-center rounded-xl">
+          <FolderKanban className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="flex items-baseline gap-2 text-xl font-semibold tracking-tight">
+            Projects
+            <span className="text-muted-foreground text-sm font-normal tabular-nums">
+              {(snap.projects ?? []).length}
             </span>
-            <TaskTally tally={all} />
-          </div>
+          </h2>
+          <p className="text-muted-foreground mt-0.5 text-[13px]">
+            Everything he&apos;s working on. Open one for its board, conversations and outputs.
+          </p>
+        </div>
+        <div className="border-border/70 bg-card/50 flex w-full max-w-sm items-center gap-2 rounded-xl border p-1 pl-3.5 transition-colors focus-within:border-ring/60 sm:w-80">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && add()}
+            placeholder="Start a project…"
+            aria-label="New project name"
+            className={`${FIELD} flex-1`}
+          />
+          <Button size="sm" onClick={add}>
+            <Plus className="size-4" />
+            New
+          </Button>
+        </div>
+      </div>
+
+      {everything.total + everything.dropped > 0 ? (
+        <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Stat
+            label="Waiting on you"
+            value={everything.planning}
+            note="plans waiting for your OK"
+            emphasis={everything.planning > 0}
+          />
+          <Stat label="Working now" value={everything.working} note="tasks he is on right now" tone="kith" pulse />
+          <Stat label="Up next" value={everything.approved} note="approved, not started yet" />
+          <Stat label="Done" value={everything.done} note="tasks finished, all time" tone="roam" />
         </div>
       ) : null}
 
-      {projects.length === 0 && loose.length === 0 ? (
+      <div className="mb-4 flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Which projects">
+        {FILTERS.map((one) => {
+          const n = all.filter((p) => p.status === one.key).length;
+          return (
+            <button
+              key={one.key}
+              type="button"
+              role="tab"
+              aria-selected={filter === one.key}
+              onClick={() => setFilter(one.key)}
+              className={cn(
+                "h-7 rounded-full border px-3 text-xs transition-colors",
+                filter === one.key
+                  ? "border-border bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground border-transparent",
+              )}
+            >
+              {one.label}
+              <span className="text-muted-foreground/70 ml-1.5 tabular-nums">{n}</span>
+            </button>
+          );
+        })}
+        <span className="flex-1" />
+        <span className="text-muted-foreground/60 text-xs">Most recently active first</span>
+      </div>
+
+      {shown.length === 0 && (filter !== "active" || loose.length === 0) ? (
         <EmptyState icon={<FolderKanban className="size-5" />}>
-          No projects yet — start one above.
+          {searching
+            ? "Nothing here matches."
+            : filter === "active"
+              ? "No projects yet — start one above."
+              : `No ${filter} projects.`}
         </EmptyState>
       ) : (
-        <div className="space-y-3">
-          {live.map((p) => {
+        <div className="grid grid-cols-1 gap-3.5 xl:grid-cols-2">
+          {shown.map((p) => {
             const own = snap.tasks.filter((t) => t.project_id === p.id);
             return (
               <ProjectCard
@@ -261,37 +161,13 @@ export function Projects({
                 project={p}
                 tasks={own}
                 matching={searching ? own.filter(hits).length : undefined}
-                remove={remove}
-                update={update}
+                chats={chatsFor(p.id)}
                 onOpen={() => onOpenProject(p.id)}
-                chats={chats.get(p.id) ?? []}
               />
             );
           })}
-          {loose.length > 0 ? (
+          {filter === "active" && loose.length > 0 ? (
             <LooseCard tasks={loose} onOpen={() => onOpenProject(LOOSE)} />
-          ) : null}
-
-          {closedOnes.length > 0 ? (
-            <div className="pt-2">
-              <p className="text-muted-foreground/60 mb-2 text-[11px] tracking-wide uppercase">
-                Finished &amp; paused · {closedOnes.length}
-              </p>
-              <div className="space-y-2">
-                {closedOnes.map((p) => (
-                  <ProjectCard
-                    key={p.id}
-                    project={p}
-                    tasks={snap.tasks.filter((one) => one.project_id === p.id)}
-                    matching={0}
-                    remove={remove}
-                    update={update}
-                    onOpen={() => onOpenProject(p.id)}
-                    chats={chats.get(p.id) ?? []}
-                  />
-                ))}
-              </div>
-            </div>
           ) : null}
         </div>
       )}
@@ -299,216 +175,194 @@ export function Projects({
   );
 }
 
-function TaskTally({ tally }: { tally: ReturnType<typeof taskTally> }) {
-  if (!tally.total) return <span className="text-muted-foreground/70">no tasks yet</span>;
+function Stat({
+  label,
+  value,
+  note,
+  tone,
+  pulse,
+  emphasis,
+}: {
+  label: string;
+  value: number;
+  note: string;
+  tone?: "kith" | "roam";
+  pulse?: boolean;
+  /** "Your turn" is weight and a warm edge rather than a third hue — see STATE in types.ts. */
+  emphasis?: boolean;
+}) {
   return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
-      {tally.working ? <span className="text-kith">{tally.working} working</span> : null}
-      {/* Same shape as `review`, one step earlier: a plan waiting on a decision before any
-          work starts, rather than work waiting on a check after it's done. */}
-      {tally.planning ? (
-        <span className="text-foreground font-medium">{tally.planning} to approve</span>
-      ) : null}
-      {tally.open ? <span>{tally.open} to do</span> : null}
-      {tally.done ? <span className="text-muted-foreground/70">{tally.done} done</span> : null}
-    </span>
+    <div
+      className={cn(
+        "flex flex-col gap-1 rounded-xl border px-4 py-3",
+        emphasis ? "border-kith/35 bg-kith-soft/60" : "border-border/60 bg-card/40",
+      )}
+    >
+      <span
+        className={cn(
+          "flex items-center gap-1.5 text-[11px] tracking-[0.08em] uppercase",
+          emphasis ? "text-kith" : "text-muted-foreground",
+        )}
+      >
+        {pulse && value > 0 ? <span className="bg-kith size-1.5 animate-pulse rounded-full" /> : null}
+        {label}
+      </span>
+      <span
+        className={cn(
+          "text-2xl font-semibold tabular-nums",
+          tone === "kith" && value > 0 && "text-kith",
+          tone === "roam" && value > 0 && "text-roam",
+        )}
+      >
+        {value}
+      </span>
+      <span className="text-muted-foreground text-xs">{note}</span>
+    </div>
   );
 }
 
+/**
+ * One project, as a card you open.
+ *
+ * It used to carry a milestone strip, a progress ring over milestones, a "Next:" line from the
+ * roadmap, a status dropdown and a delete button — five things about the plan's shape and two
+ * controls you almost never want from a list. What is left answers the three questions you scan
+ * a projects list with: is he on it, does it need me, and where was it left.
+ */
 function ProjectCard({
   project,
   tasks,
   matching,
-  remove,
-  update,
-  onOpen,
   chats,
+  onOpen,
 }: {
-  project: BrainSnapshot["projects"][number];
+  project: Project;
   tasks: BrainSnapshot["tasks"];
   /** How many of its tasks match the current search (undefined = not searching). */
   matching?: number;
-  onOpen: () => void;
   /** This project's conversations, newest first. */
   chats: ConversationSummary[];
-} & Pick<Handlers, "remove" | "update">) {
-  const pct = project.milestones_total
-    ? Math.round((project.milestones_done / project.milestones_total) * 100)
-    : 0;
-  const closed = project.status !== "active";
-  const tally = taskTally(tasks);
-
-  // Where the project actually is, from its own graph. A card that only showed "3/5
-  // milestones" was telling you how much of it was behind rather than what happens next,
-  // which is the question you open a project to answer.
-  const ordered = [...project.milestones].sort((a, b) => a.order_index - b.order_index);
-  const here = ordered.find((one) => one.tasks_doing > 0) ?? null;
-  const next = ordered.find((one) => one.status !== "done" && one.ready) ?? null;
-  const stalled = !here && !next && ordered.some((one) => one.status !== "done");
+  onOpen: () => void;
+}) {
+  const counts = tally(tasks);
+  const latest = chats[0];
 
   return (
-    // Click anywhere to go into the project; the status dropdown and delete opt out.
+    // Not a <button>: the description is Markdown, and a link in it renders as its own anchor or
+    // button, which may not sit inside another. Keyboard-reachable all the same.
     <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
       className={cn(
-        "group cursor-pointer rounded-xl border border-border/70 bg-card/50 p-4 shadow-sm transition-all hover:border-kith/30 hover:shadow-md",
-        closed && "opacity-70",
-        here && "border-kith/40",
+        "group border-border/70 bg-card/50 hover:border-kith/30 focus-visible:ring-ring/40 flex w-full cursor-pointer flex-col gap-2.5 rounded-2xl border p-4 text-left shadow-sm transition-all outline-none hover:shadow-md focus-visible:ring-[3px]",
+        counts.working > 0 && "border-kith/30",
       )}
     >
-      <div className="flex items-start gap-4">
-        <ProgressRing pct={pct} size={44} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 truncate text-[15px] leading-snug font-semibold transition-colors group-hover:text-foreground">
-              {project.name}
+      <span className="flex w-full items-center gap-2">
+        <span className="min-w-0 truncate text-[15px] leading-snug font-semibold">{project.name}</span>
+        {counts.working > 0 ? (
+          <span className="text-kith flex shrink-0 items-center gap-1 text-[11px]">
+            <span className="bg-kith size-1.5 animate-pulse rounded-full" />
+            working
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        {matching ? (
+          <Badge className="border-kith/25 bg-kith-soft text-kith">
+            {matching} match{matching === 1 ? "" : "es"}
+          </Badge>
+        ) : null}
+        {counts.planning > 0 ? (
+          <Badge className="border-kith/30 bg-kith-soft text-kith font-semibold">
+            {counts.planning} to approve
+          </Badge>
+        ) : null}
+        <ChevronRight className="text-muted-foreground/40 group-hover:text-foreground size-4 shrink-0 transition-colors" />
+      </span>
+
+      {project.description ? (
+        // `line-clamp` is a display of its own (-webkit-box), so nothing here may also say `block`;
+        // and the minimum height is exactly two lines, or a sliver of the third shows under it.
+        <div className="text-muted-foreground line-clamp-2 min-h-10 text-[13px] leading-5">
+          <MarkdownInline>{project.description}</MarkdownInline>
+        </div>
+      ) : (
+        <span className="text-muted-foreground/50 block min-h-10 text-[13px] leading-5 italic">No description</span>
+      )}
+
+      {/* Where the work actually lands, cut from the left: the end of a path identifies it. */}
+      {project.directory ? (
+        <span
+          title={project.directory}
+          className="text-muted-foreground/70 flex min-w-0 items-center gap-1.5 font-mono text-[11px]"
+        >
+          <Folder className="size-3 shrink-0" />
+          <span className="truncate">{shortPath(project.directory)}</span>
+        </span>
+      ) : (
+        <span className="text-muted-foreground/50 text-[11px] italic">No folder — nothing here writes files</span>
+      )}
+
+      <span className="flex w-full flex-col gap-1.5">
+        <ProgressBar counts={counts} />
+        <span className="text-muted-foreground text-[11px]">
+          <Breakdown counts={counts} />
+        </span>
+      </span>
+
+      <span className="border-border/50 flex w-full items-center gap-2.5 border-t pt-2.5 text-xs">
+        <MessageSquare className="text-muted-foreground/60 size-3.5 shrink-0" />
+        {latest ? (
+          <>
+            <span className="text-muted-foreground shrink-0">
+              {chats.length} conversation{chats.length === 1 ? "" : "s"}
             </span>
-            {here ? (
-              <span className="text-kith flex shrink-0 items-center gap-1 text-[11px]">
-                <span className="bg-kith size-1.5 animate-pulse rounded-full" />
-                working now
-              </span>
+            <span className="text-foreground/80 min-w-0 flex-1 truncate">{latest.title}</span>
+            {latest.working ? (
+              <span
+                className="bg-roam size-1.5 shrink-0 animate-pulse rounded-full"
+                title="Still working in this conversation"
+              />
             ) : null}
-            {tally.planning ? (
-              <Badge className="border-kith/25 bg-kith-soft text-kith">plan for your look</Badge>
-            ) : null}
-            {matching ? (
-              <Badge className="border-kith/25 bg-kith-soft text-kith">
-                {matching} match{matching === 1 ? "" : "es"}
-              </Badge>
-            ) : null}
-          </div>
-
-          {project.description ? (
-            <div className="text-muted-foreground mt-0.5 line-clamp-2 text-sm">
-              <MarkdownInline>{project.description}</MarkdownInline>
-            </div>
-          ) : null}
-
-          {/*
-            Where the work actually lands. The server has always sent this and the interface never
-            showed it, so the single fact that decides where every file he writes goes was
-            invisible — which is how a project ran against a folder that had been deleted, and how
-            a relative path quietly resolved into his own folder instead of the codebase.
-
-            Truncated from the *left*: the end of a path is the part that identifies it, and
-            `/Users/saifullahsaeed/Desktop/personal/…` is the part that never varies.
-          */}
-          {project.directory ? (
-            <p
-              title={project.directory}
-              className="text-muted-foreground/60 mt-1 truncate font-mono text-[11px]"
-            >
-              {shortPath(project.directory)}
-            </p>
-          ) : (
-            <p className="text-muted-foreground/50 mt-1 text-[11px] italic">
-              No folder — nothing here writes files
-            </p>
-          )}
-
-          {/* What happens next, in words. The single most useful line on the card. */}
-          {!closed && ordered.length > 0 ? (
-            <p className="mt-1.5 truncate text-xs">
-              {here ? (
-                <span className="text-kith">On “{here.title}”</span>
-              ) : next ? (
-                <span className="text-muted-foreground">
-                  Next: <span className="text-foreground">{next.title}</span>
-                </span>
-              ) : stalled ? (
-                <span className="text-foreground font-medium">
-                  Nothing available — every milestone is waiting on another
-                </span>
-              ) : (
-                <span className="text-roam">Every milestone done</span>
-              )}
-            </p>
-          ) : null}
-
-          <div className="text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-            <span className="tabular-nums">
-              {project.milestones_done}/{project.milestones_total} milestones
-            </span>
-            <span className="text-muted-foreground/40">·</span>
-            <TaskTally tally={tally} />
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          <Dropdown
-            value={project.status}
-            onChange={(v) => update("project", project.id, { status: v })}
-            options={PROJECT_STATUSES}
-            className="w-28"
-            ariaLabel="Project status"
-          />
-          <DeleteButton onClick={() => remove("project", project.id, project.name)} />
-        </div>
-        <ChevronRight className="text-muted-foreground/40 group-hover:text-foreground mt-2 size-4 shrink-0 transition-colors" />
-      </div>
-
-      <CardChats chats={chats} onOpenProject={onOpen} />
-
-      {/* The roadmap as a strip: the shape of the project without opening it. Segments in
-          order, coloured by state, the one he is on marked. A ring can only say how much is
-          left; this says where the work actually is. */}
-      {ordered.length > 1 ? (
-        <div className="mt-3 flex items-center gap-1">
-          {ordered.map((one) => (
-            <span
-              key={one.id}
-              title={
-                one.status === "done"
-                  ? `${one.title} — done`
-                  : one.tasks_doing > 0
-                    ? `${one.title} — being worked on now`
-                    : one.ready
-                      ? `${one.title} — ready`
-                      : `${one.title} — waits for ${one.blocked_by.join(", ")}`
-              }
-              className={cn(
-                "h-1.5 flex-1 rounded-full transition-colors",
-                one.status === "done" && "bg-roam/60",
-                one.tasks_doing > 0 && "bg-kith animate-pulse",
-                one.status !== "done" && one.tasks_doing === 0 && one.ready && "bg-kith/50",
-                one.status !== "done" && !one.ready && "bg-muted-foreground/20",
-              )}
-            />
-          ))}
-        </div>
-      ) : null}
+            <span className="text-muted-foreground/60 shrink-0 text-[11px]">{dayLabel(latest.updatedAt)}</span>
+          </>
+        ) : (
+          <span className="text-muted-foreground/60">No conversations yet</span>
+        )}
+      </span>
     </div>
   );
 }
 
 function LooseCard({ tasks, onOpen }: { tasks: BrainSnapshot["tasks"]; onOpen: () => void }) {
-  const tally = taskTally(tasks);
+  const counts = tally(tasks);
   return (
-    <div
+    <button
+      type="button"
       onClick={onOpen}
-      className="group flex cursor-pointer items-center gap-4 rounded-xl border border-dashed border-border/70 bg-card/30 p-4 transition-all hover:border-kith/40 hover:bg-card/50"
+      className="group border-border/70 bg-card/20 hover:border-kith/40 hover:bg-card/50 flex w-full items-center gap-4 rounded-2xl border border-dashed p-4 text-left transition-all xl:col-span-2"
     >
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted/70 text-muted-foreground">
+      <span className="bg-muted/70 text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-xl">
         <ListChecks className="size-5" />
       </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-[15px] font-semibold leading-snug transition-colors group-hover:text-foreground">
-            No project
-          </span>
-          {tally.planning ? (
-            <Badge className="border-kith/25 bg-kith-soft text-kith">plan for your look</Badge>
-          ) : null}
-        </div>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Loose work — tasks that aren't part of anything bigger.
-        </p>
-        <div className="mt-2 text-[11px] text-muted-foreground">
-          <TaskTally tally={tally} />
-        </div>
-      </div>
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground" />
-    </div>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[15px] leading-snug font-semibold">No project</span>
+        <span className="text-muted-foreground mt-0.5 block text-[13px]">
+          Loose work — errands that aren&apos;t part of anything bigger. Same board, no project.
+        </span>
+      </span>
+      <span className="text-muted-foreground hidden text-xs sm:block">
+        <Breakdown counts={counts} />
+      </span>
+      <ChevronRight className="text-muted-foreground/40 group-hover:text-foreground size-4 shrink-0 transition-colors" />
+    </button>
   );
 }

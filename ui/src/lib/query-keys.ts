@@ -4,7 +4,7 @@
  * This is the piece the app did not have. There was a push channel saying "tasks changed" and
  * seven widgets subscribed to it, and each one then refetched *its own* endpoint into *its own*
  * `useState`. So a turn that filed three tasks fired three events, and each event ran the board's
- * refetch, the roadmap's refetch and the task detail's refetch separately, none of them deduping
+ * refetch, the project page's refetch and the task detail's refetch separately, none of them deduping
  * against another or against a request already in flight. Meanwhile eleven other widgets ignored
  * the channel entirely and polled on clocks between 1.2 and 30 seconds, which is why one part of
  * the screen could agree with the server and the part beside it not.
@@ -23,7 +23,7 @@ import type { ChangeKind } from "@/lib/backend/events";
 export const keys = {
   /** What he last asked you to look at, if anything. */
   showing: () => ["showing"] as const,
-  /** The board: projects, tasks, milestones — everything `GET /api/brain` answers with. */
+  /** The board: projects and tasks — everything `GET /api/brain` answers with. */
   brain: () => ["brain"] as const,
   /** Names and statuses only. The conversations panel groups by project and needs nothing else;
    *  `brain()` is the whole database and is a third of a megabyte. */
@@ -50,8 +50,8 @@ export const keys = {
    *  Keyed by conversation and not global, for the same reason `conversation` is: two panes can
    *  have two chats' context open at once, and one key must mean one shape. */
   contextDetail: (conversation: string) => ["context", conversation] as const,
-  /** One project's roadmap graph. */
-  roadmap: (projectId: number) => ["roadmap", projectId] as const,
+  /** What one project's tasks have produced — the project page's Outputs tab. */
+  projectOutputs: (projectId: number) => ["projectOutputs", projectId] as const,
   /** One task, in the detail panel. */
   task: (taskId: number) => ["task", taskId] as const,
   /** The history list.
@@ -145,10 +145,11 @@ export const STALE_ON: Record<ChangeKind, Stale[]> = {
      * is — this is a per-conversation report and one chat's turn does not restate another's. */
     { scoped: ["context"] },
   ],
-  // Tasks are on the board, in the roadmap, in the detail panel and in the working-on card.
-  task: [["brain"], ["task"], ["roadmap"], ["workingOn"], ["timeline"]],
-  // A project's name and status reach the board, its roadmap, and the history panel's groups.
-  project: [["brain"], ["projects"], ["roadmap"], ["conversations"], ["timeline"]],
+  // Tasks are on the board, in the detail panel and in the working-on card — and a deliverable is
+  // a task change, so a project's Outputs tab goes stale with them.
+  task: [["brain"], ["task"], ["projectOutputs"], ["workingOn"], ["timeline"]],
+  // A project's name and status reach the board and the history panel's groups.
+  project: [["brain"], ["projects"], ["conversations"], ["timeline"]],
   // The inbox badge, and the board's own count of what is waiting on you.
   message: [["messages"], ["brain"], ["timeline"]],
   process: [{ scoped: ["processes"] }],

@@ -33,9 +33,9 @@ from kith.infra import project_files
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
 
-#: Fields a brief is allowed to carry into the board. Not everything a task has: `project_id`
-#: and `milestone_id` are this machine's own numbers and mean nothing in someone else's
-#: database, and `account` records who filed it, which an import must not rewrite.
+#: Fields a brief is allowed to carry into the board. Not everything a task has: `project_id` is
+#: this machine's own number and means nothing in someone else's database, and `account` records
+#: who filed it, which an import must not rewrite.
 _CARRIED = ("goal", "status", "priority", "description")
 
 

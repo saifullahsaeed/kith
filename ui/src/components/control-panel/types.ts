@@ -44,7 +44,7 @@ export const STATE = {
   /** Waiting on a decision from you. */
   yours: "text-foreground font-medium",
   settled: "text-roam",
-  /** Blocked is not an error — it is the ordinary state of most of a roadmap. */
+  /** Waiting on something else. Not an error. */
   held: "text-muted-foreground",
   failed: "text-destructive",
 } as const;
@@ -69,7 +69,6 @@ export const KIND_LABEL: Record<string, string> = {
   journal: "journal entry",
   task: "task",
   project: "project",
-  milestone: "milestone",
   reminder: "reminder",
   schedule: "schedule",
   message: "message",
@@ -92,8 +91,8 @@ export const TAB_FOR: Record<string, Tab> = {
 };
 
 export type Handlers = {
-  /** Re-read the snapshot. The roadmap graph needs it: a new dependency changes which
-   *  tasks are available, and the board beside it would otherwise be stale. */
+  /** Re-read the snapshot — after taking in tasks from a shared folder, say, which arrive by a
+   *  route the board's own invalidation does not see. */
   refresh: () => void;
   /** True when the thing was actually deleted. Callers that navigate on delete have to wait
    *  for this: firing `onBack()` on the same tick opened the confirm over a page you had

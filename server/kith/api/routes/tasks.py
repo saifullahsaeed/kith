@@ -21,6 +21,25 @@ def task_detail(task_id):
     return jsonify(detail)
 
 
+@api.get("/projects/<int:project_id>/outputs")
+@api.doc(
+    summary="What a project has produced",
+    description="Every deliverable filed under the project's tasks, newest first, with the task's goal.",
+)
+def project_outputs(project_id: int):
+    """The project page's Outputs section — deliverables across every task, not one task's.
+
+    Here beside `task_detail` rather than in `brain`, because a file deliverable needs the same
+    size-and-modified treatment either way, and there is one function that does it.
+    """
+    detail = {
+        "project_id": project_id,
+        "deliverables": repo.tasks.project_deliverables(AGENT_DB_PATH, project_id),
+    }
+    _describe_files(detail)
+    return jsonify({"outputs": detail["deliverables"]})
+
+
 def _describe_files(detail: dict) -> None:
     """Say how big each file deliverable is and when it was last written.
 

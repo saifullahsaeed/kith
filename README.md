@@ -83,7 +83,7 @@ sandbox.
 | Area | What it covers |
 | --- | --- |
 | **Memory** | Remember, recall, forget. A level sets how present a fact is: `core` rides in every prompt, `recall` returns when reached for. Recall is semantic across everything stored. |
-| **Work tracking** | Projects, milestones, tasks, checklists and deliverables — a board the agent maintains itself rather than one you keep for it. |
+| **Work tracking** | Projects, tasks, checklists and deliverables — a board the agent maintains itself rather than one you keep for it. |
 | **Filesystem and shell** | Read, write and edit files; glob; grep; a real shell; long-running processes it can start, inspect and stop. |
 | **Code intelligence** | Repository map, symbol search, references, rename, diagnostics and test runs — via a language server where one is installed, and explicit about the gap where one is not. |
 | **Git** | Working-tree changes, history, commit, push and fetch, so work in a shared repository does not silently stay local. |
@@ -165,7 +165,7 @@ edits and not need a password. It prints the `export PATH=...` line when that di
 on yours, which on macOS it will not be.
 
 ```sh
-kith send "what's left on the roadmap?"   # continues THIS directory's conversation
+kith send "what's left on this project?"   # continues THIS directory's conversation
 kith send "review this" < diff.patch      # reads stdin when no message is given
 kith conversations                        # recent chats, with who is mid-turn
 kith show                                 # the transcript of the current one

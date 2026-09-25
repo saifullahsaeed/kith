@@ -120,6 +120,8 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   create_project: { verb: "started the project", of: "name", group: "projects" },
   list_projects: { verb: "looked over his projects", group: "projects" },
   update_project: { verb: "updated a project", group: "projects" },
+  // Milestones are gone. Their phrases stay, like every retired tool's, so older transcripts
+  // still read as English.
   add_milestone: { verb: "added the milestone", of: "title", group: "projects" },
   update_milestone: { verb: "updated a milestone", group: "projects" },
   order_milestones: { verb: "put the milestones in order", group: "projects" },
@@ -176,7 +178,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   // his own tools and skills
   read_skill: { verb: "opened the skill", of: "name", group: "skills" },
   plugin_state: { verb: "read what the plugin is holding", of: "plugin", group: "skills" },
-  plan_work: { verb: "laid out", of: "milestone", group: "tasks" },
+  plan_work: { verb: "laid out the next tasks", group: "tasks" },
   // sending someone else to look, and someone else to build
   delegate_subtask: { verb: "sent someone to find out", of: "objective", group: "delegation" },
   send_builder: { verb: "sent someone to change", of: "objective", group: "delegation" },

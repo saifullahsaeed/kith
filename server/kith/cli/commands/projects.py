@@ -26,7 +26,7 @@ def add(subparsers) -> None:
     use.add_argument("name", help="project name or id")
     use.set_defaults(run=_use)
 
-    show = inner.add_parser("show", help="a project and its roadmap")
+    show = inner.add_parser("show", help="a project and its tasks")
     show.add_argument("name", nargs="?", default="", help="default: the one this directory belongs to")
     show.add_argument("--json", action="store_true")
     show.set_defaults(run=_show)
@@ -94,18 +94,24 @@ def _show(client: Client, args) -> int:
             "pin it with: kith project use <name>",
         )
     identifier = int(project.get("id") or 0)
-    roadmap = client.get(f"/projects/{identifier}/roadmap") or {}
+    tasks = (client.get(f"/projects/{identifier}/tasks") or {}).get("tasks") or []
     if args.json:
-        render.emit_json({**project, "roadmap": roadmap})
+        render.emit_json({**project, "tasks": tasks})
         return 0
     print(f"{project.get('name')}  ({project.get('status')})")
     if project.get("directory"):
         print(f"  {project.get('directory')}")
     if project.get("description"):
         print(f"  {' '.join(str(project.get('description')).split())}")
-    milestones = roadmap.get("milestones") or []
-    if milestones:
-        print()
-        for milestone in milestones:
-            print(f"  [{str(milestone.get('status') or '')[:4]:4}] {milestone.get('title')}")
+    # The board, one column after another, in the order work moves through it. Dropped work is
+    # left off: it is on the board in the app for anyone who wants it, and here it is noise.
+    for status in ("working", "approved", "planning", "done"):
+        rows = [task for task in tasks if task.get("status") == status]
+        if not rows:
+            continue
+        print(f"\n  {status} ({len(rows)})")
+        for task in rows:
+            total = int(task.get("checklist_total") or 0)
+            steps = f"  {task.get('checklist_done') or 0}/{total}" if total else ""
+            print(f"    #{task.get('id')} {task.get('goal')}{steps}")
     return 0

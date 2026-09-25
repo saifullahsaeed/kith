@@ -21,11 +21,13 @@ export interface Task {
   description: string;
   created_by: string; // kith | user
   project_id: number | null;
-  /** Which milestone delivers this. Null for a one-off errand, which is never gated by the
-   *  roadmap — see active_tasks on the server. */
-  milestone_id: number | null;
   created_at: string;
   updated_at: string;
+  /** Checklist progress and how many outputs it has filed — what a board card shows. Sent with
+   *  the snapshot (`/api/brain`, `/api/projects/:id/tasks`), absent on rows from anywhere else. */
+  checklist_done?: number;
+  checklist_total?: number;
+  outputs?: number;
 }
 export interface TaskComment {
   id: number;
@@ -57,40 +59,12 @@ export interface Deliverable {
   modified?: string;
 }
 export interface TaskDetail extends Task {
-  /** The milestone's title, for showing it without another lookup. */
-  milestone_title: string | null;
-  /** Titles of the unfinished milestones holding this back. Empty when he can work on it —
-   *  status alone cannot tell you this, and the page would otherwise say "planned" about
-   *  something he will not touch. */
-  held_by: string[];
   comments: TaskComment[];
   checklist: ChecklistItem[];
   deliverables: Deliverable[];
   /** The plan this task was approved on, as Markdown — read from `.kith/work/task-<id>.md` on
    *  every request, so the file is still the thing you edit. Empty when none is filed. */
   plan: string;
-}
-export interface Milestone {
-  id: number;
-  project_id: number;
-  title: string;
-  target_at: string | null;
-  status: string; // todo | done
-  order_index: number;
-  /** Milestone ids this one waits for. */
-  waits_for: number[];
-  /** Titles of the unfinished ones — the reason, not just the state. */
-  blocked_by: string[];
-  /** Nothing in the way and not done: this is what he may work on. */
-  ready: boolean;
-  tasks_total: number;
-  tasks_done: number;
-  tasks_active: number;
-  /** In `working` — where he is right now. */
-  tasks_doing: number;
-  tasks_waiting: number;
-  created_at: string;
-  updated_at: string;
 }
 export interface Project {
   id: number;
@@ -109,11 +83,20 @@ export interface Project {
   directory: string | null;
   created_at: string;
   updated_at: string;
-  milestones: Milestone[];
-  milestones_done: number;
-  milestones_total: number;
+  /** How many of its tasks sit in each column. `tasks_active` is approved + working — what he
+   *  may pick up; `tasks_total` counts dropped work too. */
+  tasks_planning: number;
+  tasks_approved: number;
+  tasks_working: number;
+  tasks_done: number;
+  tasks_dropped: number;
   tasks_active: number;
   tasks_total: number;
+}
+/** One thing a project produced, from any of its tasks — `GET /api/projects/:id/outputs`. */
+export interface ProjectOutput extends Deliverable {
+  /** The goal of the task that filed it, so a list of outputs can say where each came from. */
+  task_goal: string;
 }
 /* Restored. Commit 3d18366 ("Remove the tools he wrote for himself") deleted 53 lines from
  * this file to take out `CustomTool`, and took these five with it — all of them still
@@ -354,6 +337,12 @@ export async function fetchShowing(): Promise<{
 /** Take it, so relaunching the app does not reopen a board from last Tuesday. */
 export async function takeShowing(): Promise<void> {
   await fetch("/api/showing", { method: "DELETE" }).catch(() => {});
+}
+
+export async function fetchProjectOutputs(projectId: number): Promise<ProjectOutput[]> {
+  const res = await fetch(`/api/projects/${projectId}/outputs`);
+  if (!res.ok) throw new Error(`/api/projects/${projectId}/outputs ${res.status}`);
+  return ((await res.json()) as { outputs: ProjectOutput[] }).outputs;
 }
 
 export async function fetchTaskDetail(id: number): Promise<TaskDetail> {

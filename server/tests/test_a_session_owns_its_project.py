@@ -47,18 +47,17 @@ class TestAdoptingAProject:
             )
         assert repo.conversations.project_of(db, session_id) == project["id"]
 
-    def test_a_task_filed_under_only_a_milestone_still_claims_the_project(self, db, session_id):
-        """The repository resolves the project from the milestone, so reading the argument
-        would have missed the case a roadmap actually produces."""
+    def test_laying_out_tasks_in_one_call_claims_the_project(self, db, session_id):
+        """`plan_work` files through `add_task`, so it claims the same way filing one does."""
         project = repo.projects.add_project(db, "Circulars", "")
-        milestone = repo.projects.add_milestone(db, project["id"], "Scrape it")
         with session_context.working_in(session_id):
-            task_tools.add_task(
+            task_tools.plan_work(
                 db,
                 {
-                    "goal": "write the scraper",
-                    "description": "done when scraper.py fetches the page",
-                    "milestone_id": milestone["id"],
+                    "project_id": project["id"],
+                    "tasks": [
+                        {"goal": "write the scraper", "description": "done when scraper.py fetches the page"}
+                    ],
                 },
             )
         assert repo.conversations.project_of(db, session_id) == project["id"]
@@ -70,12 +69,6 @@ class TestAdoptingAProject:
         task = repo.tasks.add_task(db, "the first step", project_id=project["id"])
         with session_context.working_in(session_id):
             task_tools.update_task(db, {"id": task["id"], "status": "working"})
-        assert repo.conversations.project_of(db, session_id) == project["id"]
-
-    def test_adding_a_milestone_claims_the_project(self, db, session_id):
-        project = repo.projects.add_project(db, "Roadmapped", "")
-        with session_context.working_in(session_id):
-            project_tools.add_milestone(db, {"project_id": project["id"], "title": "Ship it"})
         assert repo.conversations.project_of(db, session_id) == project["id"]
 
     def test_linking_a_folder_claims_the_project(self, db, session_id, tmp_path):

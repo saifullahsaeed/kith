@@ -2,17 +2,15 @@
 
 Two measured facts sit behind this file, and they are the same fact twice. Told to delegate,
 Kith delegates well; left alone it never reaches for `delegate_subtask` at all. Told to plan, it
-plans well; left alone it does the work inline and files nothing — and when it does file a task
-into a project with a roadmap, the task lands beside the roadmap rather than under it.
+plans well; left alone it does the work inline and files nothing.
 
 Neither is a judgement failure. Both are economics. `shell` costs one call and can do anything,
-so it wins every round against a tool that costs a dozen — and a milestone was a dozen: one
-`add_milestone`, then an `add_task` each, then every `add_checklist_item`. And `milestone_id` is
-a bare integer in `add_task`'s schema, so placing a task correctly meant having already called
-`list_tasks`, held the ids, and recalled the right one at that moment, with skipping it always
-valid because the field is optional.
+so it wins every round against a tool that costs a dozen — and a plan was a dozen: an `add_task`
+each, then every checklist item. So: one call for a plan.
 
-So: one call for a plan, and the candidates offered at the moment the choice is made.
+This file also used to hold the milestone refusal — a task filed into a project with a roadmap had
+to name the step it delivered. Milestones are gone, and with them the refusal: a task filed into a
+project needs a done-condition and nothing else.
 """
 
 from __future__ import annotations
@@ -27,52 +25,8 @@ def _project(db: Path, name: str = "Sadeef AI") -> int:
     return repo.projects.add_project(db, name)["id"]
 
 
-class TestAMilestoneIsOfferedWhereTheChoiceIsMade:
-    def test_a_task_into_a_project_with_a_roadmap_must_say_which_step(self, db: Path):
-        here = _project(db)
-        repo.projects.add_milestone(db, here, "Retrieval is trustworthy")
-
-        answer = task_tools.add_task(
-            db,
-            {
-                "goal": "Chunker keeps page numbers",
-                "description": "tests/test_chunk.py::test_pages passes",
-                "project_id": here,
-            },
-        )
-        assert answer["ok"] is False
-        assert "milestone" in answer["error"]
-
-    def test_the_refusal_names_the_candidates(self, db: Path):
-        """The whole point. A refusal that says 'pass milestone_id' and nothing else sends it
-        back to the board to look them up, which is the round this is trying to save."""
-        here = _project(db)
-        first = repo.projects.add_milestone(db, here, "Retrieval is trustworthy")
-        second = repo.projects.add_milestone(db, here, "Connections survive a token refresh")
-
-        answer = task_tools.add_task(
-            db,
-            {"goal": "x", "description": "a real done-condition here", "project_id": here},
-        )
-        offered = {one["id"]: one["title"] for one in answer["milestones"]}
-        assert offered == {
-            first["id"]: "Retrieval is trustworthy",
-            second["id"]: "Connections survive a token refresh",
-        }
-
-    def test_a_finished_milestone_is_not_offered(self, db: Path):
-        here = _project(db)
-        done = repo.projects.add_milestone(db, here, "Already shipped")
-        repo.projects.update_milestone(db, done["id"], status="done")
-
-        answer = task_tools.add_task(
-            db,
-            {"goal": "x", "description": "a real done-condition here", "project_id": here},
-        )
-        # No open milestone to choose from, so nothing to refuse over.
-        assert answer.get("ok", True) is not False
-
-    def test_a_project_with_no_roadmap_is_left_alone(self, db: Path):
+class TestFilingIntoAProject:
+    def test_a_task_with_a_done_condition_is_filed(self, db: Path):
         """Refusing here would make the first task of a new project impossible to file."""
         here = _project(db)
         answer = task_tools.add_task(
@@ -80,20 +34,36 @@ class TestAMilestoneIsOfferedWhereTheChoiceIsMade:
             {"goal": "First thing", "description": "a real done-condition here", "project_id": here},
         )
         assert answer.get("ok", True) is not False
+        assert answer["project_id"] == here
 
     def test_a_task_with_no_project_is_left_alone(self, db: Path):
         answer = task_tools.add_task(db, {"goal": "Buy milk"})
         assert answer.get("ok", True) is not False
 
+    def test_a_stale_milestone_argument_is_ignored_rather_than_fatal(self, db: Path):
+        """His transcripts and his habits both still say `milestone_id`. The schema no longer
+        offers it; a call that sends it anyway files the task and drops the number."""
+        here = _project(db)
+        answer = task_tools.add_task(
+            db,
+            {
+                "goal": "A thing",
+                "description": "a real done-condition here",
+                "project_id": here,
+                "milestone_id": 7,
+            },
+        )
+        assert answer.get("ok", True) is not False
+        assert "milestone_id" not in answer
 
-class TestOneCallLaysOutAMilestone:
-    def test_it_writes_the_step_its_tasks_and_their_checklists(self, db: Path):
+
+class TestOneCallLaysOutTheNextTasks:
+    def test_it_writes_the_tasks_and_their_checklists(self, db: Path):
         here = _project(db)
         answer = task_tools.plan_work(
             db,
             {
                 "project_id": here,
-                "milestone": "Retrieval is trustworthy",
                 "tasks": [
                     {
                         "goal": "Chunker keeps page numbers",
@@ -110,10 +80,11 @@ class TestOneCallLaysOutAMilestone:
         )
 
         assert answer["ok"] is True
+        assert answer["project_id"] == here
         assert len(answer["tasks"]) == 2
         filed = repo.tasks.list_tasks(db)
         assert {one["goal"] for one in filed} == {"Chunker keeps page numbers", "Reranker is measured"}
-        assert all(one["milestone_id"] == answer["milestone_id"] for one in filed)
+        assert all(one["project_id"] == here for one in filed)
         assert len(repo.tasks.list_checklist(db, answer["tasks"][0]["id"])) == 3
 
     def test_everything_lands_in_planning(self, db: Path):
@@ -122,11 +93,7 @@ class TestOneCallLaysOutAMilestone:
         here = _project(db)
         task_tools.plan_work(
             db,
-            {
-                "project_id": here,
-                "milestone": "A step",
-                "tasks": [{"goal": "A thing", "description": "a real done-condition here"}],
-            },
+            {"project_id": here, "tasks": [{"goal": "A thing", "description": "a real done-condition here"}]},
         )
         assert {one["status"] for one in repo.tasks.list_tasks(db)} == {"planning"}
 
@@ -138,7 +105,6 @@ class TestOneCallLaysOutAMilestone:
             db,
             {
                 "project_id": here,
-                "milestone": "A step",
                 "tasks": [
                     {"goal": "Fine", "description": "a real done-condition here"},
                     {"goal": "Vague", "description": "verify"},
@@ -159,7 +125,6 @@ class TestOneCallLaysOutAMilestone:
             db,
             {
                 "project_id": here,
-                "milestone": "A step",
                 "tasks": [
                     {"goal": "One", "description": "a real done-condition here"},
                     {"goal": "Two", "description": "x"},
@@ -168,34 +133,34 @@ class TestOneCallLaysOutAMilestone:
         )
         assert len(repo.tasks.list_tasks(db)) == 1
 
-    def test_it_can_hang_tasks_on_a_milestone_that_exists(self, db: Path):
+    def test_an_old_milestone_argument_does_not_stop_it(self, db: Path):
+        """The shape it was called with for weeks. The step's name has nowhere to go now; the
+        tasks still do."""
         here = _project(db)
-        step = repo.projects.add_milestone(db, here, "Already planned")
         answer = task_tools.plan_work(
             db,
             {
                 "project_id": here,
-                "milestone_id": step["id"],
+                "milestone": "Retrieval is trustworthy",
                 "tasks": [{"goal": "A thing", "description": "a real done-condition here"}],
             },
         )
-        assert answer["milestone_id"] == step["id"]
-        assert len(repo.projects.list_milestones(db, here)) == 1
+        assert answer["ok"] is True
+        assert len(repo.tasks.list_tasks(db)) == 1
 
-    def test_it_needs_a_step_to_hang_them_on(self, db: Path):
-        here = _project(db)
-        answer = task_tools.plan_work(db, {"project_id": here, "tasks": [{"goal": "x", "description": "y"}]})
+    def test_it_needs_a_project(self, db: Path):
+        answer = task_tools.plan_work(db, {"tasks": [{"goal": "x", "description": "a real done-condition"}]})
         assert answer["ok"] is False
 
     def test_it_needs_tasks(self, db: Path):
         here = _project(db)
-        answer = task_tools.plan_work(db, {"project_id": here, "milestone": "A step", "tasks": []})
+        answer = task_tools.plan_work(db, {"project_id": here, "tasks": []})
         assert answer["ok"] is False
 
 
 class TestAWorkerCannotPlan:
     def test_plan_work_is_withheld(self):
-        """A sub-agent that lays out a roadmap is a sub-agent making plans, and the plan is the
+        """A sub-agent that lays out work is a sub-agent making plans, and the plan is the
         one thing that must stay in the conversation a person can see."""
         from kith.tools import delegation
 

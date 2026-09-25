@@ -73,11 +73,13 @@ class TestWritingIntoAnotherProject:
         assert "blocked" in (out.get("result") or {}), out
         assert repo.tasks.task_detail(db, int(stray["id"]))["priority"] == "normal"
 
-    def test_adding_a_milestone_there_is_refused(self, db: Path, tmp_path: Path):
+    def test_laying_out_work_there_is_refused(self, db: Path, tmp_path: Path):
         _, there = _two_projects(db, tmp_path)
 
         with session_context.working_in("c-1"):
-            out = run_tool("add_milestone", {"project_id": there, "title": "Theirs"}, db)
+            out = run_tool(
+                "plan_work", {"project_id": there, "tasks": [{"goal": "Theirs", "description": BRIEF}]}, db
+            )
 
         assert "blocked" in (out.get("result") or {}), out
 

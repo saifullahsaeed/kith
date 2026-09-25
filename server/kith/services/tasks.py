@@ -264,10 +264,7 @@ def _update_task(path: Path, a: dict) -> dict | None:
         refusal = _verify_approvable(path, a["id"])
         if refusal is not None:
             return refusal
-    # Milestone linkage also sets the project, so apply it before a bare project set.
-    if "milestone_id" in a:
-        repo.tasks.set_task_milestone(path, a["id"], a.get("milestone_id"))
-    elif "project_id" in a:
+    if "project_id" in a:
         repo.tasks.set_task_project(path, a["id"], a.get("project_id"))
     out = repo.tasks.update_task(
         path,
@@ -285,7 +282,7 @@ def _update_task(path: Path, a: dict) -> dict | None:
     project_binding.adopt(path, (out or {}).get("project_id"))
     _mirror_brief(path, (out or {}).get("id"))
     # Approving a plan is the moment work becomes work. This is the other half of everything
-    # landing in `planning`: you lay the roadmap out with nothing running, and saying yes to a
+    # landing in `planning`: you lay the work out with nothing running, and saying yes to a
     # plan is what says go — rather than a button somewhere else that means the same thing.
     if (a.get("status") or "") in TASK_ACTIVE:
         reopened = _reopen_if_finished(path, (out or {}).get("project_id"))

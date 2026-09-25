@@ -1,12 +1,12 @@
 """Task creation is gated at the one chokepoint — the add_task tool handler.
 
-Three gates so a bad plan can't start: real tasks need a checkable done-condition (kills
-"Verify the Prisma foundation"), near-identical open tasks merge instead of piling up (kills
-the 106≈110 duplicates), and one milestone can't hold the whole roadmap at once.
+Two gates so a bad plan can't start: real tasks need a checkable done-condition (kills "Verify
+the Prisma foundation"), and near-identical open tasks merge instead of piling up (kills the
+106≈110 duplicates). There was a third — one milestone could hold only so many open tasks — and
+it went with milestones.
 """
 
 from kith.infra.db import repositories as repo
-from kith.services import tuning
 from kith.tools import tasks as task_tools
 
 
@@ -54,26 +54,3 @@ def test_a_near_identical_open_task_is_merged(db):
     assert dup["id"] == first["id"]
     ids = [t["id"] for t in repo.tasks.list_tasks(db)]
     assert ids.count(first["id"]) == 1  # the duplicate was merged, not created
-
-
-def test_milestone_breakdown_is_capped(db):
-    tuning.apply({"milestone_task_cap": 3})
-    proj = repo.projects.add_project(db, "Warehouse")
-    ms = repo.projects.add_milestone(db, proj["id"], "Data foundation")
-    for goal in ("Configure the database layer", "Write the seed script", "Add receiving endpoint"):
-        res = task_tools.add_task(
-            db,
-            {"goal": goal, "description": f"done when {goal.lower()} works", "milestone_id": ms["id"]},
-        )
-        assert res.get("id"), f"{goal} should have been created"
-
-    over = task_tools.add_task(
-        db,
-        {
-            "goal": "Build the shipping module",
-            "description": "done when shipping works end to end",
-            "milestone_id": ms["id"],
-        },
-    )
-    assert over.get("ok") is False
-    assert "milestone" in (over.get("error") or "").lower()

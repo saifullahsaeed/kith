@@ -1220,7 +1220,7 @@ function looksLikeTask(value: Record<string, unknown>): boolean {
  *
  *  Four, because folding two is worse than showing them: the fold costs a click and a line of
  *  chrome to hide one line of content. Above that the arithmetic flips, and `plan_work` made it
- *  flip often — it writes a milestone's tasks with their whole checklists in one call, so a
+ *  flip often — it writes several tasks with their whole checklists in one call, so a
  *  single result now routinely carries nine steps three times over, in a card with no scroll
  *  container of its own inside a thread that has to scroll past all of it. */
 const STEPS_INLINE = 4;

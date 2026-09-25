@@ -69,13 +69,19 @@ class TestTheBindingSticks:
 
         assert bound_to(db) == two_projects["hired"]
 
-    def test_adding_a_milestone_elsewhere_does_not_move_it(self, two_projects):
+    def test_laying_out_work_elsewhere_does_not_move_it(self, two_projects):
         from kith.tools import registry
 
         db = two_projects["db"]
         with session_context.working_in("c-1"):
-            registry.require("add_milestone").run(
-                db, {"project_id": two_projects["other"], "title": "Their first step"}
+            registry.require("plan_work").run(
+                db,
+                {
+                    "project_id": two_projects["other"],
+                    "tasks": [
+                        {"goal": "Their first step", "description": "done when their first step exists"}
+                    ],
+                },
             )
 
         assert bound_to(db) == two_projects["hired"]
@@ -85,8 +91,12 @@ class TestTheBindingSticks:
 
         db = two_projects["db"]
         with session_context.working_in("c-1"):
-            registry.require("add_milestone").run(
-                db, {"project_id": two_projects["hired"], "title": "Our next step"}
+            registry.require("plan_work").run(
+                db,
+                {
+                    "project_id": two_projects["hired"],
+                    "tasks": [{"goal": "Our next step", "description": "done when our next step exists"}],
+                },
             )
 
         assert bound_to(db) == two_projects["hired"]
@@ -138,7 +148,13 @@ class TestWhatBindsAnUnboundSession:
         project = repo.projects.add_project(db, "First", "a project")
 
         with session_context.working_in("c-2"):
-            registry.require("add_milestone").run(db, {"project_id": int(project["id"]), "title": "Step"})
+            registry.require("plan_work").run(
+                db,
+                {
+                    "project_id": int(project["id"]),
+                    "tasks": [{"goal": "Step", "description": "done when the first step exists"}],
+                },
+            )
 
         assert repo.conversations.project_of(db, "c-2") == int(project["id"])
 

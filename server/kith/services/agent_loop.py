@@ -331,10 +331,10 @@ _GATHERING_TOOLS = frozenset(
 # so he can finish the work must not turn the reserve back into an unbounded turn.
 #
 # The line is *new* work, not work. `update_task`, `checklist` and
-# `add_deliverable` all describe what this turn did and are exactly what landing is for; a task,
-# a project or a milestone is a commitment to do something else later, which is the thing the
-# budget is trying to stop.
-_STARTING_TOOLS = frozenset({"add_task", "create_project", "add_milestone"})
+# `add_deliverable` all describe what this turn did and are exactly what landing is for; a task
+# or a project is a commitment to do something else later, which is the thing the budget is
+# trying to stop.
+_STARTING_TOOLS = frozenset({"add_task", "create_project"})
 
 #: What landing takes away. Everything else he keeps, which is the inversion: a tool built
 #: tomorrow is usable while finishing unless it goes and looks or opens new work.

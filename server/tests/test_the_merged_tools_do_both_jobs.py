@@ -189,46 +189,6 @@ class TestScheduleDoesBothKinds:
         assert out["cancelled"], out
 
 
-class TestUpdateMilestoneDoesTheRoadmap:
-    """`order_milestones` and `unlink_milestones` were a schema each for one graph edge."""
-
-    @pytest.fixture
-    def roadmap(self, db):
-        project = run("create_project", db, name="The App", description="an app")
-        first = run("add_milestone", db, project_id=project["id"], title="foundations")
-        second = run("add_milestone", db, project_id=project["id"], title="the feature")
-        return {"project": project, "first": int(first["id"]), "second": int(second["id"])}
-
-    def test_ids_put_them_in_order(self, db, roadmap):
-        out = run("update_milestone", db, ids=[roadmap["first"], roadmap["second"]])
-
-        assert out["ordered"] == [roadmap["first"], roadmap["second"]], out
-        second = next(one for one in out["roadmap"]["milestones"] if one["id"] == roadmap["second"])
-        assert second["waits_for"] == [roadmap["first"]], second
-        assert second["ready"] is False, "work under it must not be offered yet"
-
-    def test_and_the_order_can_be_undone(self, db, roadmap):
-        run("update_milestone", db, ids=[roadmap["first"], roadmap["second"]])
-        run("update_milestone", db, id=roadmap["second"], no_longer_waits_for=roadmap["first"])
-
-        after = run("list_projects", db)
-        second = next(
-            one
-            for project in after["items"]
-            for one in project.get("milestones", [])
-            if one["id"] == roadmap["second"]
-        )
-        assert not second.get("blocked_by"), second
-
-    def test_an_ordinary_update_still_works(self, db, roadmap):
-        out = run("update_milestone", db, id=roadmap["first"], status="done")
-        assert out["status"] == "done", out
-
-    def test_neither_argument_says_so_rather_than_guessing(self, db):
-        out = run("update_milestone", db, status="done")
-        assert "error" in out
-
-
 class TestUpdateProjectLinksAFolder:
     """`link_folder`'s job — one column, and the grant that comes with it."""
 

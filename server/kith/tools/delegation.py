@@ -160,11 +160,9 @@ WITHHELD = frozenset(
         # the plan is the one thing that must stay in the conversation a person can see.
         "add_task",
         "plan_work",
-        "add_milestone",
         "checklist",
         "add_deliverable",
         "create_project",
-        "update_milestone",
         "update_project",
         "update_task",
         "take_in_shared_tasks",

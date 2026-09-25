@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { formatBytes } from "@/lib/bytes";
 import {
-  Lock,
   ArrowLeft,
   ArrowUpRight,
   Check,
@@ -61,12 +60,10 @@ export function TaskDetailPage({
   onChanged,
 }: {
   taskId: number;
-  /** For moving the task between projects, and for its milestones — the field that decides
-   *  when he actually gets to it. */
+  /** For naming the project the task belongs to. */
   projects: {
     id: number;
     name: string;
-    milestones?: { id: number; title: string; status: string }[];
   }[];
   /** Where "back" lands — the project you came in from, if any. */
   trail?: string;
@@ -118,7 +115,7 @@ export function TaskDetailPage({
    * fields is written from server data while it is being edited. `EditableText` copies `value` into
    * its own draft when you click the pencil and never reads it again until you are done; the title
    * renders `goalDraft ?? task.goal`, where the draft wins; the new-checklist-item box is local.
-   * The two controls that *are* driven by the task — the priority and milestone selects — hold no
+   * The control that *is* driven by the task — the priority select — holds no
    * typed text to lose. So the guard was covering a case the components already handle, at the cost
    * of a page that stopped updating while you had a comment box focused.
    */
@@ -246,12 +243,6 @@ export function TaskDetailPage({
   const done = task.checklist.filter((c) => c.done).length;
   const pct = task.checklist.length ? Math.round((done / task.checklist.length) * 100) : 0;
 
-  // What holds this task back, and which milestones it could belong to. Both come from the
-  // roadmap: a task's status says what someone intends, and only the graph says whether he
-  // is allowed to act on it.
-  const held = task.held_by ?? [];
-  const milestones = projects.find((one) => one.id === task.project_id)?.milestones ?? [];
-
   return (
     <div className="flex h-full flex-col">
       {/* Header: pinned, so what the task IS never scrolls away from the discussion of it. */}
@@ -322,21 +313,6 @@ export function TaskDetailPage({
             />
           </div>
 
-          {/* Whether this is actually workable, stated first, because a status of "planned" on a
-            task the roadmap is holding back is the page telling you something untrue about
-            the most important thing on it. */}
-          {held.length > 0 ? (
-            <div className="border-kith/25 bg-kith-soft mt-3 ml-12 flex items-start gap-2.5 rounded-xl border px-3 py-2.5">
-              <Lock className="mt-0.5 size-3.5 shrink-0 text-kith" />
-              <p className="text-xs leading-relaxed">
-                <span className="text-kith">Not available yet.</span>{" "}
-                <span className="text-muted-foreground">
-                  It waits for {held.join(", ")} — he will not pick it up until that is done,
-                  whatever its status says.
-                </span>
-              </p>
-            </div>
-          ) : null}
         </div>
 
       </div>
@@ -383,43 +359,13 @@ export function TaskDetailPage({
               ariaLabel="Priority"
             />
           </Prop>
-          {/* Shown, not editable, and it was never really editable: `update_task` has no
+          {/* Shown, not editable, and it was never really editable: the panel's task edit has no
               project_id parameter, so this was a dropdown that let you choose, updated
-              optimistically, and was ignored by the server.
-
-              It should not be editable either. A task's milestone belongs to a project, so
-              changing the project underneath it would leave the task pointing at a milestone
-              in a different one — which is the inconsistency set_task_milestone exists to
-              prevent. The way to move work is the milestone, which is the field next to
-              this one. */}
+              optimistically, and was ignored by the server. */}
           <Prop label="Project">
             <span className="text-muted-foreground block truncate py-1.5 text-sm">
               {projects.find((one) => one.id === task.project_id)?.name ?? "No project"}
             </span>
-          </Prop>
-          {/* The field that decides when he gets to it. It was not on this page at all, which
-            meant the one attribute that gates the work was the one you could not see. */}
-          <Prop label="Milestone">
-            <Dropdown
-              value={task.milestone_id == null ? "none" : String(task.milestone_id)}
-              onChange={(v) => patch({ milestone_id: v === "none" ? null : Number(v) })}
-              options={[
-                { value: "none", label: "No milestone" },
-                ...milestones.map((m) => ({
-                  value: String(m.id),
-                  label: m.status === "done" ? `${m.title} ✓` : m.title,
-                })),
-                // A milestone id with no milestone behind it. Without an option to match, the
-                // dropdown renders the bare number as though it were a name — #91, #92 and #93 all
-                // showed "30", and there is no milestone 30. Naming it says what is wrong and
-                // leaves "No milestone" selectable, which is the fix.
-                ...(task.milestone_id != null && !milestones.some((m) => m.id === task.milestone_id)
-                  ? [{ value: String(task.milestone_id), label: `#${task.milestone_id} — no longer exists` }]
-                  : []),
-              ]}
-              className="w-full"
-              ariaLabel="Milestone"
-            />
           </Prop>
           <Prop label="Raised by">
             <span className="text-muted-foreground py-1.5 text-sm">

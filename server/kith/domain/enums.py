@@ -55,10 +55,12 @@ TASK_STATUSES = ("planning", "approved", "working", "done", "dropped")
 #: What he may pick up without being asked for it by name. `planning` is not here: nothing is
 #: pickable until a person has approved a plan for it.
 TASK_ACTIVE = ("approved", "working")
-#: Closed, either way. The one set both `active_tasks` (repositories/tasks.py) and `add_task`'s
-#: duplicate-merge / milestone-cap checks (tools/tasks.py) need, kept in one place after both
-#: had grown their own copy of the same two strings.
+#: Closed, either way. `add_task`'s duplicate merge (tools/tasks.py) reads it, kept here rather
+#: than as a second copy of the same two strings.
 TASK_SETTLED = ("done", "dropped")
 TASK_PRIORITIES = ("low", "normal", "high")
 PROJECT_STATUSES = ("active", "done", "paused", "archived")
-MILESTONE_STATUSES = ("todo", "done")
+# There were milestones between a project and its tasks — a roadmap graph whose edges decided
+# what he was allowed to pick up. Removed on purpose: a project is its tasks, a task is its
+# checklist, and the board is four columns. See `repositories/tasks.active_tasks` for the gate
+# that went with them and why nobody should miss it.

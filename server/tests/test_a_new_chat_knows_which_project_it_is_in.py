@@ -1,7 +1,7 @@
 """A conversation is told about the project it is in, and only named the others.
 
 Before this, the prompt had no project-scoped region at all. It had a global one — every
-active project with its next milestone, every active task across all of them with no project
+active project with its next step, every active task across all of them with no project
 named on any row — and a project region that went silent exactly when it was needed: the
 fallback that found `.kith/memory.md` declined whenever more than one project was open, and
 the binding it preferred was written by the *client*, over a second request, after the first
@@ -161,16 +161,16 @@ class TestWhatTheProjectRegionSays:
 
         assert "filed before projects existed" not in self._block(db, mine)
 
-    def test_the_next_milestone_is_the_one_that_is_ready(self, db, two_projects):
+    def test_a_board_with_everything_finished_says_so(self, db, two_projects):
+        """Nothing rolls a project up any more, so this line is the only thing that notices it
+        running out of work — and it hands the decision to them rather than closing it."""
         mine, _, _ = two_projects
-        first = repo.projects.add_milestone(db, mine["id"], "Lay the foundations")
-        second = repo.projects.add_milestone(db, mine["id"], "Build on them")
-        repo.projects.add_dependency(db, second["id"], first["id"])
+        repo.tasks.add_task(db, goal="the only thing", status="done", project_id=mine["id"])
 
         block = self._block(db, mine)
 
-        assert "NOW: Lay the foundations" in block
-        assert "later: Build on them" in block
+        assert "Every task here is finished" in block
+        assert "milestone" not in block.lower()
 
     def test_the_project_s_own_memory_comes_with_it(self, db, two_projects):
         mine, _, here = two_projects
@@ -203,12 +203,12 @@ class TestWhatTheProjectRegionSays:
 class TestTheOtherProjectsShrink:
     def test_they_are_named_and_nothing_more(self, db, two_projects):
         mine, other, _ = two_projects
-        repo.projects.add_milestone(db, other["id"], "Their next milestone")
+        repo.tasks.add_task(db, goal="Their next task", status="approved", project_id=other["id"])
 
         said = project_context.others(db, mine["id"])
 
         assert "Something else" in said
-        assert "Their next milestone" not in said
+        assert "Their next task" not in said
 
     def test_the_project_in_hand_is_not_among_them(self, db, two_projects):
         mine, _, _ = two_projects

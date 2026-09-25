@@ -792,6 +792,11 @@ export function Workspace({
                 openTask={route.taskId}
                 onSelectTab={(t) => navigate(pathForTab(t))}
                 onOpenTask={(id) => navigate(pathForTask(id))}
+                onNewConversation={(project) => {
+                  // The panel is a route, the chat is a layout tab: open the draft, then leave.
+                  newConversation(project);
+                  navigate(pathForHome());
+                }}
                 onClose={() => navigate(pathForHome())}
               />
             </Suspense>

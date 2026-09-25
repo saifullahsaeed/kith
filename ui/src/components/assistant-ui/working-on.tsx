@@ -78,7 +78,7 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
 
   const pct = items.length ? Math.round((done / items.length) * 100) : 0;
   // Folded by default once there are more than a few, because this sits in a fixed-height column
-  // with four sections under it. `plan_work` writes a milestone's tasks with their whole
+  // with four sections under it. `plan_work` writes several tasks with their whole
   // checklists in one call, so nine steps here is now ordinary — and nine steps at this spacing
   // pushed the errands, the context and the background work off the bottom of a panel that did
   // not scroll past them. The count and the bar were always the part worth seeing anyway.

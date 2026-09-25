@@ -62,3 +62,16 @@ export function projectLabel(snap: BrainSnapshot, ref: ProjectRef): string {
   if (ref === LOOSE) return "No project";
   return (snap.projects ?? []).find((p) => p.id === ref)?.name ?? "Project";
 }
+
+/** Where a set of tasks stands, column by column. Dropped work is counted apart and left out of
+ *  the total: giving something up is not progress, and it is not work left either. */
+export function tally(tasks: BrainSnapshot["tasks"]) {
+  const of = (status: string) => tasks.filter((task) => task.status === status).length;
+  const planning = of("planning");
+  const approved = of("approved");
+  const working = of("working");
+  const done = of("done");
+  return { planning, approved, working, done, dropped: of("dropped"), total: planning + approved + working + done };
+}
+
+export type Tally = ReturnType<typeof tally>;

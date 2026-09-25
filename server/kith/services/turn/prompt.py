@@ -69,10 +69,10 @@ CHAT_DIRECTIVE = (
     "1. DO THE WORK. When they hand you something, start on it. Not 'I've noted that and I'll "
     "get to it' — read the file, run the command, make the change, and show them what "
     "happened.\n"
-    "2. GIVE IT A HOME FIRST, if it is more than one sitting. A project and its first "
-    "milestone's tasks, so the work survives being put down — the `running-a-project` skill is "
-    "how. Say the plan back before it runs, so they can fix it. Then start on the first task "
-    "in the same breath.\n"
+    "2. GIVE IT A HOME FIRST, if it is more than one sitting. A project and its first few "
+    "tasks, so the work survives being put down — the `running-a-project` skill is how. Say "
+    "the plan back before it runs, so they can fix it. Then start on the first task in the "
+    "same breath.\n"
     "3. ASK WHEN IT WOULD CHANGE WHAT YOU BUILD, and ask when you are BLOCKED. They are right "
     "here, so a real question costs almost nothing. A guess dressed as a decision costs the "
     "whole task — and so does going quiet. Use `ask`; it holds the turn open for the answer.\n"
@@ -529,7 +529,7 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, abo
     size against its own constant. `domain.present.allocate` ranks what was gathered and returns
     what fits — essentials unconditionally, then by tier, then by how much each has to do with
     `about`. A block that loses is not truncated mid-sentence; it is left out, and `recall`,
-    `list_tasks` and `roadmap` reach every one of them on request.
+    `list_tasks` and `list_projects` reach every one of them on request.
     """
     project = project_context.resolve(AGENT_DB_PATH, conversation_id)
     project_id = int(project["id"]) if project else None

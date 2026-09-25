@@ -157,12 +157,10 @@ WORKSPACE_DIR = _text("KITH_WORKSPACE")
 #: was written on a machine where the skill happened to be installed, which is the class of bug
 #: this folder closes.
 #:
-#: ``running-a-project`` because projects, milestones and tasks are not an optional feature someone
-#: turns on: every copy has a board, and the board is how he decides what to work on next. Without
-#: this skill a fresh install still files tasks — it just files them badly, and the failure is the
-#: quiet kind, a board that hands him the wrong thing and is convincing about it. The tunable
-#: ``milestone_task_cap`` guards one symptom of that with a number; this is the part that cannot be
-#: a number.
+#: ``running-a-project`` because projects and tasks are not an optional feature someone turns on:
+#: every copy has a board, and the board is how he decides what to work on next. Without this skill
+#: a fresh install still files tasks — it just files them badly, and the failure is the quiet kind,
+#: a board that hands him the wrong thing and is convincing about it.
 #:
 #: ``brainstorming`` and ``sending-workers`` for the same reason as each other: both name the way
 #: out of a failure he does not otherwise recognise as one. A brief vague enough to invent around

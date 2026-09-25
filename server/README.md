@@ -91,8 +91,8 @@ what follows is the shape of it, not an inventory to keep in step:
 
 - **Memory** — `remember`, `recall`, `forget`, `journal`, `read_journal`, `set_memory_level`.
   This is how Kith carries anything across conversations.
-- **Work** — `add_task`, `update_task`, `view_task`, `create_project`, `add_milestone`,
-  `add_deliverable`, `check_item`, and the rest of the board.
+- **Work** — `add_task`, `plan_work`, `update_task`, `list_tasks`, `create_project`,
+  `add_deliverable`, `checklist`, and the rest of the board.
 - **Computer** — `shell`, `read_file`, `write_file`, `edit_file(s)`, `glob`, `grep`,
   `start_process`, `run_tests`, `commit`. Everything here goes through `infra/permissions.py`.
 - **Code** — `repo_map`, `outline`, `definition`, `references`, `find_symbol`,

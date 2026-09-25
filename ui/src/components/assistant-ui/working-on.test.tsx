@@ -6,7 +6,7 @@
  * unreachable. One nine-step task was enough to hide the errands, the context and the background
  * work completely.
  *
- * Nine steps used to be unusual. `plan_work` writes a milestone's tasks with their whole
+ * Nine steps used to be unusual. `plan_work` writes several tasks with their whole
  * checklists in one call, so it is now ordinary — the feature landing is what turned a latent
  * layout bug into the thing you look at every day.
  *

@@ -28,6 +28,13 @@ ALIASES: dict[str, str] = {
     "terminal": "shell",
     "run_shell": "shell",
     "set_task_status": "update_task",
+    # Milestones are gone. The nearest thing to laying one out is filing its tasks, and the
+    # nearest thing to finishing one is finishing a task — a suggestion, not a translation,
+    # because there is no milestone left for the arguments to describe.
+    "add_milestone": "plan_work",
+    "update_milestone": "update_task",
+    "order_milestones": "update_task",
+    "unlink_milestones": "update_task",
     "mark_done": "update_task",
     "complete_task": "update_task",
     "close_task": "update_task",
@@ -100,8 +107,6 @@ RETIRED: dict[str, Retired] = {
     "list_reminders": Retired("list_schedules"),
     "outline": Retired("repo_map", rename={"path": "paths"}),
     "link_folder": Retired("update_project", rename={"folder": "directory"}, add={"directory": ""}),
-    "order_milestones": Retired("update_milestone"),
-    "unlink_milestones": Retired("update_milestone", rename={"milestone_id": "id"}),
     "diagnostics": Retired("check_code"),
     # The checklist pair. `text` becomes the plural `add`, which `domain.tooling.many` reads
     # from a bare string as happily as from a list; `item_id` becomes the plural `items` the
