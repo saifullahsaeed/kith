@@ -44,6 +44,7 @@ class _Report:
         self.error = ""
         self.text = "said"
         self.said_before = ""
+        self.calls: list[str] = ["grep"]
 
 
 @pytest.fixture
@@ -556,3 +557,34 @@ class TestAnAgentIsNeverHandedPluginCommands:
         monkeypatch.setattr(agent_loop, "_stream_once", fake)
         workers.run_agent(db, "scout", "look", "")
         assert seen.get("mcp") == [] and seen.get("plugin") == []
+
+
+@needs_confinement
+class TestTheBoardCanDrawARunTheFeedHasForgotten:
+    """The feed is a ring of the last few hundred lines; a busy conversation pushes a run out of it
+    in minutes. The board keeps what the agent map needs, so a window opened later can still draw
+    the run — including one still going."""
+
+    def test_listing_carries_the_agents(self, db: Path, project: Path, agents):
+        script = """
+META = {"name": "board", "phases": ["Look", "Build"]}
+with phase("Look"):
+    agent("what is in kept.py", label="look")
+with phase("Build"):
+    agent("change x", kind="builder", label="change")
+finish("ok")
+"""
+        run = _wait(_start(db, script)["run"])
+        [listed] = workflows.listing("conv-1")
+        assert listed["state"] == workflows.FINISHED
+        assert listed["phases"] == ["Look", "Build"]
+        assert listed["said"].startswith("The workflow `board`")
+        by_label = {one["label"]: one for one in listed["agents"]}
+        assert by_label["look"]["phase"] == "Look" and by_label["look"]["kind"] == "scout"
+        assert by_label["change"]["phase"] == "Build" and by_label["change"]["kind"] == "builder"
+        assert by_label["change"]["patch"].endswith(".patch")
+        assert (
+            by_label["look"]["state"] == "done" and by_label["look"]["ended"] >= by_label["look"]["started"]
+        )
+        assert by_label["look"]["prompt"] == "what is in kept.py"
+        assert run.id == listed["run"]

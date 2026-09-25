@@ -290,9 +290,11 @@ def _drive(run: workflows.Run, path: Path) -> None:
                     else:
                         pool.submit(copy_context().run, _answer, run, path, message, agents, reply)
                 elif op == "phase":
-                    workflows.say(run, "phase", str(message.get("title") or ""))
+                    run.phase = str(message.get("title") or "")
+                    workflows.say(run, "phase", run.phase)
                 elif op == "log":
-                    workflows.say(run, "log", str(message.get("text") or "")[:300])
+                    run.said = str(message.get("text") or "")[:300]
+                    workflows.say(run, "log", run.said)
                 elif op == "finish":
                     result = message.get("value")
                 elif op == "error":
@@ -336,7 +338,7 @@ def _drive(run: workflows.Run, path: Path) -> None:
             except OSError:
                 pass
         note = _closing_note(run, state, why, result, agents, time.monotonic() - began, told_error)
-        workflows.end(run, state, note)
+        workflows.end(run, state, note, cost=round(agents.cost, 4), agents=len(agents.lines))
 
 
 def _watchdog(
@@ -393,7 +395,26 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
     label = str(message.get("label") or "").strip() or " ".join(prompt.split())[:60]
     objective = prompt if schema is None else prompt + _asking_for(schema)
 
-    def mark(state: str, text: str, tool_name: str = "", arguments: dict | None = None) -> None:
+    def mark(state: str, text: str, tool_name: str = "", arguments: dict | None = None, **extra) -> None:
+        """One line on the live feed about this agent, and the same facts on the run's board.
+        ``extra`` is what the agent map shows when you click it: the prompt and phase when it
+        starts, the cost, the report and the patch when it ends. Never stored in the transcript
+        or sent to a model."""
+        if state == "step":
+            from kith.services.activity import short_args
+
+            # Shortened, as on the feed: a `write_file` call's arguments are the whole file.
+            workflows.note_agent(run, agent_id, step={"tool": tool_name, "args": short_args(arguments or {})})
+        else:
+            workflows.note_agent(
+                run,
+                agent_id,
+                state=state,
+                label=label,
+                kind=kind,
+                tally=text if state == "done" else "",
+                **extra,
+            )
         try:
             from kith.services.activity import feed, short_args
 
@@ -402,7 +423,14 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
                 text,
                 tool=tool_name or None,
                 args=short_args(arguments or {}) or None,
-                errand={"id": agent_id, "state": state, "objective": label, "role": kind, "run": run.id},
+                errand={
+                    "id": agent_id,
+                    "state": state,
+                    "objective": label,
+                    "role": kind,
+                    "run": run.id,
+                    **extra,
+                },
                 conversation=run.conversation,
             )
         except Exception:
@@ -438,7 +466,7 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
                 agents.record(f'- {kind} "{label}" — could not start: {refused}', 0.0)
                 raise _Failed(f"the earlier patches do not apply together — {refused}")
 
-    mark("running", label)
+    mark("running", label, prompt=prompt[:4000], phase=run.phase, after=on_top_of)
     try:
         answer, report = workers.run_agent(
             path,
@@ -453,7 +481,7 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
         cost = report.cost
         if report.cut_short or (report.error and not (report.text.strip() or report.said_before.strip())):
             why = "stopped" if report.cut_short else report.error
-            mark("done", f"failed: {why}"[:120])
+            mark("done", f"failed: {why}"[:120], failed=True, cost=round(cost, 4), calls=len(report.calls))
             agents.record(f'- {kind} "{label}" — failed: {why}', cost)
             raise _Failed(f"the agent did not finish: {why}")
 
@@ -462,13 +490,21 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
             shaped, extra = _parse_or_repair(path, kind, objective, said, schema, run)
             cost += extra
             if shaped is None:
-                mark("done", "no JSON in its report")
+                mark(
+                    "done", "no JSON in its report", failed=True, cost=round(cost, 4), calls=len(report.calls)
+                )
                 agents.record(f'- {kind} "{label}" — reported, but not as the JSON asked for', cost)
                 raise _Failed("the agent's report did not end with the JSON the schema asked for")
 
         tally = str(answer.get("looked_at") or "")
         if kind == "scout":
-            mark("done", tally or "reported")
+            mark(
+                "done",
+                tally or "reported",
+                cost=round(cost, 4),
+                calls=len(report.calls),
+                report=said[:1500],
+            )
             agents.record(f'- scout "{label}" — reported ({tally or "no calls"})', cost)
             return shaped
 
@@ -486,7 +522,15 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
                 outcome += f", made on top of {', '.join(on_top_of)} — apply those first"
         else:
             outcome = "changed nothing"
-        mark("done", tally or outcome)
+        mark(
+            "done",
+            tally or outcome,
+            cost=round(cost, 4),
+            calls=len(report.calls),
+            report=said[:1500],
+            patch=patch_file,
+            outcome=outcome,
+        )
         agents.record(f'- builder "{label}" — {outcome}', cost)
         return {"report": shaped, "diff": diff, "patch_file": patch_file, "label": label}
     finally:

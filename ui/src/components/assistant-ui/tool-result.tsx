@@ -11,11 +11,13 @@ import { formatBytes } from "@/lib/bytes";
 import { useThreadRuntime } from "@assistant-ui/react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BookOpenText, Check, Copy, Frame, Radar } from "lucide-react";
+import { BookOpenText, Check, Copy, Frame, Network, Radar } from "lucide-react";
 
 import { PluginOutcome, splitPluginTool } from "@/components/assistant-ui/plugin-outcome";
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/files";
+import { useAgentMap } from "@/lib/agent-map";
+import { useConversationId } from "@/lib/conversation";
 import { useMedia } from "@/components/files/media";
 import { copyText, useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
@@ -462,6 +464,8 @@ function looksLikeWorkflow(value: Record<string, unknown>): boolean {
 
 const WorkflowStarted: FC<{ value: Record<string, unknown>; script: string }> = ({ value, script }) => {
   const [open, setOpen] = useState(false);
+  const conversation = useConversationId();
+  const showMap = useAgentMap((s) => s.show);
   const phases = Array.isArray(value.phases) ? (value.phases as unknown[]).map(String) : [];
 
   return (
@@ -482,9 +486,16 @@ const WorkflowStarted: FC<{ value: Record<string, unknown>; script: string }> = 
         </ol>
       ) : null}
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Running in the background — follow it in the Work panel. He picks the result up in a new
-        turn when it finishes.
+        Runs in the background. He picks the result up in a new turn when it finishes.
       </p>
+      <button
+        type="button"
+        onClick={() => showMap(conversation, String(value.run))}
+        className="text-kith hover:text-kith/80 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] font-medium"
+      >
+        <Network className="size-3.5" aria-hidden />
+        Open the agent map
+      </button>
       {script ? (
         <div className="flex flex-col gap-1">
           <button

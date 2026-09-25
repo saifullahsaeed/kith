@@ -34,6 +34,7 @@ import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { steerTurn, stopTurn } from "@/lib/commands";
 import { useConversationId } from "@/lib/conversation";
+import { AgentsChip } from "@/components/chat/agent-map";
 import { dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
 import { time, when } from "@/lib/dates";
@@ -875,7 +876,12 @@ const SteerButton: FC = () => {
 
 const ComposerAction: FC<{ conversationId: string }> = ({ conversationId }) => {
   return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-end">
+    <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
+      {/* The running-agents indicator, and the door to the agent map. Left of the row, away from
+          the send cluster, and absent entirely until this conversation has a workflow. */}
+      <div className="flex min-w-0 items-center">
+        <AgentsChip conversationId={conversationId} />
+      </div>
       <div className="flex items-center gap-1.5">
         <ComposerHint />
         <AttachButton />

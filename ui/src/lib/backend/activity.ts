@@ -50,6 +50,19 @@ export interface ActivityItem {
     role?: string;
     /** The workflow run that sent it. */
     run?: string;
+    /** On `running`: the whole prompt, the phase it started in, and the labels of the earlier
+     *  builders whose patches it was started on top of. */
+    prompt?: string;
+    phase?: string;
+    after?: string[];
+    /** On `done`: what it cost, how many tool calls, the start of its report, its patch file
+     *  and the outcome line, and whether it failed. */
+    cost?: number;
+    calls?: number;
+    report?: string;
+    patch?: string;
+    outcome?: string;
+    failed?: boolean;
   };
   /** Present on `workflow` lines: a run's own state. `started` carries the plan, `phase` and
    *  `log` are the script's progress, and `finished` / `failed` / `stopped` end it. */
@@ -60,6 +73,10 @@ export interface ActivityItem {
     description?: string;
     phases?: string[];
     folder?: string;
+    /** On the closing line: how long it ran, what its agents cost, and how many there were. */
+    seconds?: number;
+    cost?: number;
+    agents?: number;
   };
   /** Which session this line belongs to. Absent on the genuinely global lines — a status
    *  change — which every session shows, because they are about the machine rather than

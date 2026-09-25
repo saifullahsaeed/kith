@@ -8,10 +8,10 @@
  * *only* place a workflow's agents are ever shown. Their greps and reads are discarded by design,
  * and the run outlives the turn that started it, so a fold that loses them loses them for good.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { foldAgents, foldRuns, isWorkflowLine, Workflows } from "./workflows";
+import { fireEvent, render, screen } from "@/test/render";
+import { foldAgents, foldRuns, isWorkflowLine, mergeRuns, runsFromBoard, Workflows } from "./workflows";
 import type { ActivityItem } from "@/lib/backend/activity";
 
 const at = "2026-09-25T10:00:00Z";
@@ -42,6 +42,11 @@ function agent(
     ...rest,
   };
 }
+
+beforeEach(() => {
+  // The server's board says nothing unless a test says otherwise; the feed carries the run.
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ runs: [] })));
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -117,6 +122,30 @@ describe("the section itself", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("still draws a run the feed has forgotten, from the server's board", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            runs: [
+              {
+                run: "wf-9",
+                name: "remembered",
+                phases: ["Build"],
+                phase: "Build",
+                state: "running",
+                started: 1,
+                agents: [{ id: "a", label: "discover-module", kind: "builder", phase: "Build", state: "running", started: 2 }],
+              },
+            ],
+          }),
+        ),
+    );
+    render(<Workflows lines={[]} conversationId="conv-1" />);
+    expect(await screen.findByText("remembered")).toBeTruthy();
+    expect(screen.getByText("discover-module")).toBeTruthy();
+  });
+
   it("shows a running agent's steps in English, not as function calls", () => {
     render(
       <Workflows
@@ -157,7 +186,7 @@ describe("the section itself", () => {
   it("offers Stop while running, and it asks the server to stop that run", () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify({ stopping: true }), { status: 200 }));
+      .mockImplementation(async () => new Response(JSON.stringify({ stopping: true }), { status: 200 }));
     render(<Workflows lines={[run("wf-1", "started", "port-rag")]} conversationId="conv-1" />);
     fireEvent.click(screen.getByRole("button", { name: /stop/i }));
     expect(fetch).toHaveBeenCalledWith("/api/workflows/wf-1/stop", { method: "POST" });
@@ -201,5 +230,32 @@ describe("the section itself", () => {
     expect(head.className).toContain("line-clamp-2");
     fireEvent.click(head);
     expect(screen.getByRole("button", { expanded: true }).className).not.toContain("line-clamp-2");
+  });
+});
+
+describe("the board and the feed together", () => {
+  it("keeps the board's record and lays the feed's newer steps over it", () => {
+    const board = runsFromBoard([
+      {
+        run: "wf-1",
+        name: "port-rag",
+        state: "running",
+        started: 1,
+        agents: [{ id: "a", label: "x", state: "running", started: 2, steps: [{ tool: "grep", args: {} }] }],
+      },
+    ]);
+    const live = foldRuns(
+      [
+        run("wf-1", "started", "port-rag"),
+        agent("a", "running", "x"),
+        agent("a", "step", "grep", { tool: "grep" }),
+        agent("a", "step", "read_file", { tool: "read_file" }),
+        agent("b", "running", "y"),
+      ],
+      "conv-1",
+    );
+    const [merged] = mergeRuns(board, live);
+    expect(merged.agents.map((one) => one.id)).toEqual(["a", "b"]);
+    expect(merged.agents[0].steps.map((one) => one.tool)).toEqual(["grep", "read_file"]);
   });
 });

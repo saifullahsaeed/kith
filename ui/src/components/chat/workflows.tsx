@@ -1,9 +1,12 @@
-import { Check, CircleSlash, Loader2, Square, X } from "lucide-react";
-import { useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, CircleSlash, Loader2, Network, Square, X } from "lucide-react";
+import { useEffect, useState } from "react";
 
+import { useAgentMap } from "@/lib/agent-map";
 import { stopWorkflow } from "@/lib/commands";
 import { describeCall } from "@/lib/tool-language";
 import type { ActivityItem } from "@/lib/backend/activity";
+import { keys } from "@/lib/query-keys";
 
 /**
  * The workflows running for this conversation, and the agents inside each one.
@@ -46,6 +49,18 @@ export interface Agent {
   tally: string;
   /** Which run sent it. */
   run: string;
+  /** When its opening and closing lines arrived, in epoch milliseconds. */
+  startedAt: number;
+  endedAt: number;
+  prompt: string;
+  phase: string;
+  after: string[];
+  cost: number;
+  calls: number;
+  report: string;
+  patch: string;
+  outcome: string;
+  failed: boolean;
 }
 
 export interface Run {
@@ -58,6 +73,9 @@ export interface Run {
   /** The last `log()` line while running; the first line of the closing note once it ends. */
   said: string;
   agents: Agent[];
+  startedAt: number;
+  endedAt: number;
+  cost: number;
 }
 
 /** The feed's agent lines, folded into one entry per agent, oldest first.
@@ -72,7 +90,8 @@ export function foldAgents(lines: ActivityItem[], conversationId: string): Agent
     if (!mark) continue;
     // A line with no conversation is about the machine, not about one piece of work.
     if (conversationId && line.conversation !== conversationId) continue;
-    const found = byId.get(mark.id) ?? {
+    const at = Date.parse(line.at) || 0;
+    const found: Agent = byId.get(mark.id) ?? {
       id: mark.id,
       objective: mark.objective,
       steps: [],
@@ -80,13 +99,37 @@ export function foldAgents(lines: ActivityItem[], conversationId: string): Agent
       role: mark.role ?? "scout",
       tally: "",
       run: mark.run ?? "",
+      startedAt: at,
+      endedAt: 0,
+      prompt: "",
+      phase: "",
+      after: [],
+      cost: 0,
+      calls: 0,
+      report: "",
+      patch: "",
+      outcome: "",
+      failed: false,
     };
+    if (mark.state === "running") {
+      found.startedAt = at;
+      found.prompt = mark.prompt ?? found.prompt;
+      found.phase = mark.phase ?? found.phase;
+      found.after = mark.after ?? found.after;
+    }
     if (mark.state === "step" && line.tool) {
       found.steps.push({ tool: line.tool, args: line.args ?? {} });
     }
     if (mark.state === "done") {
       found.running = false;
       found.tally = line.text;
+      found.endedAt = at;
+      found.cost = mark.cost ?? 0;
+      found.calls = mark.calls ?? found.steps.length;
+      found.report = mark.report ?? "";
+      found.patch = mark.patch ?? "";
+      found.outcome = mark.outcome ?? "";
+      found.failed = Boolean(mark.failed);
     }
     byId.set(mark.id, found);
   }
@@ -100,7 +143,8 @@ export function foldRuns(lines: ActivityItem[], conversationId: string): Run[] {
     const mark = line.workflow;
     if (!mark) continue;
     if (conversationId && line.conversation !== conversationId) continue;
-    const found = byId.get(mark.run) ?? {
+    const at = Date.parse(line.at) || 0;
+    const found: Run = byId.get(mark.run) ?? {
       id: mark.run,
       name: mark.name ?? "workflow",
       description: "",
@@ -109,8 +153,12 @@ export function foldRuns(lines: ActivityItem[], conversationId: string): Run[] {
       state: "running" as const,
       said: "",
       agents: [],
+      startedAt: at,
+      endedAt: 0,
+      cost: 0,
     };
     if (mark.state === "started") {
+      found.startedAt = at;
       found.description = mark.description ?? "";
       found.phases = mark.phases ?? [];
     } else if (mark.state === "phase") {
@@ -120,6 +168,8 @@ export function foldRuns(lines: ActivityItem[], conversationId: string): Run[] {
     } else if (mark.state === "finished" || mark.state === "failed" || mark.state === "stopped") {
       found.state = mark.state;
       found.said = line.text;
+      found.endedAt = at;
+      found.cost = mark.cost ?? 0;
     }
     byId.set(mark.run, found);
   }
@@ -127,6 +177,126 @@ export function foldRuns(lines: ActivityItem[], conversationId: string): Run[] {
     byId.get(agent.run)?.agents.push(agent);
   }
   return [...byId.values()];
+}
+
+/** A run as the server's board keeps it — see `services/workflows.Run.public`. */
+interface BoardRun {
+  run: string;
+  name: string;
+  description?: string;
+  phases?: string[];
+  phase?: string;
+  started?: number;
+  ended?: number;
+  state: Run["state"];
+  said?: string;
+  cost?: number;
+  agents?: {
+    id: string;
+    label?: string;
+    kind?: string;
+    phase?: string;
+    state?: string;
+    prompt?: string;
+    report?: string;
+    patch?: string;
+    outcome?: string;
+    tally?: string;
+    cost?: number;
+    calls?: number;
+    failed?: boolean;
+    after?: string[];
+    started?: number;
+    ended?: number;
+    steps?: { tool: string; args: Record<string, string> }[];
+  }[];
+}
+
+/** The board's runs in the shape the panel and the map draw. Exported for its test. */
+export function runsFromBoard(board: BoardRun[]): Run[] {
+  return [...board]
+    .sort((a, b) => (a.started ?? 0) - (b.started ?? 0))
+    .map((one) => ({
+      id: one.run,
+      name: one.name,
+      description: one.description ?? "",
+      phases: one.phases ?? [],
+      phase: one.phase ?? "",
+      state: one.state,
+      said: one.said ?? "",
+      startedAt: (one.started ?? 0) * 1000,
+      endedAt: (one.ended ?? 0) * 1000,
+      cost: one.cost ?? 0,
+      agents: (one.agents ?? []).map((agent) => ({
+        id: agent.id,
+        objective: agent.label ?? agent.id,
+        steps: agent.steps ?? [],
+        running: agent.state !== "done",
+        role: agent.kind ?? "scout",
+        tally: agent.tally ?? "",
+        run: one.run,
+        startedAt: (agent.started ?? 0) * 1000,
+        endedAt: (agent.ended ?? 0) * 1000,
+        prompt: agent.prompt ?? "",
+        phase: agent.phase ?? "",
+        after: agent.after ?? [],
+        cost: agent.cost ?? 0,
+        calls: agent.calls ?? 0,
+        report: agent.report ?? "",
+        patch: agent.patch ?? "",
+        outcome: agent.outcome ?? "",
+        failed: Boolean(agent.failed),
+      })),
+    }));
+}
+
+/** The board's account of each run, with the feed's live steps laid over it.
+ *
+ *  The board is the record — it survives the feed's ring rolling over, which a busy conversation
+ *  does in minutes — and the feed is the heartbeat, carrying every step as it happens. A run only
+ *  the feed knows (the board has not been re-read yet) is kept too, so a run that just started
+ *  appears at once. Exported for its test. */
+export function mergeRuns(board: Run[], live: Run[]): Run[] {
+  const known = new Set(board.map((one) => one.id));
+  const merged = board.map((run) => {
+    const fresh = live.find((one) => one.id === run.id);
+    if (!fresh) return run;
+    const agents = run.agents.map((agent) => {
+      const seen = fresh.agents.find((one) => one.id === agent.id);
+      return seen && seen.steps.length > agent.steps.length ? { ...agent, steps: seen.steps } : agent;
+    });
+    // An agent the feed has seen start and the board has not been re-read for yet.
+    for (const agent of fresh.agents) if (!agents.some((one) => one.id === agent.id)) agents.push(agent);
+    return { ...run, agents };
+  });
+  return [...merged, ...live.filter((one) => !known.has(one.id))].sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** Every workflow run in this conversation, merged from the board and the live feed. */
+export function useRuns(conversationId: string, lines: ActivityItem[]): Run[] {
+  const cache = useQueryClient();
+  const live = foldRuns(lines, conversationId);
+  // A run or an agent changing state is what makes the board worth re-reading; a step is not.
+  const pulse = lines.filter(
+    (line) =>
+      line.conversation === conversationId &&
+      (line.kind === "workflow" || (line.kind === "errand" && line.errand?.state !== "step")),
+  ).length;
+  const { data } = useQuery({
+    queryKey: keys.workflows(conversationId),
+    queryFn: async (): Promise<BoardRun[]> => {
+      const response = await fetch(`/api/workflows?conversation=${encodeURIComponent(conversationId)}`);
+      if (!response.ok) return [];
+      const body = (await response.json()) as { runs?: BoardRun[] } | null;
+      return body?.runs ?? [];
+    },
+    enabled: Boolean(conversationId),
+    placeholderData: keepPreviousData,
+  });
+  useEffect(() => {
+    if (conversationId && pulse) void cache.invalidateQueries({ queryKey: keys.workflows(conversationId) });
+  }, [cache, conversationId, pulse]);
+  return mergeRuns(runsFromBoard(data ?? []), live);
 }
 
 /** One agent's first line: what it is, what kind it is, and whether it is still going.
@@ -158,7 +328,7 @@ function AgentHead({ agent }: { agent: Agent }) {
       >
         {/* Named, not only coloured. A builder is editing a copy of your repository and a scout
             is not, and that difference must survive someone who cannot tell teal from amber. */}
-        {builder ? <span className="mr-1 font-medium text-amber-400/80">builder</span> : null}
+        {builder ? <span className="mr-1 font-medium text-amber-600 dark:text-amber-400/80">builder</span> : null}
         {agent.objective}
       </button>
     </div>
@@ -271,17 +441,29 @@ export function Workflows({
   lines: ActivityItem[];
   conversationId?: string;
 }) {
-  const runs = foldRuns(lines, conversationId);
+  const runs = useRuns(conversationId, lines);
+  const show = useAgentMap((s) => s.show);
   // Nothing to say beats a header over an empty list — the same rule the background section follows.
   if (!runs.length) return null;
   const running = runs.filter((one) => one.state === "running").length;
 
   return (
     <div className="border-border/60 flex flex-col gap-2 border-b px-4 py-3">
-      <div className="flex items-baseline justify-between gap-2">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] font-medium">Workflows</span>
-        <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
-          {running ? `${running} running` : runs.length}
+        <span className="flex items-center gap-2">
+          <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
+            {running ? `${running} running` : runs.length}
+          </span>
+          <button
+            type="button"
+            onClick={() => show(conversationId, runs[runs.length - 1].id)}
+            className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-1 text-[10px]"
+            title="Open the agent map"
+          >
+            <Network className="size-3" aria-hidden />
+            map
+          </button>
         </span>
       </div>
       <ul className="flex flex-col gap-3">

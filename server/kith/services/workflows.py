@@ -44,12 +44,25 @@ class Run:
     folder: str
     started: float = field(default_factory=time.time)
     state: str = RUNNING
+    #: The phase the script last announced, so an agent can be filed under the phase it ran in.
+    phase: str = ""
     #: Set by Stop. The runner reads it between protocol lines and every agent reads it between
     #: its own events, so one switch reaches the script and all of its agents.
     halt: threading.Event = field(default_factory=threading.Event)
     #: What the conversation is told when it wakes. Written once, when the run ends.
     note: str = ""
     reported: bool = False
+    #: The last `log()` line while it runs, the first line of the note once it ends.
+    said: str = ""
+    ended: float = 0.0
+    cost: float = 0.0
+    #: Every agent it sent, by id, as the agent map draws them: kind, label, phase, state, the
+    #: prompt, what it said, what it cost, its patch, and its last few steps.
+    #:
+    #: Kept here as well as published on the feed, because the feed is a ring of the last few
+    #: hundred lines and a busy conversation pushes a run's lines out of it within minutes —
+    #: after which a window opened fresh had no way to draw a run that was still going.
+    agents: dict[str, dict] = field(default_factory=dict)
 
     def public(self) -> dict:
         return {
@@ -58,9 +71,16 @@ class Run:
             "name": self.name,
             "description": self.description,
             "phases": list(self.phases),
+            "phase": self.phase,
             "folder": self.folder,
             "started": self.started,
+            "ended": self.ended,
             "state": self.state,
+            "said": self.said,
+            "cost": self.cost,
+            "agents": sorted(
+                (dict(one) for one in self.agents.values()), key=lambda one: one.get("started", 0)
+            ),
         }
 
 
@@ -118,12 +138,43 @@ def stop(run_id: str) -> bool:
     return True
 
 
-def end(run: Run, state: str, note: str) -> None:
+#: Steps kept per agent for the map. The feed carries every one live; the board only has to be
+#: able to say what an agent was doing lately to a window that just opened.
+KEPT_STEPS = 8
+
+
+def note_agent(run: Run, agent_id: str, *, step: dict | None = None, **fields) -> None:
+    """Record what one agent is, or has just done, for the agent map. Never raises."""
+    try:
+        with _LOCK:
+            agent = run.agents.setdefault(agent_id, {"id": agent_id, "steps": []})
+            if "state" in fields and fields["state"] == "running" and "started" not in agent:
+                agent["started"] = time.time()
+            if fields.get("state") == "done":
+                agent["ended"] = time.time()
+            agent.update(fields)
+            if step is not None:
+                agent["steps"] = [*agent["steps"], step][-KEPT_STEPS:]
+                agent["calls"] = int(agent.get("calls") or 0) + 1
+    except Exception:
+        pass
+
+
+def end(run: Run, state: str, note: str, **extra) -> None:
     """Close a run and leave the note its conversation will be woken with."""
     with _LOCK:
         run.state = state
         run.note = note
-    say(run, state, note.splitlines()[0] if note else state)
+        run.ended = time.time()
+        run.said = note.splitlines()[0] if note else state
+        run.cost = float(extra.get("cost") or 0.0)
+    say(
+        run,
+        state,
+        note.splitlines()[0] if note else state,
+        seconds=round(time.time() - run.started, 1),
+        **extra,
+    )
 
 
 def say(run: Run, state: str, text: str, **extra) -> None:
