@@ -152,9 +152,10 @@ WORKSPACE_DIR = _text("KITH_WORKSPACE")
 #:
 #: Four, for three different reasons.
 #:
-#: ``drawing-a-canvas`` because the persona points at it by name. A default persona that names a
-#: skill nobody has is a dead pointer in every downloaded copy — it was written on a machine where
-#: the skill happened to be installed, which is the class of bug this folder closes.
+#: ``animating-a-diagram`` (once ``drawing-a-canvas``) because the persona points at it by name.
+#: A default persona that names a skill nobody has is a dead pointer in every downloaded copy — it
+#: was written on a machine where the skill happened to be installed, which is the class of bug
+#: this folder closes.
 #:
 #: ``running-a-project`` because projects, milestones and tasks are not an optional feature someone
 #: turns on: every copy has a board, and the board is how he decides what to work on next. Without

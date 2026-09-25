@@ -222,10 +222,10 @@ def packaged_with_skills(tmp_path, monkeypatch):
     data = tmp_path / "home" / ".kith"
     (bundle / "persona").mkdir(parents=True)
     (bundle / "persona" / "00-who.md").write_text("Your name is Kith.\n")
-    canvas = bundle / "skills" / "drawing-a-canvas"
+    canvas = bundle / "skills" / "animating-a-diagram"
     canvas.mkdir(parents=True)
     (canvas / "SKILL.md").write_text(
-        '---\nname: drawing-a-canvas\ndescription: "How to draw one."\n---\n\nInstructions.\n'
+        '---\nname: animating-a-diagram\ndescription: "How to draw one."\n---\n\nInstructions.\n'
     )
 
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -250,16 +250,16 @@ def packaged_with_skills(tmp_path, monkeypatch):
 
 
 def test_the_skill_the_persona_names_is_in_the_box(packaged_with_skills):
-    """`25-what-you-draw.md` says "the `drawing-a-canvas` skill has the rest of the syntax".
+    """`25-what-you-draw.md` says "the `animating-a-diagram` skill has the rest of the syntax".
 
     That sentence was written on a machine with twenty skills installed, and shipped to people
     with none. Nothing failed — he simply pointed at something that was not there.
     """
     data, skills = packaged_with_skills
 
-    assert [one.name for one in skills.installed()] == ["drawing-a-canvas"]
+    assert [one.name for one in skills.installed()] == ["animating-a-diagram"]
     assert not skills.problems(), "a skill we ship has to parse"
-    assert (data / "skills" / "drawing-a-canvas" / "SKILL.md").exists()
+    assert (data / "skills" / "animating-a-diagram" / "SKILL.md").exists()
 
 
 def test_removing_a_bundled_skill_removes_it(packaged_with_skills):
@@ -267,7 +267,7 @@ def test_removing_a_bundled_skill_removes_it(packaged_with_skills):
     data, skills = packaged_with_skills
 
     skills.root()
-    shutil.rmtree(data / "skills" / "drawing-a-canvas")
+    shutil.rmtree(data / "skills" / "animating-a-diagram")
     skills._seeded = False
 
     assert skills.installed() == [], "it came back after they threw it away"
@@ -328,7 +328,7 @@ def test_every_skill_we_ship_parses(shipped_skills):
 def test_the_persona_only_names_skills_that_are_in_the_box(shipped_skills):
     """The bug the bundle exists to close, checked against the persona rather than a list.
 
-    `25-what-you-draw.md` says "the `drawing-a-canvas` skill has the rest of the syntax". That
+    `25-what-you-draw.md` says "the `animating-a-diagram` skill has the rest of the syntax". That
     sentence was written on a machine with twenty skills installed and shipped to people with
     none. Hardcoding the one name here would pass forever and check nothing the next time
     someone writes the same sentence about a different skill.

@@ -1,5 +1,8 @@
 /**
- * The designs a turn produced, shown under the turn that produced them.
+ * The canvas in a reply: the designs a turn produced or showed, under the turn.
+ *
+ * "Canvas" is what the person and Kith call the board. The name used to belong to the ```html
+ * fence, which ran as a live sealed page in the reply; that was retired and this took its place.
  *
  * ── Why this is not the tool result ─────────────────────────────────────────────────────────
  *
@@ -72,11 +75,26 @@ export function DesignsInTurn() {
    * message body, taking the whole conversation down to its error boundary. */
   const packed = useAuiState((state) =>
     JSON.stringify(
-      state.message.parts.flatMap((part) => {
-        if (part.type !== "tool-call" || part.toolName !== "add_deliverable") return [];
+      state.message.parts.flatMap((part): Made[] => {
+        if (part.type !== "tool-call") return [];
         const { value, failed } = unwrap((part as { result?: unknown }).result);
         if (failed || !value || typeof value !== "object") return [];
         const row = value as Record<string, unknown>;
+        // `show_canvas` (and `show_board`, its old name, in older transcripts): the designs he
+        // chose to put in front of you, which may have been made in an earlier turn. This is
+        // what makes the canvas appear in the reply that says "have a look", not only in the one
+        // that happened to attach the files.
+        if (part.toolName === "show_canvas" || part.toolName === "show_board") {
+          const taskId = Number((part as { args?: { id?: unknown } }).args?.id);
+          if (row.shown !== true || !Number.isFinite(taskId) || !Array.isArray(row.designs)) return [];
+          const projectId = typeof row.project_id === "number" ? row.project_id : null;
+          return row.designs.flatMap((one: unknown) => {
+            const design = one as { file?: unknown; title?: unknown };
+            if (typeof design.file !== "string" || !looksLikeADesign("file", design.file)) return [];
+            return [{ file: design.file, title: String(design.title ?? design.file), taskId, projectId }];
+          });
+        }
+        if (part.toolName !== "add_deliverable") return [];
         const kind = row.kind;
         const content = row.content;
         const taskId = row.task_id;
@@ -98,13 +116,41 @@ export function DesignsInTurn() {
   } catch {
     made = [];
   }
+  // Attached and then shown in the same turn is one design, not two.
+  made = made.filter((one, at) => made.findIndex((other) => other.file === one.file) === at);
   if (!made.length) return null;
 
+  return <Strip made={made} />;
+}
+
+/** The canvas, as it sits in a reply: the designs, and the way onto the full canvas.
+ *
+ *  This is the place the ```html canvas used to occupy — at the level of the answer, open, next
+ *  to the prose about it. A turn that touched designs on more than one task gets one button per
+ *  task, since a canvas is a task's. */
+function Strip({ made }: { made: Made[] }) {
+  const show = useBoardOverlay((state) => state.show);
+  const tasks = made.filter((one, at) => made.findIndex((other) => other.taskId === one.taskId) === at);
+
   return (
-    <div className="mt-3 flex flex-col gap-2">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        <Frame className="size-3.5" />
-        {made.length} design{made.length === 1 ? "" : "s"}
+    <div className="mt-3 flex flex-col gap-2 rounded-2xl bg-muted/20 p-3 ring-1 ring-border/50">
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          <Frame className="size-3.5" />
+          Canvas · {made.length} design{made.length === 1 ? "" : "s"}
+        </div>
+        <div className="ms-auto flex gap-1.5">
+          {tasks.map((one) => (
+            <button
+              key={one.taskId}
+              type="button"
+              onClick={() => show({ taskId: one.taskId, projectId: one.projectId, title: one.title })}
+              className="rounded-lg px-2 py-1 text-[11px] font-medium ring-1 ring-border/60 transition-colors hover:bg-accent"
+            >
+              {tasks.length > 1 ? `Open canvas · task ${one.taskId}` : "Open canvas"}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="flex flex-wrap gap-2">
         {made.map((one) => (
@@ -132,7 +178,7 @@ function Thumb({ made }: { made: Made }) {
     <button
       type="button"
       onClick={() => show({ taskId: made.taskId, projectId: made.projectId, title: made.title })}
-      title={`${made.title} — open the board`}
+      title={`${made.title} — open the canvas`}
       className="group w-66 overflow-hidden rounded-xl text-start ring-1 ring-border/60 transition-shadow hover:shadow-md"
     >
       <div className="relative overflow-hidden bg-muted/30" style={{ height: box }}>
@@ -157,7 +203,7 @@ function Thumb({ made }: { made: Made }) {
           </div>
         )}
         <span className="absolute inset-0 flex items-center justify-center bg-background/70 text-xs font-medium opacity-0 transition-opacity group-hover:opacity-100">
-          Open board
+          Open canvas
         </span>
       </div>
       <div className="truncate px-2.5 py-1.5 text-[11px] font-medium">{made.title}</div>

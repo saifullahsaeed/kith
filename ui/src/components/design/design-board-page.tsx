@@ -112,7 +112,7 @@ export function DesignBoardPage({ taskId, projectId, designs, onBack }: DesignBo
     return (
       <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
         <RefreshCw className="size-4 animate-spin" />
-        Opening the board…
+        Opening the canvas…
       </div>
     );
   }

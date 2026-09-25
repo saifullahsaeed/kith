@@ -63,21 +63,19 @@ FILENAME = "api.token"
 #: tab opened against the server directly, which is a development shape rather than the product.
 OPEN_PATHS = frozenset({"/api/health", "/api/events"})
 
-#: ``/api/canvas/<id>`` — a frame's ``src``, and a navigation cannot carry a custom header any
-#: more than an EventSource can. Same trade, and a smaller one: the id is 24 random bytes handed
-#: out over the authenticated POST, so guessing it is the only way in, and what it buys is a copy
-#: of a message already in the transcript. Same-origin gated like the others.
-#:
-#: ``/api/plugins/frame/<ticket>`` is here for exactly the same reason and rests on exactly the
-#: same property — 24 random bytes from `secrets.token_urlsafe`, handed out over an
-#: authenticated POST, and what it buys is a document already on this machine's disk.
+#: ``/api/plugins/frame/<ticket>`` — a frame's ``src``, and a navigation cannot carry a custom
+#: header any more than an EventSource can. Same trade, and a smaller one: the ticket is 24
+#: random bytes from `secrets.token_urlsafe`, handed out over an authenticated POST, so guessing
+#: it is the only way in, and what it buys is a document already on this machine's disk.
+#: Same-origin gated like the others. (``/api/canvas/<id>`` sat here on the same terms until the
+#: ```html canvas was retired.)
 #:
 #: **The unguessable ticket is the whole of it, so a stable path must never be added here.**
 #: `/api/plugins/<id>/surface/<view>` would be a plugin surface readable by anything that can
 #: reach this port and knows a plugin's name, and the exemption would go from "a secret in the
 #: URL" to "no gate at all". Only the GET is exempt: the ticket's `POST .../state` and its
 #: DELETE carry the header like everything else, because a write is not a navigation.
-OPEN_GET_PREFIXES = ("/api/canvas/", "/api/plugins/frame/")
+OPEN_GET_PREFIXES = ("/api/plugins/frame/",)
 
 #: Documentation. Serving the schema of an API someone cannot call is not a leak, and
 #: locking it means /docs is a login wall on a single-user machine.

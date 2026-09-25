@@ -234,15 +234,14 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # to say why. Skipping it costs nothing and cannot be the wrong call.
         if message.get("role") == "assistant" and not str(message.get("content") or "").strip():
             continue
-        # Canvas and diagrams first, and the order is load-bearing in both directions.
+        # Diagrams first, and the order is load-bearing in both directions.
         # `_with_attachments` is the narrowing step — it rebuilds the message from role and
         # content alone, which is how internal keys are kept off the wire — so anything
-        # downstream of it has already lost `canvas` and `diagrams` and silently does nothing.
-        # And it is the step that can turn `content` into a list of parts for a vision model,
-        # which neither of the other two can append to. Reversed, this composed away the whole
-        # feature: the readings were dropped on every message and the unit test never noticed,
-        # because it called `_with_canvas` directly.
-        out.append(_with_attachments(_with_canvas(_with_diagrams(message))))
+        # downstream of it has already lost `diagrams` and silently does nothing. And it is the
+        # step that can turn `content` into a list of parts for a vision model, which a note
+        # cannot append to. Reversed, this once composed away a whole feature (the retired
+        # canvas readings) and the unit test never noticed, because it called the step directly.
+        out.append(_with_attachments(_with_diagrams(message)))
     sizes: dict[str, int] = {}
     # The subject comes off the folded history rather than being passed in, so a preview of
     # the prompt and the prompt itself cannot score memories differently — `as_sent` and
@@ -295,69 +294,6 @@ def _plugin_digest(conversation_id: str, project: dict | None) -> str:
         return ""
 
 
-#: What a canvas may say about itself before it is talking rather than reporting. Small on
-#: purpose: a control's reading is a word or a number, and anything longer arrived from a page a
-#: model wrote after reading the open web.
-_CANVAS_LIMITS = {"canvases": 8, "values": 32, "text": 200, "title": 80}
-
-
-def _with_canvas(message: dict) -> dict:
-    """Append what they have set on a canvas, as a note under their message.
-
-    A canvas he draws is the first thing in a reply that keeps happening after the reply ends.
-    Someone steps a nine-step walkthrough to the fork that needs them, and without this he learns
-    nothing — not which step, not that they opened it at all.
-
-    Rendered as a plain note under what they said, rather than delivered as a message of its own,
-    and both halves of that are deliberate. Not its own turn, because moving a slider is not a
-    question and this app has been burned by machinery that invents user messages. Not a
-    structured field either: the model reads one thing, which is the conversation, and a note in
-    it is visible in the transcript, foldable like everything else, and impossible to forget to
-    render somewhere.
-
-    Clamped rather than trusted. The values came from a sandboxed page written by a model that
-    reads the web — the UI already validates them at the frame boundary, and this is the second
-    check, because the first one runs on the far side of an HTTP request that anything local can
-    make.
-    """
-    readings = [c for c in (message.get("canvas") or []) if isinstance(c, dict)]
-    if not readings:
-        return {k: v for k, v in message.items() if k != "canvas"}
-
-    blocks: list[str] = []
-    for reading in readings[: _CANVAS_LIMITS["canvases"]]:
-        values = reading.get("values")
-        if not isinstance(values, dict) or not values:
-            continue
-        lines = []
-        for key, value in list(values.items())[: _CANVAS_LIMITS["values"]]:
-            if not isinstance(key, str) or not re.fullmatch(r"[\w.-]{1,40}", key):
-                continue
-            if isinstance(value, bool):
-                shown = "yes" if value else "no"
-            elif isinstance(value, (int, float)):
-                shown = str(value)
-            elif isinstance(value, str):
-                shown = value[: _CANVAS_LIMITS["text"]]
-            else:
-                continue
-            lines.append(f"- {key}: {shown}")
-        if not lines:
-            continue
-        title = str(reading.get("title") or "").strip()[: _CANVAS_LIMITS["title"]]
-        head = f'On the canvas "{title}" they have set:' if title else "On the canvas they have set:"
-        blocks.append(head + "\n" + "\n".join(lines))
-
-    content = message.get("content")
-    if not blocks or not isinstance(content, str):
-        return {k: v for k, v in message.items() if k != "canvas"}
-    joined = "\n\n".join(blocks)
-    return {
-        **{k: v for k, v in message.items() if k != "canvas"},
-        "content": f"{content}\n\n{joined}".strip(),
-    }
-
-
 #: What a refused diagram may say about itself. One line each, and few of them: a reply with five
 #: broken diagrams has one problem, not five.
 _DIAGRAM_LIMITS = {"diagrams": 4, "text": 300}
@@ -376,10 +312,11 @@ def _with_diagrams(message: dict) -> dict:
     \"UserTypesEmail\" in a route — nodes in this diagram: Core, Gateway, IdP, User" is the
     mistake, the vocabulary and the correction in one line.
 
-    A note under what they said rather than a message of its own, for the reasons `_with_canvas`
-    gives at length: a diagram that did not animate is not a question, and this app has been
-    burned by machinery that invents user messages. Clamped rather than trusted for the same
-    reason as well — it arrives over an HTTP request that anything local can make.
+    A note under what they said rather than a message of its own: a diagram that did not animate
+    is not a question, and this app has been burned by machinery that invents user messages. A
+    note is visible in the transcript, foldable like everything else, and impossible to forget to
+    render. Clamped rather than trusted, because it arrives over an HTTP request that anything
+    local can make.
     """
     refused = [
         line.strip()[: _DIAGRAM_LIMITS["text"]]

@@ -84,7 +84,7 @@ export function useSlashCommands(conversationId?: string) {
     {
       id: "design",
       label: "design",
-      description: "Mock up a few options as screens I can compare on a board",
+      description: "Mock up a few options as screens I can compare on the canvas",
       icon: "Frame",
       execute: () => {
         composer.setText(DESIGN_PROMPT);

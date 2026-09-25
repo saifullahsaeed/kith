@@ -129,7 +129,7 @@ def test_the_ticket_is_long_enough_to_be_the_gate(mounted):
 def test_only_the_frame_prefix_is_exempt():
     """A stable path here would turn a secret in the URL into no gate at all — so the shape of
     this tuple is the security property, and it is short on purpose."""
-    assert auth.OPEN_GET_PREFIXES == ("/api/canvas/", "/api/plugins/frame/")
+    assert auth.OPEN_GET_PREFIXES == ("/api/plugins/frame/",)
     assert not any(prefix.rstrip("/").endswith("surface") for prefix in auth.OPEN_GET_PREFIXES)
 
 

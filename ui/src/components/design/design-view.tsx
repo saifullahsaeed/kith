@@ -1,7 +1,7 @@
 /**
  * A design, on the screen, in the app's own document — and the dragging that goes with it.
  *
- * This is the component the seal was traded away for. `html-canvas.tsx` mounts a frame with an
+ * This is the component the seal was traded away for. A sealed frame (a plugin surface) has an
  * opaque origin and is safe without reading anything inside it; a design has to be measurable and
  * selectable, which means being in the same document as the editor, which means everything it
  * contains has already been through `parse.ts`. Nothing here is a boundary — by the time a node
@@ -21,7 +21,7 @@
  */
 import { createElement, type DragEvent, type ReactNode, useId, useMemo, useState } from "react";
 
-import { canvasTokens } from "@/lib/canvas-bridge";
+import { frameTokens } from "@/lib/seal";
 import { type DesignNode, parseDesign } from "@/lib/design/parse";
 import { paletteFor } from "@/lib/kith-palette";
 import { assetPaths, useAssets } from "@/lib/design/assets";
@@ -111,12 +111,12 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
 
   /* The tokens the dialect is written in, defined where the design can see them.
    *
-   * `groundwork()` puts these into the sealed frame's own stylesheet, which is why a canvas can
-   * say `var(--kith-accent)` and mean something. A design has no document of its own — it is in
+   * A sealed frame gets these in its own stylesheet, which is why a plugin surface can say
+   * `var(--kith-accent)` and mean something. A design has no document of its own — it is in
    * the app's — and the app's variables are named `--background`, `--kith` and so on. So a
    * design written in the dialect would have referred to nine variables that resolve to nothing,
-   * and every colour in it would have come out as the initial value. Same `canvasTokens` both
-   * ends, for the reason `canvas-bridge.ts` gives: the last time these two were written
+   * and every colour in it would have come out as the initial value. Same `frameTokens` both
+   * ends, for the reason `seal.ts` gives: the last time these two were written
    * separately, three of the nine silently failed to travel and it read as "light mode doesn't
    * work". */
   /* Every picture the design asks for, fetched rather than linked — see `assets.ts` for why an
@@ -143,10 +143,10 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
      *
      * Every design written before systems existed refers to `--kith-accent` and friends, and a
      * surface that stopped defining them would break all of it at once for nothing. They cost
-     * nine declarations. `canvasTokens` is the sealed canvas's contract and is read here for the
-     * same reason `canvas-bridge.ts` gives — the last time these names were written out twice,
+     * nine declarations. `frameTokens` is the sealed frame's contract and is read here for the
+     * same reason `seal.ts` gives — the last time these names were written out twice,
      * three of the nine silently failed to travel and it read as "light mode doesn't work". */
-    for (const [name, value] of Object.entries(canvasTokens(paletteFor(dark)))) {
+    for (const [name, value] of Object.entries(frameTokens(paletteFor(dark)))) {
       style[`--kith-${name}`] = value;
     }
     // And the system's own, namespaced so it can never reach a variable the editor draws with.

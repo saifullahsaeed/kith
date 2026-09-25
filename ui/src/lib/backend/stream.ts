@@ -1,6 +1,5 @@
 import type { ThreadMessage } from "@assistant-ui/react";
 
-import { currentCanvasState, type CanvasReading } from "@/lib/canvas-state";
 import { currentFlowFailures } from "@/lib/flow-failures";
 
 import type { BackendEvent } from "./types";
@@ -63,7 +62,6 @@ type WireMessage = {
   role: string;
   content: string;
   attachments?: WireAttachment[];
-  canvas?: CanvasReading[];
   diagrams?: string[];
 };
 
@@ -90,16 +88,12 @@ export function toWireMessages(
       ...(attachments.length ? { attachments } : {}),
     });
   }
-  // Whatever is set on a canvas he drew, carried by the message you are sending rather than by a
-  // turn of its own. Attached to the last message for the same reason an attachment is: it is
-  // part of what you are saying, not a separate thing that happened. Only the newest, because an
-  // earlier message was sent when those controls read something else and rewriting history to
-  // match the present would be a lie about both.
-  const readings = currentCanvasState(conversation);
+  // Any animated diagram whose choreography was refused, carried by the message you are sending
+  // rather than by a turn of its own. Attached to the last message for the same reason an
+  // attachment is: the person's screen knows something he does not, and the next thing they say
+  // is when it can be useful. Only the newest, because rewriting history to match the present
+  // would be a lie about both.
   const last = out[out.length - 1];
-  if (readings.length && last?.role === "user") last.canvas = readings;
-  // And any animated diagram whose choreography was refused. Same ride, same reason: the person's
-  // screen knows something he does not, and the next thing they say is when it can be useful.
   const refused = currentFlowFailures(conversation);
   if (refused.length && last?.role === "user") last.diagrams = refused;
   return out;

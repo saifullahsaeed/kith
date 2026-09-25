@@ -594,7 +594,7 @@ export function TaskDetailPage({
                   onClick={() => setOnBoard(true)}
                 >
                   <Frame className="size-3.5" />
-                  Open board
+                  Open canvas
                 </Button>
               ) : null}
             </H>

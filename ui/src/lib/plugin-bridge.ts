@@ -1,7 +1,7 @@
 /**
  * What a plugin surface may say, and the thing that refuses to believe most of it.
  *
- * `canvas-bridge.ts` is the sibling of this file and the reasoning there applies here in full:
+ * The retired ```html canvas had a sibling of this file, and its reasoning carries over in full:
  * everything arriving is written by a third party, running in a frame that was sealed precisely
  * because it is not trusted, so a message is *evidence of an event* — never an instruction and
  * never a value to pass along unexamined.
@@ -18,13 +18,11 @@
  * * **Shapes, not values.** Every field is bounded. A surface cannot send prose, so it cannot
  *   smuggle a paragraph of instructions into a turn dressed as a stored value.
  *
- * ## What is different from a canvas, and why
+ * ## Why the state is kept
  *
- * A canvas reading rides on one message and is then gone, which is why `canvas-state` is right
- * to forget it on unmount. Plugin state survives the frame, lands in a table, and is read into
- * the prompt of every turn for as long as the plugin is installed. Same discipline, separate
- * vocabulary and separate caps, because one name for two lifetimes is exactly the drift
- * `canvasTokens()` exists to prevent.
+ * Plugin state survives the frame, lands in a table, and is read into the prompt of every turn
+ * for as long as the plugin is installed — so it gets its own vocabulary and its own caps rather
+ * than borrowing a shape built for a reading that rode on one message and was gone.
  *
  * **The frame has no verb that reaches anything outside the plugin's own store.** There is no
  * `fetch`, no `navigate`, no `invoke`, no `open`. That is a real bound and it is what keeps
@@ -32,9 +30,9 @@
  * clicked it, so it is authorised" safe to rely on.
  */
 
-/** The envelope version, shared with the canvas so there is one number to bump. */
-export { PROTOCOL } from "@/lib/canvas-bridge";
-import { PROTOCOL } from "@/lib/canvas-bridge";
+/** The envelope version — see `seal.ts`. */
+export { PROTOCOL } from "@/lib/seal";
+import { PROTOCOL } from "@/lib/seal";
 
 /** How many keys one write may carry. More than this is a surface synchronising its whole model
  *  rather than recording what changed, and the store has a per-slot cap behind this anyway. */
@@ -99,7 +97,7 @@ export type PluginMessage =
  * One message from a frame, or null.
  *
  * **`protocol` is load-bearing on `ready`.** An unrecognised envelope version is dropped, which
- * is what makes a stale cached canvas harmless — and that rule works only while the only
+ * is what makes a stale cached document harmless — and that rule works only while the only
  * consumer is a document Kith generated seconds ago. A third party ships against this, so a
  * mismatch has to be *visible*: the caller mounts a placeholder saying the surface was built for
  * a different version of Kith, rather than a live frame that silently answers nothing.
@@ -171,7 +169,7 @@ export function readPluginMessage(data: unknown): PluginMessage | null {
 
     case "size": {
       const px = Number(message.px);
-      // The same range a canvas may claim: a line of content at the floor, a few screens at the
+      // A line of content at the floor, a few screens at the
       // ceiling, past which the answer is a wider pane rather than a taller box.
       if (!Number.isFinite(px) || px < 80 || px > 2400) return null;
       return { type: "size", px: Math.round(px) };

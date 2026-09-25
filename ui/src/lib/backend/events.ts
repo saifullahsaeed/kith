@@ -56,7 +56,7 @@ export type ChangeKind =
   | "plugin"
   | "plugin_state"
   | "plugin_call"
-  // Something he asked you to look at — see `services/showing` and `show_board`.
+  // Something he asked you to look at — see `services/showing` and `show_canvas`.
   | "showing";
 
 export interface Change {

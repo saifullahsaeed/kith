@@ -20,8 +20,8 @@
  * overwriting the other on mount. Keyed on the tab, the unnamed-chat case needs no migration at
  * all and two panes on one conversation are simply two places to type.
  *
- * **Deliberately the same shape as `canvas-state` and `flow-failures`**, which are the other two
- * keyed holding stores: a `create` over a `Record`, a per-key writer that returns the state
+ * **Deliberately the same shape as `flow-failures`**, the other keyed holding
+ * store: a `create` over a `Record`, a per-key writer that returns the state
  * untouched when nothing changed, a per-key `forget`, and a non-subscribing getter for the
  * caller that reads at a moment rather than rendering against it. A store and not the
  * module-level slot `active-composer` uses, for the reason `focused-chat` states outright — this

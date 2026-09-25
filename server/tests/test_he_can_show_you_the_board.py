@@ -52,7 +52,7 @@ class TestShowing:
             ("file", "B — compact", "screens/b.html"),
         )
 
-        answer = task_tools.show_board(brain, {"id": tid})
+        answer = task_tools.show_canvas(brain, {"id": tid})
         assert answer["shown"] is True
 
         held = showing.current()
@@ -66,13 +66,13 @@ class TestShowing:
             ("file", "A — comfortable", "screens/a.html"),
             ("file", "B — compact", "screens/b.html"),
         )
-        answer = task_tools.show_board(brain, {"id": tid})
+        answer = task_tools.show_canvas(brain, {"id": tid})
         assert [one["title"] for one in answer["designs"]] == ["A — comfortable", "B — compact"]
         assert answer["task"] == "Engagements table"
 
     def test_a_note_rides_along(self, brain):
         tid = _task_with(brain, ("file", "A", "screens/a.html"))
-        task_tools.show_board(brain, {"id": tid, "note": "look at the row height"})
+        task_tools.show_canvas(brain, {"id": tid, "note": "look at the row height"})
         assert showing.current()["note"] == "look at the row height"
 
 
@@ -81,19 +81,19 @@ class TestWhenThereIsNothingToShow:
         """An empty board looks broken, and would be his fault in a way he could not see."""
         tid = _task_with(brain, ("text", "A written result", "some prose"))
 
-        answer = task_tools.show_board(brain, {"id": tid})
+        answer = task_tools.show_canvas(brain, {"id": tid})
         assert answer["shown"] is False
         assert "no design files" in answer["why"]
         assert showing.current() is None
 
     def test_a_task_that_does_not_exist(self, brain):
-        answer = task_tools.show_board(brain, {"id": 9999})
+        answer = task_tools.show_canvas(brain, {"id": 9999})
         assert answer["shown"] is False
         assert showing.current() is None
 
     def test_a_deliverable_that_is_a_file_but_not_a_design(self, brain):
         tid = _task_with(brain, ("file", "The report", "reports/q4.pdf"))
-        assert task_tools.show_board(brain, {"id": tid})["shown"] is False
+        assert task_tools.show_canvas(brain, {"id": tid})["shown"] is False
 
 
 class TestTaking:
@@ -101,7 +101,7 @@ class TestTaking:
         """It means "he just asked", not "this is on screen" — otherwise relaunching the app
         reopens a board from last Tuesday."""
         tid = _task_with(brain, ("file", "A", "screens/a.html"))
-        task_tools.show_board(brain, {"id": tid})
+        task_tools.show_canvas(brain, {"id": tid})
         assert showing.current() is not None
 
         showing.clear()
@@ -110,6 +110,15 @@ class TestTaking:
     def test_the_latest_one_wins(self, brain):
         first = _task_with(brain, ("file", "A", "screens/a.html"))
         second = _task_with(brain, ("file", "B", "screens/b.html"))
-        task_tools.show_board(brain, {"id": first})
-        task_tools.show_board(brain, {"id": second})
+        task_tools.show_canvas(brain, {"id": first})
+        task_tools.show_canvas(brain, {"id": second})
         assert showing.current()["taskId"] == second
+
+
+class TestTheOldName:
+    def test_show_board_still_reaches_the_canvas(self):
+        """Renamed to `show_canvas` when the ```html fence was retired. Old transcripts and his
+        habits still say `show_board`, and a retired name runs the new tool rather than failing."""
+        from kith.tools import aliases
+
+        assert aliases.retired("show_board").now == "show_canvas"

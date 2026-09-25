@@ -1,21 +1,13 @@
-"""The two copies of the seal agree, and neither has quietly widened.
+"""The two statements of the seal agree, and neither has quietly widened.
 
-A sealed document's policy exists twice by necessity: once on the response that serves it, and
-once as a `<meta>` the interface bakes into the document itself. The second copy is not
-redundancy — it is what keeps a document safe when it is mounted some way other than through
-the route that has the authoritative header.
-
-Two statements of one rule drift, and these had. The route's carried `form-action 'none'` and
-`base-uri 'none'`; `ui/src/lib/canvas.ts`'s carried neither, and nothing failed anywhere. It was
-harmless only because policies compose by intersection and the route happened to be the stricter
-half. A plugin surface is the second consumer, which is what turned a latent inconsistency into
-something worth a test.
+The policy itself now lives only on the server (`domain/seal.py`), which serves every sealed
+document — today that is a plugin surface. The interface still states one half of the seal: the
+`sandbox` attribute it mounts the frame with, in `ui/src/lib/seal.ts`. Two statements of one rule
+drift, and these once had (the retired canvas's `<meta>` copy carried neither `form-action` nor
+`base-uri`), so the half that is still stated twice is compared here.
 
 Reading the TypeScript from Python is the precedent this codebase already set for a rule that
 has to hold on both sides of a boundary with no type coupling across it.
-
-`ui/src/lib/canvas.test.ts` guards the other half — that the sandbox is not widened for
-convenience. This guards that the two languages say the same thing.
 """
 
 from __future__ import annotations
@@ -27,30 +19,19 @@ import pytest
 
 from kith.domain import seal
 
-CANVAS_TS = Path(__file__).resolve().parents[2] / "ui" / "src" / "lib" / "canvas.ts"
-
-
-def _directives_in(source: str, name: str) -> list[str]:
-    """The string literals of a `const <name> = [ ... ].join("; ")` array."""
-    match = re.search(rf"const {name} = \[(.*?)\]\.join", source, re.S)
-    assert match, f"could not find the {name} array in canvas.ts"
-    return re.findall(r'"([^"]+)"', match.group(1))
+SEAL_TS = Path(__file__).resolve().parents[2] / "ui" / "src" / "lib" / "seal.ts"
 
 
 @pytest.fixture(scope="module")
-def canvas_ts() -> str:
-    if not CANVAS_TS.is_file():
+def seal_ts() -> str:
+    if not SEAL_TS.is_file():
         pytest.skip("the interface source is not in this checkout")
-    return CANVAS_TS.read_text()
+    return SEAL_TS.read_text()
 
 
-def test_the_policies_are_the_same_directives(canvas_ts: str):
-    assert _directives_in(canvas_ts, "POLICY") == list(seal.DIRECTIVES)
-
-
-def test_the_sandbox_attribute_is_the_same(canvas_ts: str):
-    match = re.search(r'export const FRAME_SANDBOX = "([^"]*)"', canvas_ts)
-    assert match, "could not find FRAME_SANDBOX in canvas.ts"
+def test_the_sandbox_attribute_is_the_same(seal_ts: str):
+    match = re.search(r'export const FRAME_SANDBOX = "([^"]*)"', seal_ts)
+    assert match, "could not find FRAME_SANDBOX in seal.ts"
     assert match.group(1) == seal.FRAME_SANDBOX
 
 

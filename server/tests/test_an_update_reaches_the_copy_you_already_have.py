@@ -172,3 +172,32 @@ def test_the_shipped_history_we_actually_ship_is_readable():
         assert hashes, key
         for one in hashes:
             assert len(one) == 64 and set(one) <= set("0123456789abcdef"), (key, one)
+
+
+def test_a_file_we_stopped_shipping_is_removed_if_nobody_touched_it(upgrading):
+    """Retirement. `drawing-a-canvas` taught ```html fences as live pages; once the fence stopped
+    running, every machine that already had the skill would have kept reading it in every prompt.
+    Our own bytes, no longer in the bundle, are ours to take back."""
+    _bundle, data, persona, release = upgrading
+    retired = data / "persona" / "40-retired.md"
+    retired.write_bytes(V_ONE)
+    (data / "persona" / "30-how-you-read.md").write_bytes(V_ONE)
+
+    release(V_ONE, {"persona/30-how-you-read.md": [sha(V_ONE)], "persona/40-retired.md": [sha(V_ONE)]})
+    persona.load_persona()
+
+    assert not retired.exists()
+    assert (data / "persona" / "30-how-you-read.md").read_bytes() == V_ONE
+
+
+def test_a_retired_file_they_edited_stays(upgrading):
+    """Fails closed, like every other branch: edited means theirs."""
+    _bundle, data, persona, release = upgrading
+    retired = data / "persona" / "40-retired.md"
+    retired.write_bytes(THEIRS)
+    (data / "persona" / "30-how-you-read.md").write_bytes(V_ONE)
+
+    release(V_ONE, {"persona/30-how-you-read.md": [sha(V_ONE)], "persona/40-retired.md": [sha(V_ONE)]})
+    persona.load_persona()
+
+    assert retired.read_bytes() == THEIRS

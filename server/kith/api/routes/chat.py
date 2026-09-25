@@ -398,7 +398,7 @@ def _history_for_turn(conversation_id: str, latest: dict) -> list[dict]:
     """The transcript, with whatever the newest message carries that the transcript does not.
 
     Two things are true at once and they used to be reconciled by addition. `conversations.record`
-    writes a message's *text* and nothing else — an attachment or a canvas reading lives only in
+    writes a message's *text* and nothing else — an attachment or a refused-diagram note lives only in
     the request that carried it — and `full_messages` rebuilds every message from role and content
     alone. So the newest message arrives on disk stripped of the parts that are not words.
 
@@ -1107,7 +1107,7 @@ def chat(payload):
         # ever sending them), so on a resumed conversation everything in it but the
         # message just typed is ignored and the transcript rebuilds the real thing,
         # tool history included. What the typed message carries beyond its text — an
-        # attachment, a canvas reading — is merged back onto the transcript's copy of
+        # attachment, a refused-diagram note — is merged back onto the transcript's copy of
         # it rather than added beside it; see `_history_for_turn`.
         if resumed:
             return _history_for_turn(conversation_id, latest_message or {"role": "user", "content": latest})

@@ -60,7 +60,7 @@ class TestTheNewestMessageIsNotDoubled:
         """The reason the second copy was there at all.
 
         `record` writes text and nothing else, and `full_messages` rebuilds from role and content
-        — so an attachment or a canvas reading exists only on the request's own copy. Merging is
+        — so an attachment or a refused-diagram note exists only on the request's own copy. Merging is
         what keeps it without duplicating the words it came with.
         """
         conversations.record(db, conversation, "user", "look at this")
@@ -71,13 +71,13 @@ class TestTheNewestMessageIsNotDoubled:
                 "role": "user",
                 "content": "look at this",
                 "attachments": [{"name": "log.txt", "kind": "file"}],
-                "canvas": [{"title": "tuner", "values": {"foldAt": 5}}],
+                "diagrams": ["flow: unknown node \"X\""],
             },
         )
 
         assert _users(history) == ["what is the plan", "look at this"]
         assert history[-1]["attachments"] == [{"name": "log.txt", "kind": "file"}]
-        assert history[-1]["canvas"] == [{"title": "tuner", "values": {"foldAt": 5}}]
+        assert history[-1]["diagrams"] == ['flow: unknown node "X"']
 
     def test_a_message_that_never_reached_disk_is_still_asked(self, conversation):
         """`record` swallows an OSError rather than take a turn down with it.

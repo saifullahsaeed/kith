@@ -7,8 +7,7 @@
  * same mistake comes back in the next reply, and the one after that, and the only way it ever
  * gets fixed is somebody typing out the error by hand.
  *
- * This is the wire that closes that. Deliberately the *same* shape as `canvas-state`, and for the
- * same reasons: held rather than sent, carried by their next message rather than by a turn of its
+ * This is the wire that closes that: held rather than sent, carried by their next message rather than by a turn of its
  * own, never persisted. A diagram that did not animate is not a question and must not start a
  * turn — this app has been burned by machinery that invents user messages — but it is very much
  * context for the next thing that gets said, and it costs nothing until something is.
@@ -53,8 +52,8 @@ export const useFlowFailures = create<{
 }));
 
 /** Everything currently broken **in this conversation**, in the shape the wire wants. Empty in the
- *  ordinary case, where it costs the turn nothing — and scoped for the reason
- *  `currentCanvasState` sets out at length: one global store, several chats open at once. */
+ *  ordinary case, where it costs the turn nothing — and scoped because there is
+ *  one global store and several chats open at once. */
 export function currentFlowFailures(conversation: string): string[] {
   if (!conversation) return [];
   return Object.values(useFlowFailures.getState().failures)

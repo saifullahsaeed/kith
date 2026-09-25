@@ -170,7 +170,7 @@ def _safe_skills_dir(tmp_path_factory) -> Path:
     somebody deleted from a file that never existed — and it answers that from `seeded.json` in
     the data directory and `shipped.json` in the build. Pointed at a fresh folder mid-run, it
     correctly concludes that every *released* skill absent from it was deleted on purpose and
-    leaves it out, which is how a redirect produced an install missing `drawing-a-canvas` and
+    leaves it out, which is how a redirect produced an install missing `animating-a-diagram` and
     `running-a-project` and nothing else.
 
     That state machine is right and this is not the place to argue with it, so the folder is

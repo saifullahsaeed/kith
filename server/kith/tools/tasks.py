@@ -556,11 +556,12 @@ def add_deliverable(path: Path, args: dict):
 
 
 @tool(
-    "show_board",
-    "Open a task's designs on their screen, side by side, so they can look at them and say "
-    "which one. Use it the moment you have finished more than one design, and whenever they "
-    "ask to see something you made — a paragraph describing four screens is not showing them "
-    "four screens. Takes the task the designs are attached to.",
+    "show_canvas",
+    "Open a task's canvas on their screen: every HTML design attached to the task, side by "
+    "side, where they can look, compare, and open one to edit. Use it the moment you have "
+    "finished a design, and whenever they ask to see something you made — a paragraph "
+    "describing four screens is not showing them four screens. Takes the task the designs are "
+    "attached to.",
     {
         "id": {**INT, "description": "The task whose designs to show."},
         "note": {
@@ -570,8 +571,13 @@ def add_deliverable(path: Path, args: dict):
     },
     required=("id",),
 )
-def show_board(path: Path, args: dict):
-    """Put the board in front of them.
+def show_canvas(path: Path, args: dict):
+    """Put the canvas in front of them.
+
+    Called `show_board` until the ```html fence stopped being a live page: "canvas" is the word
+    he and his person both reach for, and it now names exactly one thing. Internally the
+    surface is still the board (`showing.show("board", …)`, `boards/*.board.json`) — only the
+    names he and they read changed.
 
     He could make designs and never show one. Asked to, he went looking for the word "board" —
     `find -iname "*board*"`, `git log | grep board`, two plugin reads — because the surface that
@@ -601,5 +607,8 @@ def show_board(path: Path, args: dict):
     return {
         "shown": True,
         "task": detail.get("goal") or f"task #{task_id}",
+        # Read back by the reply's inline canvas, which resolves each design's assets and
+        # system against the project without first fetching the task to learn where it lives.
+        "project_id": detail.get("project_id"),
         "designs": [{"title": one.get("title"), "file": one.get("content")} for one in designs],
     }

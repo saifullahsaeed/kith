@@ -97,8 +97,8 @@ def _frame(source: str) -> tuple[int, int, str]:
 #: feels.
 STEP = 4
 
-#: The palette the editor defines on the design root. Injected here for the reason
-#: `check_canvas.py` gives: run bare, every `var(--kith-…)` resolves to nothing, every colour
+#: The palette the editor defines on the design root. Injected here because,
+#: run bare, every `var(--kith-…)` resolves to nothing, every colour
 #: silently becomes its initial value, and a design that will look right in the app reports here
 #: as black text on a transparent ground.
 _TOKENS = """:root{

@@ -272,7 +272,7 @@ export function readSystem(text: string, conventions = ""): System | null {
 /**
  * Kith's own nine, as an instance of the same thing.
  *
- * Not imported from `canvasTokens()`. That function is the sealed canvas's contract — the one
+ * Not imported from `frameTokens()`. That function is the sealed frame's contract — the one
  * place both ends of the frame bridge agree — and widening it for a second consumer is how the
  * theme silently stopped travelling last time. This reads the palette directly instead.
  */

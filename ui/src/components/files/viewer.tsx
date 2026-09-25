@@ -20,7 +20,7 @@ import { Code } from "./code-block";
 import { IconAction } from "./icon-action";
 import { classify, looksBinary, looksMissing, looksTooBig, missingHint } from "./kinds";
 import type { Kind } from "./kinds";
-import { HtmlCanvas } from "@/components/assistant-ui/html-canvas";
+import { DesignView } from "@/components/design/design-view";
 import { Markdown } from "./markdown";
 import {
   AudioBody,
@@ -250,7 +250,7 @@ export function FileViewer({
         ) : content == null ? (
           <Loading label="Reading it…" />
         ) : (
-          <FileBody kind={kind} content={content} view={view} scroller={bodyRef} />
+          <FileBody kind={kind} content={content} view={view} scroller={bodyRef} projectId={projectId} />
         )}
       </div>
     </div>
@@ -262,11 +262,13 @@ function FileBody({
   content,
   view,
   scroller,
+  projectId = null,
 }: {
   kind: Kind;
   content: string;
   view: "rendered" | "source";
   scroller: RefObject<HTMLDivElement | null>;
+  projectId?: number | null;
 }) {
   if (!content.trim()) return <p className="p-5 text-sm text-muted-foreground">(empty file)</p>;
   // An SVG viewed as source. Highlighted as XML, which is what it is — the fallback `<pre>`
@@ -290,14 +292,16 @@ function FileBody({
     );
   }
   if (kind.type === "markdown") return <Code code={content} language="markdown" numbered />;
-  // An .html file is a thing to look at, so it runs. This is the surface that matters most:
-  // asked for something animated he writes a page to his folder and shells out to `open`, which
-  // hands it to a browser outside this app. Rendering it here is the same drawing without the
-  // detour — and under the same seal a canvas in a reply gets.
+  // An .html file is a thing to look at, so it is drawn — by the same renderer the canvas (the
+  // board) and the design editor use, so a screen looks the same here as it does there. It used
+  // to run in a sealed frame instead; that renderer was retired with the ```html canvas, and a
+  // page's scripts no longer run in the app. The source is one toggle away.
   if (kind.type === "page" && view === "rendered") {
     return (
       <div className="mx-auto max-w-[68rem] px-6 py-6">
-        <HtmlCanvas code={content} fallback={<Code code={content} language="xml" numbered />} />
+        <div className="overflow-auto rounded-xl ring-1 ring-border/60">
+          <DesignView html={content} projectId={projectId} />
+        </div>
       </div>
     );
   }

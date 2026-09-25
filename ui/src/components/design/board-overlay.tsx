@@ -20,7 +20,7 @@ import { looksLikeADesign } from "@/lib/design/detect";
 import { useShowing } from "@/lib/design/use-showing";
 
 export function BoardOverlay() {
-  // He can open this himself — `show_board` sets a small piece of state and this is what
+  // He can open this himself — `show_canvas` sets a small piece of state and this is what
   // notices. Listened for here rather than at the app root because this is the thing that
   // draws the result, and a listener somewhere else would be a second place to look.
   useShowing();
@@ -59,7 +59,7 @@ export function BoardOverlay() {
     return (
       <div className="absolute inset-0 z-40 flex items-center justify-center gap-2 bg-background text-sm text-muted-foreground">
         <RefreshCw className="size-4 animate-spin" />
-        Opening the board…
+        Opening the canvas…
       </div>
     );
   }
@@ -84,7 +84,7 @@ export function BoardOverlay() {
         <button
           type="button"
           onClick={hide}
-          aria-label="Close the board"
+          aria-label="Close the canvas"
           className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <X className="size-4" />

@@ -453,7 +453,7 @@ function Design({ value }: { value: Record<string, unknown> }) {
             </div>
           )}
           <span className="absolute end-2 bottom-2 rounded-md bg-background/90 px-2 py-1 text-[11px] font-medium opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
-            Open board
+            Open canvas
           </span>
         </div>
         <div className="flex items-baseline gap-2 px-3 py-2">

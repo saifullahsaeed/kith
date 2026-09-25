@@ -37,6 +37,12 @@ two want opposite treatment.
     absent, we placed it or a release carried it   they removed it -> leave it absent
     present, and the bytes are ones we shipped     untouched    -> write the new version
     present, and the bytes are nobody's but theirs theirs       -> leave it alone
+    present, ours, and no longer shipped at all    retired      -> remove it
+
+The fifth exists because a retired file is not inert. A skill's description sits in every
+prompt, so the `drawing-a-canvas` skill that taught ```html fences as live pages would have kept
+teaching it on every machine that already had it, long after the fence stopped running. Only a
+file whose bytes are positively ours is removed; an edited one is theirs and stays.
 
 The last one is the one that has to be wrong in the safe direction, and it is: anything this
 module cannot positively recognise as its own is treated as somebody's work and not touched.
@@ -53,6 +59,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,9 +77,10 @@ class Report:
     added: list[str] = field(default_factory=list)
     updated: list[str] = field(default_factory=list)
     kept: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.added or self.updated)
+        return bool(self.added or self.updated or self.removed)
 
     def __str__(self) -> str:
         parts = []
@@ -80,6 +88,8 @@ class Report:
             parts.append(f"{len(self.added)} added")
         if self.updated:
             parts.append(f"{len(self.updated)} updated")
+        if self.removed:
+            parts.append(f"{len(self.removed)} retired")
         if self.kept:
             parts.append(f"{len(self.kept)} left as edited")
         return ", ".join(parts) or "nothing to do"
@@ -192,8 +202,10 @@ def sync(name: str, bundled: Path, live: Path) -> Report:
     history = released()
     touched = False
 
+    bundled_keys: set[str] = set()
     for source in _files(bundled):
         relative = source.relative_to(bundled).as_posix()
+        bundled_keys.add(f"{name}/{relative}")
         key = f"{name}/{relative}"
         target = live / relative
         try:
@@ -241,6 +253,9 @@ def sync(name: str, bundled: Path, live: Path) -> Report:
             # would make their own edit look like ours to the next release.
             report.kept.append(key)
 
+    if not first_run and _retire(name, live, bundled_keys, manifest, history, report):
+        touched = True
+
     if touched:
         _write_manifest(manifest, live)
     if report:
@@ -250,6 +265,61 @@ def sync(name: str, bundled: Path, live: Path) -> Report:
         # block-buffered, and a line that appears an hour later is not a startup line.
         print(f"{name}: {report}", flush=True)
     return report
+
+
+def _retire(
+    name: str,
+    live: Path,
+    bundled_keys: set[str],
+    manifest: dict[str, str],
+    history: dict[str, list[str]],
+    report: Report,
+) -> bool:
+    """Remove files we once shipped, no longer ship, and nobody has edited. True if the manifest
+    changed.
+
+    The manifest key goes with the file. Keeping it would make a later release that re-ships the
+    same path read the absence as "they removed it" and never deliver it again.
+    """
+    prefix = f"{name}/"
+    changed = False
+    candidates = {key for key in (*manifest, *history) if key.startswith(prefix)} - bundled_keys
+    for key in sorted(candidates):
+        target = live / key[len(prefix) :]
+        if not target.is_file():
+            continue
+        try:
+            current = digest(target.read_bytes())
+        except OSError:
+            continue
+        recognised = set(history.get(key, ()))
+        if key in manifest:
+            recognised.add(manifest[key])
+        if current not in recognised:
+            # Theirs, or edited from ours — either way somebody's work, so it stays.
+            report.kept.append(key)
+            continue
+        try:
+            target.unlink()
+        except OSError:
+            continue
+        report.removed.append(key)
+        if manifest.pop(key, None) is not None:
+            changed = True
+        # Folders the retirement emptied, up to but never including the live root.
+        parent = target.parent
+        while parent != live and live in parent.parents:
+            leftovers = [p for p in parent.iterdir() if p.name not in _IGNORED]
+            if leftovers:
+                break
+            for junk in parent.iterdir():
+                if junk.is_dir():
+                    shutil.rmtree(junk, ignore_errors=True)
+                else:
+                    junk.unlink(missing_ok=True)
+            parent.rmdir()
+            parent = parent.parent
+    return changed
 
 
 def _write(target: Path, data: bytes) -> bool:

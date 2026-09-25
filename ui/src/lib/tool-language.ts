@@ -114,7 +114,9 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   add_checklist_item: { verb: "added a step", of: "text", group: "tasks" },
   check_item: { verb: "ticked off a step", group: "tasks" },
   add_deliverable: { verb: "handed over", of: "title", group: "tasks" },
-  show_board: { verb: "showed you the designs", group: "tasks" },
+  show_canvas: { verb: "opened the canvas", group: "tasks" },
+  // The name `show_canvas` replaced, kept so older transcripts still render.
+  show_board: { verb: "opened the canvas", group: "tasks" },
   create_project: { verb: "started the project", of: "name", group: "projects" },
   list_projects: { verb: "looked over his projects", group: "projects" },
   update_project: { verb: "updated a project", group: "projects" },

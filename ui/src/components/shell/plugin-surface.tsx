@@ -3,8 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PlugZap, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { FRAME_SANDBOX } from "@/lib/canvas";
-import { canvasTokens } from "@/lib/canvas-bridge";
+import { FRAME_SANDBOX, frameTokens } from "@/lib/seal";
 import { paletteFor } from "@/lib/kith-palette";
 import { PROTOCOL, readPluginMessage } from "@/lib/plugin-bridge";
 import { indexSettled, pluginSurfaces, watchPluginSurfaces } from "@/lib/plugin-index";
@@ -22,10 +21,11 @@ import { useDarkMode } from "@/lib/theme";
 /**
  * One plugin surface, in a sealed frame.
  *
- * **Nothing about the seal changes here.** Same `sandbox` attribute a canvas gets, same policy,
+ * **Nothing about the seal changes here.** The `sandbox` attribute from `lib/seal.ts`, the policy from
+ * `domain/seal.py`,
  * same opaque origin — and the document arrives with every asset already inlined, so there is
- * nothing for it to fetch and no reason to widen anything. `lib/canvas.test.ts` is the test that
- * fails if someone loosens the seal for convenience, and it passes untouched.
+ * nothing for it to fetch and no reason to widen anything. `lib/seal.test.ts` and
+ * `test_the_seal_is_stated_once.py` are the tests that fail if someone loosens it for convenience.
  *
  * The frame has **no verb that reaches outside the plugin's own store**. It can say it is ready,
  * say how tall it is, answer a question core asked, and write its own state. It cannot ask core
@@ -62,7 +62,7 @@ export function PluginSurface({
   // `installApiToken` patches `window.fetch` for `/api/` paths, so a plain fetch is
   // authenticated and a second helper would be a second place to forget the header.
   const dark = useDarkMode();
-  const tokens = canvasTokens(paletteFor(dark));
+  const tokens = frameTokens(paletteFor(dark));
   /* This surface's declaration, as a subscription rather than a read.
    *
    * `pluginSurface()` reads a module-level array that is replaced when the index refreshes, so
@@ -127,8 +127,8 @@ export function PluginSurface({
    *
    * `event.source` first, before the type switch. `event.origin` is the string "null" for every
    * sandboxed frame on the page, so it distinguishes nothing — which window sent it is the only
-   * trustworthy fact about a message from an opaque frame. The canvas bridge checks type first;
-   * harmless with one inbound message, not harmless with three. */
+   * trustworthy fact about a message from an opaque frame. Checking type first is harmless with
+   * one inbound message, not harmless with three. */
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const here = frame.current;

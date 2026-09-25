@@ -10,7 +10,7 @@ The validator's own words go back unedited, because they are already the fix: th
 vocabulary, and the correction in one line. What is checked here is that they arrive, that they
 arrive *narrowed* — this is a field off the wire, from a request anything local can make — and
 that they survive the step that rebuilds a message from role and content alone, which is exactly
-where the canvas note was silently composed away.
+where a note (the retired canvas readings) was once silently composed away.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def test_only_so_many_are_carried():
 def test_the_note_survives_the_walk_to_the_provider(monkeypatch):
     """The unit tests above all pass with the feature entirely disconnected.
 
-    Which is not hypothetical: the canvas note was composed *inside* the step that rebuilds a
+    Which is not hypothetical: the retired canvas note was composed *inside* the step that rebuilds a
     message from role and content alone, so it was stripped before it ever ran — on every
     message, with nothing failing. This asks the question the model asks: what arrived.
     """
@@ -79,25 +79,4 @@ def test_the_note_survives_the_walk_to_the_provider(monkeypatch):
     )
     assert len(out) == 1
     assert NO_EDGE in out[0]["content"]
-    assert set(out[0]) == {"role", "content"}
-
-
-def test_a_refusal_and_a_canvas_reading_both_arrive(monkeypatch):
-    """Two notes, written by two steps, one of which narrows the message."""
-    monkeypatch.setattr(prompt, "_present_state", lambda *_a, **_k: "")
-    out = prompt._assemble(
-        [],
-        [
-            {
-                "role": "user",
-                "content": "so?",
-                "canvas": [{"title": "tuner", "values": {"foldAt": 5}}],
-                "diagrams": [NO_EDGE],
-            }
-        ],
-        "",
-    )
-    body = out[0]["content"]
-    assert "- foldAt: 5" in body
-    assert NO_EDGE in body
     assert set(out[0]) == {"role", "content"}

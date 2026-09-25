@@ -366,7 +366,7 @@ def _renderable(value: Any) -> bool:
 
 def _leaf(value: Any) -> str:
     if isinstance(value, bool):
-        # `yes`/`no`, following `_with_canvas`.
+        # `yes`/`no`, following `_with_diagrams`.
         return "yes" if value else "no"
     return _clean(str(value), DIGEST_VALUE_CHARS)
 

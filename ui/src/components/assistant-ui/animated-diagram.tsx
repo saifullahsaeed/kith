@@ -755,8 +755,8 @@ function CopyFrame({
  * The bottom edge, draggable.
  *
  * The measured height is right for most diagrams and wrong for the two ends: a wide flat one
- * leaves space above and below, a tall one hits the ceiling and is drawn small. Same handle,
- * same bounds and same reasoning as the canvas — see `html-canvas.tsx`.
+ * leaves space above and below, a tall one hits the ceiling and is drawn small. A drag handle
+ * rather than a measured height, so nothing inside the drawing has to report its own size.
  */
 function ResizeHandle({
   height,

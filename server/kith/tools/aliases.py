@@ -114,6 +114,8 @@ RETIRED: dict[str, Retired] = {
     "view_task": Retired("list_tasks", rename={"id": "ids"}),
     "definition": Retired("find_symbol", rename={"symbol": "name"}),
     "references": Retired("find_symbol", rename={"symbol": "name"}),
+    # Renamed when the ```html fence was retired and "canvas" came to mean the board.
+    "show_board": Retired("show_canvas"),
 }
 
 

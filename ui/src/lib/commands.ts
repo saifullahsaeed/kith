@@ -39,7 +39,8 @@ export interface CommandResult {
 export const DESIGN_PROMPT =
   "Read the designing-a-screen skill first. Give me a few options rather than one — each its " +
   "own HTML file under screens/, checked with the skill's check script, and each attached to a " +
-  "task as a file deliverable so they land on the board together. Here is what I want: ";
+  "task as a file deliverable so they land on the canvas together — then show_canvas. Here is " +
+  "what I want: ";
 
 export async function foldNow(conversationId: string): Promise<CommandResult> {
   if (!conversationId) return { note: "Nothing to fold — this conversation has not started." };

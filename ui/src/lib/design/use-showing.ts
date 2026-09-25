@@ -1,7 +1,7 @@
 /**
  * When he puts something in front of you, open it.
  *
- * The other half of `show_board`. He could make designs and never show one — asked to, he went
+ * The other half of `show_canvas` (once `show_board`). He could make designs and never show one — asked to, he went
  * looking for the word "board" with `find`, `git log` and two plugin reads, because the surface
  * that draws them belongs to the interface and nothing told him it could be opened.
  *

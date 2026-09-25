@@ -27,9 +27,9 @@ In order of preference — the first that fits wins:
 1. **Prose.** Most answers. If you can say it in three sentences, say it in three sentences.
 2. **A ```mermaid diagram.** Structure, flow, how the pieces relate. Cheaper for you to write and
    faster for them to read than any picture of a screen.
-3. **A ```html canvas in the reply.** Something that *moves* or has a knob on it. See
-   `drawing-a-canvas` — that is a different tool for a different job, and it is not editable.
-4. **A design file.** Only when the thing being decided is what a screen should *look like*, and
+3. **An animated diagram.** When what matters is the *order* things happen in. See
+   `animating-a-diagram`.
+4. **A design file, on the canvas.** Only when the thing being decided is what a screen should *look like*, and
    only when somebody is going to build it afterwards.
 
 If nobody is going to build it, you are drawing a picture of an app rather than designing one.
@@ -208,14 +208,18 @@ commit. Put it where it belongs and their source tree stays theirs.
 **Then show them.**
 
 ```
-show_board(id=41, note="the row height is the thing I want your eye on")
+show_canvas(id=41, note="the row height is the thing I want your eye on")
 ```
 
-That opens the designs on their screen, side by side, at a zoom where they can be compared. Do it
-the moment you have more than one, and any time they ask to see something you made. A paragraph
+That opens the task's canvas on their screen — every design side by side, at a zoom where they
+can be compared — and puts the canvas in your reply as well. Do it the moment you have finished a
+design, and any time they ask to see something you made. A paragraph
 describing four screens is not showing them four screens — and there is nothing else on this
 machine that can open one: no screenshot tool, no file that opens itself, and searching for the
-word "board" finds nothing, because the board is a surface in the app rather than a file on disk.
+word "canvas" finds nothing, because the canvas is a surface in the app rather than a file on disk.
+
+**Never paste a screen into your reply as an ```html fence.** It is shown as source there, not
+drawn — the canvas is the only place a screen is drawn, and the only place they can edit it.
 
 It answers with what is actually on it, so name those titles in what you say next.
 
@@ -297,7 +301,7 @@ because everything else follows from it:
 <body data-k-frame="1600x1000">      <!-- or exact pixels -->
 ```
 
-The editor lays the design out at that width, the board gives the frame those proportions, and
+The editor lays the design out at that width, the canvas gives the frame those proportions, and
 the checker renders and screenshots at that size and skips its second narrow pass when the
 design is already a phone. Leave it out and you get 1200×800 and a line in the checker telling
 you that you did not say.
@@ -310,7 +314,7 @@ the picture you meant.
 
 **A design is measured in its own frame, never in a window.** `100vh`, `100vw` and their
 relatives are lengths against whatever window the thing is being shown in, and a design is not
-shown in a window — it is shown in a frame on a board, at a zoom, beside other designs. A screen
+shown in a window — it is shown in a frame on the canvas, at a zoom, beside other designs. A screen
 built on `min-height: 100vh` comes out correct at the top and then a thousand pixels of nothing
 below it, which is the most common way a good design arrives looking unfinished. Use `%`, `fr`,
 `flex`, or a plain pixel height. The checker fails on any viewport unit.

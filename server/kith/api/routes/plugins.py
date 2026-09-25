@@ -423,8 +423,8 @@ def _palette(theme) -> dict:
     """The tokens a surface starts from.
 
     Supplied by the renderer, which is the only place that knows whether the person is in light
-    or dark — and passed through `canvasTokens`-shaped names so one document and one live theme
-    message cannot drift, which is the bug that comment in `canvas-bridge.ts` exists for.
+    or dark — and passed through `frameTokens`-shaped names (`ui/src/lib/seal.ts`) so one document
+    and one live theme message cannot drift, which is the bug that function exists to prevent.
     """
     if isinstance(theme, dict) and theme:
         return {str(k): str(v) for k, v in theme.items()}
