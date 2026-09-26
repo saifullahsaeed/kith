@@ -156,6 +156,25 @@ class TestTheRequestThreadDoesNothingSlow:
 
         assert "compacting" not in kinds
 
+    def test_reusing_the_stored_brief_is_not_a_fold(self, db: Path, feed, monkeypatch):
+        """After the first fold, every turn replaces the older turns with the brief already
+        stored — a shorter list, no model call, nothing new. That is not folding, and saying it
+        was put "Folding older turns" in front of every single turn of a long conversation."""
+        monkeypatch.setattr(
+            route.history,
+            "fold",
+            lambda *a, **k: ([{"role": "system", "content": "the stored brief", "_summary": True}, a[0][-1]], None),
+        )
+        monkeypatch.setattr(route, "stream_agent", lambda *a, **k: iter(()))
+
+        conv = conversations.start(db, "hi")["id"]
+        for said in ("one", "two", "three"):
+            _chat({"messages": [{"role": "user", "content": said}], "conversationId": conv})
+        response = _chat({"messages": [{"role": "user", "content": "go"}], "conversationId": conv})
+        kinds = [event["type"] for event in _events(response)]
+
+        assert "compacting" not in kinds, f"a reused brief was announced as a fold: {kinds}"
+
     def test_the_user_message_is_recorded_before_the_stream_opens(self, db: Path, feed, monkeypatch):
         """Moving work off the request path must not move *this*: a turn that dies still has to
         leave what you said in the transcript."""

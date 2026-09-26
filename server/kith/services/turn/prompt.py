@@ -145,9 +145,16 @@ def _build_messages(
     # Reported rather than inferred by the caller. Comparing what went in against what comes
     # out cannot see a fold: this function also prepends the persona and appends the present
     # state, so a heavily folded turn can still produce a longer list than it was given.
+    #
+    # A fold is a *new* brief, and only that. This used to add `or len(folded) < len(messages)`,
+    # which is also true of every turn that merely reuses the brief already stored — the older
+    # turns are replaced by it on every turn after the first fold, at no cost and with no model
+    # call. So once a conversation had folded once, every turn announced "Folding older turns —
+    # summarising ≈201,124 tokens" before it began, and was written down as folded: measured on
+    # a real one, 32 turns said so and 2 had.
     if _folded is not None:
         _folded.update(
-            happened=fresh is not None or len(folded) < len(messages),
+            happened=fresh is not None,
             fromChars=_conversation_chars(messages),
             toChars=_conversation_chars(folded),
         )
