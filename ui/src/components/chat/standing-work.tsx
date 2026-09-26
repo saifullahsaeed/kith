@@ -45,46 +45,42 @@ export function StandingWork({ conversationId }: { conversationId?: string }) {
   if (standing.length === 0) return null;
 
   return (
-    <div className="border-border/60 flex flex-col gap-2 border-b px-4 py-3">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-medium">Standing</span>
-        <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
-          {standing.length}
-        </span>
-      </div>
-      <ul className="flex flex-col gap-1.5">
-        {standing.map((one) => (
-          <li key={one.id} className="flex items-start gap-2 text-[11px]">
-            <Repeat className="text-muted-foreground/50 mt-0.5 size-3 shrink-0" aria-hidden />
-            <span className="min-w-0 flex-1">
-              {/* The note, in one line. These are written as instructions to him and run to a
-                  paragraph — the whole `gh run list --jq …` incantation in the case this came
-                  from — and the panel is answering "what is standing", not "what exactly will it
-                  say". The full text is on hover. */}
-              <span className="block truncate font-medium" title={one.note}>
-                {one.note}
-              </span>
-              <span className="text-muted-foreground/60 block truncate font-mono text-[10px]">
-                {cadence(one)}
-              </span>
+    // The same card as the background processes above it, one row per schedule: what it will
+    // say, how often, and how long until it next takes the conversation over.
+    <section
+      aria-label="Standing schedules"
+      className="flex shrink-0 flex-col rounded-[14px] border border-border bg-card"
+    >
+      {standing.map((one) => (
+        <div
+          key={one.id}
+          className="flex min-w-0 items-center gap-2.5 border-foreground/7 px-3.5 py-2.5 [&+&]:border-t"
+        >
+          <Repeat className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
+          <span className="flex min-w-0 flex-1 flex-col gap-px">
+            {/* The note, in one line. These are written as instructions to him and run to a
+                paragraph — the whole `gh run list --jq …` incantation in the case this came
+                from — and the card is answering "what is standing", not "what exactly will it
+                say". The full text is on hover. */}
+            <span className="truncate text-[13px]" title={one.note}>
+              {one.note}
             </span>
-            <span
-              className={cn(
-                "shrink-0 font-mono text-[10px] tabular-nums",
-                // Amber inside a minute: it is about to take the conversation over, which is
-                // worth a beat's warning if you were mid-sentence.
-                dueIn(one.next_fire, now) <= 60_000
-                  ? "text-kith"
-                  : "text-muted-foreground/50",
-              )}
-              title={one.next_fire ? new Date(one.next_fire).toLocaleString() : undefined}
-            >
-              {until(one.next_fire, now)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
+            <code className="truncate font-mono text-[11px] text-muted-foreground/80">{cadence(one)}</code>
+          </span>
+          <span
+            className={cn(
+              "shrink-0 text-[12px] tabular-nums",
+              // Amber inside a minute: it is about to take the conversation over, which is
+              // worth a beat's warning if you were mid-sentence.
+              dueIn(one.next_fire, now) <= 60_000 ? "text-kith" : "text-muted-foreground/80",
+            )}
+            title={one.next_fire ? new Date(one.next_fire).toLocaleString() : undefined}
+          >
+            {until(one.next_fire, now)}
+          </span>
+        </div>
+      ))}
+    </section>
   );
 }
 

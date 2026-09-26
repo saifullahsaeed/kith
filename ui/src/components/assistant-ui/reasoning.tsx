@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { BrainIcon, ChevronDownIcon } from "lucide-react";
+import { BrainIcon, ChevronRightIcon } from "lucide-react";
 import {
   useScrollLock,
   useAuiState,
@@ -165,6 +165,17 @@ function ReasoningFade({
   );
 }
 
+/**
+ * The "Thought" chip: a small bordered pill that opens the chain of thought under it.
+ *
+ * It was a full-width "Reasoning ›" row with a 16px brain, the loudest line in a turn for the
+ * part a reader is least often after. The design draws it as a chip the size of a tag — present,
+ * one click away, and obviously not something he said. "Thinking" while it streams (it opens by
+ * itself then, following the newest line), "Thought" once it is done.
+ *
+ * No duration unless one is passed: reasoning parts do not carry their timing here, and a number
+ * invented for the label would be the one thing on it a reader could not check.
+ */
 function ReasoningTrigger({
   active,
   duration,
@@ -174,44 +185,43 @@ function ReasoningTrigger({
   active?: boolean;
   duration?: number;
 }) {
-  const durationText = duration ? ` (${duration}s)` : "";
+  const label = `${active ? "Thinking" : "Thought"}${duration ? ` for ${duration}s` : ""}`;
 
   return (
     <CollapsibleTrigger
       data-slot="reasoning-trigger"
       className={cn(
-        "aui-reasoning-trigger group/trigger text-muted-foreground hover:text-foreground flex max-w-[75%] origin-left items-center gap-2 py-1.5 text-sm transition-[color,scale] active:scale-[0.98]",
+        "aui-reasoning-trigger group/trigger border-border text-muted-foreground hover:text-foreground hover:border-foreground/15 inline-flex h-[22px] w-fit max-w-full items-center gap-1.5 rounded-md border ps-1.5 pe-[7px] text-xs transition-[color,border-color,scale] active:scale-[0.98]",
         className,
       )}
       {...props}
     >
       <BrainIcon
         data-slot="reasoning-trigger-icon"
-        className="aui-reasoning-trigger-icon size-4 shrink-0"
+        className="aui-reasoning-trigger-icon size-3 shrink-0"
       />
       <span
         data-slot="reasoning-trigger-label"
         className="aui-reasoning-trigger-label-wrapper relative inline-block leading-none tabular-nums"
       >
-        <span>Reasoning{durationText}</span>
+        <span>{label}</span>
         {active ? (
           <span
             aria-hidden
             data-slot="reasoning-trigger-shimmer"
             className="aui-reasoning-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none"
           >
-            Reasoning{durationText}
+            {label}
           </span>
         ) : null}
       </span>
-      <ChevronDownIcon
+      <ChevronRightIcon
         data-slot="reasoning-trigger-chevron"
         className={cn(
-          "aui-reasoning-trigger-chevron mt-0.5 size-4 shrink-0",
+          "aui-reasoning-trigger-chevron size-[11px] shrink-0",
           "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0",
+          "group-data-open/trigger:rotate-90",
+          "group-data-panel-open/trigger:rotate-90",
         )}
       />
     </CollapsibleTrigger>
@@ -302,7 +312,7 @@ function ReasoningText({
       ref={scrollRef}
       data-slot="reasoning-text"
       className={cn(
-        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto ps-6 pt-2 pb-2 leading-relaxed text-pretty",
+        "aui-reasoning-text border-border bg-background/40 relative z-0 mt-1.5 max-h-64 overflow-y-auto rounded-lg border px-3 py-2 text-[12.5px] leading-relaxed text-pretty",
         "transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.32,0.72,0,1)]",
         "motion-reduce:animate-none",
         "group-data-open/collapsible-content:animate-in",
@@ -319,7 +329,7 @@ function ReasoningText({
       )}
       {...props}
     >
-      <div ref={contentRef} className="aui-reasoning-text-content space-y-4">
+      <div ref={contentRef} className="aui-reasoning-text-content space-y-2.5 [&_p]:my-0">
         {children}
       </div>
     </div>

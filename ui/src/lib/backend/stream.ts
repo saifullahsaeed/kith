@@ -1,6 +1,7 @@
 import type { ThreadMessage } from "@assistant-ui/react";
 
 import { currentFlowFailures } from "@/lib/flow-failures";
+import { expandCommand } from "@/lib/slash";
 
 import type { BackendEvent } from "./types";
 
@@ -79,7 +80,8 @@ export function toWireMessages(
     if (message.role !== "user" && message.role !== "assistant") continue;
     const attachments = attachmentsOf(message);
     const quote = quoteOf(message);
-    const body = textOf(message);
+    // `/design …` and `/<skill> …` are words in the box and a sentence for him — see `lib/slash`.
+    const body = message.role === "user" ? expandCommand(textOf(message)) : textOf(message);
     out.push({
       role: message.role,
       // A real blockquote, one `>` per line — not a label ahead of a dump, since this is what

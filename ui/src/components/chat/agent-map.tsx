@@ -26,8 +26,8 @@ import type { ActivityItem } from "@/lib/backend/activity";
  * it has ended and its agents' work reaches the thread nowhere, so without this the only record of
  * why a builder came back empty is a line in the note that wakes him.
  *
- * Opened from the chip on the composer (drawn by `AgentsChip` below), the Work panel, or the card
- * a `run_workflow` call leaves in the thread. All three go through `useAgentMap`.
+ * Opened from the title bar's workflow pill, the Work panel, or the card a `run_workflow` call
+ * leaves in the thread. All three go through `useAgentMap`; `AgentMapHost` below draws it.
  */
 
 /** How long something took, in the shortest form that is still true. */
@@ -458,42 +458,16 @@ export function AgentMapDialog({
 }
 
 /**
- * The running-agents indicator on the composer, and the door to the map.
+ * The map, mounted once for the window.
  *
- * Only there when this conversation has a workflow: pulsing with the count of agents working
- * while one runs, and a quiet check or cross once it has ended — so the map stays one click away
- * after the fact, which is when "why did that builder come back empty" gets asked.
+ * It lived inside the composer's workflow chip, which made the chip load-bearing: the title bar's
+ * pill, the Work panel and the thread's workflow card all ask for the map through `useAgentMap`,
+ * and none of them could open it in a chat whose composer had no chip. Drawn here it answers
+ * whichever conversation asked, from wherever it asked.
  */
-export function AgentsChip({ conversationId }: { conversationId: string }) {
+export function AgentMapHost() {
   const { activity } = useActivity();
-  const show = useAgentMap((s) => s.show);
-  const runs = useRuns(conversationId, activity);
-  const latest = runs[runs.length - 1];
-  if (!conversationId || !latest) return null;
-  const working = latest.agents.filter((agent) => agent.running).length;
-  const running = latest.state === "running";
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => show(conversationId, latest.id)}
-        className={`flex h-7 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[11px] ring-1 transition-colors ${
-          running
-            ? "bg-kith-soft/40 text-kith ring-kith/30 hover:bg-kith-soft/60"
-            : "text-muted-foreground ring-border hover:text-foreground"
-        }`}
-        title={`${latest.name} — open the agent map`}
-        aria-label={`Agent map: ${latest.name}, ${latest.state}`}
-      >
-        <Dot state={running ? "running" : latest.state} />
-        {running
-          ? working
-            ? `${working} agent${working === 1 ? "" : "s"}${latest.phase ? ` · ${latest.phase}` : ""}`
-            : latest.phase || "starting"
-          : `workflow ${latest.state}`}
-      </button>
-      <AgentMapDialog lines={activity} conversationId={conversationId} />
-    </>
-  );
+  const conversation = useAgentMap((s) => s.conversation);
+  if (!conversation) return null;
+  return <AgentMapDialog lines={activity} conversationId={conversation} />;
 }

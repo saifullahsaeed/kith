@@ -163,7 +163,9 @@ describe("the section itself", () => {
     );
     expect(screen.getByText("port-rag")).toBeTruthy();
     expect(screen.getByText("where the fold is triggered from")).toBeTruthy();
-    expect(screen.getByText(/searched files for/)).toBeTruthy();
+    // Capitalised, and in the present tense on the step it is on now ("Searching files for") —
+    // either way a sentence, never `grep`.
+    expect(screen.getByText(/search(ed|ing) files for/i)).toBeTruthy();
     expect(screen.getByText(/_FOLD_ABOVE_SHARE/)).toBeTruthy();
   });
 
@@ -179,7 +181,7 @@ describe("the section itself", () => {
         conversationId="conv-1"
       />,
     );
-    expect(screen.queryByText(/searched files for/)).toBeNull();
+    expect(screen.queryByText(/search(ed|ing) files for/i)).toBeNull();
     expect(screen.getByText("grep x3, read_file x8")).toBeTruthy();
   });
 
@@ -200,7 +202,9 @@ describe("the section itself", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: /stop/i })).toBeNull();
-    expect(screen.getByText("stopped")).toBeTruthy();
+    // Said by the end mark, named — the word beside it made way for the map button.
+    expect(screen.getByRole("img", { name: "stopped" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /agent map/i })).toBeTruthy();
   });
 
   it("says which agents are builders, in words and not only in colour", () => {

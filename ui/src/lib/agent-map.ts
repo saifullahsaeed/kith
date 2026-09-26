@@ -3,10 +3,9 @@ import { create } from "zustand";
 /**
  * Which conversation's agent map is open, and on which run.
  *
- * A store rather than local state because three places open it — the chip on the composer, the
- * Workflows section of the Work panel, and the card a `run_workflow` call leaves in the thread —
- * and only one of them (the chip) is where the window is drawn. Keyed by conversation so two
- * chat panes side by side do not both open a map when one is asked for.
+ * A store rather than local state because three places open it — the title bar's workflow pill,
+ * the Workflows section of the Work panel, and the card a `run_workflow` call leaves in the
+ * thread — and the window is drawn once, by `AgentMapHost`, for whichever conversation asked.
  */
 export const useAgentMap = create<{
   conversation: string;

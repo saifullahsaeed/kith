@@ -1,297 +1,202 @@
-import { useState } from "react";
-import { Activity, Bell, LayoutDashboard, Moon, PanelLeft, Plus, Settings2, Sun } from "lucide-react";
+import type { ReactNode, Ref } from "react";
+import {
+  Bell,
+  LayoutDashboard,
+  PanelLeft,
+  PanelRight,
+  PenLine,
+  Plus,
+  SlidersHorizontal,
+} from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { HeaderControls } from "@/components/shell/header-controls";
-import { PresenceOrb } from "@/components/shell/presence";
-import { cn } from "@/lib/utils";
+import type { Presence } from "@/components/shell/chat-states";
+import { PresencePill } from "@/components/shell/presence";
 import { UpdatePill } from "@/components/shell/update-notice";
+import { cn } from "@/lib/utils";
 
-/** The presence bar: Kith as a living thing (orb + what he's doing right
- * now), then his inbox, work, panel, and settings. */
+/** How wide the bar's left segment is while the conversation list is hidden: the traffic lights,
+ *  the toggle that brings the list back, and the pencil, with room to breathe. */
+const SEGMENT_CLOSED = 180;
+
+/**
+ * The window's one bar: navigation and presence, and nothing about the next message.
+ *
+ * It used to be two bars — this one, then a strip of tabs under it — and it carried the
+ * per-message settings too: how hard he thinks, what he may touch, which model. Those moved into
+ * the composer, because they are about the message you are writing and that is where it is
+ * written. The counters for "working elsewhere" and "unsent text" went because the tabs and the
+ * conversation list now carry both on the chat they are about, and the theme switch moved into
+ * Settings, where a preference you set once belongs.
+ *
+ * Left to right: a segment exactly as wide as the conversation list under it (the traffic lights,
+ * the list's toggle, a new chat), then the open chats as tabs — handed in as a slot, because the
+ * layout draws them and only it knows when the window is a single pane — then Kith, the bell, the
+ * companion column, the control panel and Settings.
+ *
+ * Doubles as the title bar in the desktop build: `window-drag-region` makes the empty parts drag
+ * the window, and `window-controls-gap` keeps the traffic lights clear. Both do nothing in a
+ * browser tab. See index.css → "Desktop window chrome" and "The title bar".
+ */
 export function AppHeader({
-  working,
-  elsewhere = [],
-  drafting = [],
-  onGoToWorking,
-  onGoToDraft,
-  status,
-  model,
-  effort = "",
-  supportsEffort = false,
-  onEffort,
-  unread,
-  workOpen,
-  historyOpen,
-  onOpenHistory,
+  sidebarOpen,
+  sidebarWidth,
+  onToggleSidebar,
   onNewConversation,
+  tabsSlot,
+  presence,
+  onPresence,
+  unread,
   onOpenInbox,
-  onOpenWork,
+  companionOpen,
+  onToggleCompanion,
   onOpenPanel,
   onOpenSettings,
 }: {
-  working: boolean;
-  status: string | null;
-  /** The model he is actually thinking with, straight from the server. */
-  model?: string;
-  effort?: string;
-  /** Whether this model accepts a reasoning parameter at all. */
-  supportsEffort?: boolean;
-  onEffort?: (effort: string) => void;
+  sidebarOpen: boolean;
+  /** The conversation list's width, so the segment above it lines up with its edge. */
+  sidebarWidth: number;
+  onToggleSidebar: () => void;
+  onNewConversation: () => void;
+  /** Where the layout puts the tab strip when the window is one pane. */
+  tabsSlot?: Ref<HTMLDivElement>;
+  presence: Presence;
+  /** Where the presence pill takes you, if anywhere. */
+  onPresence?: () => void;
   unread: number;
-  workOpen?: boolean;
-  historyOpen?: boolean;
-  onOpenHistory?: () => void;
-  onNewConversation?: () => void;
   onOpenInbox: () => void;
-  onOpenWork: () => void;
+  /** Whether the chat in front of you has its companion column open. */
+  companionOpen: boolean;
+  onToggleCompanion: () => void;
   onOpenPanel: () => void;
   onOpenSettings: () => void;
-  /** Conversations other than this one with a turn running. */
-  elsewhere?: string[];
-  /** Conversations holding something typed and not sent. Ids, like `elsewhere`, and for the same
-   *  reason: "one of them is waiting" and "*that* one is waiting" are different sentences and the
-   *  second is the one that can be clicked. */
-  drafting?: string[];
-  /** Go to the one holding unsent text, or open the list when several are. */
-  onGoToDraft?: (conversationId: string) => void;
-  /** Go to the one that is working, or open the list when several are. */
-  onGoToWorking?: (conversationId: string) => void;
 }) {
-  const doing = cleanStatus(status);
-
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
-  const toggleTheme = () => {
-    const next = !dark;
-    document.documentElement.classList.toggle("dark", next);
-    try {
-      localStorage.setItem("kith-theme", next ? "dark" : "light");
-    } catch {
-      /* ignore */
-    }
-    setDark(next);
-  };
-
   return (
-    // Doubles as the window's title bar in the desktop build: drag it to move the
-    // window, and window-controls-gap keeps the traffic lights off the presence orb.
-    // Both classes do nothing in a browser tab. See index.css → "Desktop window chrome".
-    <header className="window-drag-region window-controls-gap relative z-10 flex items-center gap-3 border-b border-border/60 bg-background/60 px-4 py-2.5 backdrop-blur-md">
-      {onOpenHistory ? (
-        <TooltipIconButton
-          tooltip={historyOpen ? "Hide conversations" : "Your conversations"}
-          side="bottom"
-          variant="ghost"
-          size="icon"
-          className={cn("size-7", historyOpen && "bg-accent/60 text-foreground")}
-          onClick={onOpenHistory}
+    <header
+      className={cn(
+        "window-drag-region bg-titlebar relative z-10 flex h-[45px] shrink-0 items-stretch",
+        /* The rule under the bar, as an inset shadow rather than a border. A shadow is painted
+         * under the bar's children, so the active tab — which fills the bar's full height in the
+         * thread's own ground — covers it and reads as continuous with the page below. A border
+         * would sit outside the tab strip's scroll box, which clips anything that tries to reach
+         * it. */
+        "shadow-[inset_0_-1px_0_var(--border)]",
+      )}
+    >
+      <div
+        className={cn(
+          "window-controls-gap kith-titlebar-gap flex shrink-0 items-center gap-1.5 pr-2.5",
+          sidebarOpen && "border-border border-r",
+        )}
+        style={{ width: sidebarOpen ? sidebarWidth : SEGMENT_CLOSED }}
+      >
+        <BarButton
+          tooltip={sidebarOpen ? "Hide the conversation list" : "Show the conversation list"}
+          className="size-[30px]"
+          onClick={onToggleSidebar}
         >
           <PanelLeft className="size-4" />
-        </TooltipIconButton>
-      ) : null}
-      {onNewConversation ? (
-        <TooltipIconButton
-          tooltip="New conversation"
-          side="bottom"
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          onClick={onNewConversation}
-        >
-          <Plus className="size-4" />
-        </TooltipIconButton>
-      ) : null}
-
-      <PresenceOrb working={working} idle={!working} size={11} />
-      {/* Work carrying on in a chat you are not looking at.
-          It had no representation here at all — the only sign was a 6px dot on a row inside the
-          conversations panel, which you had to have open to see, so a turn running somewhere else
-          was indistinguishable from nothing happening. This is the smallest honest thing: a count,
-          the same amber as him, and a way to get there. Absent entirely when nothing is running,
-          because a control that is usually greyed out is furniture. */}
-      {elsewhere.length > 0 ? (
-        <TooltipIconButton
-          tooltip={
-            elsewhere.length === 1
-              ? "Working in another conversation — go to it"
-              : `Working in ${elsewhere.length} other conversations`
-          }
-          side="bottom"
-          variant="ghost"
-          size="icon"
-          className="text-roam hover:bg-accent/60 size-7 shrink-0"
-          onClick={() => onGoToWorking?.(elsewhere.length === 1 ? (elsewhere[0] ?? "") : "")}
-        >
-          <span className="relative flex items-center justify-center">
-            <span className="bg-roam absolute size-4 animate-ping rounded-full opacity-20" />
-            <span className="font-mono text-[11px] tabular-nums">{elsewhere.length}</span>
-          </span>
-        </TooltipIconButton>
-      ) : null}
-      {/* Unsent text, waiting in a chat.
-          The same argument one row down from the one above, and it is here for the same reason a
-          count of running turns is: the tab mark and the conversations dot are both drawn on
-          surfaces that can be *gone*. Zoom a pane and no other strip renders at all; collapse the
-          conversations panel and its dots go with it. This header does not go anywhere, so it is
-          the one place a draft cannot hide — which matters more for a draft than for a turn,
-          because a turn finishes whether you find it or not.
-
-          Still and hollow where that one pings, keeping the vocabulary the marks already use: a
-          ring rather than a fill, no animation, and the muted foreground rather than a fourth
-          colour the palette does not have. */}
-      {drafting.length > 0 ? (
-        <TooltipIconButton
-          tooltip={
-            drafting.length === 1
-              ? "Unsent text in another conversation — go to it"
-              : `Unsent text in ${drafting.length} conversations`
-          }
-          side="bottom"
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground hover:bg-accent/60 size-7 shrink-0"
-          onClick={() => onGoToDraft?.(drafting.length === 1 ? (drafting[0] ?? "") : "")}
-        >
-          <span className="relative flex items-center justify-center">
-            <span className="border-muted-foreground/50 absolute size-4 rounded-full border" />
-            <span className="font-mono text-[11px] tabular-nums">{drafting.length}</span>
-          </span>
-        </TooltipIconButton>
-      ) : null}
-      <div className="flex min-w-0 items-baseline gap-2">
-        <span className="font-medium tracking-tight">Kith</span>
-        <span className="truncate font-mono text-[11px] tracking-wide">
-          {/* This said "roaming", which was a mode you switched on for the whole machine and
-              which is gone — work belongs to a session now. The word had to go with it, or
-              the header names a thing the app no longer has. */}
-          <span className={working ? "text-roam" : "text-muted-foreground/60"}>
-            {working ? "working" : "here"}
-          </span>
-          {doing ? <span className="text-muted-foreground/50"> · {doing}</span> : null}
-        </span>
+        </BarButton>
+        <div className="flex-1" />
+        <BarButton tooltip="New chat" className="size-[30px]" onClick={onNewConversation}>
+          <PenLine className="size-4" />
+        </BarButton>
       </div>
 
-      <div className="flex-1" />
+      {/* The tabs, when the layout puts them here — see `LayoutView`'s `bar`. With several panes
+          each draws its own strip and this is empty title bar: somewhere to drag the window. */}
+      <div ref={tabsSlot} className="flex min-w-0 flex-1 items-stretch" />
 
-      {/* How he is set to run, as one object.
-          These are three halves of a single question — how hard he thinks, what he may touch,
-          and which model is doing the thinking — and they were three unrelated shapes sitting
-          in a row with five other unrelated shapes: two mono pills with chevrons, then a
-          faint grey model name, then labelled buttons, then bare icons. Boxing them says
-          "these belong together, and they are settings rather than places".
-
-          Which model is answering is in here rather than trailing off the end. Nothing showed
-          it at all once, and that is how turns ran for days on a model nobody had selected —
-          the settings page said one thing and a stale client override sent another. */}
-      <div className="border-border/50 bg-muted/40 hidden items-center gap-0.5 rounded-lg border p-0.5 sm:flex">
-        <HeaderControls
-          effort={effort}
-          supportsEffort={supportsEffort}
-          onEffort={(next) => onEffort?.(next)}
-        />
-        {model ? (
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            title={`${model} — click to change`}
-            className="text-muted-foreground hover:text-foreground hover:bg-accent/60 max-w-[12rem] truncate rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
-          >
-            {shortModel(model)}
-          </button>
-        ) : null}
+      <div className="flex shrink-0 items-center gap-1.5 px-3">
+        <PresencePill presence={presence} onClick={onPresence} />
+        {/* A release you do not have. Absent unless there is one — nothing else in a running Kith
+            mentions that versions exist. */}
+        <UpdatePill onOpen={onOpenSettings} />
+        <BarButton
+          tooltip={unread > 0 ? `Alerts, ${unread} unread` : "Alerts"}
+          className="relative"
+          onClick={onOpenInbox}
+        >
+          <Bell className="size-4" />
+          {unread > 0 ? (
+            <span
+              aria-hidden
+              className="bg-kith text-primary-foreground absolute top-[3px] right-[2px] flex h-[15px] min-w-[15px] items-center justify-center rounded-full px-1 text-[10px] leading-none font-bold"
+            >
+              {unread > 9 ? "9+" : unread}
+            </span>
+          ) : null}
+        </BarButton>
+        {/* The column beside the chat — Activity, context, the task. A toggle, and it says so:
+            pressed while the column is open. */}
+        <BarButton
+          tooltip={companionOpen ? "Hide the companion" : "Show the companion"}
+          pressed={companionOpen}
+          onClick={onToggleCompanion}
+        >
+          <PanelRight className="size-4" />
+        </BarButton>
+        <BarButton tooltip="Control panel" onClick={onOpenPanel}>
+          <LayoutDashboard className="size-4" />
+        </BarButton>
+        <BarButton tooltip="Settings" onClick={onOpenSettings}>
+          <SlidersHorizontal className="size-4" />
+        </BarButton>
       </div>
-
-      <span className="bg-border/60 mx-1 hidden h-4 w-px sm:block" aria-hidden />
-
-      {/* A release you do not have. First of the right-hand controls because it is the one
-          thing in here you would otherwise never learn — nothing else in a running Kith
-          mentions that versions exist — and it takes a corner of a bar that is already on
-          screen rather than a banner over what you were reading. Absent unless there is one. */}
-      <UpdatePill onOpen={onOpenSettings} />
-
-      {/* Where to go. Labels for the two rooms you move between; the bell keeps its icon
-          because the count is the only part that ever mattered and a word next to it was
-          costing space to the things that need words. */}
-      <TooltipIconButton
-        tooltip={unread > 0 ? `${unread} unread` : "Alerts"}
-        side="bottom"
-        variant="ghost"
-        size="icon"
-        className="relative size-7"
-        onClick={onOpenInbox}
-      >
-        <Bell className="size-4" />
-        {unread > 0 ? (
-          <span className="bg-kith text-primary-foreground absolute -top-0.5 -right-0.5 flex min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold shadow-[0_0_10px_var(--kith)]">
-            {unread > 9 ? "9+" : unread}
-          </span>
-        ) : null}
-      </TooltipIconButton>
-      <Button
-        variant="ghost"
-        size="sm"
-        aria-pressed={workOpen}
-        className={
-          workOpen
-            ? "gap-1.5 bg-accent text-foreground"
-            : "gap-1.5 text-muted-foreground hover:text-foreground"
-        }
-        onClick={onOpenWork}
-      >
-        <Activity className="size-4" />
-        Work
-        {working ? <span className="ml-0.5 size-1.5 animate-pulse rounded-full bg-roam" /> : null}
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="gap-1.5 text-muted-foreground hover:text-foreground"
-        onClick={onOpenPanel}
-      >
-        <LayoutDashboard className="size-4" />
-        Panel
-      </Button>
-
-      {/* Utilities, behind their own rule: switches get icons. Without the divider these sat
-          in the same run as Work and Panel, so a labelled destination and an unlabelled toggle
-          read as two members of one confused set. */}
-      <span className="bg-border/60 mx-1 h-4 w-px" aria-hidden />
-      {/* Saved arrangements. In this run rather than beside Work and Panel because it acts on
-          the window rather than taking you somewhere in it. */}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="text-muted-foreground hover:text-foreground"
-        onClick={toggleTheme}
-        aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
-      >
-        {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="text-muted-foreground hover:text-foreground"
-        onClick={onOpenSettings}
-        aria-label="Settings"
-      >
-        <Settings2 className="size-4" />
-      </Button>
     </header>
   );
 }
 
-/** Turn the raw status line ("working on: practice cello") into a short,
- * lowercase phrase for the presence line. */
-function cleanStatus(status: string | null): string {
-  if (!status) return "";
-  const text = status.replace(/^working on:\s*/i, "").replace(/^reminder due:\s*/i, "↳ ");
-  return text.length > 42 ? text.slice(0, 42) + "…" : text;
+/** "Open another chat", at the end of the title bar's tabs — where a browser puts it, and where
+ *  the eye already is after reading along them. Handed to the layout as the strip's `after`, so
+ *  it follows the last tab rather than the far edge of the bar. */
+export function NewTabButton({ onClick }: { onClick: () => void }) {
+  return (
+    <TooltipIconButton
+      tooltip="Open another chat"
+      side="bottom"
+      variant="ghost"
+      size="icon"
+      className="text-muted-foreground/80 hover:text-foreground h-full w-8 shrink-0 rounded-none hover:bg-transparent dark:hover:bg-transparent"
+      onClick={onClick}
+    >
+      <Plus className="size-3.5" />
+    </TooltipIconButton>
+  );
 }
 
-/** "openai/gpt-5.6-luna" → "gpt-5.6-luna". The vendor prefix is the least useful part
- *  of a name that has to fit in a title bar; the full id is on hover. */
-function shortModel(id: string): string {
-  const slash = id.lastIndexOf("/");
-  return slash === -1 ? id : id.slice(slash + 1);
+/** One of the bar's square buttons: 32px by default, an 8px corner, the muted ink the bar's
+ *  icons share, and a pressed state that lifts it onto the accent ground. */
+function BarButton({
+  tooltip,
+  pressed,
+  className,
+  onClick,
+  children,
+}: {
+  tooltip: string;
+  pressed?: boolean;
+  className?: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <TooltipIconButton
+      tooltip={tooltip}
+      side="bottom"
+      variant="ghost"
+      size="icon"
+      aria-pressed={pressed}
+      className={cn(
+        "size-8 shrink-0 rounded-[8px]",
+        pressed
+          ? "bg-accent text-foreground hover:bg-accent dark:hover:bg-accent"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+        className,
+      )}
+      onClick={onClick}
+    >
+      {children}
+    </TooltipIconButton>
+  );
 }

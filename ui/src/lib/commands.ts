@@ -81,10 +81,6 @@ export async function stopWorkflow(runId: string): Promise<boolean> {
   return Boolean(body.stopping);
 }
 
-/** What `/workflow` writes into the composer. The prefix *is* the opt-in: a message that starts
- *  with it lets him write and run a workflow for that one request, and nothing else can. */
-export const WORKFLOW_PREFIX = "/workflow ";
-
 /**
  * Say something to the turn already running, instead of killing it.
  *

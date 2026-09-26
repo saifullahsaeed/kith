@@ -1,14 +1,10 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ChevronRight, Layers, Maximize2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useLayout } from "@/components/shell/layout/store";
 import { foldNow } from "@/lib/commands";
 import { useFocusedChat } from "@/lib/focused-chat";
 import { byGroup, FOLDS_AT } from "@/lib/context-groups";
-import { pathForContext } from "@/lib/router";
-import { formatTokens } from "@/lib/tokens";
+import { cn } from "@/lib/utils";
 import type { ContextLedger } from "@/lib/backend/types";
 
 /**
@@ -20,16 +16,24 @@ import type { ContextLedger } from "@/lib/backend/types";
  * the window is filling and nothing about what to do, and that is the whole question: 300k of stale
  * tool results and 300k of conversation are the same percentage and completely different problems.
  *
- * Collapsed to the bar by default. Expanded is the itemised list, which is also what makes the
- * colours legible — the palette clears every contrast gate on the dark surface and warns on the
- * light one, and a warn there obliges labels rather than colour alone.
+ * A card now, with the five groups always named under the bar. The itemised list of every category
+ * that used to fold open here is the Context tab's job, one click away on the card's title — two
+ * copies of the same breakdown a tab apart was the Work panel's old mistake in miniature.
  *
  * Nothing renders at all when the window is unknown. A local model reports `window === 0`, and a
  * percentage of an unknown total is worse than no percentage.
  */
 
+/** `412k`, `1M`, `1.05M` — the figures the card is read at, where a comma-grouped count would
+ *  make every row a different width. The exact numbers are one click away, on the Context tab. */
+function short(count: number): string {
+  if (count < 1_000) return String(count);
+  if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
+  return `${Number((count / 1_000_000).toFixed(2))}M`;
+}
+
 export function ContextSection({ conversationId }: { conversationId?: string }) {
-  const navigate = useNavigate();
+  const openSurface = useLayout((state) => state.open);
   /* Read from the focused chat rather than from a runtime.
    *
    * This panel is its own pane now, outside every chat's provider, so `useAuiState` throws
@@ -37,7 +41,6 @@ export function ContextSection({ conversationId }: { conversationId?: string }) 
    * publishes what this needs; see `lib/focused-chat`. */
   const usage = useFocusedChat((state) => state.usage);
   const running = useFocusedChat((state) => state.running);
-  const [open, setOpen] = useState(false);
   const [folding, setFolding] = useState(false);
   // The reading a fold leaves behind. A fold takes no reading of its own, so until the next turn
   // reports in, the thread's latest usage still describes the conversation as it was *before* the
@@ -80,123 +83,100 @@ export function ContextSection({ conversationId }: { conversationId?: string }) 
     setFolding(false);
   };
 
-  return (
-    <div className="border-border/60 flex flex-col gap-2 border-b px-4 py-3">
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <div className="flex items-center gap-1.5">
-          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-1.5 text-left">
-            <span className="text-[11px] font-medium">Context</span>
-            <ChevronRight
-              className="text-muted-foreground/60 size-3 transition-transform group-data-[state=open]:rotate-90"
-              aria-hidden
-            />
-            <span className={`ms-auto font-mono text-[11px] tabular-nums ${tone}`}>{percent}%</span>
-          </CollapsibleTrigger>
-          {/* The one thing you can do about a full window, next to the number that says it is
-              full. It was only reachable as `/fold` typed into the composer, which is the wrong
-              place for it: the composer is for talking to him, and this is maintenance on the
-              conversation. Disabled mid-turn — a fold rewrites the history the turn is reading. */}
-          <Button
-            size="xs"
-            variant="ghost"
-            className="text-muted-foreground/70 hover:text-foreground -me-1 h-6 shrink-0 px-1.5"
-            onClick={fold}
-            disabled={!conversationId || folding || running}
-            title={
-              running
-                ? "Wait for the turn to finish — a fold rewrites the history it is reading."
-                : "Summarise the older turns now, instead of waiting for the window to fill"
-            }
-          >
-            <Layers className="size-3" />
-            <span className="text-[11px]">Fold</span>
-          </Button>
-          {/* The rail can say how full and what of, in sixty pixels. It cannot say *which* of it
-              is there twice, which is the question you open a context reading with and the one
-              thing you can act on — so that gets a screen, and this is the way in. */}
-          <Button
-            size="xs"
-            variant="ghost"
-            className="text-muted-foreground/70 hover:text-foreground -me-1 size-6 shrink-0 px-0"
-            onClick={() => navigate(pathForContext())}
-            aria-label="Open the full context breakdown"
-            title="Open the full breakdown — every call, and which of them are repeats"
-          >
-            <Maximize2 className="size-3" />
-          </Button>
-        </div>
+  /* The whole breakdown — every category, the prompt itself, and which reads are repeats — is the
+   * Context tab beside this one. `open` rather than a route: for a chat that is on screen it
+   * attaches to the same column, which is the tab row switching to it. */
+  const openDetail = () => {
+    if (conversationId) openSurface({ surface: "context", conversationId });
+  };
 
-        {/* The bar is what the collapsed state is for, so it lives outside the content. A 2px gap
-            between segments, because adjacent fills of similar lightness read as one block without
-            one — and it is the secondary encoding the palette's light-mode contrast warn asks for. */}
-        <span aria-hidden className="mt-2 flex h-1.5 gap-0.5 overflow-hidden rounded-full">
+  // What happens next, when it is more than the standing threshold the legend already states.
+  const said =
+    note ||
+    (afterFold
+      ? "Folded. This is the window it left."
+      : usage?.folded
+        ? "Earlier steps of this turn were folded into notes to make room."
+        : nearFold
+          ? "Near the fold — earlier steps will be summarised to make room."
+          : "");
+
+  return (
+    <section
+      aria-label="Context"
+      className="flex shrink-0 flex-col gap-2.5 rounded-[14px] border border-border bg-card px-3.5 py-3"
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={openDetail}
+          disabled={!conversationId}
+          className="cursor-pointer text-[13px] font-semibold hover:underline disabled:cursor-default disabled:no-underline"
+          title="Open the full breakdown — every call, and which of them are repeats"
+        >
+          Context
+        </button>
+        {/* The counts, not only the percent. A whole point of a million-token window is that tens
+            of thousands of tokens move the count and leave the percent unchanged. */}
+        <span className={cn("min-w-0 truncate text-[12px] tabular-nums", tone)}>
+          {short(context.used)} of {short(context.window)} · {percent}%
+        </span>
+        <span className="flex-1" />
+        {/* The one thing you can do about a full window, next to the number that says it is
+            full. Disabled mid-turn — a fold rewrites the history the turn is reading. */}
+        <button
+          type="button"
+          onClick={fold}
+          disabled={!conversationId || folding || running}
+          title={
+            running
+              ? "Wait for the turn to finish — a fold rewrites the history it is reading."
+              : "Summarise the older turns now, instead of waiting for the window to fill"
+          }
+          className="h-[26px] shrink-0 cursor-pointer rounded-[7px] border border-foreground/14 px-[9px] text-[12px] text-foreground/85 transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-50"
+        >
+          Fold now
+        </button>
+      </div>
+
+      {/* Drawn against the window, with the fold marked on it, so the bar says how far there is to
+          go as well as what it is made of. A 2px gap between segments, because adjacent fills of
+          similar lightness read as one block without one — and it is the secondary encoding the
+          palette's light-mode contrast warn asks for. */}
+      <div aria-hidden className="relative h-2">
+        <span className="bg-muted flex h-full gap-0.5 overflow-hidden rounded-full">
           {groups.map((group) => (
             <span
               key={group.key}
-              className={`${group.swatch} first:rounded-s-full last:rounded-e-full`}
-              style={{ width: `${group.part * 100}%` }}
+              className={`${group.swatch} shrink-0`}
+              style={{ width: `${(group.tokens / context.window) * 100}%` }}
             />
           ))}
         </span>
+        <span
+          className="bg-foreground/50 absolute -top-0.5 -bottom-0.5 w-0.5"
+          style={{ left: `${FOLDS_AT * 100}%` }}
+        />
+      </div>
 
-        <CollapsibleContent>
-          <div className="flex flex-col gap-2 pt-2.5">
-            {/* The counts, not only the percent. A whole point of a million-token window is that
-                tens of thousands of tokens move the count and leave the percent unchanged. */}
-            <p className="text-muted-foreground/70 font-mono text-[10px] tabular-nums">
-              {formatTokens(context.used)} of {formatTokens(context.window)} ·{" "}
-              {formatTokens(context.free)} free
-            </p>
+      {/* The legend is what makes the colours legible — the palette clears every contrast gate on
+          the dark surface and warns on the light one, and a warn obliges labels, not colour alone. */}
+      <ul className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] tabular-nums text-muted-foreground">
+        {groups.map((group) => (
+          <li key={group.key} className="flex min-w-0 items-center gap-1.5">
+            <span aria-hidden className={`size-2 shrink-0 rounded-[2px] ${group.swatch}`} />
+            <span className="min-w-0 truncate">{group.label}</span>
+            <span className="flex-1" />
+            <span className="shrink-0">{short(group.tokens)}</span>
+          </li>
+        ))}
+        <li className="flex min-w-0 items-center gap-1.5 text-muted-foreground/80">
+          <span aria-hidden className="bg-foreground/50 h-0.5 w-2 shrink-0" />
+          Folds at {Math.round(FOLDS_AT * 100)}%
+        </li>
+      </ul>
 
-            <ul className="flex flex-col gap-1">
-              {groups.map((group) => (
-                <li key={group.key} className="flex items-center gap-2 text-[11px]">
-                  <span aria-hidden className={`size-2 shrink-0 rounded-[2px] ${group.swatch}`} />
-                  <span className="text-muted-foreground min-w-0 flex-1 truncate">
-                    {group.label}
-                  </span>
-                  <span className="text-muted-foreground/60 shrink-0 font-mono text-[10px] tabular-nums">
-                    {formatTokens(group.tokens)}
-                  </span>
-                  {/* Of what is in the window, matching the bar above — not of the window, which
-                      would read 1% against every row and say nothing. */}
-                  <span className="text-muted-foreground/40 w-8 shrink-0 text-end font-mono text-[10px] tabular-nums">
-                    {Math.round(group.part * 100)}%
-                  </span>
-                </li>
-              ))}
-            </ul>
-
-            {/* Every category, under the group that owns it — the grouping is what makes the bar
-                readable, and this is where you find out which read is the expensive one. */}
-            <ul className="text-muted-foreground/45 flex flex-col gap-0.5 ps-4 text-[10px]">
-              {[...context.lines]
-                .filter((line) => line.tokens > 0)
-                .sort((a, b) => b.tokens - a.tokens)
-                .map((line) => (
-                  <li key={line.key} className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate">{line.label}</span>
-                    <span className="shrink-0 font-mono tabular-nums">
-                      {formatTokens(line.tokens)}
-                    </span>
-                  </li>
-                ))}
-            </ul>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
-
-      {/* What happens next, rather than leaving you to know that 80% is the number that matters. */}
-      <p className="text-muted-foreground/50 text-[10px]">
-        {note ||
-          (afterFold
-            ? "Folded. This is the window it left."
-            : usage?.folded
-              ? "Earlier steps of this turn were folded into notes to make room."
-              : nearFold
-                ? "Near the fold — earlier steps will be summarised to make room."
-                : `Folds at ${Math.round(FOLDS_AT * 100)}%.`)}
-      </p>
-    </div>
+      {said ? <p className="text-[11px] text-muted-foreground">{said}</p> : null}
+    </section>
   );
 }

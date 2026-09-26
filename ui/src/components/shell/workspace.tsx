@@ -1,18 +1,27 @@
+import { X } from "lucide-react";
 import { BoardOverlay } from "@/components/design/board-overlay";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AppHeader } from "@/components/shell/app-header";
+import { AppHeader, NewTabButton } from "@/components/shell/app-header";
+import {
+  chatState,
+  fetchAllWorkflows,
+  permissionHolder,
+  presenceFor,
+  runningWorkflows,
+  type ChatFacts,
+} from "@/components/shell/chat-states";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 import { PluginSurface } from "@/components/shell/plugin-surface";
 import { PluginWebView } from "@/components/shell/plugin-web-view";
 import { Sidebar, useSidebar } from "@/components/shell/sidebar";
 import { withCompanions } from "@/components/shell/companions";
 import { useHostEffects } from "@/components/shell/use-host-effects";
-import { useRoutedSurface } from "@/components/shell/routed-surface";
 
+import { AgentMapHost } from "@/components/chat/agent-map";
 import { ChatPane } from "@/components/chat/chat-pane";
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
@@ -20,6 +29,7 @@ import { LayoutView } from "@/components/shell/layout/layout-view";
 import { useLayout } from "@/components/shell/layout/store";
 import { surfaceFor } from "@/components/shell/layout/surfaces";
 import { useCanAttach } from "@/lib/active-composer";
+import { useAgentMap } from "@/lib/agent-map";
 import { useDrafts, useDraftedTabs } from "@/lib/drafts";
 import {
   BOUND,
@@ -32,6 +42,7 @@ import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
+import { usePermissions } from "@/hooks/use-permissions";
 import { pluginSurface, setPluginSurfaces } from "@/lib/plugin-index";
 import { keys } from "@/lib/query-keys";
 import {
@@ -47,7 +58,6 @@ import {
   fetchConversations,
   fetchLiveTurns,
   fetchPluginSurfaces,
-  patchServerConfig,
   type ServerConfig,
 } from "@/lib/backend";
 
@@ -81,6 +91,11 @@ const InboxPanel = lazy(() =>
  * a panel that was also closed — so the app forgot what you were doing every time it
  * reloaded, which is the one thing a window is supposed to be good at. */
 const LAST_CONVERSATION = "kith-conversation";
+
+/** The workflow board for every conversation at once, for the tabs. Under `workflows` so a blanket
+ *  invalidation of that prefix reaches it, and not `keys.workflows("")` — that is the Work panel's
+ *  key for a chat with no conversation yet, which must stay empty rather than share this list. */
+const EVERY_WORKFLOW = [...keys.workflows(""), "every conversation"] as const;
 
 /** How many conversations to know the titles of. Generous, because the cost is one query the
  *  sidebar is running anyway, and a tab whose name is missing is a tab you cannot identify. */
@@ -145,8 +160,7 @@ export function Workspace({
       closeLayoutTab(key);
       // `settings` and `board` are gone from here: they are not tabs any more, so closing one is
       // a navigation and nothing else — see the block near the foot of this file.
-      const routed = key === "context" && route.contextOpen;
-      if (routed) navigate(pathForHome());
+      if (key === "context" && route.contextOpen) navigate(pathForHome());
     },
     [closeLayoutTab, navigate, route.contextOpen],
   );
@@ -242,8 +256,16 @@ export function Workspace({
     (surface: "work" | "board" | "settings") => {
       if (BOUND.has(surface) && conversationId) {
         const hostKey = tabKey({ surface: "chat", conversationId });
+        const held = companions[hostKey] ?? [];
+        // The companion column is one thing with tabs now, so the button toggles the column:
+        // anything open in it closes, and an empty column opens on Activity. Asking only about
+        // Work left the Browser (opened by him mid-turn) showing while the button read "off".
+        if (surface === "work" && held.length) {
+          for (const one of held) detach(hostKey, tabKey(one));
+          return;
+        }
         const key = tabKey({ surface, conversationId });
-        if ((companions[hostKey] ?? []).some((one) => tabKey(one) === key)) {
+        if (held.some((one) => tabKey(one) === key)) {
           detach(hostKey, key);
         } else {
           attach(hostKey, { surface, conversationId });
@@ -320,17 +342,7 @@ export function Workspace({
    * with. So `/context` stayed in the address bar with no Context tab, the boolean stayed true,
    * and the expand button navigated to the route it was already on: no dependency change, no
    * effect, nothing on screen, for good. */
-  const showContext = useCallback(
-    () => openSurface({ surface: "context", conversationId }),
-    [openSurface, conversationId],
-  );
-  const clearContextRoute = useCallback(() => navigate(pathForHome()), [navigate]);
-  useRoutedSurface({
-    open: route.contextOpen,
-    present: hasTab("context"),
-    show: showContext,
-    clear: clearContextRoute,
-  });
+
 
 
   /* The three thresholds that used to live here are gone.
@@ -372,9 +384,9 @@ export function Workspace({
    * resumable — so a missed one costs a beat rather than a wrong screen.
    *
    * Both halves are wanted and they are different. `working` is about the conversation in front of
-   * you, and drives the wash and the orb. `elsewhere` is the one this app was missing entirely: a
-   * turn carrying on in a chat you are not looking at, which until now announced itself only as a
-   * 6px dot inside a panel you had to have open to see. */
+   * you, and drives the wash and the presence pill. The rest is a turn carrying on in a chat you
+   * are not looking at, which once announced itself only as a 6px dot inside a panel you had to
+   * have open to see — it is that chat's tab now, green and tagged WORKING (see `stateForTab`). */
   const { data: live = [] } = useQuery({
     queryKey: keys.liveTurns(),
     queryFn: fetchLiveTurns,
@@ -395,7 +407,6 @@ export function Workspace({
     if (plugins) setPluginSurfaces(plugins);
   }, [plugins]);
   const working = conversationId !== "" && live.includes(conversationId);
-  const elsewhere = live.filter((id) => id !== conversationId);
 
   /* Which chats are holding something you typed and did not send.
    *
@@ -412,15 +423,9 @@ export function Workspace({
     (ref: TabRef) => (ref.uid && ref.uid in drafted ? ("draft" as const) : undefined),
     [drafted],
   );
-  /* Which *conversations* are holding one, for the header.
-   *
-   * Deduplicated, because two tabs on one chat are two drafts and one row — and `""` dropped,
-   * because a chat that has never been spoken to has no conversation to go to. The tab mark is
-   * that one's whole answer. */
-  const drafting = useMemo(
-    () => [...new Set(Object.values(drafted).filter(Boolean))],
-    [drafted],
-  );
+  /* The header used to count these — "unsent text in 2 conversations" — beside a count of turns
+   * running elsewhere. Both went when the tabs learned to say it themselves: the ring on a tab
+   * and its WORKING tag are on the chat they are about, which a number in a corner was not. */
 
   /* Let go of drafts whose tab is gone.
    *
@@ -633,6 +638,77 @@ export function Workspace({
     [known],
   );
 
+  /* What every chat is doing, for its tab and for the presence pill: working, waiting on you,
+   * or running a workflow. Three sources, one ranking — see `chat-states.ts`.
+   *
+   * Workflows are read from the server's board for *every* conversation, and the live feed is
+   * laid over it so a run that just started, or a phase that just began, shows at once. The
+   * board is re-read when the feed's newest workflow line changes: its identity rather than a
+   * count of such lines, because the feed is a ring and a count can stand still while it turns. */
+  const cache = useQueryClient();
+  const { pending } = usePermissions();
+  const { data: board = [] } = useQuery({
+    queryKey: EVERY_WORKFLOW,
+    queryFn: fetchAllWorkflows,
+    staleTime: 30_000,
+  });
+  const lastFlow = useMemo(() => {
+    for (let at = activity.activity.length - 1; at >= 0; at -= 1) {
+      const line = activity.activity[at];
+      if (line?.workflow) return `${line.at}|${line.workflow.run}|${line.workflow.state}`;
+    }
+    return "";
+  }, [activity.activity]);
+  useEffect(() => {
+    if (lastFlow) void cache.invalidateQueries({ queryKey: EVERY_WORKFLOW });
+  }, [cache, lastFlow]);
+
+  const facts = useMemo<ChatFacts>(() => {
+    const waiting = new Set(known.filter((one) => one.waiting).map((one) => one.id));
+    return {
+      live: new Set(live),
+      waiting,
+      asking: permissionHolder(pending.length, live, waiting),
+      workflows: runningWorkflows(board, activity.activity),
+    };
+  }, [activity.activity, board, known, live, pending.length]);
+  const stateForTab = useCallback(
+    (ref: TabRef) =>
+      ref.surface === "chat" ? chatState(ref.conversationId ?? "", facts) : undefined,
+    [facts],
+  );
+
+  /* When each live turn was first seen, for the pill's clock. The server says *that* a turn is
+   * live and not since when, so this is the moment this window learned it — exact for a turn you
+   * started here, and a lower bound for one already running when the window opened. */
+  const [started, setStarted] = useState<Record<string, number>>({});
+  useEffect(() => {
+    setStarted((was) => {
+      const now = Date.now();
+      const next: Record<string, number> = {};
+      for (const id of live) next[id] = was[id] ?? now;
+      const same =
+        Object.keys(next).length === Object.keys(was).length &&
+        Object.keys(next).every((id) => was[id] === next[id]);
+      return same ? was : next;
+    });
+  }, [live]);
+  const presence = presenceFor(conversationId, facts, started[conversationId]);
+  const showAgentMap = useAgentMap((s) => s.show);
+
+  /** Whether the chat in front of you has its companion column open — any tab of it. */
+  const companionOpen = conversationId
+    ? (companions[tabKey({ surface: "chat", conversationId })] ?? []).length > 0
+    : hasTab("work");
+
+  /* Where the title bar's tab strip is drawn — a node the header renders and the layout portals
+   * into. State rather than a ref, so the layout re-renders once the node exists. */
+  const [tabSlot, setTabSlot] = useState<HTMLDivElement | null>(null);
+  const tabBar = useMemo(
+    () => ({ slot: tabSlot, after: <NewTabButton onClick={() => newConversation()} /> }),
+    [newConversation, tabSlot],
+  );
+
   return (
     <TooltipProvider>
       {/* No runtime provider here any more. There is one per chat pane, inside `ChatPane`,
@@ -663,54 +739,40 @@ export function Workspace({
            * window, so it lives here — above the panes, outside anything that unmounts when you
            * look somewhere else. */}
           <BoardOverlay />
+          {/* The agent map, for the same reason: it is asked for from the title bar, the Work
+              panel and the thread, and belongs to none of them. */}
+          <AgentMapHost />
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             <AppHeader
-              working={working}
-              status={null}
-              model={config.model}
-              effort={config.effort}
-              // Offered unless the provider has said otherwise: an unknown model is the
-              // normal case right after a switch, and the transport retries a reasoning 400.
-              supportsEffort={
-                !config.capabilities?.known || config.capabilities.reasoning
-              }
-              onEffort={(effort) => {
-                onSaveConfig({ ...config, effort });
-                void patchServerConfig({ effort });
-              }}
-              historyOpen={sidebar.open}
-              onOpenHistory={sidebar.toggle}
+              sidebarOpen={sidebar.open}
+              sidebarWidth={sidebar.width}
+              onToggleSidebar={sidebar.toggle}
               onNewConversation={() => newConversation()}
-              elsewhere={elsewhere}
-              /* The chats holding unsent text, excluding the one in front of you — whose draft is
-                 already on screen, in the box it is sitting in. Same split as `elsewhere`, and for
-                 the same reason: this control is for finding the ones you cannot see. */
-              drafting={drafting.filter((id) => id !== conversationId)}
-              onGoToDraft={(id) => {
-                if (id) void openConversation(id);
-                else sidebar.setOpen(true);
-              }}
-              onGoToWorking={(id) => {
-                // One: go straight to it, which is the whole point of knowing where. Several: open
-                // the list, because picking is the question and the panel is where it is answered.
-                if (id) void openConversation(id);
-                else sidebar.setOpen(true);
-              }}
-              unread={inbox.unread}
-              workOpen={
-                conversationId
-                  ? (companions[tabKey({ surface: "chat", conversationId })] ?? []).some(
-                      (one) => one.surface === "work",
-                    )
-                  : hasTab("work")
+              tabsSlot={setTabSlot}
+              presence={presence}
+              onPresence={
+                /* The pill goes where it is talking about. A workflow opens its agent map — in
+                   the chat running it, which is this one or, taken there first, another. A chat
+                   that needs you is opened. A turn working here is a status, not a destination. */
+                presence.kind === "workflow"
+                  ? () => {
+                      const home = presence.target || conversationId;
+                      if (presence.target) openConversation(presence.target);
+                      if (home) showAgentMap(home);
+                    }
+                  : "target" in presence && presence.target
+                    ? () => openConversation(presence.target)
+                    : undefined
               }
+              unread={inbox.unread}
               onOpenInbox={() => {
                 inbox.enableNotifications();
                 // Toggle: the bell is the way in and the way back out, so pressing it twice
                 // puts the alerts away the same as every other header control.
                 navigate(inboxOpen ? pathForHome() : pathForMessages());
               }}
-              onOpenWork={() => toggleSurface("work")}
+              companionOpen={companionOpen}
+              onToggleCompanion={() => toggleSurface("work")}
               onOpenPanel={() => navigate(pathForTab(route.tab ?? "overview"))}
               onOpenSettings={() => navigate(pathForSettings())}
             />
@@ -730,7 +792,13 @@ export function Workspace({
                   />
                 </ErrorBoundary>
               </Sidebar>
-              <LayoutView render={renderSurface} titleFor={titleForTab} markFor={markForTab} />
+              <LayoutView
+                render={renderSurface}
+                titleFor={titleForTab}
+                markFor={markForTab}
+                stateFor={stateForTab}
+                bar={tabBar}
+              />
 
               {/* Alerts, over the room rather than beside it.
                 *
@@ -800,6 +868,34 @@ export function Workspace({
                 onClose={() => navigate(pathForHome())}
               />
             </Suspense>
+          </ErrorBoundary>
+        ) : null}
+        {/* The context breakdown, full screen — reached from the drop-up on the composer's ring.
+            A takeover like Settings rather than a tab in the side column: at 424px its tables
+            were cramped, and the ring already answers the quick question. */}
+        {route.contextOpen ? (
+          <ErrorBoundary where="The context breakdown">
+            <div className="bg-background fixed inset-0 z-30 flex flex-col">
+              <div className="window-drag-region window-controls-gap border-border flex h-11 shrink-0 items-center gap-2 border-b pe-3">
+                <span className="text-sm font-semibold">Context</span>
+                <span className="text-muted-foreground text-xs">what is in his window, and where it came from</span>
+                <span className="flex-1" />
+                <span className="text-muted-foreground/70 text-[11px]">Esc to close</span>
+                <button
+                  type="button"
+                  aria-label="Close the context breakdown"
+                  onClick={() => navigate(pathForHome())}
+                  className="text-muted-foreground hover:text-foreground hover:bg-accent/60 flex size-8 items-center justify-center rounded-lg transition-colors"
+                >
+                  <X className="size-4" aria-hidden />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                <Suspense fallback={<ScreenLoading />}>
+                  <ContextDetailScreen conversationId={conversationId} onClose={() => navigate(pathForHome())} />
+                </Suspense>
+              </div>
+            </div>
           </ErrorBoundary>
         ) : null}
         {route.settingsTab ? (

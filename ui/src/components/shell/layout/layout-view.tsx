@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -56,6 +57,27 @@ import {
   type TabRef,
 } from "./tree";
 
+/** What a tab is doing, in the one word it has room for.
+ *
+ *  `working` is a live turn (green), `needs` is waiting on the person — a question or a
+ *  permission (amber), `workflow` is a workflow running in that chat (teal). Handed in by the
+ *  caller like `markFor`, so this module still never learns what a surface holds. */
+export interface TabState {
+  tone: "working" | "needs" | "workflow";
+  /** The tag drawn on the tab, in sentence case — the tab sets it in capitals. */
+  tag: string;
+  /** The longer sentence, for the tooltip. */
+  said?: string;
+}
+
+/** Where the strip goes when the window is a single pane: into the title bar, beside the
+ *  window's own controls, rather than a second bar under it. `after` rides at the end of the
+ *  tabs — the "open another chat" button. */
+export interface TabBar {
+  slot: HTMLElement | null;
+  after?: ReactNode;
+}
+
 /**
  * The layout tree, drawn.
  *
@@ -68,6 +90,8 @@ export function LayoutView({
   render,
   titleFor,
   markFor,
+  stateFor,
+  bar,
 }: {
   render: (ref: TabRef) => ReactNode;
   /** A chat's title. Everything else is named by the surface registry. */
@@ -77,12 +101,24 @@ export function LayoutView({
    *  A function passed in rather than a store this module reads, for the same reason
    *  `titleFor` is one: `layout/` answers for the arrangement and must not learn what a
    *  surface holds. It also keeps the ranking of every per-chat signal in one place —
-   *  `workspace`, beside `working` and `elsewhere`. */
+   *  `workspace`, beside `stateFor`'s. */
   markFor?: (ref: TabRef) => "draft" | undefined;
+  /** What a tab is doing — see `TabState`. */
+  stateFor?: (ref: TabRef) => TabState | undefined;
+  /** The title bar's slot for the strip. Used only while the whole tree is one pane: with
+   *  several, every pane keeps its own strip, because which strip a tab is in is the whole of
+   *  what says which pane it is in. */
+  bar?: TabBar;
 }) {
   const tree = useLayout((s) => s.tree);
   const zoomed = useLayout((s) => s.zoomed);
   useLayoutKeys();
+  const labels = { titleFor, markFor, stateFor };
+
+  /* One pane: its strip is the window's. */
+  if (tree.kind === "pane") {
+    return <PaneView pane={tree} render={render} {...labels} bar={bar?.slot ? bar : undefined} />;
+  }
 
   /* Zoom is answered here and nowhere else.
    *
@@ -92,9 +128,9 @@ export function LayoutView({
    * `commit` clears it with the pane — but it is read defensively anyway, because the failure
    * would be a window with nothing in it. */
   const only = zoomed ? panesOf(tree).find((one) => one.id === zoomed) : undefined;
-  if (only) return <PaneView pane={only} render={render} titleFor={titleFor} markFor={markFor} />;
+  if (only) return <PaneView pane={only} render={render} {...labels} />;
 
-  return <NodeView node={tree} render={render} titleFor={titleFor} markFor={markFor} />;
+  return <NodeView node={tree} render={render} {...labels} />;
 }
 
 function NodeView({
@@ -102,11 +138,13 @@ function NodeView({
   render,
   titleFor,
   markFor,
+  stateFor,
 }: {
   node: Node;
   render: (ref: TabRef) => ReactNode;
   titleFor?: (ref: TabRef) => string | undefined;
   markFor?: (ref: TabRef) => "draft" | undefined;
+  stateFor?: (ref: TabRef) => TabState | undefined;
 }) {
   const resize = useLayout((s) => s.resize);
   const order = useLayout((s) => s.order);
@@ -134,7 +172,15 @@ function NodeView({
   }, [along]);
 
   if (node.kind === "pane") {
-    return <PaneView pane={node} render={render} titleFor={titleFor} markFor={markFor} />;
+    return (
+      <PaneView
+        pane={node}
+        render={render}
+        titleFor={titleFor}
+        markFor={markFor}
+        stateFor={stateFor}
+      />
+    );
   }
 
   const stacked = node.direction === "column";
@@ -223,9 +269,21 @@ function NodeView({
             className="flex min-h-0 min-w-0 flex-col"
           >
             {railed.has(child.id) ? (
-              <Rail node={child} titleFor={titleFor} markFor={markFor} onOpen={focus} />
+              <Rail
+                node={child}
+                titleFor={titleFor}
+                markFor={markFor}
+                stateFor={stateFor}
+                onOpen={focus}
+              />
             ) : (
-              <NodeView node={child} render={render} titleFor={titleFor} markFor={markFor} />
+              <NodeView
+                node={child}
+                render={render}
+                titleFor={titleFor}
+                markFor={markFor}
+                stateFor={stateFor}
+              />
             )}
           </Panel>
         </Fragment>
@@ -253,11 +311,16 @@ function PaneView({
   render,
   titleFor,
   markFor,
+  stateFor,
+  bar,
 }: {
   pane: PaneNode;
   render: (ref: TabRef) => ReactNode;
   titleFor?: (ref: TabRef) => string | undefined;
   markFor?: (ref: TabRef) => "draft" | undefined;
+  stateFor?: (ref: TabRef) => TabState | undefined;
+  /** Set when this pane is the whole window: its strip is drawn into the title bar. */
+  bar?: TabBar;
 }) {
   /* One selector each, rather than one returning an object.
    *
@@ -399,6 +462,128 @@ function PaneView({
     setOver(edgeAt(rect, event.clientX, event.clientY));
   }, []);
 
+  /* The strip is a drop target of its own, which is what makes tabs sortable: the pane body
+   * answers "which edge", the strip answers "which gap". Both see dragover for the same pointer —
+   * the strip stops propagation, or the pane under it lights up too and the two answers fight
+   * over one highlight. */
+  const stripElement = (
+    <div
+      ref={strip}
+      role="tablist"
+      aria-orientation="horizontal"
+      aria-label="Open tabs"
+      onKeyDown={onStripKeys}
+      className={cn(
+        "flex overflow-x-auto",
+        bar
+          ? /* In the title bar: full height, so the active tab can fill it and sit on the page
+             * below; no shelf, because the bar is the shelf. */
+            "h-full min-w-0 flex-1 items-stretch gap-0.5 px-2"
+          : "shrink-0 items-center",
+        /* The shelf the tabs sit on.
+         *
+         * There was no ground here at all — a transparent strip over `bg-background` with one
+         * border under it — and the active tab was `bg-background` too, which is to say the
+         * selected tab was painted the same colour as the empty space beside it. `muted` at a
+         * low alpha is the app's own recessed-chrome idiom (the header's segment group is
+         * `bg-muted/40`), and it is what makes the active tab read as lifted out of it. */
+        bar ? null : focused ? "bg-muted/55" : "bg-muted/40",
+        /* The strip's own scrollbar is 9px of a 29px shelf — a third of the chrome spent
+         * saying "there is more", which a tab clipped at the edge already says.
+         *
+         * Both spellings, and the webkit one is not redundant: `index.css` styles
+         * `*::-webkit-scrollbar` globally, and once that pseudo-element is styled Chromium
+         * takes the legacy path and ignores `scrollbar-width` entirely. */
+        "scrollbar-none [&::-webkit-scrollbar]:hidden",
+      )}
+      onDragOver={(event) => {
+        if (!carriesTab(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        setOver(null);
+        setCaret(caretAt(event));
+      }}
+      onDragLeave={(event) => {
+        // As at the pane: leaving into a child is crossing your own border, not leaving.
+        if (event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) return;
+        setCaret(null);
+      }}
+      onDrop={(event) => {
+        if (!carriesTab(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const key = event.dataTransfer.getData(TAB_MIME);
+        const before = caretAt(event);
+        setOver(null);
+        setCaret(null);
+        if (!key || before === null) return;
+        /* The caret counts the strip as it is on screen, dragged tab still in it; a move
+         * counts the strip without it. Same-pane drops translate, cross-pane ones do not —
+         * removing from the source never shifts the target. */
+        const from = pane.tabs.findIndex((one) => tabKey(one) === key);
+        move(key, pane.id, from >= 0 ? landingIndex(from, before) : before);
+      }}
+    >
+      {pane.tabs.map((tab, index) => (
+        <TabButton
+          key={tab.uid ?? tabKey(tab)}
+          tab={tab}
+          title={tabTitle(tab, titleFor?.(tab))}
+          mark={markFor?.(tab)}
+          state={stateFor?.(tab)}
+          variant={bar ? "bar" : "strip"}
+          active={index === pane.active}
+          paneFocused={focused || Boolean(bar)}
+          onSelect={() => activate(pane.id, index)}
+          onClose={() => close(tabKey(tab))}
+          others={pane.tabs.filter((one) => one.uid !== tab.uid).map(tabKey)}
+          paneId={pane.id}
+          index={index}
+          count={pane.tabs.length}
+          caret={
+            caret === index
+              ? "before"
+              : caret !== null && caret === pane.tabs.length && index === pane.tabs.length - 1
+                ? "after"
+                : null
+          }
+        />
+      ))}
+      {/* The rule under the strip, carried past the last tab to the pane's edge — and the
+       * pane's own right-click target.
+       *
+       * The rule lives on the tabs and on this filler rather than on the strip, and that is
+       * what lets the active tab break it: a tab connected to the body below it, which is the
+       * whole of what "this pane is showing that one" looks like. It cannot be done with a
+       * border on the strip, because a scroll container clips at its padding box and nothing
+       * inside can paint over a border belonging to the container.
+       *
+       * The pane menu hangs here because this is the only part of the strip that is not a
+       * tab, so a right-click on it is unambiguously about the pane. */}
+      {bar?.after}
+      <PaneMenu pane={pane}>
+        {/* No rule of its own in the title bar: the bar draws one under everything. */}
+        <div
+          className={cn("min-w-0 flex-1 self-stretch", bar ? null : "border-border/60 border-b")}
+        />
+      </PaneMenu>
+      {zoomed ? (
+        /* An exit that exists only on the keyboard is a trap for whoever got here from the
+           menu. Sits after the filler, so it is pinned to the far end of the strip. */
+        <button
+          type="button"
+          aria-label="Leave zoom"
+          title="Leave zoom"
+          onClick={() => useLayout.getState().zoom(null)}
+          className="text-muted-foreground hover:text-foreground hover:bg-accent/60 focus-visible:ring-kith/60 mr-1 shrink-0 self-center rounded p-1 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <Minimize2 className="size-3.5" />
+        </button>
+      ) : null}
+    </div>
+  );
+
   return (
     <div
       ref={box}
@@ -427,117 +612,17 @@ function PaneView({
         // opacity over a warm ground — present in the markup, absent on screen — so which pane
         // the next tab would open into was a guess. The strip's ground and the active tab's
         // mark below carry the same fact more quietly; this is the outline that scopes it.
-        focused && "ring-kith/40 ring-1 ring-inset",
+        // Not when this pane is the whole window: there is no other pane to tell it from, and
+        // the ring was an amber frame around the entire app.
+        focused && !bar && "ring-kith/40 ring-1 ring-inset",
       )}
     >
-      {/* The strip is a drop target of its own, which is what makes tabs sortable: the pane
-       * body answers "which edge", the strip answers "which gap". Both see dragover for the
-       * same pointer — the strip stops propagation, or the pane under it lights up too and the
-       * two answers fight over one highlight. */}
-      <div
-        ref={strip}
-        role="tablist"
-        aria-orientation="horizontal"
-        aria-label="Open tabs"
-        onKeyDown={onStripKeys}
-        className={cn(
-          "flex shrink-0 items-center overflow-x-auto",
-          /* The shelf the tabs sit on.
-           *
-           * There was no ground here at all — a transparent strip over `bg-background` with one
-           * border under it — and the active tab was `bg-background` too, which is to say the
-           * selected tab was painted the same colour as the empty space beside it. `muted` at a
-           * low alpha is the app's own recessed-chrome idiom (the header's segment group is
-           * `bg-muted/40`), and it is what makes the active tab read as lifted out of it. */
-          focused ? "bg-muted/55" : "bg-muted/40",
-          /* The strip's own scrollbar is 9px of a 29px shelf — a third of the chrome spent
-           * saying "there is more", which a tab clipped at the edge already says.
-           *
-           * Both spellings, and the webkit one is not redundant: `index.css` styles
-           * `*::-webkit-scrollbar` globally, and once that pseudo-element is styled Chromium
-           * takes the legacy path and ignores `scrollbar-width` entirely. */
-          "scrollbar-none [&::-webkit-scrollbar]:hidden",
-        )}
-        onDragOver={(event) => {
-          if (!carriesTab(event.dataTransfer)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          event.dataTransfer.dropEffect = "move";
-          setOver(null);
-          setCaret(caretAt(event));
-        }}
-        onDragLeave={(event) => {
-          // As at the pane: leaving into a child is crossing your own border, not leaving.
-          if (event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) return;
-          setCaret(null);
-        }}
-        onDrop={(event) => {
-          if (!carriesTab(event.dataTransfer)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          const key = event.dataTransfer.getData(TAB_MIME);
-          const before = caretAt(event);
-          setOver(null);
-          setCaret(null);
-          if (!key || before === null) return;
-          /* The caret counts the strip as it is on screen, dragged tab still in it; a move
-           * counts the strip without it. Same-pane drops translate, cross-pane ones do not —
-           * removing from the source never shifts the target. */
-          const from = pane.tabs.findIndex((one) => tabKey(one) === key);
-          move(key, pane.id, from >= 0 ? landingIndex(from, before) : before);
-        }}
-      >
-        {pane.tabs.map((tab, index) => (
-          <TabButton
-            key={tab.uid ?? tabKey(tab)}
-            tab={tab}
-            title={tabTitle(tab, titleFor?.(tab))}
-            mark={markFor?.(tab)}
-            active={index === pane.active}
-            paneFocused={focused}
-            onSelect={() => activate(pane.id, index)}
-            onClose={() => close(tabKey(tab))}
-            others={pane.tabs.filter((one) => one.uid !== tab.uid).map(tabKey)}
-            paneId={pane.id}
-            index={index}
-            count={pane.tabs.length}
-            caret={
-              caret === index
-                ? "before"
-                : caret !== null && caret === pane.tabs.length && index === pane.tabs.length - 1
-                  ? "after"
-                  : null
-            }
-          />
-        ))}
-        {/* The rule under the strip, carried past the last tab to the pane's edge — and the
-         * pane's own right-click target.
-         *
-         * The rule lives on the tabs and on this filler rather than on the strip, and that is
-         * what lets the active tab break it: a tab connected to the body below it, which is the
-         * whole of what "this pane is showing that one" looks like. It cannot be done with a
-         * border on the strip, because a scroll container clips at its padding box and nothing
-         * inside can paint over a border belonging to the container.
-         *
-         * The pane menu hangs here because this is the only part of the strip that is not a
-         * tab, so a right-click on it is unambiguously about the pane. */}
-        <PaneMenu pane={pane}>
-          <div className="border-border/60 min-w-0 flex-1 self-stretch border-b" />
-        </PaneMenu>
-        {zoomed ? (
-          /* An exit that exists only on the keyboard is a trap for whoever got here from the
-             menu. Sits after the filler, so it is pinned to the far end of the strip. */
-          <button
-            type="button"
-            aria-label="Leave zoom"
-            title="Leave zoom"
-            onClick={() => useLayout.getState().zoom(null)}
-            className="text-muted-foreground hover:text-foreground hover:bg-accent/60 focus-visible:ring-kith/60 mr-1 shrink-0 rounded p-1 transition-colors focus-visible:ring-2 focus-visible:outline-none"
-          >
-            <Minimize2 className="size-3.5" />
-          </button>
-        ) : null}
-      </div>
+      {/* The strip, where it lives: in the title bar when this pane is the whole window, and
+          on top of the pane otherwise. A portal and not a second copy of the strip, so the
+          drag-and-drop, the keys, the menus and the caret are the same code in both places —
+          and React bubbles a portal's events through *this* tree, so a press on a tab up there
+          still focuses this pane and a drop there still stops at the strip. */}
+      {bar?.slot ? createPortal(stripElement, bar.slot) : stripElement}
 
       <div
         role="tabpanel"
@@ -604,10 +689,27 @@ const PLACEMENT_CHOICES: { mode: PlacementMode; label: string; icon: LucideIcon 
   { mode: "beside", label: "Always a new pane", icon: SplitSquareHorizontal },
 ];
 
+/** The colour each state wears — as a dot, and as the ink of its tag. One meaning each, the same
+ *  as everywhere else in the app: green is working, amber is waiting on you, teal is workflows.
+ *  Teal is spelled from the palette because workflows have no token of their own; the light
+ *  theme takes a darker step so a 10px tag stays legible on paper. */
+const STATE_DOT: Record<TabState["tone"], string> = {
+  working: "bg-roam",
+  needs: "bg-kith",
+  workflow: "bg-teal-500 dark:bg-teal-400",
+};
+const STATE_INK: Record<TabState["tone"], string> = {
+  working: "text-roam",
+  needs: "text-kith",
+  workflow: "text-teal-600 dark:text-teal-400",
+};
+
 function TabButton({
   tab,
   title,
   mark,
+  state,
+  variant,
   active,
   paneFocused,
   onSelect,
@@ -622,6 +724,11 @@ function TabButton({
   title: string;
   /** What this tab is holding that its name cannot say. `"draft"` is unsent text. */
   mark: "draft" | undefined;
+  /** What it is doing — working, waiting on you, running a workflow. */
+  state: TabState | undefined;
+  /** `bar` is the title bar's tab — full height, a fixed width, a state dot; `strip` is a
+   *  pane's own, which keeps its icon because several panes' tabs have to be told apart. */
+  variant: "bar" | "strip";
   active: boolean;
   /** Whether this tab's pane is the focused one — which is what the active tab's mark says. */
   paneFocused: boolean;
@@ -657,6 +764,21 @@ function TabButton({
   const placement = useLayout((s) => s.placements[tab.surface]) ?? DEFAULT_PLACEMENT;
   const key = tabKey(tab);
   const closeable = others.filter((one) => !(one in pins));
+  const inBar = variant === "bar";
+  const drafted = mark === "draft";
+
+  /* The tooltip: the whole title — a title-bar tab is a fixed 232px and most titles do not fit
+   * it — then what the tab is doing, then the draft's words. The marks themselves are
+   * `aria-hidden` spans, which have no role for a label to attach to, so this and the `sr-only`
+   * span below the title are where they are said. */
+  const tip =
+    [
+      inBar ? title : undefined,
+      state?.said,
+      drafted ? "You typed something here and did not send it" : undefined,
+    ]
+      .filter(Boolean)
+      .join(" — ") || undefined;
 
   /* Right-click on a tab.
    *
@@ -674,10 +796,7 @@ function TabButton({
       id={`tab-${key}`}
       role="tab"
       aria-selected={active}
-      /* The draft mark's words. The ring on the icon is `aria-hidden` — a `<span>` has no role
-       * for an `aria-label` to attach to — so hovering is answered here and the `sr-only` span
-       * below the title answers the reader. */
-      title={mark === "draft" ? "You typed something here and did not send it" : undefined}
+      title={tip}
       // Roving tabindex: one stop per strip, arrows move within it. Tab lands you on the tab
       // you are looking at rather than walking you through eight of them to reach the body.
       tabIndex={active ? 0 : -1}
@@ -696,14 +815,28 @@ function TabButton({
         onSelect();
       }}
       className={cn(
-        "group relative flex max-w-[220px] shrink-0 cursor-default items-center gap-1.5 border-b px-3 py-1.5 text-xs transition-colors",
+        "group relative flex cursor-default items-center text-xs transition-colors",
         "focus-visible:ring-kith/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none",
-        active
-          ? /* Lifted onto the pane's own ground and continuous with it: the bottom rule stops
-             * here. `border-b-transparent` rather than no border, so switching tabs cannot
-             * change the strip's height by a pixel. */
-            "bg-background text-foreground border-b-transparent"
-          : "border-border/60 text-muted-foreground hover:bg-background/50 hover:text-foreground",
+        inBar
+          ? cn(
+              /* 232px, as the design draws them, giving way to 132px before the bar scrolls —
+               * so four chats fit a laptop screen without any of them becoming an icon. */
+              "h-full w-[232px] min-w-[132px] shrink gap-2 px-3",
+              active
+                ? /* The page below, reaching up into the bar: the thread's own ground, the bar's
+                   * full height (which covers the rule under the bar), hairlines either side. */
+                  "bg-background text-foreground border-border border-x"
+                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+            )
+          : cn(
+              "max-w-[220px] shrink-0 gap-1.5 border-b px-3 py-1.5",
+              active
+                ? /* Lifted onto the pane's own ground and continuous with it: the bottom rule
+                   * stops here. `border-b-transparent` rather than no border, so switching tabs
+                   * cannot change the strip's height by a pixel. */
+                  "bg-background text-foreground border-b-transparent"
+                : "border-border/60 text-muted-foreground hover:bg-background/50 hover:text-foreground",
+            ),
       )}
     >
       {/* Which tab — and, by its colour, which pane.
@@ -733,40 +866,71 @@ function TabButton({
           )}
         />
       ) : null}
-      {/* Something typed here and not sent, worn on the corner of the icon.
-        *
-        * The strip has never carried a per-tab status of any kind, so this is new vocabulary
-        * rather than a copy — but it is built out of the conversation dots' size (`size-1.5`, a
-        * rounded full span) with their fill and motion inverted. Every status dot in this app is
-        * solid and pulsing, because every one of them is about something in flight; a draft is the
-        * opposite — nothing is moving and nothing is waiting on him — so it is hollow and still.
-        * That also spares it a colour: `--kith` already means "waiting on you" *and* marks the
-        * active tab, `--roam` means "running", and a third hue for a fourth meaning is how a
-        * vocabulary stops being one.
-        *
-        * **On the icon rather than in the row**, which is the difference between a mark and a
-        * flinch. As a real child of this flex row it took 12px of width — gap plus dot — so the
-        * first character typed pushed every tab to its right along, and backspace pulled them
-        * back; on a tab already at its width cap the title's truncation shortened mid-sentence
-        * instead. Absolutely positioned on the icon it costs no layout at all, and it is the same
-        * badge in the same place as the railed version, which is what makes the two read as one
-        * thing rather than two.
-        *
-        * The tab's `title` carries the words. A bare `aria-label` on a `<span>` is not an
-        * accessible name — the element has no role to hang one on — and the visible label beside
-        * it is the tab's name, so putting it on the tooltip is both the honest place and the one a
-        * screen reader reaches. */}
-      <span className="relative shrink-0">
-        <Icon className={cn("size-3.5 transition-opacity", active ? "opacity-90" : "opacity-60")} />
-        {mark === "draft" ? (
-          <span
-            aria-hidden
-            className="border-muted-foreground/70 bg-muted/40 absolute -top-0.5 -right-0.5 size-1.5 rounded-full border"
-          />
-        ) : null}
-      </span>
-      <span className="truncate">{title}</span>
-      {mark === "draft" ? <span className="sr-only">— unsent text</span> : null}
+      {inBar && tab.surface === "chat" ? (
+        /* A chat in the title bar leads with its state rather than an icon: every tab up here is
+         * a chat, so the icon said nothing, and the dot says the one thing the title cannot.
+         * Always present — transparent when there is nothing to say — so titles line up.
+         *
+         * Unsent text is the hollow ring the strip has always used: nothing is moving and
+         * nothing is waiting on him, so it is still and unfilled. On a tab that is also doing
+         * something the ring goes *around* the state dot, so neither fact hides the other. */
+        <span
+          aria-hidden
+          className={cn(
+            "size-[7px] shrink-0 rounded-full",
+            state
+              ? cn(STATE_DOT[state.tone], "kith-breathe [animation-duration:2s]")
+              : drafted
+                ? "border-muted-foreground/70 border"
+                : null,
+            state && drafted && "outline-muted-foreground/60 outline outline-offset-[1.5px]",
+          )}
+        />
+      ) : (
+        /* Something typed here and not sent, worn on the corner of the icon — and, in its place
+         * when there is one, what the tab is doing.
+         *
+         * **On the icon rather than in the row**, which is the difference between a mark and a
+         * flinch. As a real child of this flex row it took 12px of width — gap plus dot — so the
+         * first character typed pushed every tab to its right along, and backspace pulled them
+         * back. Absolutely positioned on the icon it costs no layout at all, and it is the same
+         * badge in the same place as the railed version. */
+        <span className="relative shrink-0">
+          <Icon className={cn("size-3.5 transition-opacity", active ? "opacity-90" : "opacity-60")} />
+          {state ? (
+            <span
+              aria-hidden
+              className={cn(
+                "absolute -top-0.5 -right-0.5 size-1.5 rounded-full",
+                STATE_DOT[state.tone],
+              )}
+            />
+          ) : drafted ? (
+            <span
+              aria-hidden
+              className="border-muted-foreground/70 bg-muted/40 absolute -top-0.5 -right-0.5 size-1.5 rounded-full border"
+            />
+          ) : null}
+        </span>
+      )}
+      <span className={cn("truncate", inBar && "min-w-0 flex-1")}>{title}</span>
+      {drafted ? <span className="sr-only">— unsent text</span> : null}
+      {/* The state in a word — WORKING, ASKING, NEEDS YES, or the phase a workflow is in.
+          Hidden while the close button is showing over it in the title bar, which takes this
+          slot rather than a slot of its own: a tab at rest spends no width on a button. */}
+      {state ? (
+        <span
+          className={cn(
+            "shrink-0 text-[10px] tracking-[0.02em] uppercase",
+            STATE_INK[state.tone],
+            inBar &&
+              !pinned &&
+              "transition-opacity group-hover:opacity-0 group-has-[button:focus-visible]:opacity-0",
+          )}
+        >
+          {state.tag}
+        </span>
+      ) : null}
       {/* A pinned tab wears the pin where the close button would be.
        *
        * Not a button. The X in this slot is the accidental close — a 22px target you pass over
@@ -774,37 +938,41 @@ function TabButton({
        * the pin one slip away from being undone. Unpinning is the context menu or Cmd+Alt+P,
        * both of which you have to mean. */}
       {pinned ? (
-        <Pin
-          aria-hidden
-          className="-mr-0.5 size-3 shrink-0 rotate-45 opacity-50"
-        />
+        <Pin aria-hidden className="-mr-0.5 size-3 shrink-0 rotate-45 opacity-50" />
       ) : (
-      <button
-        type="button"
-        aria-label={`Close ${title}`}
-        // Reachable only once its tab is, and only from the tab: Tab steps onto the tab, then
-        // onto its close button, then out into the body.
-        tabIndex={active ? 0 : -1}
-        onClick={(event) => {
-          event.stopPropagation();
-          onClose();
-        }}
-        className={cn(
-          // 22px of hit target instead of 13px. A 12px glyph in half a pixel of padding is a
-          // target you miss and select the tab instead — which, on a tab you meant to close,
-          // is the one wrong outcome available.
-          "-mr-1.5 rounded p-1 transition-[color,background-color,opacity]",
-          "hover:bg-destructive/10 hover:text-destructive",
-          "focus-visible:ring-kith/60 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none",
-          // Always there on the tab you are looking at — you can always close what is in front
-          // of you — and revealed on hover for the rest, so a strip of eight is not eight X's.
-          active
-            ? "opacity-60 hover:opacity-100"
-            : "opacity-0 group-hover:opacity-60 hover:opacity-100",
-        )}
-      >
-        <X className="size-3.5" />
-      </button>
+        <button
+          type="button"
+          aria-label={`Close ${title}`}
+          // Reachable only once its tab is, and only from the tab: Tab steps onto the tab, then
+          // onto its close button, then out into the body.
+          tabIndex={active ? 0 : -1}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+          className={cn(
+            "transition-[color,background-color,opacity]",
+            "hover:bg-destructive/10 hover:text-destructive",
+            "focus-visible:ring-kith/60 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:outline-none",
+            inBar
+              ? /* Over the tag's slot at the tab's right edge, on its own chip so the title
+                 * running under it stays unreadable rather than half-covered. Revealed on hover
+                 * and on keyboard focus only: at rest the bar shows what the design shows. */
+                "bg-accent text-muted-foreground absolute top-1/2 right-2 flex size-5 -translate-y-1/2 items-center justify-center rounded-[5px] opacity-0 group-hover:opacity-100"
+              : cn(
+                  // 22px of hit target instead of 13px. A 12px glyph in half a pixel of padding
+                  // is a target you miss and select the tab instead.
+                  "-mr-1.5 rounded p-1",
+                  // Always there on the tab you are looking at — you can always close what is in
+                  // front of you — and revealed on hover for the rest.
+                  active
+                    ? "opacity-60 hover:opacity-100"
+                    : "opacity-0 group-hover:opacity-60 hover:opacity-100",
+                ),
+          )}
+        >
+          <X className={inBar ? "size-3" : "size-3.5"} />
+        </button>
       )}
     </div>
   );
@@ -996,11 +1164,13 @@ function Rail({
   node,
   titleFor,
   markFor,
+  stateFor,
   onOpen,
 }: {
   node: Node;
   titleFor?: (ref: TabRef) => string | undefined;
   markFor?: (ref: TabRef) => "draft" | undefined;
+  stateFor?: (ref: TabRef) => TabState | undefined;
   onOpen: (paneId: string) => void;
 }) {
   const trackWidth = useLayout((s) => s.trackWidth);
@@ -1049,7 +1219,10 @@ function Rail({
              * shows no title to put words beside, so both the tooltip and the announced name have
              * to say it here or it is a decoration nobody can account for. */
             const drafting = markFor?.(tab) === "draft";
-            const said = drafting ? `${label} — unsent text` : label;
+            const state = stateFor?.(tab);
+            const said = [label, state?.said, drafting ? "unsent text" : undefined]
+              .filter(Boolean)
+              .join(" — ");
             return (
               <button
                 key={tab.uid ?? tabKey(tab)}
@@ -1083,7 +1256,15 @@ function Rail({
                     railing a pane is one of the ways a draft went missing, and a rail shows no
                     title to hang it beside — so it sits on the icon's corner, where a badge goes.
                     Hollow and still for the reason the strip's is. */}
-                {drafting ? (
+                {state ? (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute top-0.5 right-0.5 size-1.5 rounded-full",
+                      STATE_DOT[state.tone],
+                    )}
+                  />
+                ) : drafting ? (
                   <span
                     aria-hidden
                     className="border-muted-foreground/70 bg-muted/40 absolute top-0.5 right-0.5 size-1.5 rounded-full border"

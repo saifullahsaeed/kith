@@ -1,7 +1,7 @@
 /**
  * The composer's document and its markdown have to describe the same thing.
  *
- * Everything downstream reads the string, not the document: the wire format, the slash menu, the
+ * Everything downstream reads the string, not the document: the wire format, the send button, the
  * ledger, and him. So a parser and serialiser that disagree do not fail loudly — text goes in,
  * comes out subtly different, and the difference lands in a message that was already sent. Which
  * is why most of what follows is a round trip rather than a one-way assertion.
@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { composerSchema, fromMarkdown, markdownOffset, toMarkdown } from "./markdown";
+import { composerSchema, fromMarkdown, toMarkdown } from "./markdown";
 
 /** Markdown → document → markdown. The whole contract in one function. */
 const round = (text: string) => toMarkdown(fromMarkdown(text));
@@ -82,44 +82,6 @@ describe("tables, which is where this gets interesting", () => {
   it("gives a ragged table a full row rather than emitting something unreadable", () => {
     const doc = fromMarkdown("| a | b |\n| --- | --- |\n| 1 |");
     expect(toMarkdown(doc)).toBe("| a | b |\n| --- | --- |\n| 1 |  |");
-  });
-});
-
-describe("the caret offset the slash menu runs on", () => {
-  /* The menu is driven by (text, cursorPosition) where the cursor indexes the string. A document
-     has no such index, so it is computed by serialising everything left of the caret. If this is
-     wrong the menu filters on the wrong characters, which looks like the menu being broken. */
-
-  it("counts nothing before the first position", () => {
-    const doc = fromMarkdown("hello");
-    expect(markdownOffset(doc, 0)).toBe(0);
-  });
-
-  it("counts the characters typed so far", () => {
-    const doc = fromMarkdown("/fold");
-    // Position 1 is the start of the paragraph's text; 6 is the end of "/fold".
-    expect(markdownOffset(doc, 6)).toBe(5);
-    expect(markdownOffset(doc, 3)).toBe(2);
-  });
-
-  it("agrees with the length of the whole document at the end", () => {
-    const doc = fromMarkdown("## Plan\n\n- one\n- two");
-    expect(markdownOffset(doc, doc.content.size)).toBe(toMarkdown(doc).length);
-  });
-
-  it("clamps a position past the end instead of throwing", () => {
-    /* The caret is reported by the editor and the document is read here; a transaction in between
-       can already have shortened it. ProseMirror throws on an out-of-range cut, which would take
-       the composer down over a position that was merely stale. */
-    const doc = fromMarkdown("hello");
-    expect(markdownOffset(doc, 9_999)).toBe(5);
-    expect(markdownOffset(doc, -3)).toBe(0);
-  });
-
-  it("counts a heading's own marker, because the text he reads contains it", () => {
-    const doc = fromMarkdown("## Hi");
-    // "## Hi" — three characters of syntax precede the caret sitting after "H".
-    expect(markdownOffset(doc, 2)).toBe(4);
   });
 });
 

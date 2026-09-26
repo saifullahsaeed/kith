@@ -14,6 +14,28 @@ import remarkGfm from "remark-gfm";
 import { BookOpenText, Check, Copy, Frame, Network, Radar } from "lucide-react";
 
 import { PluginOutcome, splitPluginTool } from "@/components/assistant-ui/plugin-outcome";
+import {
+  BrowserCard,
+  ChecklistCard,
+  DesignSystemCard,
+  EditsCard,
+  FilesCard,
+  IconsCard,
+  MemoriesCard,
+  PlanCard,
+  ProblemsCard,
+  ProcessCard,
+  RefusalCard,
+  ScheduledCard,
+  SchedulesCard,
+  SearchDownCard,
+  SymbolsCard,
+  TestsCard,
+  WroteCard,
+} from "@/components/assistant-ui/tool-cards";
+import { outcomeOf } from "@/lib/tool-row";
+import { describeCall, shortPath } from "@/lib/tool-language";
+import { useProjectRoot } from "@/lib/project-root";
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/files";
 import { useAgentMap } from "@/lib/agent-map";
@@ -71,161 +93,12 @@ function listArg(plural: unknown, singular: unknown): string[] {
   return raw == null || String(raw) === "" ? [] : [String(raw)];
 }
 
-/** The line you read without opening anything. */
-export function summarise(name: string, args: Args, wrapped: unknown): string {
-  const { value: result, failed } = unwrap(wrapped);
-  if (failed)
-    return `failed · ${String((result as { message?: string })?.message ?? result ?? "").slice(0, 70)}`;
-  const r = (result ?? {}) as Record<string, unknown>;
-  const s = (v: unknown) => (v == null ? "" : String(v));
-  const short = (v: unknown, n = 44) => {
-    const t = s(v).replace(/\s+/g, " ").trim();
-    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
-  };
-  const lines = (v: unknown) => s(v).split("\n").length;
-
-  switch (name) {
-    case "shell": {
-      const code = Number(r.exitCode ?? 0);
-      const out = s(r.output).trim();
-      const tail = out ? ` · ${lines(out)} line${lines(out) === 1 ? "" : "s"}` : " · no output";
-      return `${short(args.command, 52)} · ${code === 0 ? "ok" : `exit ${code}`}${tail}`;
-    }
-    case "edit_file": {
-      const diff = s(result);
-      const plus = (diff.match(/^\+(?!\+)/gm) || []).length;
-      const minus = (diff.match(/^-(?!-)/gm) || []).length;
-      return `${short(args.path)} · +${plus} −${minus}`;
-    }
-    case "edit_files": {
-      /* One tool for one edit and for twenty, so the summary has to say which. Without this
-         every edit read as a bare "edited" with nothing about what or how much — and the
-         single-edit shape, which is what a retired `edit_file` call arrives as, names its file
-         the way it always did. */
-      const edits = Array.isArray(args.edits) ? (args.edits as Record<string, unknown>[]) : [];
-      const diff = s(r.diff ?? result);
-      const plus = (diff.match(/^\+(?!\+)/gm) || []).length;
-      const minus = (diff.match(/^-(?!-)/gm) || []).length;
-      const what = edits.length
-        ? edits.length === 1
-          ? short(edits[0]?.path)
-          : `${edits.length} files`
-        : short(args.path);
-      return `${what} · +${plus} −${minus}`;
-    }
-    case "write_file":
-      return `${short(args.path)} · ${s(args.content).length.toLocaleString()} chars`;
-    case "read_file": {
-      const paths = listArg(args.paths, args.path);
-      // A batch says how many it opened rather than naming four files at you; the names are
-      // on the row above and inside the result.
-      const what = paths.length > 1 ? `${paths.length} files` : short(paths[0] ?? "");
-      // Image first, and the order is the whole point. A picture comes back with a `note`
-      // reading "Look at the image below and describe or judge what you actually see" — a
-      // sentence written to him — and with `note` tested first that was the summary line
-      // every image read collapsed to.
-      if (r.image || r.data) return `${what} · looked at it`;
-      if (r.note) return `${what} · ${short(r.note, 40)}`;
-      return `${what} · ${lines(result).toLocaleString()} lines`;
-    }
-    case "delete_file":
-      return `${short(r.trashed ?? args.path)} · to the Trash`;
-    case "grep": {
-      const hits = s(result)
-        .split("\n")
-        .filter((l) => l.includes(":")).length;
-      const patterns = listArg(args.patterns, args.pattern);
-      const what =
-        patterns.length > 1 ? `${patterns.length} patterns` : short(patterns[0] ?? "", 30);
-      return `${what} · ${hits || "no"} match${hits === 1 ? "" : "es"}`;
-    }
-    case "glob": {
-      const found = Array.isArray(r.files) ? r.files.length : lines(result);
-      return `${short(args.pattern, 30)} · ${found} file${found === 1 ? "" : "s"}`;
-    }
-    case "check_code": {
-      const text = s(r.output ?? result).trim();
-      return text ? `${lines(text)} line${lines(text) === 1 ? "" : "s"} to fix` : "clean";
-    }
-    case "changes": {
-      const diff = s(r.diff ?? result);
-      const files = (diff.match(/^diff --git/gm) || []).length;
-      return files ? `${files} file${files === 1 ? "" : "s"} changed` : "nothing uncommitted";
-    }
-    case "commit":
-      return r.committed === false ? "nothing to record" : short(r.changed ?? args.message, 52);
-    case "add_task":
-      return `#${s(r.id)} ${short(args.goal ?? r.goal)}`;
-    case "update_task":
-      return `#${s(args.id)}${args.status ? ` → ${s(args.status)}` : ""}`;
-    case "add_milestone":
-      return `${short(args.title)}${r.note ? " · already there" : ""}`;
-    case "order_milestones":
-      return `${(Array.isArray(args.ids) ? args.ids : []).join(" → ")}`;
-    case "create_project":
-      return `#${s(r.id)} ${short(args.name)}`;
-    case "add_deliverable":
-      return short(args.title ?? args.content);
-    case "ask": {
-      const asked = Array.isArray(args.questions) ? args.questions : [];
-      const one = asked[0] as Record<string, unknown> | undefined;
-      return asked.length > 1
-        ? `${asked.length} questions`
-        : short(String(one?.question ?? ""), 56);
-    }
-    case "run_workflow": {
-      // Its name and its plan, which is what was started — the result itself arrives later, in
-      // the turn the finished run wakes, so there is nothing to summarise from here but intent.
-      const phases = Array.isArray(r.phases) ? (r.phases as unknown[]).map(String) : [];
-      return [s(r.name), phases.join(" → ")].filter(Boolean).join(" · ");
-    }
-    case "read_skill":
-      return s(args.name);
-    case "journal":
-      return short(args.entry, 56);
-    default:
-      break;
-  }
-  // The generic line: the most identifying argument, then what came back.
-  //
-  // Never key names. The first version ended with `Object.keys(r).slice(0,3).join(", ")`,
-  // so four consecutive list_tasks calls each read "· items, total, showing" — the shape of
-  // the answer instead of the answer, repeated, which is worse than saying nothing because
-  // it looks like content. If there is no value worth printing, print none.
-  const subject = args.path ?? args.name ?? args.title ?? args.goal ?? args.query ?? args.id;
-  const answer = describe(result);
-  return [short(subject), answer].filter(Boolean).join(" · ");
-}
-
 /** A paged listing: `{items, total, showing}`. The commonest result in the system. */
 function paged(value: unknown): { items: unknown[]; total: number } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const v = value as Record<string, unknown>;
   if (!Array.isArray(v.items) || typeof v.total !== "number") return null;
   return { items: v.items, total: v.total };
-}
-
-/** What came back, in a few words, or "" when there is nothing worth saying. */
-function describe(result: unknown): string {
-  const page = paged(result);
-  if (page) return page.total === 0 ? "none" : `${page.total.toLocaleString()}`;
-  if (Array.isArray(result)) {
-    return result.length ? `${result.length.toLocaleString()}` : "none";
-  }
-  if (typeof result === "string") {
-    const n = result.split("\n").length;
-    return result.trim() ? `${n.toLocaleString()} line${n === 1 ? "" : "s"}` : "nothing";
-  }
-  if (result && typeof result === "object") {
-    const r = result as Record<string, unknown>;
-    // A value, not a key. `ok: true` on its own says nothing anyone needs.
-    for (const key of ["note", "status", "message", "id", "committed", "trashed"]) {
-      if (r[key] !== undefined && r[key] !== null && r[key] !== "") {
-        return String(r[key]).replace(/\s+/g, " ").slice(0, 48);
-      }
-    }
-  }
-  return "";
 }
 
 /* ── the formatted body ─────────────────────────────────────────────────── */
@@ -818,6 +691,7 @@ const RepoMap: FC<{ text: string }> = ({ text }) => {
 /** `file:line: text` rows, each one openable. What grep and glob actually produce. */
 const Locations: FC<{ text: string }> = ({ text }) => {
   const open = useFileViewer((s) => s.open);
+  const root = useProjectRoot();
   const rows = text.split("\n").filter((l) => l.trim());
   return (
     <div className="max-h-80 divide-y divide-border/40 overflow-auto rounded-lg ring-1 ring-border/60">
@@ -841,8 +715,8 @@ const Locations: FC<{ text: string }> = ({ text }) => {
             onClick={() => void open(file)}
             className="flex w-full items-baseline gap-2 px-2.5 py-1.5 text-left hover:bg-accent/50"
           >
-            <span className="shrink-0 font-mono text-[11px] text-sky-400">
-              {file}
+            <span className="shrink-0 font-mono text-[11px] text-sky-400" title={file}>
+              {shortPath(file, root)}
               <span className="text-muted-foreground">:{line}</span>
             </span>
             <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-foreground/80">
@@ -1433,6 +1307,73 @@ const looksLikeLocations = (text: string) => {
   return rows.length > 0 && rows.filter((l) => /^[^\s:]+:\d+/.test(l)).length >= rows.length / 2;
 };
 
+/** The cards whose shape belongs to one tool, keyed on its name. `null` hands the result on to
+ *  the shape-driven default below. */
+function keyedCard(name: string, args: Args, result: unknown): ReactNode | null {
+  const object =
+    result && typeof result === "object" && !Array.isArray(result)
+      ? (result as Record<string, unknown>)
+      : null;
+  switch (name) {
+    case "edit_files":
+    case "edit_file":
+      if (typeof result === "string" || (object && typeof object.diff === "string")) {
+        return <EditsCard value={object ?? (result as string)} />;
+      }
+      return null;
+    case "write_file":
+      return typeof args.content === "string" ? <WroteCard args={args} value={result} /> : null;
+    case "check_code":
+    case "diagnostics":
+      return object ? <ProblemsCard args={args} value={object} /> : null;
+    case "run_tests":
+      return object ? <TestsCard value={object} /> : null;
+    case "start_process":
+    case "check_process":
+    case "stop_process":
+      return object ? <ProcessCard value={object} /> : null;
+    case "list_schedules":
+    case "list_reminders":
+      return object ? <SchedulesCard value={object} /> : null;
+    case "schedule":
+    case "set_reminder":
+      return object && object.fires ? <ScheduledCard value={object} /> : null;
+    case "find_icons":
+      return object && Array.isArray(object.icons) ? <IconsCard value={object} /> : null;
+    case "read_design_system":
+    case "update_design_system":
+      return object ? <DesignSystemCard value={object} /> : null;
+    case "remember":
+      return object && typeof object.content === "string" ? <MemoriesCard items={[object]} /> : null;
+    case "recall":
+      return Array.isArray(result) && result.length ? (
+        <MemoriesCard items={result.filter((one) => one && typeof one === "object") as Record<string, unknown>[]} />
+      ) : null;
+    case "find_symbol":
+    case "references":
+    case "definition":
+      return object ? <SymbolsCard value={object} /> : null;
+    case "plan_work":
+      return object && Array.isArray(object.tasks) ? <PlanCard value={object} /> : null;
+    case "checklist":
+    case "add_checklist_item":
+    case "check_item":
+      return object ? <ChecklistCard value={object} /> : null;
+    case "glob":
+    case "list_files":
+      return typeof result === "string" && !looksLikeLocations(result) && !/^total \d+/m.test(result) ? (
+        <FilesCard text={result} />
+      ) : null;
+    case "web_search":
+      if (Array.isArray(result) && result.length && result.every((one) => one && typeof one === "object" && "note" in one && !("url" in one))) {
+        return <SearchDownCard note={String((result[0] as { note?: unknown }).note ?? "")} />;
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
 export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> = memo(
   ({ name, args, result: wrapped }) => {
     const { value: result, failed } = unwrap(wrapped);
@@ -1460,8 +1401,31 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
      */
     if (name.startsWith("plugin__")) {
       const [plugin, command] = splitPluginTool(name);
+      if (plugin === "browser" && result && typeof result === "object" && !Array.isArray(result)) {
+        return <BrowserCard command={command} args={args} value={result as Record<string, unknown>} />;
+      }
       if (plugin) return <PluginOutcome plugin={plugin} command={command} result={result} />;
     }
+
+    // A tool that answered only `{error}`: it did not do its job, whatever the envelope says.
+    const outcome = outcomeOf(name, wrapped);
+    if (outcome.state === "failed") {
+      return (
+        <div className="rounded-lg bg-destructive/10 p-2.5 text-xs leading-relaxed text-destructive ring-1 ring-destructive/25">
+          {String((result as { error?: unknown; failure?: unknown }).error ?? (result as { failure?: unknown }).failure ?? outcome.reason)}
+        </div>
+      );
+    }
+
+    // One of his own rules said no, inside a successful envelope. It used to draw exactly like
+    // the call working — `update_task` refusing "done" with 1 of 9 requirements unmet was a
+    // neutral card of key/value rows.
+    if (outcome.state === "refused" && result && typeof result === "object") {
+      return <RefusalCard value={result as Record<string, unknown>} />;
+    }
+
+    const card = keyedCard(name, args, result);
+    if (card) return card;
 
     // Shell first: it is the only tool whose result is a command's whole world, and the exit
     // code deserves to be the thing you see rather than a key in an object.
@@ -1726,26 +1690,59 @@ const SUPERSEDED_BY_RESULT: Record<string, Set<string>> = {
   //: nested array of options with descriptions, which `Fields` prints as raw JSON — sixty lines of
   //: it above an answer of five words. The card below renders the question and what you said.
   ask: new Set(["questions"]),
+  //: The file's whole text. The card below shows its first lines and its length; printing every
+  //: byte above that made a 200-line script a 200-line row.
+  write_file: new Set(["content"]),
+  //: Every edit's old and new text, as JSON — the diff below is the same change, readable.
+  edit_files: new Set(["edits"]),
+  //: The card below has the script behind "Show the script".
+  run_workflow: new Set(["script"]),
+  //: A conventions document, often pages long; the card says what changed.
+  update_design_system: new Set(["conventions"]),
+  //: The terminal card below prints the command with its own copy button.
+  shell: new Set(["command"]),
+  //: The icons are drawn below, each under its own name.
+  find_icons: new Set(["names", "size"]),
+  //: Row ids of checklist items, which nobody outside the database can read; the card names them.
+  checklist: new Set(["items"]),
+  //: His evidence for each requirement, as JSON — the card below renders the same check as prose.
+  update_task: new Set(["verification"]),
 };
 
 export const ToolArgs: FC<{ argsText?: string; toolName?: string }> = ({ argsText, toolName }) => {
+  const root = useProjectRoot();
   const parsed = parseArgs(argsText);
   const hidden = (toolName && SUPERSEDED_BY_RESULT[toolName]) || undefined;
+  // The row already names this one, whole. A single path or URL printed again as the only field
+  // under it is the row said twice; a *list* stays, because the row stops naming after three.
+  const subject = toolName ? describeCall(toolName, parsed, root).subject : "";
+  const onTheRow = (value: unknown) =>
+    (typeof value === "string" || typeof value === "number") &&
+    subject !== "" &&
+    (subject === String(value) || subject === shortPath(String(value), root));
   const args = Object.fromEntries(
     Object.entries(parsed).filter(
       ([key, value]) =>
         !hidden?.has(key) &&
+        !onTheRow(value) &&
         !(PLUMBING.has(key) && (value === 0 || value === "" || value === null || value === 100)) &&
         value !== "" &&
         value !== null &&
         value !== undefined,
     ),
   );
+  // Paths relative to the project here too — the same forty-character prefix on every field.
+  for (const key of ["path", "paths", "folder", "directory"]) {
+    const value = args[key];
+    if (typeof value === "string") args[key] = shortPath(value, root);
+    else if (Array.isArray(value)) args[key] = value.map((one) => (typeof one === "string" ? shortPath(one, root) : one));
+  }
   const keys = Object.keys(args);
   if (!keys.length && Object.keys(parsed).length) return null; // only defaults — say nothing
   if (!keys.length) {
-    // Unparsed but present: mid-stream, or a tool that takes a bare string.
-    return argsText?.trim() ? (
+    // Unparsed but present: mid-stream, or a tool that takes a bare string. `{}` is a call with
+    // no arguments, and printing its braces is printing nothing.
+    return argsText?.trim() && argsText.trim() !== "{}" ? (
       <pre className="rounded-md bg-muted/40 p-2 text-[11.5px] whitespace-pre-wrap">{argsText}</pre>
     ) : null;
   }

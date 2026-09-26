@@ -1,7 +1,7 @@
+import { useComposerRuntime } from "@assistant-ui/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CornerDownRight, X } from "lucide-react";
+import { CornerDownRight } from "lucide-react";
 
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { fetchPendingSteers, withdrawSteers } from "@/lib/commands";
 import { keys } from "@/lib/query-keys";
 
@@ -14,17 +14,19 @@ import { keys } from "@/lib/query-keys";
  * a steer that had landed from one that was never sent. It came back into the thread only once the
  * model had picked it up, which is the one moment you no longer need reassurance.
  *
- * So it stays visible from the moment it is said, in the person's own alignment but unmistakably
- * not yet delivered: dashed, dimmed, and labelled with where it is going. When a round takes it,
- * the server records it and this disappears — replaced by the real message, in the turn that acted
- * on it.
+ * So it stays visible from the moment it is said, one row each, labelled with where it is going:
+ * "Reaches him at his next step". When a round takes it, the server records it and the row goes —
+ * replaced by the real thing, drawn in the turn at the step it landed.
  *
- * And it can be taken back. A queue you can watch but not change is a queue that makes you sit and
- * wait for your own mistake to be read out. Withdraw reaches only what is still queued; once a
- * round has it, it is in the prompt and the way to change your mind is to say so.
+ * And it can be taken back, or taken back to edit. A queue you can watch but not change is a queue
+ * that makes you sit and wait for your own mistake to be read out. Withdraw reaches only what is
+ * still queued; once a round has it, it is in the prompt and the way to change your mind is to say
+ * so. It takes the whole queue — the server offers nothing finer — so the controls sit on the last
+ * row only, rather than promising a precision that is not there.
  */
 export function PendingSteer({ conversationId }: { conversationId: string }) {
   const cache = useQueryClient();
+  const composer = useComposerRuntime();
   const { data: pending = [] } = useQuery({
     queryKey: keys.steers(conversationId),
     queryFn: () => fetchPendingSteers(conversationId),
@@ -41,34 +43,55 @@ export function PendingSteer({ conversationId }: { conversationId: string }) {
     void cache.invalidateQueries({ queryKey: keys.steers(conversationId) });
   };
 
+  /** Take it back and put the words where you can change them. */
+  const edit = async () => {
+    const said = pending.join("\n\n");
+    await withdraw();
+    const now = composer.getState().text;
+    composer.setText(now.trim() ? `${now}\n\n${said}` : said);
+  };
+
+  const several = pending.length > 1;
+
   return (
-    <div className="mx-auto mb-2 flex w-full max-w-(--thread-max-width) flex-col items-end gap-1.5 px-4">
-      {pending.map((said, index) => (
-        <div
-          key={`${index}-${said.slice(0, 24)}`}
-          className="border-border/60 bg-muted/20 text-muted-foreground/80 flex max-w-[80%] items-start gap-2 rounded-2xl border border-dashed px-3.5 py-2 text-sm"
-        >
-          <span className="min-w-0 flex-1 break-words whitespace-pre-wrap">{said}</span>
-          {/* Only on the last one: withdraw takes the whole queue, and a cross on every row
-              would promise a precision the server does not offer. */}
-          {index === pending.length - 1 ? (
-            <TooltipIconButton
-              tooltip={pending.length > 1 ? "Take all of these back" : "Take this back"}
-              side="left"
-              variant="ghost"
-              size="icon"
-              className="hover:text-foreground -me-1 size-5 shrink-0"
-              onClick={() => void withdraw()}
-            >
-              <X className="size-3.5" />
-            </TooltipIconButton>
-          ) : null}
-        </div>
-      ))}
-      <span className="text-muted-foreground/50 flex items-center gap-1 pe-1 text-[11px]">
-        <CornerDownRight className="size-3" aria-hidden />
-        {pending.length > 1 ? `${pending.length} waiting` : "waiting"} for the next round
-      </span>
+    <div className="flex flex-col gap-1.5">
+      {pending.map((said, index) => {
+        const last = index === pending.length - 1;
+        return (
+          <div
+            key={`${index}-${said.slice(0, 24)}`}
+            className="border-kith/25 bg-card flex min-w-0 items-center gap-2.5 rounded-xl border px-3 py-2 text-xs"
+          >
+            <CornerDownRight className="text-kith size-3.5 shrink-0" aria-hidden />
+            {index === 0 ? (
+              <span className="text-kith/85 shrink-0">
+                Reaches him at his next step{several ? ` · ${pending.length} waiting` : ""}
+              </span>
+            ) : null}
+            <span className="text-foreground min-w-0 flex-1 truncate" title={said}>
+              “{said}”
+            </span>
+            {last ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void edit()}
+                  className="text-muted-foreground hover:text-foreground shrink-0 rounded-md px-2 py-0.5 transition-colors"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void withdraw()}
+                  className="text-muted-foreground hover:text-foreground shrink-0 rounded-md px-2 py-0.5 transition-colors"
+                >
+                  {several ? "Take these back" : "Take back"}
+                </button>
+              </>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

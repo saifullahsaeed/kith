@@ -66,7 +66,17 @@ export type StoredPart =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
   | { kind: "tool"; id: string; name: string; arguments: Record<string, unknown>; result?: unknown }
-  | { kind: "usage"; uncached: number; cached: number; out: number }
+  | {
+      kind: "usage";
+      uncached: number;
+      cached: number;
+      out: number;
+      /** When the round landed. Absent on transcripts read by an older server. */
+      at?: string;
+      costUsd?: number;
+      model?: string;
+      provider?: string;
+    }
   // `baseline` is `{}` — not absent — on a turn recorded before this field existed; a
   // structurally real-but-empty reading, not a real one, which is why it's `Partial`.
   | {

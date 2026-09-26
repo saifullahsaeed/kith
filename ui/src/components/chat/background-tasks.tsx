@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Terminal } from "lucide-react";
 
 import { ago, useNow } from "@/hooks/use-now";
 import { keys } from "@/lib/query-keys";
+import { cn } from "@/lib/utils";
 
 /**
  * What is running in the background, while it runs.
@@ -16,10 +16,11 @@ import { keys } from "@/lib/query-keys";
  * show you a suite you cannot explain, stop, or take credit for.
  *
  * Read-only. Starting and stopping stay his, through the tools: a process he started and you killed
- * is a turn carrying on against a world that changed under it.
+ * is a turn carrying on against a world that changed under it. (The design draws Stop and Open on
+ * this card; there is no route for either, and adding one is that decision reopened, not styling.)
  */
 
-interface Task {
+export interface Task {
   name: string;
   command: string;
   alive: boolean;
@@ -29,19 +30,21 @@ interface Task {
   startedAt?: number;
 }
 
+/** This conversation's processes, from `/api/processes`. Shared with the companion's tab row,
+ *  which lights Activity while one is alive, so both read one cache entry. */
+export async function fetchProcesses(conversationId: string): Promise<Task[]> {
+  const response = await fetch(`/api/processes?conversation=${encodeURIComponent(conversationId)}`);
+  if (!response.ok) return [];
+  const body = (await response.json()) as { running?: Task[] } | null;
+  return body?.running ?? [];
+}
+
 export function BackgroundTasks({ conversationId }: { conversationId?: string }) {
   // Starting and finishing both publish a `process` change, so the list appears and empties as it
   // happens rather than on a timer.
   const { data: tasks = [] } = useQuery({
     queryKey: keys.processes(conversationId ?? ""),
-    queryFn: async (): Promise<Task[]> => {
-      const response = await fetch(
-        `/api/processes?conversation=${encodeURIComponent(conversationId ?? "")}`,
-      );
-      if (!response.ok) return [];
-      const body = (await response.json()) as { running?: Task[] } | null;
-      return body?.running ?? [];
-    },
+    queryFn: () => fetchProcesses(conversationId ?? ""),
   });
 
   /* The elapsed time is the one thing here that goes stale with nothing having changed, and it
@@ -53,37 +56,45 @@ export function BackgroundTasks({ conversationId }: { conversationId?: string })
   if (!tasks.length) return null;
 
   return (
-    <div className="border-border/60 flex flex-col gap-2 border-b px-4 py-3">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-medium">Background</span>
-        <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
-          {tasks.length}
-        </span>
-      </div>
-      <ul className="flex flex-col gap-1.5">
-        {tasks.map((task) => (
-          <li key={task.name} className="flex items-start gap-2 text-[11px]">
-            {task.alive ? (
-              <Loader2 className="text-kith mt-0.5 size-3 shrink-0 animate-spin" aria-hidden />
-            ) : (
-              <Terminal className="text-muted-foreground/50 mt-0.5 size-3 shrink-0" aria-hidden />
+    // One card, a row per process: a light, the name you gave it, and the command under it with
+    // how long it has been up. The same card the design draws for the webapp a turn left running.
+    <section
+      aria-label="Running in the background"
+      className="flex shrink-0 flex-col rounded-[14px] border border-border bg-card"
+    >
+      {tasks.map((task) => (
+        <div
+          key={task.name}
+          className="flex min-w-0 items-center gap-2.5 border-foreground/7 px-3.5 py-2.5 [&+&]:border-t"
+        >
+          <span
+            aria-hidden
+            className={cn(
+              "size-[7px] shrink-0 rounded-full",
+              task.alive ? "bg-roam" : "bg-muted-foreground/40",
             )}
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">{task.name}</span>
-              {/* The command, because a name you chose an hour ago is not always enough to say
-                  what is actually running. */}
-              <span className="text-muted-foreground/60 block truncate font-mono text-[10px]">
-                {task.command}
-              </span>
-            </span>
-            <span className="text-muted-foreground/50 shrink-0 font-mono text-[10px] tabular-nums">
-              {/* `startedAt` when the server sent one, and its own sentence otherwise — a running
-                  process from a server that predates the field still reads correctly. */}
-              {task.alive ? (task.startedAt ? ago(task.startedAt, now) : task.for) : "done"}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
+          />
+          <span className="flex min-w-0 flex-1 flex-col gap-px">
+            <span className="truncate text-[13px]">{task.name}</span>
+            {/* The command, because a name you chose an hour ago is not always enough to say
+                what is actually running. */}
+            <code className="truncate font-mono text-[11px] text-muted-foreground/80">
+              <span>{task.command}</span>
+              {" · "}
+              {task.alive ? (
+                <>
+                  up{" "}
+                  {/* `startedAt` when the server sent one, and its own sentence otherwise — a
+                      running process from a server that predates the field still reads right. */}
+                  <span>{task.startedAt ? ago(task.startedAt, now) : task.for}</span>
+                </>
+              ) : (
+                <span>done</span>
+              )}
+            </code>
+          </span>
+        </div>
+      ))}
+    </section>
   );
 }

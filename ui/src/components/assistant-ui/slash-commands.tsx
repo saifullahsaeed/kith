@@ -1,30 +1,24 @@
-import { useEffect, useState } from "react";
-import { useAuiState, useComposerRuntime, type Unstable_SlashCommand } from "@assistant-ui/react";
+import { useEffect, useMemo, useState } from "react";
+import { useAuiState } from "@assistant-ui/react";
 
 import type { ContextLedger } from "@/lib/backend/types";
-import {
-  DESIGN_PROMPT,
-  foldNow,
-  listSkills,
-  stopTurn,
-  WORKFLOW_PREFIX,
-  type SkillSummary,
-} from "@/lib/commands";
+import { foldNow, listSkills, stopTurn, type SkillSummary } from "@/lib/commands";
+import { rememberSkills, type SlashCommand } from "@/lib/slash";
 
 /**
  * The `/` commands, and the line that says what one did.
  *
  * Two kinds, and the difference is worth keeping straight. `/fold` and `/stop` *do* something
- * to the conversation and report back — they never become a message. `/skill` writes into the
- * composer and leaves the cursor with you, because choosing a skill is the start of a request
- * rather than the whole of one: "use the running-a-project skill" on its own is not an
- * instruction, and sending it immediately would make him guess what for.
+ * to the conversation and report back — they never become a message. `/workflow`, `/design` and
+ * a skill are the start of a request rather than the whole of one, so they stay in the box as a
+ * word, with the cursor after it: "use the running-a-project skill" on its own is not an
+ * instruction, and sending it immediately would make him guess what for. What those words mean
+ * is spelled out when the message is sent — see `expandCommand` in `lib/slash.ts`.
  *
  * The skill list is read when the hook mounts rather than held, because he writes skills
  * mid-conversation and a cached list would not offer the one he just made.
  */
 export function useSlashCommands(conversationId?: string) {
-  const composer = useComposerRuntime();
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [note, setNote] = useState("");
   // What the window looked like once the last `/fold` finished. Held here rather than left to
@@ -39,7 +33,10 @@ export function useSlashCommands(conversationId?: string) {
 
   useEffect(() => {
     let alive = true;
-    void listSkills().then((found) => alive && setSkills(found));
+    void listSkills().then((found) => {
+      rememberSkills(found.map((one) => one.name));
+      if (alive) setSkills(found);
+    });
     return () => {
       alive = false;
     };
@@ -60,69 +57,62 @@ export function useSlashCommands(conversationId?: string) {
 
   const id = conversationId ?? "";
 
-  const commands: Unstable_SlashCommand[] = [
-    {
-      id: "fold",
-      label: "fold",
-      description: "Summarise the older turns now, instead of waiting for the window to fill",
-      icon: "Layers",
-      execute: () => {
-        say("Folding…");
-        void foldNow(id).then((result) => {
-          say(result.note);
-          if (result.reading) setReading(result.reading);
-        });
-      },
-    },
-    {
-      id: "stop",
-      label: "stop",
-      description: running ? "Stop the turn running now" : "Nothing is running",
-      icon: "Square",
-      execute: () => {
-        void stopTurn(id).then((result) => say(result.note));
-      },
-    },
-    /* Ahead of the generated `/skill` list and separate from it, because it is not the same
-     * offer. `/designing-a-screen` would say "read the skill"; this says read it *and* make
-     * several files *and* attach them, which is the difference between a board with options on
-     * it and a paragraph about options. Offered whether or not the skill is installed — it
-     * names it, and a missing skill is a thing he can say rather than a command that vanishes. */
-    {
-      id: "design",
-      label: "design",
-      description: "Mock up a few options as screens I can compare on the canvas",
-      icon: "Frame",
-      execute: () => {
-        composer.setText(DESIGN_PROMPT);
-      },
-    },
-    /* The opt-in for a fan-out, written into the composer and left there. The prefix travels
-     * as part of the message — the transcript keeps it and he reads it — so it is the whole
-     * mechanism: a message starting `/workflow` lets him write a workflow script for it, and
-     * without it `run_workflow` refuses. */
-    {
-      id: "workflow",
-      label: "workflow",
-      description: "Have him split this into agents that run in parallel, in the background",
-      icon: "Workflow",
-      execute: () => {
-        composer.setText(WORKFLOW_PREFIX);
-      },
-    },
-    ...skills.map(
-      (skill): Unstable_SlashCommand => ({
-        id: `skill:${skill.name}`,
-        label: skill.name,
-        description: skill.description || "Open this skill before answering",
-        icon: "BookOpenText",
-        // Written into the composer, not sent. See the note above.
-        execute: () => {
-          composer.setText(`Read the ${skill.name} skill and use it for this: `);
+  const commands = useMemo<SlashCommand[]>(
+    () => [
+      {
+        name: "fold",
+        kind: "action",
+        description: "Summarise the older turns now, instead of waiting for the window to fill",
+        run: () => {
+          say("Folding…");
+          void foldNow(id)
+            .then((result) => {
+              say(result.note);
+              if (result.reading) setReading(result.reading);
+            })
+            // A fold that never reached the server must not leave "Folding…" on screen for good.
+            .catch(() => say("Could not reach Kith to fold."));
         },
-      }),
-    ),
-  ];
+      },
+      {
+        name: "stop",
+        kind: "action",
+        description: running ? "Stop the turn running now" : "Nothing is running",
+        run: () => {
+          void stopTurn(id)
+            .then((result) => say(result.note))
+            .catch(() => say("Could not reach Kith to stop."));
+        },
+      },
+      /* Ahead of the skill list and separate from it, because it is not the same offer.
+       * `/designing-a-screen` would say "read the skill"; this says read it *and* make several
+       * files *and* attach them, which is the difference between a board with options on it and
+       * a paragraph about options. */
+      {
+        name: "design",
+        kind: "prefix",
+        description: "Mock up a few options as screens I can compare on the canvas",
+      },
+      /* The opt-in for a fan-out. The word travels as part of the message — the transcript keeps
+       * it and the server reads it — so it is the whole mechanism: a message starting `/workflow`
+       * lets him write a workflow script for it, and without it `run_workflow` refuses. */
+      {
+        name: "workflow",
+        kind: "prefix",
+        description: "Have him split this into agents that run in parallel, in the background",
+      },
+      ...skills.map(
+        (skill): SlashCommand => ({
+          name: skill.name,
+          kind: "prefix",
+          description: skill.description || "Open this skill before answering",
+        }),
+      ),
+    ],
+    // `say` and the setters are stable in effect; what changes the list is these.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [id, running, skills],
+  );
 
   return { commands, note, reading };
 }

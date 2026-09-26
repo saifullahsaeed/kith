@@ -7,6 +7,7 @@ import {
   Layers,
   Loader2,
   MessageSquare,
+  Moon,
   PlugZap,
   Puzzle,
   Search,
@@ -15,6 +16,7 @@ import {
   ShieldCheck,
   Terminal,
   SlidersHorizontal,
+  Sun,
   Wrench,
   X,
 } from "lucide-react";
@@ -352,6 +354,7 @@ export function SettingsPage({
           </div>
         </div>
         <div className="flex-1" />
+        <ThemeSwitch />
         <Button
           variant="ghost"
           size="icon"
@@ -539,6 +542,63 @@ export function SettingsPage({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Light or dark, in the header of every settings page.
+ *
+ * This was a sun/moon button in the window's title bar, one of eleven things up there, and the
+ * only one that was a preference rather than a place to go or a fact about him. The title bar is
+ * navigation and presence now; a switch you set once and forget belongs with the other things
+ * you set once. In the header rather than on one page so it is found without knowing which page
+ * to look on — and as two named choices rather than an icon that shows the *other* mode, which
+ * was a button whose picture described what it would not do.
+ *
+ * Same mechanism as before: the `dark` class on `<html>`, and `kith-theme` in storage for the
+ * script in `index.html` that applies it before first paint.
+ */
+function ThemeSwitch() {
+  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const choose = (next: boolean) => {
+    document.documentElement.classList.toggle("dark", next);
+    try {
+      localStorage.setItem("kith-theme", next ? "dark" : "light");
+    } catch {
+      /* private mode — the choice still holds for this window */
+    }
+    setDark(next);
+  };
+  const options = [
+    { value: false, label: "Light", Icon: Sun },
+    { value: true, label: "Dark", Icon: Moon },
+  ];
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Appearance"
+      className="border-border/60 bg-muted/40 flex items-center gap-0.5 rounded-[10px] border p-0.5"
+    >
+      {options.map(({ value, label, Icon }) => (
+        <button
+          key={label}
+          type="button"
+          role="radio"
+          aria-checked={dark === value}
+          onClick={() => choose(value)}
+          className={cn(
+            "flex h-7 items-center gap-1.5 rounded-[8px] px-2.5 text-[12px] transition-colors",
+            "focus-visible:ring-kith/60 focus-visible:ring-2 focus-visible:outline-none",
+            dark === value
+              ? "bg-background text-foreground shadow-xs"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <Icon className="size-3.5" />
+          {label}
+        </button>
+      ))}
     </div>
   );
 }

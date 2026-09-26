@@ -1,5 +1,9 @@
+import { USAGE_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
 import { formatTokens, type Usage } from "@/lib/tokens";
+import { cn } from "@/lib/utils";
+
+import { Spin } from "./spin";
 
 /** Every model request in this turn, in the order they finished. */
 export interface TurnUsage {
@@ -36,6 +40,97 @@ export interface TurnUsage {
    *  turn that fought its way through six attempts finishes looking exactly like one that
    *  sailed. This is the part that stays, in the footer with the rest of what the turn cost. */
   retried?: number;
+  /** What the turn cost, summed over its rounds, in dollars. Absent when no round was priced —
+   *  a local model, a provider that reports nothing, or a turn read back from the transcript,
+   *  whose timeline does not carry the price. Absent is "unknown", never "$0". */
+  costUsd?: number;
+  /** Which model answered the last round, as the provider named it ("deepseek/deepseek-v4.1-flash"). */
+  model?: string;
+  /** Which host served it ("Novita", "Together"). */
+  provider?: string;
+}
+
+/** The most recent assistant turn's usage data part, walking back from the end — there is at most one per turn (see `USAGE_PART`), and an
+ * in-progress turn's is exactly as current as the round that just landed.
+ *
+ * Exported because the Work panel reads the same figure. One reader rather than two: this walks
+ * the thread from the end looking for one part shape, and a second copy of that in the panel is a
+ * second thing to get wrong when the shape changes. */
+export function latestUsage(messages: readonly unknown[]): TurnUsage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as { role?: string; content?: unknown[] };
+    if (message.role !== "assistant") continue;
+    for (const part of message.content ?? []) {
+      const candidate = part as { type?: string; name?: string; data?: TurnUsage };
+      if (candidate.type === "data" && candidate.name === USAGE_PART && candidate.data) {
+        return candidate.data;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** A price the way a person reads one: "$0.19", "$0.004", "$1.24". */
+export function formatCost(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  if (usd >= 0.01) return `$${usd.toFixed(2)}`;
+  if (usd > 0) return `$${usd.toFixed(3)}`;
+  return "$0";
+}
+
+/** The model's own name, without the vendor prefix a router puts in front of it. */
+export function shortModelName(id: string): string {
+  const slash = id.lastIndexOf("/");
+  return slash === -1 ? id : id.slice(slash + 1);
+}
+
+/**
+ * The line under a finished answer: "$0.19 · deepseek-v4.1-flash via Novita".
+ *
+ * Each clause only when it is known — never borrowing today's model for a turn that may have run
+ * on another. The token accounting (what was sent, how much came from cache) is on the tooltip;
+ * how full the window is lives once, on the composer's ring.
+ */
+export function TurnFooterStats({ usage, title }: { usage: TurnUsage; title?: string }) {
+  const rounds = usage.rounds ?? [];
+  const sent = rounds.reduce((sum, one) => sum + one.uncached + one.cached, 0);
+  const cached = rounds.reduce((sum, one) => sum + one.cached, 0);
+  const clauses: string[] = [];
+  if (usage.costUsd !== undefined) clauses.push(formatCost(usage.costUsd));
+  // No token count here. Every answer said "412k in, 71% cached", so a long chat printed the
+  // size of the window fifteen times down the page; the ring on the composer says it once, and
+  // the tooltip keeps the accounting for whoever wants it.
+  if (usage.model) {
+    clauses.push(`${shortModelName(usage.model)}${usage.provider ? ` via ${usage.provider}` : ""}`);
+  }
+  const accounting = sent
+    ? `${formatTokens(sent)} prompt tokens over ${rounds.length} request${rounds.length === 1 ? "" : "s"}, ` +
+      `${formatTokens(cached)} of them from cache`
+    : "";
+  const tooltip = [title, accounting].filter(Boolean).join("\n");
+  const retried = usage.retried ?? 0;
+  if (!clauses.length && !retried) return null;
+  return (
+    <span
+      data-slot="kith_turn-usage"
+      className="text-muted-foreground/75 flex min-w-0 items-center gap-2 ps-1.5 text-[11px] tabular-nums select-none"
+      title={tooltip || undefined}
+    >
+      {clauses.length ? <span className="truncate">{clauses.join(" · ")}</span> : null}
+      {retried ? (
+        <span
+          className="text-kith/80 shrink-0"
+          title={
+            `A round failed and was sent again ${retried} time${retried === 1 ? "" : "s"}. ` +
+            "The tools of the rounds before it had already run, so only the model request " +
+            "repeated — nothing was done twice."
+          }
+        >
+          sent again ×{retried}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 /**
@@ -65,15 +160,21 @@ export interface TurnUsage {
  * sentence on the right. It belongs next to the thing it is about.
  */
 export function TurnStatus({ usage }: { usage: TurnUsage }) {
+  /* One shape for all three, as the design draws its "live lines": a small bordered pill with a
+   * spinner, the state in its colour and the detail after a dash. Amber for a reconnect (it needs
+   * nothing from you, but it is the one that can fail), blue for making room, green for writing —
+   * green is "he is working right now", and writing a file is exactly that. */
+  const pill = "flex w-fit max-w-full items-center gap-2 rounded-lg border px-3 py-1.5 text-xs select-none";
   if (usage.retrying) {
     return (
       <div
         data-slot="kith_turn-status"
-        className="flex items-center gap-1.5 font-mono text-[11px] text-amber-600/80 select-none dark:text-amber-400/80"
+        className={cn(pill, "border-kith/30 bg-kith-soft/50")}
         title={`${usage.retrying.message}\n\nThe round is being sent again. His earlier rounds are kept either way — if it keeps failing he will write down what he found rather than lose it.`}
       >
-        <span className="size-1.5 animate-pulse rounded-full bg-amber-500/60" />
-        reconnecting — attempt {usage.retrying.attempt + 1}
+        <Spin tone="kith" className="size-3" />
+        <span className="text-kith font-semibold">Reconnecting</span>
+        <span className="text-muted-foreground truncate">— attempt {usage.retrying.attempt + 1}</span>
       </div>
     );
   }
@@ -85,14 +186,18 @@ export function TurnStatus({ usage }: { usage: TurnUsage }) {
     return (
       <div
         data-slot="kith_turn-status"
-        className="text-muted-foreground/70 flex items-center gap-1.5 font-mono text-[11px] select-none"
+        className={cn(pill, "border-roam/30 bg-roam-soft/40")}
         title={
           "He is writing this out now. Large files arrive a piece at a time, and the count is " +
           "how far through it he is — the finished call reports the real size."
         }
       >
-        <span className="bg-kith size-1.5 animate-pulse rounded-full" />
-        writing {what} — {chars < 1000 ? `${chars}` : `${(chars / 1000).toFixed(1)}k`} chars
+        <Spin className="size-3" />
+        <span className="text-roam font-semibold">Writing</span>
+        <code className="text-foreground/90 truncate font-mono">{what}</code>
+        <span className="text-muted-foreground shrink-0">
+          — {chars < 1000 ? `${chars}` : `${(chars / 1000).toFixed(1)}k`} chars
+        </span>
       </div>
     );
   }
@@ -100,60 +205,22 @@ export function TurnStatus({ usage }: { usage: TurnUsage }) {
   // would be a stale line sitting above a live answer.
   if (usage.folded && (usage.rounds ?? []).length === 0) {
     const removed = usage.foldedChars
-      ? ` — summarising ${formatTokens(Math.round((usage.foldedChars.from - usage.foldedChars.to) / 4))}`
+      ? ` — summarising ≈${formatTokens(Math.round((usage.foldedChars.from - usage.foldedChars.to) / 4))} tokens`
       : "";
     return (
       <div
         data-slot="kith_turn-status"
-        className="text-muted-foreground/70 flex items-center gap-1.5 font-mono text-[11px] select-none"
+        className={cn(pill, "border-blue-400/30 bg-blue-400/10")}
         title={
           "This conversation is past what the model can hold, so he is summarising the older " +
           "part before answering. It costs a model call, which is why it takes a moment."
         }
       >
-        <span className="bg-muted-foreground/50 size-1.5 animate-pulse rounded-full" />
-        making room{removed}
+        <Spin tone="blue" className="size-3" />
+        <span className="font-semibold text-blue-400">Folding older turns</span>
+        {removed ? <span className="text-muted-foreground truncate">{removed}</span> : null}
       </div>
     );
   }
   return null;
-}
-
-
-/**
- * What the footer still has to say about a finished turn, which is now only the awkward part.
- *
- * The running token total was here and is gone — it was on screen for every turn in the
- * conversation, and a figure you are not acting on is a figure competing with the writing. What
- * it was genuinely good for, "how full am I", is the composer's meter, which is one gauge that
- * stays put instead of a number per message. The per-round breakdown went with it; the turn log
- * still has all of it if a turn ever needs accounting for.
- *
- * The retry marker stays, because it is not a cost — it is the difference between a turn that
- * sailed and one that fought its way through six attempts, and those finish looking identical.
- * `retrying` in `TurnStatus` is the live version and the answer replaces it, which is no use when
- * a dead network fails name resolution in hundredths of a second.
- */
-export function TurnTokens({ usage }: { usage: TurnUsage }) {
-  const retried = usage.retried ?? 0;
-  if (!retried) return null;
-  return (
-    <div
-      data-slot="kith_turn-usage"
-      // No top margin: it sits on the message's footer row, beside the action bar, rather than
-      // as a line of its own at the end of the body.
-      className="me-1 flex items-center gap-2 font-mono text-[10px] tabular-nums select-none"
-    >
-      <span
-        className="text-amber-600/70 dark:text-amber-400/70"
-        title={
-          `A round failed and was sent again ${retried} time${retried === 1 ? "" : "s"}. ` +
-          "The tools of the rounds before it had already run, so only the model request " +
-          "repeated — nothing was done twice."
-        }
-      >
-        sent again ×{retried}
-      </span>
-    </div>
-  );
 }

@@ -1,12 +1,15 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CircleSlash, Loader2, Network, Square, X } from "lucide-react";
+import { Check, CircleSlash, Network, Square, X, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { useNow } from "@/hooks/use-now";
 import { useAgentMap } from "@/lib/agent-map";
 import { stopWorkflow } from "@/lib/commands";
-import { describeCall } from "@/lib/tool-language";
+import { useProjectRoot } from "@/lib/project-root";
+import { callText, describeCall } from "@/lib/tool-language";
 import type { ActivityItem } from "@/lib/backend/activity";
 import { keys } from "@/lib/query-keys";
+import { cn } from "@/lib/utils";
 
 /**
  * The workflows running for this conversation, and the agents inside each one.
@@ -180,7 +183,7 @@ export function foldRuns(lines: ActivityItem[], conversationId: string): Run[] {
 }
 
 /** A run as the server's board keeps it — see `services/workflows.Run.public`. */
-interface BoardRun {
+export interface BoardRun {
   run: string;
   name: string;
   description?: string;
@@ -272,6 +275,18 @@ export function mergeRuns(board: Run[], live: Run[]): Run[] {
   return [...merged, ...live.filter((one) => !known.has(one.id))].sort((a, b) => a.startedAt - b.startedAt);
 }
 
+/** The server's board of runs for one conversation.
+ *
+ *  Its own function because two readers share the cache entry: the section below, and the tab
+ *  row above the companion column, which lights Activity while a run is going. Two fetchers
+ *  under one key would be two opinions about the same answer. */
+export async function fetchRunBoard(conversationId: string): Promise<BoardRun[]> {
+  const response = await fetch(`/api/workflows?conversation=${encodeURIComponent(conversationId)}`);
+  if (!response.ok) return [];
+  const body = (await response.json()) as { runs?: BoardRun[] } | null;
+  return body?.runs ?? [];
+}
+
 /** Every workflow run in this conversation, merged from the board and the live feed. */
 export function useRuns(conversationId: string, lines: ActivityItem[]): Run[] {
   const cache = useQueryClient();
@@ -284,12 +299,7 @@ export function useRuns(conversationId: string, lines: ActivityItem[]): Run[] {
   ).length;
   const { data } = useQuery({
     queryKey: keys.workflows(conversationId),
-    queryFn: async (): Promise<BoardRun[]> => {
-      const response = await fetch(`/api/workflows?conversation=${encodeURIComponent(conversationId)}`);
-      if (!response.ok) return [];
-      const body = (await response.json()) as { runs?: BoardRun[] } | null;
-      return body?.runs ?? [];
-    },
+    queryFn: () => fetchRunBoard(conversationId),
     enabled: Boolean(conversationId),
     placeholderData: keepPreviousData,
   });
@@ -299,141 +309,450 @@ export function useRuns(conversationId: string, lines: ActivityItem[]): Run[] {
   return mergeRuns(runsFromBoard(data ?? []), live);
 }
 
-/** One agent's first line: what it is, what kind it is, and whether it is still going.
+/* ── The card ───────────────────────────────────────────────────────────────────────────────
  *
- *  Its own component only because it holds state. A single `open` id on the list would collapse
- *  whichever one you were reading the moment you opened another. */
-function AgentHead({ agent }: { agent: Agent }) {
-  const [open, setOpen] = useState(false);
-  const builder = agent.role === "builder";
+ * One card per run, laid out the way the companion's Activity tab draws it: the run's own line
+ * (name, id, clock, Stop), where it is in its plan, the agents of the phase it is in, what is
+ * still ahead, and how close it is to each of its limits. Teal throughout, because teal is what
+ * a workflow is everywhere else — the card in the thread that started it, the chip on the tab.
+ */
 
+/** The server's limits for one run — `AT_ONCE`, `MAX_AGENTS` and `MAX_SECONDS` in
+ *  `server/kith/tools/workflow.py`. Mirrored by hand: the board does not carry them, and this
+ *  footer, which says how close a run is to each, is their only reader. */
+const AT_ONCE = 6;
+const MAX_AGENTS = 30;
+const MAX_MINUTES = 60;
+
+const TEAL = "text-teal-600 dark:text-teal-400";
+
+/** `1:52`, `12:05`, `1:02:05` — a stopwatch, because that is what a running thing is timed by. */
+export function clock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** The small ring the design uses for "going": a spinner that reads as a status, not a load. */
+function Ring({ className }: { className?: string }) {
   return (
-    <div className="flex items-start gap-2 text-[11px]">
-      {agent.running ? (
-        <Loader2
-          className={`mt-0.5 size-3 shrink-0 animate-spin ${builder ? "text-amber-400/80" : "text-teal-400/80"}`}
-          aria-hidden
-        />
-      ) : (
-        <Check className="text-muted-foreground/50 mt-0.5 size-3 shrink-0" aria-hidden />
+    <span
+      aria-hidden
+      className={cn(
+        "size-3 shrink-0 animate-spin rounded-full border-2 border-teal-600/25 border-t-teal-600 dark:border-teal-400/25 dark:border-t-teal-400",
+        className,
       )}
-      <button
-        type="button"
-        onClick={() => setOpen((was) => !was)}
-        title={open ? "Fold" : agent.objective}
-        aria-expanded={open}
-        className={`min-w-0 flex-1 cursor-pointer text-left leading-relaxed ${
-          agent.running ? "" : "text-muted-foreground/70"
-        } ${open ? "whitespace-pre-wrap" : agent.running ? FOLDED_LINES : "truncate"}`}
-      >
-        {/* Named, not only coloured. A builder is editing a copy of your repository and a scout
-            is not, and that difference must survive someone who cannot tell teal from amber. */}
-        {builder ? <span className="mr-1 font-medium text-amber-600 dark:text-amber-400/80">builder</span> : null}
-        {agent.objective}
-      </button>
+    />
+  );
+}
+
+/** What kind of agent it is, in words. A builder is editing a copy of your repository and a
+ *  scout is not, and that difference must survive someone who cannot tell blue from amber. */
+function Kind({ role, chip = true, quiet = false }: { role: string; chip?: boolean; quiet?: boolean }) {
+  const builder = role === "builder";
+  return (
+    <span
+      className={cn(
+        "shrink-0 text-[10px] font-bold uppercase tracking-[0.06em]",
+        chip && "rounded-[5px] px-1.5 py-0.5",
+        quiet
+          ? "text-muted-foreground/80"
+          : builder
+            ? cn("text-kith", chip && "bg-kith-soft")
+            : cn("text-blue-600 dark:text-blue-300", chip && "bg-blue-500/14 dark:bg-blue-400/14"),
+      )}
+    >
+      {builder ? "builder" : "scout"}
+    </span>
+  );
+}
+
+/** A section's small-caps heading, the same one every card in the column uses. */
+function Label({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        "px-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80",
+        className,
+      )}
+    >
+      {children}
     </div>
   );
 }
 
-function RunIcon({ state }: { state: Run["state"] }) {
-  if (state === "running") return <Loader2 className="text-kith/80 size-3.5 shrink-0 animate-spin" aria-hidden />;
-  if (state === "finished") return <Check className="size-3.5 shrink-0 text-emerald-400/80" aria-hidden />;
-  if (state === "stopped") return <CircleSlash className="text-muted-foreground/70 size-3.5 shrink-0" aria-hidden />;
-  return <X className="size-3.5 shrink-0 text-red-400/80" aria-hidden />;
-}
+const SWEEP = "@keyframes kith-sweep{from{background-position:-120px 0}to{background-position:calc(100% + 120px) 0}}";
 
-function RunCard({ run }: { run: Run }) {
-  const [stopping, setStopping] = useState(false);
-  const running = run.state === "running";
-  const reached = run.phases.indexOf(run.phase);
-
+/** The thin light that runs under a working agent. Its keyframes ride with it — React hoists and
+ *  dedupes a `<style>` with an `href` — so the card does not depend on a stylesheet elsewhere. */
+function Sweep() {
   return (
-    <li className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <RunIcon state={run.state} />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium" title={run.description || run.name}>
-          {run.name}
-        </span>
-        {running ? (
-          <button
-            type="button"
-            disabled={stopping}
-            onClick={() => {
-              setStopping(true);
-              void stopWorkflow(run.id);
-            }}
-            className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ring-1 ring-border/60 disabled:cursor-default disabled:opacity-50"
-            title="Stop this workflow and its agents. He is still told what finished."
-          >
-            <Square className="size-2.5" aria-hidden />
-            {stopping ? "stopping" : "stop"}
-          </button>
-        ) : (
-          <span className="text-muted-foreground/60 text-[10px]">{run.state}</span>
+    <>
+      <style href="kith-sweep" precedence="default">
+        {SWEEP}
+      </style>
+      <div
+        aria-hidden
+        className={cn(
+          "h-0.5 rounded-full opacity-70 animate-[kith-sweep_1.6s_linear_infinite]",
+          // Longhands, not `background:` — the shorthand resets the size, and the 120px light
+          // became a smear the width of the card.
+          "bg-no-repeat [background-image:linear-gradient(90deg,transparent,currentColor,transparent)] [background-size:120px_2px]",
+          TEAL,
         )}
-      </div>
-
-      {run.phases.length ? (
-        // Where in its own plan it is. Phases before the current one are done, the current one is
-        // lit, the rest are still ahead — which is the one thing a list of agents cannot say.
-        <ol className="ml-[1.375rem] flex flex-wrap gap-1">
-          {run.phases.map((phase, i) => (
-            <li
-              key={`${run.id}-${phase}`}
-              className={`rounded px-1.5 py-px text-[10px] ${
-                running && i === reached
-                  ? "bg-kith-soft/60 text-kith"
-                  : i < reached || !running
-                    ? "text-muted-foreground/60"
-                    : "text-muted-foreground/40"
-              }`}
-            >
-              {phase}
-            </li>
-          ))}
-        </ol>
-      ) : null}
-
-      {run.agents.length ? (
-        <ul className="ml-[1.375rem] flex flex-col gap-1.5">
-          {run.agents.map((agent) => (
-            <li key={agent.id} className="flex flex-col gap-1">
-              <AgentHead agent={agent} />
-              {agent.running ? (
-                <ul className="border-border/40 ml-[1.375rem] flex flex-col gap-0.5 border-l pl-2">
-                  {agent.steps.slice(-RECENT_STEPS).map((step, i) => {
-                    const call = describeCall(step.tool, step.args);
-                    return (
-                      <li
-                        key={`${agent.id}-${agent.steps.length - Math.min(agent.steps.length, RECENT_STEPS) + i}`}
-                        className="text-muted-foreground/60 truncate text-[10px]"
-                        title={`${call.verb} ${call.subject}`}
-                      >
-                        {call.verb}
-                        {call.subject ? <span className="font-mono"> {call.subject}</span> : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : agent.tally ? (
-                <span className="text-muted-foreground/50 ml-[1.375rem] truncate font-mono text-[10px]">
-                  {agent.tally}
-                </span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {run.said ? (
-        <p className="text-muted-foreground/70 ml-[1.375rem] line-clamp-2 text-[10px] leading-relaxed" title={run.said}>
-          {run.said}
-        </p>
-      ) : null}
-    </li>
+      />
+    </>
   );
 }
 
+/** How far one agent has got: `14 steps · 1:52`. */
+function agentMeta(agent: Agent, now: number): string {
+  const count = Math.max(agent.calls, agent.steps.length);
+  const until = agent.running ? now : agent.endedAt || now;
+  const took = agent.startedAt ? clock(until - agent.startedAt) : "";
+  return [`${count} step${count === 1 ? "" : "s"}`, took].filter(Boolean).join(" · ");
+}
+
+/** A running agent: what it is, what it was asked, and its last few steps as it takes them. */
+function AgentCard({ agent, now }: { agent: Agent; now: number }) {
+  const [open, setOpen] = useState(false);
+  const root = useProjectRoot();
+  /* The brief is the prompt. A label defaults to the prompt's first sixty characters, so a feed
+   * line that carried no prompt still has its brief in the label when the label is long. */
+  const brief = agent.prompt.trim() || (agent.objective.length > 60 ? agent.objective : "");
+  const recent = agent.steps.slice(-RECENT_STEPS);
+  const first = agent.steps.length - recent.length;
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2 rounded-[10px] border border-foreground/8 bg-muted/40 px-3 py-2.5">
+      <div className="flex min-w-0 items-center gap-2">
+        <Kind role={agent.role} />
+        <span className="min-w-0 truncate text-[13px] font-semibold" title={agent.objective}>
+          {agent.objective}
+        </span>
+        <span className="flex-1" />
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/80">
+          {agentMeta(agent, now)}
+        </span>
+      </div>
+
+      {brief ? (
+        /* Folded to two lines and opened on click. A good builder brief says exactly what to
+           change, in which files and what done looks like — hundreds of words, and two of them
+           whole filled the column and pushed their own steps off it. */
+        <button
+          type="button"
+          onClick={() => setOpen((was) => !was)}
+          aria-expanded={open}
+          title={open ? "Fold" : "Show the whole brief"}
+          className={cn(
+            "cursor-pointer text-left text-[12px] leading-[1.45] text-muted-foreground",
+            open ? "whitespace-pre-wrap" : FOLDED_LINES,
+          )}
+        >
+          {brief}
+        </button>
+      ) : null}
+
+      {recent.length ? (
+        <ul className="flex flex-col gap-px text-[12px]">
+          {recent.map((step, i) => {
+            // The newest step is the one it is on: present tense and lit, the rest quiet.
+            const live = i === recent.length - 1;
+            const call = describeCall(step.tool, step.args, root);
+            return (
+              <li
+                key={`${agent.id}-${first + i}`}
+                className={cn("flex h-[22px] min-w-0 items-center gap-2", live ? "text-foreground" : "text-foreground/75")}
+                title={callText(call)}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "size-[5px] shrink-0 rounded-full",
+                    live ? "bg-teal-500 dark:bg-teal-400" : "bg-foreground/25",
+                  )}
+                />
+                <span className="shrink-0 text-muted-foreground/80">{capital(live ? call.doing : call.verb)}</span>
+                {call.subject ? (
+                  <code className="min-w-0 truncate font-mono text-[11.5px]">{call.subject}</code>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+
+      <Sweep />
+    </div>
+  );
+}
+
+/** A finished agent: one quiet line with its tally, kept because "it looked at eleven things" is
+ *  the context for the result you are about to read. */
+function DoneRow({ agent, now }: { agent: Agent; now: number }) {
+  if (agent.failed || /^failed\b/i.test(agent.tally)) return <FailedRow agent={agent} now={now} />;
+  return (
+    <div
+      className="flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px]"
+      title={agent.report || agent.objective}
+    >
+      <Check className="size-3 shrink-0 text-muted-foreground/60" aria-hidden />
+      <Kind role={agent.role} chip={false} quiet />
+      <span className="min-w-0 shrink truncate text-muted-foreground">{agent.objective}</span>
+      {agent.tally ? (
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground/70">{agent.tally}</span>
+      ) : (
+        <span className="flex-1" />
+      )}
+      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">{agentMeta(agent, now)}</span>
+    </div>
+  );
+}
+
+/** An agent that failed, with the reason — red, because failed is the one done state that asks
+ *  for a look. The run carries on without it; `parallel()` hands the script back `None`. */
+function FailedRow({ agent, now }: { agent: Agent; now: number }) {
+  const reason = agent.tally.replace(/^failed:\s*/i, "").trim() || agent.outcome || "it stopped without a report";
+  return (
+    <div className="flex min-w-0 flex-col gap-1 rounded-[10px] border border-destructive/30 bg-destructive/8 px-3 py-2">
+      <div className="flex min-w-0 items-center gap-2 text-[12px]">
+        <XCircle className="size-3.5 shrink-0 text-destructive" aria-label="Failed" />
+        <Kind role={agent.role} chip={false} />
+        <span className="min-w-0 truncate text-foreground/85">{agent.objective}</span>
+        <span className="flex-1" />
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/80">{agentMeta(agent, now)}</span>
+      </div>
+      <p className="line-clamp-2 text-[12px] leading-[1.45] text-destructive" title={reason}>
+        failed: {reason}
+      </p>
+    </div>
+  );
+}
+
+/** How a run ended — the only place the card says so, since the word beside it went to make room
+ *  for the map button. Named for a screen reader and on hover. */
+function EndIcon({ state }: { state: Run["state"] }) {
+  const icon =
+    state === "finished" ? (
+      <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden />
+    ) : state === "stopped" ? (
+      <CircleSlash className="size-3.5 text-muted-foreground" aria-hidden />
+    ) : (
+      <X className="size-3.5 text-destructive" aria-hidden />
+    );
+  return (
+    <span role="img" aria-label={state} title={state} className="flex shrink-0">
+      {icon}
+    </span>
+  );
+}
+
+/** Where in its own plan it is: the phases it declared, the current one lit, with how many agents
+ *  each has sent. A count is only shown once there is one — the server learns of an agent when it
+ *  starts, so a phase still ahead has no honest number yet. */
+function Phases({ run }: { run: Run }) {
+  const running = run.state === "running";
+  const reached = run.phases.indexOf(run.phase);
+  return (
+    <ol className="flex min-w-0 items-center">
+      {run.phases.map((phase, i) => {
+        const here = running && i === reached;
+        const past = reached >= 0 && i < reached;
+        const sent = run.agents.filter((one) => one.phase === phase).length;
+        return (
+          <li key={`${run.id}-${phase}`} className="flex min-w-0 flex-1 items-center">
+            <span
+              className={cn(
+                "flex h-6 shrink-0 items-center gap-1.5 rounded-full border px-[9px] text-[11px] font-semibold",
+                here
+                  ? "border-teal-600/40 bg-teal-500/14 text-teal-700 dark:border-teal-400/40 dark:bg-teal-400/14 dark:text-teal-300"
+                  : "border-foreground/12 text-muted-foreground",
+              )}
+            >
+              {past ? <Check className="size-2.5 text-muted-foreground/80" aria-label="done" /> : null}
+              {phase}
+              {sent ? <span className="font-normal text-muted-foreground/80">{sent}</span> : null}
+            </span>
+            {i < run.phases.length - 1 ? <span aria-hidden className="mx-1 h-px min-w-2 flex-1 bg-foreground/12" /> : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function RunCard({ run, conversationId }: { run: Run; conversationId: string }) {
+  const [stopping, setStopping] = useState(false);
+  const show = useAgentMap((s) => s.show);
+  const running = run.state === "running";
+  // A stopwatch while it runs; once it has ended nothing on the card moves.
+  const now = useNow(running ? 1000 : 60_000);
+  const elapsed = run.startedAt ? (running ? now : run.endedAt || now) - run.startedAt : 0;
+
+  /* Which agents belong to the phase it is in. With no phase announced — a script that declared
+   * none, or one that has not reached its first — they all do. An agent that started before any
+   * phase and is still going stays in view rather than vanishing into "earlier". */
+  const reached = run.phases.indexOf(run.phase);
+  const inPhase = (one: Agent) => !run.phase || one.phase === run.phase || (one.running && !one.phase);
+  const current = run.agents.filter(inPhase);
+  const earlier = run.agents.filter((one) => !inPhase(one));
+  const ahead = running && reached >= 0 ? run.phases.slice(reached + 1) : [];
+  const going = run.agents.filter((one) => one.running).length;
+  const left = Math.max(0, Math.ceil(MAX_MINUTES - elapsed / 60_000));
+
+  return (
+    <section
+      aria-label={`Workflow ${run.name}`}
+      className={cn(
+        "flex shrink-0 flex-col rounded-[14px] border bg-card",
+        running ? "border-teal-600/35 dark:border-teal-400/35" : "border-border",
+      )}
+    >
+      <div className="flex flex-col gap-2.5 px-3.5 pt-3 pb-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          {running ? <Ring /> : <EndIcon state={run.state} />}
+          {/* The name opens the agent map — the whole run drawn as a graph, every agent's brief,
+              report and patch. It used to be a separate "map" link in a header this card no
+              longer has. */}
+          <button
+            type="button"
+            onClick={() => show(conversationId, run.id)}
+            title={run.description ? `${run.description} — open the agent map` : "Open the agent map"}
+            className="min-w-0 cursor-pointer truncate font-mono text-[14px] font-[650] hover:underline"
+          >
+            {run.name}
+          </button>
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground/80">{run.id}</span>
+          <span className="flex-1" />
+          {elapsed ? (
+            <span className={cn("shrink-0 text-[12px] tabular-nums", running ? TEAL : "text-muted-foreground/80")}>
+              {clock(elapsed)}
+            </span>
+          ) : null}
+          {/* The map, said as a button. The name above opens it too, but a hover underline is
+              not how anyone finds a door. */}
+          <button
+            type="button"
+            onClick={() => show(conversationId, run.id)}
+            title="Open the agent map — the run as a graph, every agent's brief, report and patch"
+            className="flex h-[26px] shrink-0 cursor-pointer items-center gap-[5px] rounded-[7px] border border-foreground/14 px-[9px] text-[12px] text-foreground/85 transition-colors hover:bg-accent"
+          >
+            <Network className="size-3" aria-hidden />
+            Agent map
+          </button>
+          {running ? (
+            <button
+              type="button"
+              disabled={stopping}
+              onClick={() => {
+                setStopping(true);
+                void stopWorkflow(run.id);
+              }}
+              title="Stop this workflow and its agents. He is still told what finished."
+              className="flex h-[26px] shrink-0 cursor-pointer items-center gap-[5px] rounded-[7px] border border-foreground/14 px-[9px] text-[12px] text-foreground/85 transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-50"
+            >
+              <Square className="size-2.5 fill-current" aria-hidden />
+              {stopping ? "Stopping" : "Stop"}
+            </button>
+          ) : null}
+        </div>
+
+        {run.phases.length ? <Phases run={run} /> : null}
+
+        {run.said ? (
+          <p className="line-clamp-2 text-[12px] leading-[1.45] text-muted-foreground" title={run.said}>
+            {run.said}
+          </p>
+        ) : null}
+      </div>
+
+      {run.agents.length || ahead.length ? (
+        <div className="flex flex-col gap-2 border-t border-foreground/7 px-2.5 pt-2.5 pb-1.5">
+          {current.length ? (
+            <>
+              <Label>
+                {run.phase || "Agents"} · {running ? (going ? "running" : "waiting") : run.state}
+              </Label>
+              {/* One column in the companion, several once the tab is opened full width. */}
+              <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))]">
+                {current.map((agent) =>
+                  agent.running ? (
+                    <AgentCard key={agent.id} agent={agent} now={now} />
+                  ) : (
+                    <DoneRow key={agent.id} agent={agent} now={now} />
+                  ),
+                )}
+              </div>
+            </>
+          ) : null}
+
+          {ahead.length ? (
+            <>
+              <Label className="pt-1">Up next</Label>
+              {/* The phases still ahead, not named agents: the server learns of an agent only
+                  when the script sends it, so what is known about the rest of the plan is its
+                  phases and their order. */}
+              <div className="flex flex-col gap-1 pb-1">
+                {ahead.map((phase, i) => (
+                  <div
+                    key={`${run.id}-next-${phase}`}
+                    className="flex h-[30px] min-w-0 items-center gap-2 rounded-lg border border-dashed border-foreground/12 px-2.5 text-[12px] text-muted-foreground"
+                  >
+                    <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.06em] text-muted-foreground/80">
+                      phase {reached + i + 2}
+                    </span>
+                    <span className="min-w-0 truncate text-foreground/85">{phase}</span>
+                    <span className="flex-1" />
+                    <span className="shrink-0 text-[11px] text-muted-foreground/80">
+                      after {run.phases[reached + i]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {earlier.length ? (
+            <>
+              <Label className="pt-1">Earlier</Label>
+              <div className="flex flex-col gap-0.5 pb-1">
+                {earlier.map((agent) => (
+                  <DoneRow key={agent.id} agent={agent} now={now} />
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      {running ? (
+        /* How close it is to each of the three things that end a run early. */
+        <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-foreground/7 px-3.5 py-2 text-[11px] tabular-nums text-muted-foreground/80">
+          <span>
+            {going} of {AT_ONCE} running
+          </span>
+          <span>
+            {run.agents.length} of {MAX_AGENTS} agents
+          </span>
+          {run.startedAt ? <span>{left} min left</span> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The runs, as cards. The running one first — while it runs it *is* what is happening, the
+ * turn that started it having ended — and the finished ones after it, newest first.
+ *
+ * No header of its own: each card names its run, and a "Workflows" heading over a single card
+ * was a title for a title.
+ */
 export function Workflows({
   lines,
   conversationId = "",
@@ -442,36 +761,18 @@ export function Workflows({
   conversationId?: string;
 }) {
   const runs = useRuns(conversationId, lines);
-  const show = useAgentMap((s) => s.show);
   // Nothing to say beats a header over an empty list — the same rule the background section follows.
   if (!runs.length) return null;
-  const running = runs.filter((one) => one.state === "running").length;
-
+  const ordered = [
+    ...runs.filter((one) => one.state === "running"),
+    ...runs.filter((one) => one.state !== "running").reverse(),
+  ];
   return (
-    <div className="border-border/60 flex flex-col gap-2 border-b px-4 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-medium">Workflows</span>
-        <span className="flex items-center gap-2">
-          <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
-            {running ? `${running} running` : runs.length}
-          </span>
-          <button
-            type="button"
-            onClick={() => show(conversationId, runs[runs.length - 1].id)}
-            className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-1 text-[10px]"
-            title="Open the agent map"
-          >
-            <Network className="size-3" aria-hidden />
-            map
-          </button>
-        </span>
-      </div>
-      <ul className="flex flex-col gap-3">
-        {runs.map((run) => (
-          <RunCard key={run.id} run={run} />
-        ))}
-      </ul>
-    </div>
+    <>
+      {ordered.map((run) => (
+        <RunCard key={run.id} run={run} conversationId={conversationId} />
+      ))}
+    </>
   );
 }
 

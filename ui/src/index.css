@@ -500,6 +500,25 @@
   margin-top: 0.5rem;
 }
 
+/* A recognised `/command` at the start of the message (`composer-input/slash-token.ts`): the word
+   is still plain text, only drawn as a token — the chip the bubble will show once it is sent. */
+.kith-composer-doc .kith-slash-token {
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-weight: 600;
+  color: var(--kith);
+  background: color-mix(in oklch, var(--kith) 15%, transparent);
+}
+.kith-composer-doc .kith-slash-token[data-tone="workflow"] {
+  color: var(--color-teal-600);
+  background: color-mix(in oklch, var(--color-teal-400) 15%, transparent);
+}
+.dark .kith-composer-doc .kith-slash-token[data-tone="workflow"] {
+  color: var(--color-teal-400);
+}
+
 .kith-composer-doc h1,
 .kith-composer-doc h2,
 .kith-composer-doc h3 {
@@ -832,4 +851,40 @@
   [data-slot="aui_system-message"] {
     animation: none;
   }
+}
+
+/* ── The title bar ─────────────────────────────────────────────────────────────────────────
+ *
+ * One 44px bar across the top of the window: the sidebar's own segment, the open chats as tabs,
+ * then Kith's presence and the few places you go from here (`app-header.tsx`).
+ *
+ * Its ground sits between the room and the sidebar — a shade up from the thread, a shade under
+ * the conversation list — which is what lets the active tab, painted in the thread's own ground,
+ * read as the top of the page below it. Derived from those two rather than given a value of its
+ * own, so light mode and any later change to either token carry it along. Declared once on
+ * `:root`: `.dark` sits on the same element, so the `var()`s resolve to whichever theme is on. */
+:root {
+  --titlebar: color-mix(in oklab, var(--background) 60%, var(--sidebar));
+}
+@theme inline {
+  --color-titlebar: var(--titlebar);
+}
+
+/* The bar's left segment clears the traffic lights by the width they take and not a rem more:
+ * the sidebar toggle sits just past them, where a Mac puts it. In a browser tab (no inset) and in
+ * full screen (no lights) it keeps the segment's own 10px. Unlayered like the rule it refines,
+ * and more specific, so it wins without `!important`. */
+.window-controls-gap.kith-titlebar-gap {
+  padding-left: max(10px, calc(var(--window-controls-inset) + 6px));
+}
+[data-desktop-fullscreen] .window-controls-gap.kith-titlebar-gap {
+  padding-left: 10px;
+}
+
+/* A state dot that breathes: the tab of a chat that is working, running a workflow or waiting
+ * on you, and the dot in the presence pill. The same keyframes as the orb's halo, applied to the
+ * dot itself. Kept under reduced motion for the reason the note above gives — it is the signal,
+ * not decoration. The duration is set per use (`animation-duration`), the default is the orb's. */
+.kith-breathe {
+  animation: kith-breathe 3.2s ease-in-out infinite;
 }

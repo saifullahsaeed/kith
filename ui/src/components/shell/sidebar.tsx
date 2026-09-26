@@ -26,7 +26,8 @@ export const SIDEBAR_MIN = 240;
 /** Widest it may be dragged. Past this the rail is competing with the thread rather than
  *  indexing it. */
 export const SIDEBAR_MAX = 460;
-export const SIDEBAR_DEFAULT = 260;
+/** The design's rail: 264px, the width the title bar's first column is drawn to. */
+export const SIDEBAR_DEFAULT = 264;
 
 export type SidebarShape = { width: number; open: boolean };
 

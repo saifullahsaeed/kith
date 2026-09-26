@@ -33,6 +33,29 @@ export const USAGE_PART = "round-usage";
 export const STEER_PART = "steered-in";
 
 /**
+ * When a turn this window started began and ended, carried on the message's own metadata as
+ * `custom[TURN_TIMING]`.
+ *
+ * The run strip says "Worked 4m 12s", and the only honest source for that is having watched it:
+ * the stream's events carry no timestamps, and a turn rejoined mid-way (`resumeTurn`) began
+ * before this window knew about it — `createdAt` there is when the window attached, not when he
+ * started. So this is set only by `run`, for a turn sent from here, and a rejoined or reloaded
+ * turn simply has none and shows no duration rather than a wrong one.
+ *
+ * Metadata rather than a field on the usage part because the usage part does not exist until the
+ * first round reports in, which can be twenty seconds into a turn — and the clock is wanted from
+ * the first second.
+ */
+export const TURN_TIMING = "kithTiming";
+
+export interface TurnTiming {
+  /** ms since the epoch, when the request was sent. */
+  startedAt: number;
+  /** ms since the epoch, when the stream ended. Absent while it is running. */
+  endedAt?: number;
+}
+
+/**
  * Attempts at *starting* a turn — and only at starting one.
  *
  * The distinction is the whole design. Retrying a connection that never opened is free: nothing
@@ -167,6 +190,8 @@ export function createBackendAdapter(conversation?: {
        * this branch had been asking a question whose answer could no longer be yes.
        */
       const startingIn = conversation?.project?.() ?? null;
+      // Taken before the request, which is when the person's wait begins.
+      const startedAt = Date.now();
       const body = JSON.stringify({
         messages: toWireMessages(messages, conversation?.get() ?? ""),
         // Omitted on the first turn; the server opens one and tells us which.
@@ -237,7 +262,7 @@ export function createBackendAdapter(conversation?: {
        * happy path is a claim that outlives its stream and silently hides the stored turn. */
       conversation?.onTurn?.(response.headers.get("X-Kith-Turn") ?? "");
       try {
-        yield* readTurn(response, conversation);
+        yield* readTurn(response, conversation, startedAt);
       } finally {
         conversation?.onTurn?.("");
       }
@@ -257,7 +282,30 @@ export function createBackendAdapter(conversation?: {
 async function* readTurn(
   response: Response,
   conversation?: { get: () => string; set: (id: string) => void } | undefined,
+  /** When this window sent the turn; absent for a turn it rejoined — see `TURN_TIMING`. */
+  startedAt?: number,
 ): AsyncGenerator<ChatModelRunResult> {
+    /** The turn's timing, riding on every update so the first one already carries the start. */
+    const timed = (endedAt?: number): ChatModelRunResult["metadata"] =>
+      startedAt === undefined
+        ? undefined
+        : {
+            custom: {
+              [TURN_TIMING]: { startedAt, ...(endedAt ? { endedAt } : {}) } satisfies TurnTiming,
+            },
+          };
+    /** Every update, with the timing on it when there is any. */
+    const update = (content: ThreadAssistantMessagePart[]): ChatModelRunResult => {
+      const metadata = timed();
+      return metadata ? { content, metadata } : { content };
+    };
+    /* What the turn cost and who answered it. Summed and replaced respectively as rounds land:
+     * a turn's price is every request in it, and the model is whichever answered last — which is
+     * the one that wrote the answer. `costUsd` stays undefined until a round actually prices
+     * itself, so a provider that reports nothing reads as "unknown", never as "$0". */
+    let costUsd: number | undefined;
+    let model: string | undefined;
+    let provider: string | undefined;
     const pieces: Piece[] = [];
     const toolById = new Map<string, ToolPart>();
     // One entry per model request. Kept out of `pieces` because the total belongs at
@@ -342,6 +390,9 @@ let retried = 0;
           retrying,
           writing,
           retried,
+          ...(costUsd !== undefined ? { costUsd } : {}),
+          ...(model ? { model } : {}),
+          ...(provider ? { provider } : {}),
         };
         parts.push({ type: "data", name: USAGE_PART, data: usage });
       }
@@ -349,6 +400,8 @@ let retried = 0;
     };
 
     try {
+      // The start, straight away: nothing else may arrive for the length of a whole first round.
+      if (startedAt !== undefined) yield update(snapshot());
       for await (const event of readEvents(response)) {
         if (event.type === "error") throw new Error(event.message);
 
@@ -360,13 +413,13 @@ let retried = 0;
         if (event.type === "retrying") {
           retrying = { attempt: event.attempt, message: event.message };
           retried += 1;
-          yield { content: snapshot() };
+          yield update(snapshot());
           continue;
         }
         if (event.type === "writing") {
           retrying = undefined;
           writing = { name: event.name, chars: event.chars, ...(event.path ? { path: event.path } : {}) };
-          yield { content: snapshot() };
+          yield update(snapshot());
           continue;
         }
         // Anything else arriving means the round got through.
@@ -387,11 +440,17 @@ let retried = 0;
         } else if (event.type === "stats") {
           // One of these lands per model request, so the total grows a round at a
           // time and the footer counts up while he works.
+          const stats = event.stats;
           rounds.push({
-            uncached: event.stats.uncachedTokens ?? 0,
-            cached: event.stats.cachedTokens ?? 0,
-            out: event.stats.responseTokens ?? 0,
+            uncached: Number(stats.uncachedTokens ?? 0) || 0,
+            cached: Number(stats.cachedTokens ?? 0) || 0,
+            out: Number(stats.responseTokens ?? 0) || 0,
           });
+          if (typeof stats.costUsd === "number" && Number.isFinite(stats.costUsd)) {
+            costUsd = (costUsd ?? 0) + stats.costUsd;
+          }
+          if (typeof stats.model === "string" && stats.model) model = stats.model;
+          if (typeof stats.provider === "string" && stats.provider) provider = stats.provider;
         } else if (event.type === "context") {
           // `context` is replaced rather than accumulated: this is a reading of the window
           // as it stands, not a thing that happened, so the last one is the only one still
@@ -414,8 +473,12 @@ let retried = 0;
           continue; // done
         }
 
-        yield { content: snapshot() };
+        yield update(snapshot());
       }
+      /* The stream is over: stamp the end, so the strip can say how long he worked. A turn that
+       * threw never reaches here and keeps no end — its strip says it did not finish instead. */
+      const ended = timed(Date.now());
+      if (ended) yield { content: snapshot(), metadata: ended };
   } catch (error) {
     if (isAbort(error)) return;
     throw error;

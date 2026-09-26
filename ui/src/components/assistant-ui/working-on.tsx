@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ListChecks } from "lucide-react";
+import { Check, ListChecks } from "lucide-react";
 
 import { useState } from "react";
 
@@ -17,11 +17,20 @@ interface ChecklistItem {
   done: boolean | number;
 }
 
-interface WorkingTask {
+export interface WorkingTask {
   id: number;
   goal: string;
   status: string;
   checklist?: ChecklistItem[];
+}
+
+/** The task this conversation is working through, or null. Shared with the companion's Canvas
+ *  tab, which opens that task's board, so both read the one cache entry. */
+export async function fetchWorkingOn(conversationId: string): Promise<WorkingTask | null> {
+  const response = await fetch(`/api/chat/${conversationId}/working-on`);
+  if (!response.ok) return null;
+  const body = (await response.json()) as WorkingTask | null;
+  return body && body.id ? body : null;
 }
 
 /**
@@ -51,12 +60,7 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
    * See lib/query.ts. */
   const { data: task = null } = useQuery({
     queryKey: keys.workingOn(conversationId),
-    queryFn: async (): Promise<WorkingTask | null> => {
-      const response = await fetch(`/api/chat/${conversationId}/working-on`);
-      if (!response.ok) return null;
-      const body = (await response.json()) as WorkingTask | null;
-      return body && body.id ? body : null;
-    },
+    queryFn: () => fetchWorkingOn(conversationId),
     // Nothing to ask about until there is a conversation.
     enabled: Boolean(conversationId),
   });
@@ -85,113 +89,102 @@ export function WorkingOn({ conversationId }: { conversationId: string }) {
   const open = asked ?? (items.length > 0 && items.length <= INLINE_STEPS);
   const next = items.find((one) => !one.done);
 
+  // "working" is the only status the endpoint answers with — see above — but a server that says
+  // something else should be read back as it said it, not relabelled.
+  const status = task.status && task.status !== "working" ? task.status : "Working";
+
   return (
-    // Panel spacing, not composer spacing. This carried `mx-auto`, `max-w-(--thread-max-width)`
-    // and a `mb-1.5` from sitting in the composer stack — a thread measurement and a gap between
-    // siblings, neither of which means anything here. `px-4` matches the panel's other rows; the
-    // vertical padding is its own, because it is the first thing under the header and had been
-    // sitting flush against the rule.
-    <div className="w-full px-4 pt-3 pb-3">
-      {/* Quieter than the composer, deliberately. It had the same border weight and the same
-          text size, so two boxes of equal loudness sat on top of each other and the one you
-          type into was not obviously the subject. This is a status line: it should be readable
-          when you look for it and ignorable when you are not. */}
-      <div className="border-border/40 bg-muted/25 rounded-lg border px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <ListChecks className="text-kith/70 size-3.5 shrink-0" />
-          <a
-            href={pathForTask(task.id)}
-            className="text-muted-foreground hover:text-foreground min-w-0 flex-1 truncate text-[11px] transition-colors"
-            title={task.goal}
-          >
-            <span className="text-muted-foreground/50 me-1.5 font-mono">#{task.id}</span>
-            {task.goal}
-          </a>
-
-          {/* The count sits with a bar rather than alone at the far right, where it was a
-              number with nothing to compare itself to. Two glances become one. */}
-          {items.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => setAsked(!open)}
-              aria-expanded={open}
-              aria-label={open ? "Hide the checklist" : "Show the checklist"}
-              disabled={items.length <= INLINE_STEPS}
-              className={cn(
-                "-me-1 flex shrink-0 items-center gap-1.5 rounded px-1 py-0.5",
-                items.length > INLINE_STEPS &&
-                  "hover:bg-muted/60 cursor-pointer transition-colors",
-              )}
-            >
-              <span className="bg-border/70 h-1 w-10 overflow-hidden rounded-full">
-                <span
-                  className="bg-roam block h-full rounded-full transition-[width] duration-500"
-                  style={{ width: `${pct}%` }}
-                />
-              </span>
-              <span className="text-muted-foreground/60 font-mono text-[10px] tabular-nums">
-                {done}/{items.length}
-              </span>
-              {/* The count alone was the whole affordance, and nothing said it was a control.
-                  A chevron is the one glyph nobody has to be taught, and it doubles as the
-                  state: pointing down means there is more under here. */}
-              {items.length > INLINE_STEPS ? (
-                <ChevronDown
-                  className={cn(
-                    "text-muted-foreground/50 size-3 transition-transform",
-                    open && "rotate-180",
-                  )}
-                  aria-hidden
-                />
-              ) : null}
-            </button>
-          ) : null}
-        </div>
-
-        {/* What is next, when the list is folded. One line, and the only line that answers the
-            question you had when you glanced at this. */}
-        {!open && next ? (
+    // A card in the Activity column: the task's number and state, its goal as a sentence, and a
+    // bar for how far through its checklist he is. The count is the control that opens the list.
+    <section
+      aria-label={`Task ${task.id}`}
+      className="flex shrink-0 flex-col gap-2 rounded-[14px] border border-border bg-card px-3.5 py-3"
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <ListChecks className="size-3.5 shrink-0 text-blue-600 dark:text-blue-400" aria-hidden />
+        <span className="shrink-0 font-mono text-[11px] text-muted-foreground/80">#{task.id}</span>
+        <span className="shrink-0 rounded-full bg-kith-soft px-[7px] py-0.5 text-[11px] font-semibold text-kith capitalize">
+          {status}
+        </span>
+        <span className="flex-1" />
+        {items.length > 0 ? (
           <button
             type="button"
-            onClick={() => setAsked(true)}
-            className="text-muted-foreground/60 hover:text-muted-foreground mt-1.5 block w-full cursor-pointer truncate ps-[22px] text-start text-[11px] transition-colors"
+            onClick={() => setAsked(!open)}
+            aria-expanded={open}
+            aria-label={open ? "Hide the checklist" : "Show the checklist"}
+            disabled={items.length <= INLINE_STEPS}
+            className={cn(
+              "-me-1 shrink-0 rounded px-1 py-0.5 text-[11px] tabular-nums text-muted-foreground",
+              items.length > INLINE_STEPS && "hover:bg-accent cursor-pointer transition-colors",
+            )}
           >
-            next · {next.text}
+            {/* The count is the control, as the design draws it — no chevron. What says it can be
+                pressed is the hover, the pointer, and the "next ·" line under a folded list,
+                which opens it too. */}
+            {done} / {items.length}
           </button>
         ) : null}
-
-        {open ? (
-          // Capped even when open. A task with thirty steps would otherwise do to the panel
-          // exactly what this is fixing, one click later.
-          <ul className="mt-2.5 flex max-h-56 flex-col gap-2.5 overflow-y-auto ps-[22px]">
-            {items.map((item) => {
-              const ticked = Boolean(item.done);
-              return (
-                <li key={item.id} className="flex items-start gap-2 text-[11px] leading-normal">
-                  <span
-                    className={cn(
-                      "mt-[2px] flex size-3 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
-                      ticked ? "bg-roam border-roam text-background" : "border-muted-foreground/30",
-                    )}
-                  >
-                    {ticked ? <Check className="size-2" strokeWidth={3} /> : null}
-                  </span>
-                  <span
-                    className={cn(
-                      "min-w-0 flex-1",
-                      ticked
-                        ? "text-muted-foreground/40 line-through"
-                        : "text-muted-foreground/90",
-                    )}
-                  >
-                    {item.text}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        ) : null}
       </div>
-    </div>
+
+      <a
+        href={pathForTask(task.id)}
+        className="text-[13px] leading-[1.45] text-foreground/85 transition-colors hover:text-foreground"
+        title="Open the task"
+      >
+        {task.goal}
+      </a>
+
+      {items.length > 0 ? (
+        <span aria-hidden className="block h-1 overflow-hidden rounded-full bg-foreground/10">
+          <span
+            className="bg-roam block h-full rounded-full transition-[width] duration-500"
+            style={{ width: `${pct}%` }}
+          />
+        </span>
+      ) : null}
+
+      {/* What is next, when the list is folded. One line, and the only line that answers the
+          question you had when you glanced at this. */}
+      {!open && next ? (
+        <button
+          type="button"
+          onClick={() => setAsked(true)}
+          className="block w-full cursor-pointer truncate text-start text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          next · {next.text}
+        </button>
+      ) : null}
+
+      {open ? (
+        // Capped even when open. A task with thirty steps would otherwise do to the column
+        // exactly what this is fixing, one click later.
+        <ul className="flex max-h-56 flex-col gap-1.5 overflow-y-auto">
+          {items.map((item) => {
+            const ticked = Boolean(item.done);
+            return (
+              <li key={item.id} className="flex items-start gap-2 text-[12px] leading-[1.45]">
+                <span
+                  className={cn(
+                    "mt-[2px] flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+                    ticked ? "border-roam/40 bg-roam/15 text-roam" : "border-foreground/20",
+                  )}
+                >
+                  {ticked ? <Check className="size-2.5" strokeWidth={3} /> : null}
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1",
+                    ticked ? "text-muted-foreground/70 line-through" : "text-foreground/85",
+                  )}
+                >
+                  {item.text}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </section>
   );
 }

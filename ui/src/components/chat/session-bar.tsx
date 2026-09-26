@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { FolderKanban, Search } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Folder, ListChecks, Search } from "lucide-react";
 
 import { Dropdown } from "@/components/ui/dropdown";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ThreadFind } from "@/components/chat/thread-find";
-import { setConversationProject } from "@/lib/backend";
+import { fetchConversations, setConversationProject } from "@/lib/backend";
 import { fetchBrain, type Project } from "@/lib/backend/brain";
+import { Go } from "@/lib/go";
+import { keys } from "@/lib/query-keys";
+import { pathForTask } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Layer, useLayer } from "@/hooks/use-layer";
 
@@ -24,8 +28,10 @@ const NONE = "none";
  * rather than in the app header deliberately — the header is about Kith, and this is about
  * the piece of work in front of you.
  *
- * It draws nothing at all until a conversation exists. An empty chat has no session to
- * describe, and a disabled control on a blank screen is just noise.
+ * One 44px row, as the design draws the thread's header: the project, a slash, the conversation's
+ * title — then, at the far end, the task this chat is working (when it is working one) and find.
+ * The title is here because this row is the only thing above the thread that names *this*
+ * conversation; the tab above it is a truncated copy, and a split pane has no tab of its own.
  */
 export function SessionBar({
   conversationId,
@@ -64,6 +70,9 @@ export function SessionBar({
   // Reloaded when the session changes as well as on mount: he starts projects himself
   // mid-conversation, so the list a picker was opened with goes stale within a turn.
   useEffect(load, [load, conversationId, projectId]);
+
+  const title = useConversationTitle(conversationId);
+  const task = useWorkingTask(conversationId);
 
   /* ⌘F opens the find bar, and takes the key off the browser to do it.
    *
@@ -124,70 +133,106 @@ export function SessionBar({
    * glance, and Stop is one Escape away. */
   if (finding) {
     return (
-      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-1.5">
+      <div className="border-border/80 flex h-11 shrink-0 items-center gap-2 border-b px-5">
         <ThreadFind focusSignal={focusFind} onClose={() => setFinding(false)} />
       </div>
     );
   }
 
+  const counts = current
+    ? `${current.tasks_active} open · ${current.tasks_done}/${current.tasks_total - current.tasks_dropped} done`
+    : "";
+
   return (
-    <div className="flex items-center gap-2 border-b border-border/60 px-4 py-1.5">
-      <FolderKanban
-        className={cn("size-3.5 shrink-0", current ? "text-blue-400/80" : "text-muted-foreground/50")}
-      />
+    <div className="border-border/80 flex h-11 shrink-0 items-center gap-2.5 border-b px-5">
       {projectId && conversationId ? (
         // Locked, not merely disabled: this isn't "you could, but not right now" — a
         // conversation is stuck with the first project it picks for the rest of its life,
         // so there is nothing here to click at all. A dropdown that silently refuses every
         // selection reads as broken; a label reads as what it is.
         <span
-          className="min-w-[9rem] max-w-[18rem] shrink-0 truncate text-sm"
-          title="This conversation is working on this project for good — start a new conversation for something else."
+          className="text-foreground/75 flex max-w-[16rem] min-w-0 shrink-0 items-center gap-1.5 text-[13px]"
+          title={
+            "This conversation is working on this project for good — start a new conversation for something else." +
+            (counts ? `\n${counts}` : "")
+          }
         >
-          {current ? (
-            current.status === "active" ? (
-              current.name
+          <Folder className="size-3.5 shrink-0" aria-hidden />
+          <span className="truncate">
+            {current ? (
+              current.status === "active" ? (
+                current.name
+              ) : (
+                <>
+                  {current.name} <span className="text-muted-foreground/70">· {current.status}</span>
+                </>
+              )
             ) : (
-              <>
-                {current.name}{" "}
-                <span className="text-muted-foreground/70">· {current.status}</span>
-              </>
-            )
-          ) : (
-            `Project #${projectId}`
-          )}
+              `Project #${projectId}`
+            )}
+          </span>
         </span>
       ) : (
-        <Dropdown
-          variant="bare"
-          ariaLabel="What this conversation will work on"
-          className={cn("min-w-[9rem] max-w-[18rem] shrink-0", busy && "opacity-60")}
-          value={projectId ? String(projectId) : NONE}
-          onChange={(value) => void choose(value)}
-          options={[
-            // "No project" is a real choice, not an empty state: a session for a one-off
-            // errand should stay unbound. Picking an actual project below is the one-way
-            // door — there is no unbinding a conversation once it has chosen.
-            { value: NONE, label: <span className="text-muted-foreground">No project</span> },
-            ...projects.map((project) => ({
-              value: String(project.id),
-              label: project.name,
-            })),
-          ]}
-        />
-      )}
-      {current ? (
-        <span className="text-muted-foreground/50 hidden truncate text-[11px] sm:block">
-          {current.tasks_active} open · {current.tasks_done}/
-          {current.tasks_total - current.tasks_dropped} done
+        <span className="flex shrink-0 items-center gap-1.5">
+          <Folder
+            className={cn("size-3.5 shrink-0", current ? "text-foreground/75" : "text-muted-foreground/60")}
+            aria-hidden
+          />
+          <Dropdown
+            variant="bare"
+            ariaLabel="What this conversation will work on"
+            className={cn("min-w-[8rem] max-w-[16rem] shrink-0 text-[13px]", busy && "opacity-60")}
+            value={projectId ? String(projectId) : NONE}
+            onChange={(value) => void choose(value)}
+            options={[
+              // "No project" is a real choice, not an empty state: a session for a one-off
+              // errand should stay unbound. Picking an actual project below is the one-way
+              // door — there is no unbinding a conversation once it has chosen.
+              { value: NONE, label: <span className="text-muted-foreground">No project</span> },
+              ...projects.map((project) => ({
+                value: String(project.id),
+                label: project.name,
+              })),
+            ]}
+          />
         </span>
-      ) : null}
+      )}
+      <span className="text-muted-foreground/45 shrink-0" aria-hidden>
+        /
+      </span>
+      <span className="text-foreground min-w-0 truncate text-[13px] font-semibold" title={title}>
+        {title || "New chat"}
+      </span>
 
       <div className="flex-1" />
 
-      {/* Left of Stop, so the destructive-ish control keeps the end of the row it already has
-          and does not move when this appears. Gone entirely on an empty chat — the bar shows
-          there now, and there is nothing yet to search. ⌘F is guarded the same way. */}
+      {/* The task this chat is working, one click from its page. Only while a task is
+          `working` — the same rule the Work panel's card follows, off the same query, so the two
+          can never disagree about whether there is one. */}
+      {task ? (
+        <Go>
+          {(go) => (
+            <button
+              type="button"
+              onClick={() => go(pathForTask(task.id))}
+              title={task.goal}
+              className="border-border bg-muted/70 text-foreground/75 hover:text-foreground flex h-[26px] max-w-[22rem] min-w-0 shrink items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors"
+            >
+              <ListChecks className="size-3 shrink-0" aria-hidden />
+              <span className="shrink-0 tabular-nums">#{task.id}</span>
+              <span className="min-w-0 truncate">{task.goal}</span>
+              {task.total ? (
+                <span className="shrink-0 tabular-nums">
+                  · {task.done}/{task.total}
+                </span>
+              ) : null}
+            </button>
+          )}
+        </Go>
+      ) : null}
+
+      {/* Gone entirely on an empty chat — there is nothing yet to search. ⌘F is guarded the
+          same way. */}
       {conversationId ? (
         <TooltipIconButton
           tooltip="Find in this conversation (⌘F)"
@@ -195,15 +240,70 @@ export function SessionBar({
           type="button"
           variant="ghost"
           size="icon"
-          className="size-6 shrink-0 rounded-full"
+          aria-label="Find in this chat"
+          className="text-muted-foreground hover:text-foreground size-[30px] shrink-0 rounded-lg [&_svg]:size-[15px]"
           onClick={() => {
             setFinding(true);
             setFocusFind((n) => n + 1);
           }}
         >
-          <Search className="size-3.5" />
+          <Search />
         </TooltipIconButton>
       ) : null}
     </div>
   );
+}
+
+/** The conversation's title, from the same list the sidebar and the tabs read — a cache read
+ *  rather than a request of its own. `""` for a chat that has not been named yet. */
+function useConversationTitle(conversationId: string): string {
+  const { data: known = [] } = useQuery({
+    queryKey: keys.conversations(TITLE_LIMIT, ""),
+    queryFn: async () => (await fetchConversations(TITLE_LIMIT)).conversations ?? [],
+    staleTime: 30_000,
+    enabled: Boolean(conversationId),
+  });
+  if (!conversationId) return "";
+  return known.find((one) => one.id === conversationId)?.title ?? "";
+}
+
+/** The same page size the workspace reads titles with, so this shares its cache entry. */
+const TITLE_LIMIT = 200;
+
+interface WorkingTask {
+  id: number;
+  goal: string;
+  done: number;
+  total: number;
+}
+
+/**
+ * The task this conversation is working, if any — the Work panel's `WorkingOn` query, under the
+ * same key and with the same request, so the cache holds one answer and a `task` event refreshes
+ * both at once. Only `working` tasks come back: the server clears the stamp when a task stops.
+ */
+function useWorkingTask(conversationId: string): WorkingTask | null {
+  const { data = null } = useQuery({
+    queryKey: keys.workingOn(conversationId),
+    queryFn: async () => {
+      const response = await fetch(`/api/chat/${conversationId}/working-on`);
+      if (!response.ok) return null;
+      const body = (await response.json()) as {
+        id?: number;
+        goal?: string;
+        status?: string;
+        checklist?: { done: boolean | number }[];
+      } | null;
+      return body && body.id ? body : null;
+    },
+    enabled: Boolean(conversationId),
+  });
+  if (!data || !data.id) return null;
+  const items = data.checklist ?? [];
+  return {
+    id: data.id,
+    goal: data.goal ?? "",
+    done: items.filter((one) => Boolean(one.done)).length,
+    total: items.length,
+  };
 }

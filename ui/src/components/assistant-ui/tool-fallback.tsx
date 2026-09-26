@@ -1,8 +1,17 @@
 "use client";
 
 import { memo, useCallback, useRef, useState } from "react";
-import { AlertCircleIcon, CheckIcon, ChevronDownIcon, LoaderIcon, XCircleIcon } from "lucide-react";
 import {
+  AlertCircleIcon,
+  BanIcon,
+  ChevronDownIcon,
+  LoaderIcon,
+  ShieldXIcon,
+  SquareIcon,
+  XCircleIcon,
+} from "lucide-react";
+import {
+  useAuiState,
   useScrollLock,
   useToolCallElapsed,
   type ToolApprovalOption,
@@ -15,12 +24,9 @@ import { ANIMATION_DURATION } from "./disclosure";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { callText, describeCall } from "@/lib/tool-language";
-import {
-  summarise,
-  ToolArgs,
-  ToolResultBody,
-  parseArgs,
-} from "@/components/assistant-ui/tool-result";
+import { digestOf, outcomeOf, type Outcome } from "@/lib/tool-row";
+import { useProjectRoot } from "@/lib/project-root";
+import { ToolArgs, ToolResultBody, parseArgs } from "@/components/assistant-ui/tool-result";
 import { Button } from "@/components/ui/button";
 
 
@@ -80,15 +86,6 @@ function ToolFallbackRoot({
   );
 }
 
-type ToolStatus = ToolCallMessagePartStatus["type"];
-
-const statusIconMap: Record<ToolStatus, React.ElementType> = {
-  running: LoaderIcon,
-  complete: CheckIcon,
-  incomplete: XCircleIcon,
-  "requires-action": AlertCircleIcon,
-};
-
 const formatToolDuration = (ms: number) => {
   if (ms < 1000) return "<1s";
   const seconds = ms / 1000;
@@ -116,26 +113,32 @@ function ToolFallbackDuration({ className, ...props }: React.ComponentProps<"spa
 }
 
 /**
- * The row for one tool call: what he did, the thing he did it to, and an icon for the kind of
- * work it was.
+ * The row for one tool call, in the grammar every row in the thread shares:
  *
- * It used to read `Used tool: read_skill`, which is the function he called rather than the
- * thing he did — while the Mind panel, one pane over and describing the very same call, said
- * "opened the skill pdf" with an icon coloured by the kind of work. Both halves of that were
- * worth having here: the phrase, because a turn of eight calls should be readable without
- * opening any of them, and the icon, because a column where six rows carry a terminal and two
- * carry a globe says "he built for a while and looked one thing up" before you read a word.
+ *     [kind] Verb subject ·························· digest  elapsed  ›
+ *            the first line of what went wrong, when something did
  *
- * The status tick is gone from the resting state with it. Nearly every call completes, so a
- * check mark on every row carried no information and was occupying the one position on the row
- * that can be read at a glance. Running, cancelled and failed still take the slot, because
- * those are the states worth interrupting a scan for.
+ * **Kind** is the icon of the work (a terminal, a file, a globe), and a state worth interrupting a
+ * scan for takes its slot: a spinner while it runs, a red cross when it failed, a shield when a
+ * permission was refused, a ban when one of his own rules stopped it. Nearly every call succeeds,
+ * so a tick on every row carried nothing and is not drawn.
+ *
+ * **Digest** is the one fact about what came back — `exit 2 · 14 lines`, `+12 −3`, `3 errors` —
+ * right-aligned so the subject can truncate without taking it with it. It used to be glued on
+ * after the subject and repeat it ("ran npm test · npm test · ok"), so on a narrow pane the row
+ * cut off exactly the part that was new.
+ *
+ * **The reason line** is new, and is the difference between a turn you can skim and one you have
+ * to open: a failure said "failed" and made you open the row to learn why. The why is one line,
+ * so it is shown.
  */
 function ToolFallbackTrigger({
   toolName,
   args,
   status,
-  summary,
+  outcome,
+  digest,
+  recovered,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
@@ -143,107 +146,177 @@ function ToolFallbackTrigger({
   /** The call's parsed arguments, for naming what it acted on. */
   args?: Record<string, unknown>;
   status?: ToolCallMessagePartStatus;
-  /** One line of what came back, so the collapsed row is worth reading on its own. */
-  summary?: string;
+  /** How it ended, once it has — `undefined` while it is still going. */
+  outcome?: Outcome;
+  /** One fact about what came back. */
+  digest?: string;
+  /** It worked after the call before it, of the same tool, did not. */
+  recovered?: boolean;
 }) {
+  const root = useProjectRoot();
   const statusType = status?.type ?? "complete";
   const isRunning = statusType === "running";
   const isCancelled = status?.type === "incomplete" && status.reason === "cancelled";
-  const isFailed = statusType === "incomplete" && !isCancelled;
+  const isErrored = statusType === "incomplete" && !isCancelled;
   const needsAction = statusType === "requires-action";
+  const state = isErrored ? "failed" : (outcome?.state ?? "done");
 
-  const call = describeCall(toolName, args);
+  const call = describeCall(toolName, args, root);
+  const verb = isRunning ? call.doing : call.verb;
   // One definition of the line, used both as the label and as the shimmer laid over it.
   const line = (
     <>
-      {call.verb}
+      {verb.charAt(0).toUpperCase() + verb.slice(1)}
       {call.subject ? (
         <>
           {" "}
           {/* Mono for the subject: a path, a command or a query is scannable that way, and
               obviously a literal rather than part of the sentence. */}
-          <span className="text-foreground/80 font-mono">{call.subject}</span>
+          <span className="text-foreground/85 font-mono">{call.subject}</span>
         </>
       ) : null}
-      {/* The whole justification for collapsing by default. Without this the closed row says
-          the same thing twenty times over and you have to open every one to find the
-          failure. With it, a turn is skimmable. */}
-      {summary ? <span className="text-muted-foreground/70"> · {summary}</span> : null}
     </>
   );
-  // The kind icon is the resting state; a status that is worth noticing takes the slot.
-  const Icon = isRunning || isFailed || needsAction ? statusIconMap[statusType] : call.icon;
-  const tone = isFailed
-    ? "text-destructive"
+
+  // The kind icon is the resting state; a state that is worth noticing takes the slot.
+  const Icon = isRunning
+    ? LoaderIcon
     : needsAction
+      ? AlertCircleIcon
+      : isCancelled
+        ? SquareIcon
+        : state === "failed"
+          ? XCircleIcon
+          : state === "denied"
+            ? ShieldXIcon
+            : state === "refused"
+              ? BanIcon
+              : call.icon;
+  const tone = isRunning
+    ? "text-roam"
+    : needsAction || state === "refused"
       ? "text-kith"
-      : isCancelled || isRunning
-        ? "text-muted-foreground"
-        : call.tone;
+      : state === "failed" || state === "denied"
+        ? "text-destructive"
+        : isCancelled
+          ? "text-muted-foreground/70"
+          : call.tone;
+
+  const said =
+    isCancelled
+      ? "stopped"
+      : state === "failed"
+        ? "failed"
+        : state === "denied"
+          ? "not allowed"
+          : state === "refused"
+            ? "a rule stopped this"
+            : digest;
+  const reason = state !== "done" ? (outcome?.reason ?? "") : "";
 
   return (
     <CollapsibleTrigger
       data-slot="tool-fallback-trigger"
+      data-state-kind={isRunning ? "running" : isCancelled ? "stopped" : state}
       title={callText(call)}
       className={cn(
-        "aui-tool-fallback-trigger group/trigger text-muted-foreground hover:text-foreground flex w-full min-w-0 origin-left items-center gap-2 py-1 text-start text-xs transition-[color,scale] active:scale-[0.98]",
+        "aui-tool-fallback-trigger group/trigger text-muted-foreground hover:text-foreground flex w-full min-w-0 origin-left flex-col py-1 text-start text-xs transition-[color,scale] active:scale-[0.98]",
         className,
       )}
       {...props}
     >
-      <Icon
-        data-slot="tool-fallback-trigger-icon"
-        strokeWidth={2}
-        className={cn(
-          "aui-tool-fallback-trigger-icon size-3.5 shrink-0",
-          tone,
-          isRunning && "animate-spin [animation-duration:0.6s]",
-        )}
-      />
-      <span
-        data-slot="tool-fallback-trigger-label"
-        className={cn(
-          // One line, ellipsised. A path or a command that wraps turns a run of eight calls
-          // into a wall you have to read rather than a list you can scan; the whole value is
-          // on the row's title and inside the disclosure.
-          "aui-tool-fallback-trigger-label-wrapper relative min-w-0 flex-1 truncate leading-normal",
-          isCancelled && "line-through",
-        )}
-      >
-        <span>{line}</span>
-        {/* The shimmer is the same line again, drawn on top with its glyphs used as a mask.
-            That only reads as one shimmering line if the two are laid out identically — and
-            they were not. This rendered `callText(call)`, a flat string, so the subject came
-            out in the body font while the line underneath sets it in mono. Same words, two
-            different sets of glyph positions, one on top of the other: for the whole time a
-            tool was running you saw its name ghosted and smeared, and it snapped clean the
-            instant the call returned and this unmounted. Measured, the overlay's text ran in
-            `ui-sans-serif` against the label's `ui-monospace`.
-
-            So it renders `line` — the identical element — and cannot drift again. The
-            transparent fill the effect needs is inherited, so the colours inside come out
-            masked rather than painted. */}
-        {isRunning && (
-          <span
-            aria-hidden
-            data-slot="tool-fallback-trigger-shimmer"
-            className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 truncate motion-reduce:animate-none"
-          >
-            {line}
+      <span className="flex w-full min-w-0 items-center gap-2">
+        <Icon
+          data-slot="tool-fallback-trigger-icon"
+          strokeWidth={2}
+          className={cn(
+            "aui-tool-fallback-trigger-icon size-3.5 shrink-0",
+            tone,
+            isRunning && "animate-spin [animation-duration:0.6s]",
+          )}
+        />
+        <span
+          data-slot="tool-fallback-trigger-label"
+          className={cn(
+            // One line, ellipsised. A path or a command that wraps turns a run of eight calls
+            // into a wall you have to read rather than a list you can scan; the whole value is
+            // on the row's title and inside the disclosure.
+            "aui-tool-fallback-trigger-label-wrapper relative min-w-0 flex-1 truncate leading-normal",
+            isRunning && "text-roam",
+            isCancelled && "line-through",
+          )}
+        >
+          <span>{line}</span>
+          {/* The shimmer is the same line again, drawn on top with its glyphs used as a mask.
+              It renders `line` — the identical element — so the two cannot drift apart: an
+              earlier version rendered a flat string, set the subject in the body font over a
+              mono line, and ghosted every running tool's name until it returned. */}
+          {isRunning && (
+            <span
+              aria-hidden
+              data-slot="tool-fallback-trigger-shimmer"
+              className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 truncate motion-reduce:animate-none"
+            >
+              {line}
+            </span>
+          )}
+        </span>
+        {call.badge ? (
+          <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-px text-[10px] font-medium">
+            {call.badge}
           </span>
-        )}
+        ) : null}
+        {outcome?.ranAs ? (
+          <span
+            className="bg-muted text-muted-foreground/80 shrink-0 rounded px-1.5 py-px font-mono text-[10px]"
+            title={`${toolName} is a retired name — this ran as ${outcome.ranAs}`}
+          >
+            ran as {outcome.ranAs}
+          </span>
+        ) : null}
+        {recovered ? (
+          <span className="bg-roam-soft text-roam shrink-0 rounded px-1.5 py-px text-[10px] font-medium">
+            recovered
+          </span>
+        ) : null}
+        {said ? (
+          <span
+            data-slot="tool-fallback-trigger-digest"
+            className={cn(
+              "max-w-[45%] shrink-0 truncate tabular-nums",
+              state === "failed" || state === "denied"
+                ? "text-destructive/90"
+                : state === "refused"
+                  ? "text-kith/90"
+                  : "text-muted-foreground/70",
+            )}
+          >
+            {said}
+          </span>
+        ) : null}
+        <ToolFallbackDuration />
+        <ChevronDownIcon
+          data-slot="tool-fallback-trigger-chevron"
+          className={cn(
+            "aui-tool-fallback-trigger-chevron size-3.5 shrink-0 opacity-60",
+            "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+            "-rotate-90",
+            "group-data-open/trigger:rotate-0",
+            "group-data-panel-open/trigger:rotate-0",
+          )}
+        />
       </span>
-      <ToolFallbackDuration />
-      <ChevronDownIcon
-        data-slot="tool-fallback-trigger-chevron"
-        className={cn(
-          "aui-tool-fallback-trigger-chevron size-3.5 shrink-0 opacity-60",
-          "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0",
-        )}
-      />
+      {reason ? (
+        <span
+          data-slot="tool-fallback-trigger-reason"
+          className={cn(
+            "block w-full truncate ps-5.5 pt-0.5 text-[11.5px] leading-snug",
+            state === "refused" ? "text-kith/80" : "text-destructive/80",
+          )}
+        >
+          {reason}
+        </span>
+      ) : null}
     </CollapsibleTrigger>
   );
 }
@@ -552,6 +625,7 @@ function ToolFallbackApproval({
 }
 
 const ToolFallbackImpl: ToolCallMessagePartComponent = ({
+  toolCallId,
   toolName,
   argsText,
   result,
@@ -573,6 +647,24 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   }
 
   const args = parseArgs(argsText);
+  const finished = result !== undefined && !isRequiresAction;
+  const outcome = finished ? outcomeOf(toolName ?? "", result) : undefined;
+
+  /* Recovered: this call worked, and the last call of the same tool before it in this message did
+   * not. A failure followed by its own fix is routine — he tried a flag the command did not take,
+   * then the right one — and without saying so a turn with four red rows reads as four problems
+   * when it had none left. A boolean out of the selector, so rows re-render only when it flips. */
+  const recovered = useAuiState((state) => {
+    if (outcome?.state !== "done") return false;
+    const parts = state.message.parts;
+    const at = parts.findIndex((part) => part.type === "tool-call" && part.toolCallId === toolCallId);
+    for (let i = at - 1; i >= 0; i--) {
+      const part = parts[i];
+      if (part?.type !== "tool-call" || part.toolName !== toolName) continue;
+      return part.result !== undefined && outcomeOf(part.toolName, part.result).state === "failed";
+    }
+    return false;
+  });
 
   return (
     <ToolFallbackRoot open={open} onOpenChange={setOpen}>
@@ -580,11 +672,9 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
         toolName={toolName}
         args={args}
         status={status}
-        summary={
-          result === undefined || isRequiresAction
-            ? undefined
-            : summarise(toolName ?? "", args, result)
-        }
+        outcome={outcome}
+        digest={finished ? digestOf(toolName ?? "", args, result) : undefined}
+        recovered={recovered}
       />
       <ToolFallbackContent>
         <ToolFallbackError status={status} />

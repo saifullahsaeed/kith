@@ -1,5 +1,6 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
 
+import { TURN_TIMING } from "@/lib/backend/adapter";
 import { USAGE_PART, type ContextLedger, type StoredTurn } from "@/lib/backend";
 
 /**
@@ -42,6 +43,12 @@ export function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     let baseline: ContextLedger | undefined;
     let folded = false;
     let retried = 0;
+    // What the turn cost and who answered, summed and taken from its last round — the same
+    // figures the live stream accumulates, so a reopened footer reads like the one you watched.
+    let costUsd: number | undefined;
+    let model: string | undefined;
+    let provider: string | undefined;
+    let lastRoundAt = "";
     for (const part of turn.parts) {
       if (part.kind === "text") content.push({ type: "text", text: part.text });
       else if (part.kind === "reasoning")
@@ -82,6 +89,10 @@ export function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
           cached: part.cached,
           out: part.out,
         });
+        if (typeof part.costUsd === "number") costUsd = (costUsd ?? 0) + part.costUsd;
+        if (part.model) model = part.model;
+        if (part.provider) provider = part.provider;
+        if (part.at) lastRoundAt = part.at;
       }
     }
     // Last, so the figure lands at the foot of the turn and nothing is split around it.
@@ -91,7 +102,16 @@ export function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
       content.push({
         type: "data",
         name: USAGE_PART,
-        data: { rounds, context, baseline, folded, retried },
+        data: {
+          rounds,
+          context,
+          baseline,
+          folded,
+          retried,
+          ...(costUsd !== undefined ? { costUsd } : {}),
+          ...(model ? { model } : {}),
+          ...(provider ? { provider } : {}),
+        },
       });
     }
     // `createdAt` from the transcript, never left to default. A `ThreadMessageLike` without one
@@ -99,11 +119,22 @@ export function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     // would read as having happened now — a clock that is wrong on exactly the messages it is
     // there to date. Omitted rather than guessed when the turn predates the field.
     const at = turn.at ? new Date(turn.at) : null;
+    // How long the turn worked: from its first entry to its last round. The live copy stamps this
+    // as it watches; a reopened one reads it off the transcript, so both say "Worked 4m 12s".
+    const ended = lastRoundAt ? new Date(lastRoundAt) : null;
+    const timed =
+      turn.role === "assistant" &&
+      at && !Number.isNaN(at.getTime()) &&
+      ended && !Number.isNaN(ended.getTime()) &&
+      ended.getTime() >= at.getTime();
     if (content.length) {
       out.push({
         role: turn.role,
         content,
         ...(at && !Number.isNaN(at.getTime()) ? { createdAt: at } : {}),
+        ...(timed
+          ? { metadata: { custom: { [TURN_TIMING]: { startedAt: at.getTime(), endedAt: ended.getTime() } } } }
+          : {}),
       });
     }
   }

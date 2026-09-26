@@ -2,7 +2,7 @@
  * The one place the editor's document and markdown meet.
  *
  * The composer is a rich editor now, but the value everything else reads is still a markdown
- * string: the wire format sends it, the slash menu filters on it, the context ledger measures it,
+ * string: the wire format sends it, the send button reads it, the context ledger measures it,
  * and he reads it. That is deliberate — a tree in the store would mean every one of those learning
  * about ProseMirror. So the editor owns a document, this module owns the translation, and the
  * store owns a string.
@@ -149,23 +149,6 @@ const serializer = new MarkdownSerializer(
 /** The document as markdown — the value the store holds and he eventually reads. */
 export function toMarkdown(doc: ProseNode): string {
   return serializer.serialize(doc, { tightLists: true }).replace(/\s+$/, "");
-}
-
-/**
- * How many characters of markdown precede a document position.
- *
- * The slash menu is driven by `(text, cursorPosition)` where the cursor is an index into the
- * plain string — a rich editor has a tree and no such index, so it is computed: cut the document
- * at the caret and serialise what is left of it. Uses the same serialiser as `toMarkdown`, which
- * is the only reason the two numbers describe the same string.
- */
-export function markdownOffset(doc: ProseNode, position: number): number {
-  // Clamped rather than trusted. The caret is reported by the editor and the document is read
-  // here, and between the two sits a transaction that may already have shortened it — an
-  // out-of-range cut throws inside ProseMirror, which would take the composer down over a
-  // position that was merely stale.
-  const at = Math.max(0, Math.min(position, doc.content.size));
-  return toMarkdown(doc.cut(0, at)).length;
 }
 
 // --------------------------------------------------------------------------- //

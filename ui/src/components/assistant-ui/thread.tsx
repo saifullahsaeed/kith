@@ -9,23 +9,23 @@ import { RichComposerInput } from "@/components/assistant-ui/composer-input/rich
 import { UserMarkdownText } from "@/components/assistant-ui/user-markdown";
 import { useSlashCommands } from "@/components/assistant-ui/slash-commands";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
-import { MarkdownText } from "@/components/assistant-ui/markdown-text";
-import { TurnStatus, TurnTokens, type TurnUsage } from "@/components/assistant-ui/turn-usage";
-import { ContextMeter } from "@/components/assistant-ui/context-meter";
+import { TurnFooterStats, latestUsage } from "@/components/assistant-ui/turn-usage";
 import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "@/components/assistant-ui/reasoning";
-import { PluginRunOutcome } from "@/components/assistant-ui/plugin-outcome";
+  AnswerProse,
+  FlatTurn,
+  RunStrip,
+  usePartComponents,
+  useTurnUsage,
+} from "@/components/assistant-ui/run-strip";
+import {
+  AccessChip,
+  ContextRing,
+  ModelChip,
+  SteerModeToggle,
+  ThinkingChip,
+  type SteerMode,
+} from "@/components/assistant-ui/composer-bar";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
@@ -34,24 +34,21 @@ import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { steerTurn, stopTurn } from "@/lib/commands";
 import { useConversationId } from "@/lib/conversation";
-import { AgentsChip } from "@/components/chat/agent-map";
-import { dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
+import { dropHeld, heldMessage, holdUntilIdle, isHolding, subscribeHolding } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
-import { time, when } from "@/lib/dates";
-import { STEER_PART, USAGE_PART } from "@/lib/backend/adapter";
+import { when } from "@/lib/dates";
+import { STEER_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
-import { callText, describeCall, summariseRun, summaryLine } from "@/lib/tool-language";
-import { useLatched } from "@/lib/latch";
+import { KIND_CODE, kindOf, kindsFromCode, planTurn } from "@/lib/turn-plan";
+import { splitWorkflowPrefix } from "@/lib/workflow-prefix";
 import { cn } from "@/lib/utils";
 import {
-  ActionBarMorePrimitive,
   ActionBarPrimitive,
   AuiIf,
   type AssistantState,
   BranchPickerPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
-  groupPartByType,
   MessagePrimitive,
   SelectionToolbarPrimitive,
   SuggestionPrimitive,
@@ -59,8 +56,6 @@ import {
   type ToolCallMessagePartComponent,
   useAuiState,
   useComposerRuntime,
-  unstable_useSlashCommandAdapter,
-  unstable_useTriggerPopoverScopeContext,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
@@ -70,10 +65,10 @@ import {
   ChevronRightIcon,
   Clock3,
   CopyIcon,
+  CornerDownRight,
   MicIcon,
-  Paperclip,
-  MoreHorizontalIcon,
   PencilIcon,
+  Plus,
   Reply,
   RefreshCwIcon,
   RotateCcw,
@@ -84,31 +79,32 @@ import {
 import {
   createContext,
   useContext,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
   type FC,
-  type PropsWithChildren,
-  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useSyncExternalStore,
 } from "react";
 
-export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
+/* Re-exported: the Work panel reads the same figure, from here, and has always imported it from
+ * this module. It lives beside the usage type now. */
+export { latestUsage };
 
 /**
- * Optional component overrides for the thread. `AssistantMessage` and
- * `Welcome` replace whole sections; the remaining slots override how the
- * assistant message renders tool calls and part groups. Tool UIs registered
- * by name (toolkit `render`, `useAssistantDataUI`) take precedence over
- * `ToolFallback`.
+ * Optional component overrides for the thread. `AssistantMessage` and `Welcome` replace whole
+ * sections; `ToolFallback` replaces how a tool call renders when no tool UI is registered for it
+ * by name (toolkit `render`, `useAssistantDataUI` take precedence).
+ *
+ * The `ToolGroup` / `ReasoningGroup` slots are gone with the grouping they overrode: a turn is
+ * laid out as a run strip of beats now (see `run-strip.tsx`), and nothing set either slot.
  */
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
-  ToolGroup?: ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined;
-  ReasoningGroup?: ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>> | undefined;
 };
 
 export type ThreadProps = {
@@ -144,19 +140,16 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root bg-transparent @container flex h-full flex-col"
       style={{
-        ["--thread-max-width" as string]: "44rem",
-        // The card colour, which is lifted from the background in both themes — brighter than
-        // the warm paper, lighter than the warm night. It used to be muted at 30% over the
-        // background, which in the light room came out within a percent of the background
-        // itself: the one control the whole screen exists for was the faintest thing on it.
-        ["--composer-bg" as string]: "var(--color-card)",
-        // Room to write in. The box holds one line of text in a space sized for several, which
-        // is the point: it is where a long message gets composed, and an input that looks like a
-        // search field invites a sentence. Padding and radius both grew with the height so the
-        // proportions hold — a taller box inside the old 8px inset reads as a text area with a
-        // border, not as a surface.
-        ["--composer-radius" as string]: "1.75rem",
-        ["--composer-padding" as string]: "12px",
+        /* One reading column, 720px, centred — the conversation's measure, for his words and
+         * yours alike. The composer is a little wider (752px) so its edges frame the column
+         * above it rather than lining up with it.
+         *
+         * This reverses a decision, knowingly. The measure had moved off the messages so that a
+         * wide diagram or table was not drawn inside a reading column; the design puts the column
+         * back, because a thread whose every line runs 1,400px wide is not read, it is scanned.
+         * Anything wide still scrolls inside its own box, and diagrams open full screen. */
+        ["--thread-max-width" as string]: "45rem",
+        ["--composer-max-width" as string]: "47rem",
       }}
     >
       {/* Global on purpose — it listens on `document`, not on anything inside this subtree, so
@@ -175,60 +168,49 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
         autoScroll
         data-slot="aui_thread-viewport"
         className={cn(
-          "relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth",
+          // The thread never scrolls sideways. Anything that can be wide — code, tables,
+          // diagrams, tool output — scrolls inside its own box; letting the viewport scroll too
+          // meant one unbreakable line shifted every message left and cut off their starts.
+          "relative flex flex-1 flex-col overflow-x-hidden overflow-y-scroll scroll-smooth",
           // Only once there is something to scroll: on a new chat the fade would eat the top
           // of the greeting for no reason.
           !isEmpty && "kith-fade-top",
         )}
       >
-        {/* The measure moved off this wrapper and onto the composer alone.
-
-            Both used to share one 44rem column, so anything wide a turn produced — a rendered
-            diagram, a table, a long command — was drawn inside a reading measure and had to be
-            legible at 700px or not at all. A flowchart of thirty nodes is not. The column was
-            the right constraint for prose and the wrong one for pictures, and it was being
-            applied to the container rather than to the prose.
-
-            The composer keeps it, because an input that grows to 1900px is a worse input. */}
-        <div className={cn("flex w-full flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
+        <div className={cn("flex w-full flex-1 flex-col px-4 pt-[18px]", isEmpty && "justify-center")}>
           <AuiIf condition={isNewChatView}>
             <Welcome />
           </AuiIf>
 
-          <div data-slot="aui_message-group" className="mb-14 flex flex-col gap-y-6 empty:hidden">
+          <div
+            data-slot="aui_message-group"
+            className="mx-auto mb-10 flex w-full max-w-(--thread-max-width) flex-col gap-y-5 empty:hidden"
+          >
             <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
           </div>
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              "aui-thread-viewport-footer flex flex-col overflow-visible pt-6 pb-4 md:pb-6",
-              // A fade, not a fill.
-              //
-              // This was `bg-background` with a rounded top, which worked while the footer was
-              // the composer's own width: a small panel behind the input, obviously deliberate.
-              // Now the column is the full pane it became a white slab across the window —
-              // white because the app's ambient wash is painted *under* the content layer
-              // (`z-10` in workspace.tsx), so any opaque fill above it is the one rectangle on
-              // screen with no warmth in it.
-              //
-              // Almost nothing, on purpose. Enough that a line of reply does not collide with
-              // the input as it scrolls past — the messages run the full width now, so there is
-              // text moving behind the composer on both sides of it — and not enough to be a
-              // surface.
-              //
-              // The blur that used to do this work is gone. Frosting the strip did stop the
-              // collision, but it did it by making a band of his reply unreadable on its way
-              // past, which is a strange thing to do to the text someone is in the middle of
-              // reading. The gradient alone keeps the last few pixels off the composer's edge
-              // and leaves the words legible until they go under it.
-              //
-              // To remove it altogether, delete this line. Nothing else depends on it: the
-              // composer carries its own background and border, so it stays legible over
-              // whatever passes underneath.
-              !isEmpty && "sticky bottom-0 mt-auto bg-gradient-to-t from-background/45 to-transparent",
+              "aui-thread-viewport-footer flex flex-col overflow-visible",
+              /* Docked: a solid band with a hairline on top, and the thread ends where it begins.
+               *
+               * This was a fade, and before that a fill; both are written down in the history of
+               * this line. The fill was dropped because the ambient wash is painted *under* the
+               * content layer, so an opaque band was the one rectangle on screen with no warmth
+               * in it. The fade was the compromise — and it meant his reply ran on underneath the
+               * box you type in, the last lines half-visible behind it, which is exactly what the
+               * design rules out: the composer is docked, it never floats over text. The band is
+               * the page's own ground colour, so in the flat room the design draws it is
+               * indistinguishable from the thread; only the hairline says where one ends.
+               *
+               * `-mx-4 px-4` so the band reaches the pane's edges while the composer inside it
+               * keeps its measure. */
+              isEmpty
+                ? "pt-6 pb-4"
+                : "bg-background border-border/70 sticky bottom-0 -mx-4 mt-auto border-t px-4 pt-3 pb-[18px]",
             )}
           >
-            <div className="mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4">
+            <div className="mx-auto flex w-full max-w-(--composer-max-width) flex-col gap-2">
               <ThreadFollowupSuggestions />
               <AskPrompt conversationId={conversationId} />
               {/* What you have said to the running turn that it has not read yet. Sits between
@@ -274,9 +256,12 @@ const ThreadMessage: FC = () => {
  * reason the next thing happened, not a thing anybody said.
  */
 const SystemMessage: FC = () => (
-  <MessagePrimitive.Root className="aui-system-message mx-auto w-full max-w-(--thread-max-width) px-4 py-2">
-    <div className="border-border/50 bg-muted/25 text-muted-foreground/80 rounded-lg border border-dashed px-3 py-2 text-[12.5px] leading-relaxed">
-      <span className="text-muted-foreground/50 mb-1 flex items-center gap-1.5 text-[10px] font-medium tracking-[0.08em] uppercase">
+  <MessagePrimitive.Root className="aui-system-message mx-auto w-full max-w-[34rem] py-1">
+    {/* `wrap-break-word` because a finished process's last output is quoted here verbatim, and a
+        pytest node id is one 120-character word: with nothing to break on, it made this box
+        wider than the thread and the whole conversation scrolled sideways. */}
+    <div className="border-border text-muted-foreground rounded-xl border border-dashed px-3.5 py-2.5 text-[12.5px] leading-relaxed wrap-break-word">
+      <span className="text-kith/80 mb-1 flex items-center gap-1.5 text-[10px] font-semibold tracking-[0.12em] uppercase">
         <BellRing className="size-3" aria-hidden />
         Woken
       </span>
@@ -335,13 +320,16 @@ const ThreadScrollToBottom: FC = () => {
 
           No `backdrop-blur`: it sits on the composer's own fill, so there is nothing behind it
           worth frosting — and frosting is what was making a band of the reply unreadable
-          elsewhere. */}
+          elsewhere.
+
+          The composer is docked in a band now, so "above the composer" means above the band's
+          hairline: -top-14 clears the band's own top padding. */}
       <TooltipIconButton
         tooltip="Scroll to bottom"
         variant="outline"
         className={cn(
-          "aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent bg-background",
-          "absolute -top-11 left-1/2 z-20 -translate-x-1/2 rounded-full p-2 shadow-md",
+          "aui-thread-scroll-to-bottom dark:border-border dark:bg-card dark:hover:bg-accent bg-card",
+          "absolute -top-14 left-1/2 z-20 -translate-x-1/2 rounded-full p-2 shadow-md",
           "scale-100 opacity-100 transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]",
           "hover:scale-110 active:scale-90",
           "disabled:pointer-events-none disabled:scale-50 disabled:opacity-0",
@@ -405,88 +393,6 @@ const ThreadSuggestionItem: FC = () => {
   );
 };
 
-/** One row of the slash menu, which scrolls itself into view when the keys reach it.
- *
- *  Arrow keys moved the highlight and the list did not follow, so anything past the fourth
- *  command was selected invisibly — the keys "worked" and you could not see what they had
- *  landed on, which is worse than them not working.
- *
- *  A MutationObserver on the element's own `data-highlighted`, because the library sets that
- *  attribute directly and there is no callback to subscribe to. `block: "nearest"` so it moves
- *  the list by the minimum needed rather than jumping the selection to the middle.
- */
-function SlashItem({
-  item,
-  children,
-}: {
-  item: Parameters<typeof ComposerPrimitive.Unstable_TriggerPopoverItem>[0]["item"];
-  children: ReactNode;
-}) {
-  const row = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const el = row.current;
-    if (!el) return;
-    const follow = () => {
-      if (el.hasAttribute("data-highlighted")) el.scrollIntoView({ block: "nearest" });
-    };
-    follow();
-    const watch = new MutationObserver(follow);
-    watch.observe(el, { attributes: true, attributeFilter: ["data-highlighted"] });
-    return () => watch.disconnect();
-  }, []);
-
-  return (
-    <ComposerPrimitive.Unstable_TriggerPopoverItem
-      ref={row}
-      item={item}
-      className="data-[highlighted]:bg-accent flex w-full items-baseline gap-2.5 rounded-lg px-2.5 py-1.5 text-left"
-    >
-      {children}
-    </ComposerPrimitive.Unstable_TriggerPopoverItem>
-  );
-}
-
-/** Everything in the menu that is chrome rather than behaviour — mounted only while it is open.
- *
- *  `TriggerPopover` renders `open ? <div {...props}>{children}</div> : children`: closed, the
- *  children are still there, just stripped of the container that positions and paints them. It
- *  has to be that way — the `Action` child registers the behaviour, and a trigger with no
- *  registered behaviour never opens, so the behaviour child cannot be conditional on being open.
- *
- *  The items look after themselves (`TriggerPopoverItems` returns null when closed). Nothing else
- *  did, so the hint strip and the scroll box rendered in normal flow *inside* the composer with
- *  none of the popover's styling: "↑↓ move ↵ run esc dismiss" and a hairline sitting on top of an
- *  empty input, after every dismiss and after every command that ran.
- */
-function SlashPanel({ children }: { children: ReactNode }) {
-  const { open } = unstable_useTriggerPopoverScopeContext();
-  return open ? <>{children}</> : null;
-}
-
-/** The highlighted command's description in full, in a band of its own under the list.
- *
- *  This was a `title` on the row — a native tooltip, which is the OS's to place and the OS's to
- *  paint. Grey, square, its own font, and on a menu anchored to the bottom of the window there is
- *  no room beneath the pointer, so it flipped upwards and covered the six commands above the one
- *  you were reading about. You could not see the list while learning what was on it.
- *
- *  Below the list it covers nothing, and it follows the *highlight* rather than the pointer, so
- *  arrowing through the commands reads them out too — the keyboard path had no description at all.
- *  Three lines: a skill description is written to tell a model when to reach for the thing, and
- *  the sentence that says so is always the first one.
- */
-function SlashDetail() {
-  const { items, highlightedIndex } = unstable_useTriggerPopoverScopeContext();
-  const description = items[highlightedIndex]?.description;
-  if (!description) return null;
-  return (
-    <p className="border-border/50 text-muted-foreground/80 line-clamp-3 shrink-0 border-t px-2.5 py-1.5 text-[11px] leading-relaxed">
-      {description}
-    </p>
-  );
-}
-
 /** `conversationId` is not decoration here: `/fold` and `/stop` are addressed to a conversation,
  *  and without one they short-circuit into a note. `useSlashCommands()` was called bare, so the
  *  id was always `""` — every `/fold` answered "this conversation has not started" over a window
@@ -494,189 +400,112 @@ function SlashDetail() {
  *  keystroke that did nothing. */
 const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
   const { commands, note, reading } = useSlashCommands(conversationId);
-  const slash = unstable_useSlashCommandAdapter({ commands, removeOnExecute: true });
+  const composer = useComposerRuntime();
+  const running = useAuiState((s) => s.thread.isRunning);
+  const empty = useAuiState((s) => s.composer.isEmpty && s.composer.attachments.length === 0);
+  // A message that opens with `/workflow` may fan out into agents, and the box says so.
+  const workflow = useAuiState((s) => splitWorkflowPrefix(s.composer.text).workflow);
+  /* Steer now, or after this turn — what the button does while he works. The keys do not move
+   * with it (⏎ steers, ⌘⏎ waits; see `rich-input`), so this is the mouse's version of the same
+   * choice, and it starts on "now" every turn because that is what Enter does. */
+  const [mode, setMode] = useState<SteerMode>("now");
+  useEffect(() => {
+    if (!running) setMode("now");
+  }, [running]);
+
+  /* Escape stops the turn — from the box you type in, and only from there.
+   *
+   * Taken on the way *down*, because the editor claims Escape for itself: ProseMirror marks it
+   * handled before it would ever bubble to this shell, so a bubble-phase handler here never saw
+   * the key at all. The one thing in the box with a better claim is an open slash menu, where
+   * Escape means "dismiss" — so while it is open the key is left to it. The chips' menus claim
+   * theirs on the window before anything reaches here. Scoped to the editor itself, so an Escape
+   * that lands on a button — or anywhere else in the window — never ends a turn by accident. */
+  const onKeyDownCapture = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || !running) return;
+    if (!(event.target as HTMLElement).closest(".ProseMirror")) return;
+    if (event.currentTarget.querySelector("[data-slash-panel]")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composer.cancel();
+    if (conversationId) void stopTurn(conversationId);
+  };
+
   return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col gap-2">
       {/* Anchored to the composer, not floated over the conversation. */}
       <ThreadScrollToBottom />
+      <QueuedNotice />
       {/* No `AttachmentDropzone` around this. It made this box the only place in the window
           that would take a file, which is the smallest and least obvious target on screen —
           and keeping it alongside the window-wide handler in `DropZone` would mean a file let
           go on the composer landed twice. One listener, one path, the whole window. */}
       <div
         data-slot="aui_composer-shell"
-        // A full-strength border and a real focus ring, rather than border/60 and a shadow.
-        // On warm paper a 60% border over a card that barely differs from the background was
-        // a suggestion of an input; you had to know it was there.
-        className="border-border dark:border-muted-foreground/25 dark:focus-within:border-muted-foreground/40 focus-within:border-ring/70 focus-within:ring-ring/25 relative flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.10),0_1px_2px_rgba(0,0,0,0.05)] transition-[border-color,box-shadow] focus-within:ring-[3px] focus-within:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.14),0_1px_2px_rgba(0,0,0,0.06)] dark:shadow-none"
+        onKeyDownCapture={onKeyDownCapture}
+        className={cn(
+          // The card: 16px radius, the lifted card colour, a real border. Green-edged while he
+          // works — typing now steers a live turn, and the edge says which kind of box this is.
+          "bg-card relative flex w-full flex-col rounded-2xl border transition-[border-color,box-shadow]",
+          running
+            ? "border-roam/30 focus-within:border-roam/50"
+            : workflow
+              ? "border-teal-400/40 focus-within:border-teal-400/60"
+              : "border-input focus-within:border-foreground/25",
+        )}
       >
-        <QueuedNotice />
-        <ComposerQuoteStrip />
-        <ComposerAttachmentStrip />
-        {/* Four parts, and it needs all four — spreading the adapter hook's return onto the
-            popover, which is what its own example implies, throws
-            `useTriggerPopoverRootContext must be used within TriggerPopoverRoot` and takes the
-            composer down with it. A Root to hold the trigger state, the popover keyed on the
-            character, exactly one behaviour child (`Action` runs a command; `Directive` is for
-            mentions, which insert text), and an explicit item list — it renders nothing at all
-            without that last one. */}
-        {/* The Root wraps the input as well as the popover, and that is the bit I got wrong
-            twice. The trigger watches what is being typed; the input has to be inside the same
-            Root for it to see anything at all. Wrapped around only the popover, the menu mounts
-            and never opens — no error, no missing part, nothing to notice. */}
-        <ComposerPrimitive.Unstable_TriggerPopoverRoot>
-            <ComposerPrimitive.Unstable_TriggerPopover
-              char="/"
-              adapter={slash.adapter}
-              // Inside the box, not on top of it.
-              //
-              // Twice now this has been a card of its own: first floating two rems above the
-              // input, then flush against it wearing a copy of the composer's fill, border and
-              // radius. Copying the box is not being the box. Two borders still met at the seam,
-              // the composer's rounded top corners still cut their notches out of it, the focus
-              // ring still drew a line straight through the middle, and the whole thing still sat
-              // in its own layer — so it read, correctly, as a second object bolted on top.
-              //
-              // No fill, no border, no radius, no shadow, no `absolute`: an ordinary flex child
-              // of the composer shell, above the input, inheriting the one background and the one
-              // border that were already there. A single hairline divides it from the input. The
-              // box grows upward because there is more inside it, which is the whole idea — and
-              // the composer sits in a `sticky bottom-0` footer, so upward is where it grows.
-              className="border-border/50 flex max-h-72 shrink-0 flex-col overflow-hidden border-b"
-            >
-            <ComposerPrimitive.Unstable_TriggerPopover.Action {...slash.action} />
-            <SlashPanel>
-              {/* No padding of its own any more — the shell already pads, and a second inset
-                  inside the first is what made this look like a panel sitting in a box. The rows
-                  carry `px-2.5`, the same as the input, so a command name starts exactly where
-                  the placeholder does. */}
-              <div className="min-h-0 flex-1 overflow-y-auto py-0.5">
-                <ComposerPrimitive.Unstable_TriggerPopoverItems>
-                  {(items) =>
-                    items.map((item) => (
-                      <SlashItem key={item.id} item={item}>
-                        <span className="text-foreground shrink-0 font-mono text-xs">
-                          /{item.label ?? item.id}
-                        </span>
-                        {item.description ? (
-                          // Clamped to one line. A skill's description is written for him — it
-                          // tells a model when to reach for the thing, at paragraph length — and
-                          // `/code-refactor` rendered eleven lines of it, which pushed every
-                          // other command off the screen. The rest is in `SlashDetail`, below.
-                          <span className="text-muted-foreground/80 min-w-0 flex-1 truncate text-[11px]">
-                            {item.description}
-                          </span>
-                        ) : null}
-                      </SlashItem>
-                    ))
-                  }
-                </ComposerPrimitive.Unstable_TriggerPopoverItems>
-              </div>
-              <SlashDetail />
-              {/* The keys, said out loud. They already worked — the library binds them — but a
-                  menu that does not mention them is a menu people click. */}
-              <p className="border-border/50 text-muted-foreground/50 flex shrink-0 gap-3 border-t px-2.5 py-1.5 font-mono text-[10px]">
-                <span>↑↓ move</span>
-                <span>↵ run</span>
-                <span>esc dismiss</span>
-              </p>
-            </SlashPanel>
-            </ComposerPrimitive.Unstable_TriggerPopover>
-        {/* Not `ComposerPrimitive.Input` any more. The value in the store is still a markdown
-            string — nothing downstream knows the difference — but a textarea cannot show a table
-            as a table, and a message with structure in it was being written blind. The paste
-            handling that used to live here (a screenshot on the clipboard, which Cmd-V otherwise
-            drops silently) moved into `paste.ts` along with the rest of the rules. */}
-        <RichComposerInput placeholder="say something to Kith…" autoFocus />
-        </ComposerPrimitive.Unstable_TriggerPopoverRoot>
-        <ComposerAction conversationId={conversationId} />
+        <div className="flex flex-col gap-2 px-2.5 pt-2.5 empty:hidden">
+          <ComposerQuoteStrip />
+          <ComposerAttachmentStrip />
+        </div>
+          {/* Not `ComposerPrimitive.Input` any more. The value in the store is still a markdown
+              string — nothing downstream knows the difference — but a textarea cannot show a table
+              as a table, and a message with structure in it was being written blind. The paste
+              handling that used to live here (a screenshot on the clipboard, which Cmd-V otherwise
+              drops silently) moved into `paste.ts` along with the rest of the rules.
+
+              The wrapper sets the design's measure on the editor and its placeholder together —
+              16px in, 14px down, 14px type — so the placeholder sits exactly where the caret will. */}
+          <div className="@container relative [&>div>span]:start-4 [&>div>span]:top-3.5 [&>div>span]:text-sm">
+            <RichComposerInput
+              commands={commands}
+              placeholder={running ? "Steer him while he works…" : "Say something to Kith, or type / for commands…"}
+              className="min-h-[3.25rem] px-4 pt-3.5 pb-0.5 text-sm leading-normal"
+              autoFocus
+            />
+            {empty ? <ComposerHint running={running} /> : null}
+          </div>
+        <ComposerAction conversationId={conversationId} mode={mode} onMode={setMode} afterFold={reading} />
       </div>
+      {workflow ? (
+        <p className="text-muted-foreground flex items-center gap-2 px-1 text-xs">
+          <WorkflowMark className="size-3 text-teal-700 dark:text-teal-400" />
+          This message may fan out: he writes a script, agents run in the background
+        </p>
+      ) : null}
       {/* A command has no reply to appear in, so it says what it did here. Without this,
           `/fold` was indistinguishable from a keystroke that did nothing. */}
-      {note ? <p className="text-muted-foreground/70 px-2 pt-1 text-[11px]">{note}</p> : null}
-      {/* The standing meter moved to the Work panel, itemised — see `chat/context-section`. What
-          stays here is the one thing the panel cannot say: the reading straight after a `/fold`.
-          A fold takes no reading of its own, so the thread's latest usage still describes the
-          conversation as it was *before* the fold until the next turn reports in — which is why
-          `/fold` returns one, and why showing it is the difference between the command looking
-          like it worked and looking like it did nothing. Transient by construction: `reading` is
-          set by the fold and nothing else ever sets it. */}
-      {reading ? <ComposerMeter afterFold={reading} /> : null}
+      {note ? <p className="text-muted-foreground/80 px-1 text-[11px]">{note}</p> : null}
     </ComposerPrimitive.Root>
   );
 };
 
-/**
- * How full the window is right now — not attached to any one reply, because a meter that
- * only exists on the last message you happened to send disappears the moment you stop
- * sending them, which is exactly when "how much room do I have left" is worth checking.
- * One meter, here, always current; not one per message any more (see turn-usage.tsx).
- *
- * Reads it off the latest assistant message's own usage data rather than a separate
- * fetch — the number already exists, live, the instant a turn reports it in.
- *
- * Always `context` — the most recent reading, whatever round it came from — never
- * `baseline`. Preferring `baseline` at rest was the previous fix for a *different* bounce:
- * before tool calls were replayed across turns at all, a new turn's first reading was
- * always tiny, so showing this turn's own peak made it look like it dropped the instant
- * the next message was sent. Now that a turn's tool history is replayed in full
- * (`conversations.full_messages`), that reason is largely gone — and holding `baseline`
- * bought a worse version of the same complaint: a turn that did real work climbs live,
- * then the second it finishes, the number reverts to what it was *before that work
- * happened*, which reads as having lost everything it just did. `context` is the number
- * that turn actually ended on; it stays put until the next one has something newer to say.
- */
-const ComposerMeter: FC<{ afterFold?: ContextLedger }> = ({ afterFold }) => {
-  const messages = useAuiState((s) => s.thread.messages);
-  const usage = latestUsage(messages);
-  // `afterFold` wins while it exists, and it exists only between a `/fold` finishing and the
-  // next turn starting. Every reading here is taken by a turn on its way past; a fold takes
-  // none, so the last turn's figure went on describing a conversation that had just been
-  // rewritten — the meter sat at 58% of a window the fold had emptied, which reads as the
-  // command having done nothing at all. See `_reading_after_fold` for how the number is got.
-  const reading = afterFold ?? usage?.context ?? usage?.baseline;
-  if (!reading) return null;
-  return (
-    <div className="mt-1.5 flex justify-center">
-      <ContextMeter context={reading} folded={afterFold ? true : usage?.folded} />
-    </div>
-  );
-};
+/** The `/workflow` mark: a small radar, the same glyph the chip on a sent message wears. */
+export const WorkflowMark: FC<{ className?: string }> = ({ className }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.4}
+    strokeLinecap="round"
+    aria-hidden
+    className={cn("shrink-0", className)}
+  >
+    <circle cx="12" cy="12" r="2" />
+    <path d="M16.24 7.76a6 6 0 1 0 .01 8.48M19.07 4.93a10 10 0 1 0 .01 14.14" />
+  </svg>
+);
 
-/** The most recent assistant turn's usage data part, walking back from the end — there is
- * at most one per turn (see `USAGE_PART`), and an in-progress turn's is exactly as current
- * as the round that just landed.
- *
- * Exported because the Work panel reads the same figure. One reader rather than two: this walks
- * the thread from the end looking for one part shape, and a second copy of that in the panel is a
- * second thing to get wrong when the shape changes. */
-export function latestUsage(messages: readonly unknown[]): TurnUsage | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i] as { role?: string; content?: unknown[] };
-    if (message.role !== "assistant") continue;
-    for (const part of message.content ?? []) {
-      const candidate = part as { type?: string; name?: string; data?: TurnUsage };
-      if (candidate.type === "data" && candidate.name === USAGE_PART && candidate.data) {
-        return candidate.data;
-      }
-    }
-  }
-  return undefined;
-}
-
-/**
- * How to send, while there is nothing to send.
- *
- * Enter-sends and shift-Enter-newlines is a convention, not a law, and the composer is a
- * multi-line box with a send button — which is exactly the shape that makes someone type a
- * paragraph, press Enter for the next line, and post half a thought. Only while the box is
- * empty: once you are typing you already know.
- *
- * On the action row, immediately left of the paperclip, rather than centred on a line of its
- * own below the shell. That line was empty space the rest of the time, so the composer changed
- * height the moment you typed a character — and the hint is about the two keys sitting beside
- * the send button, so it belongs in the same cluster as them.
- */
 /**
  * A ⌘⏎ message, held until the turn ends.
  *
@@ -684,28 +513,29 @@ export function latestUsage(messages: readonly unknown[]): TurnUsage | undefined
  * assistant-ui had already put the message in the thread and was showing the turn as running
  * while nothing had been sent — for up to twenty minutes. A queued message and a message that
  * got no reply looked exactly alike, and only one of them is fine.
+ *
+ * Its own card above the composer now rather than a strip inside it: it is a message you have
+ * already sent, waiting, and the box below is for the next one.
  */
 const QueuedNotice: FC = () => {
   const holding = useSyncExternalStore(subscribeHolding, isHolding, () => false);
   const text = useSyncExternalStore(subscribeHolding, heldMessage, () => "");
   if (!holding) return null;
   return (
-    <div className="border-border/60 bg-muted/40 mb-1.5 flex items-start gap-2 rounded-lg border px-3 py-2">
-      <Clock3 className="text-muted-foreground/70 mt-0.5 size-3 shrink-0" />
+    <div className="border-border bg-card flex items-start gap-2.5 rounded-xl border px-3 py-2.5">
+      <Clock3 className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="text-muted-foreground text-[11px]">
-          Queued — goes as soon as this turn finishes.
+          Goes when this turn ends · sent with ⌘⏎
         </div>
         {/* The words themselves, not just the fact of them. A notice that says something is
             waiting without showing what is a notice you have to take on trust. */}
-        {text ? (
-          <p className="text-foreground/70 mt-0.5 line-clamp-2 text-[12px]">{text}</p>
-        ) : null}
+        {text ? <p className="text-foreground mt-0.5 line-clamp-2 text-[13px]">{text}</p> : null}
       </div>
       <button
         type="button"
         onClick={() => dropHeld()}
-        className="text-muted-foreground/50 hover:text-destructive shrink-0 text-[11px] transition-colors"
+        className="text-muted-foreground hover:text-destructive shrink-0 rounded-md px-1.5 py-0.5 text-xs transition-colors"
       >
         Cancel
       </button>
@@ -714,47 +544,56 @@ const QueuedNotice: FC = () => {
 };
 
 /**
- * What the keys do, said at the moment it is worth saying.
+ * What the keys do, said at the moment it is worth saying — in the empty box's top corner.
  *
- * **Shown while he is working even once you have typed**, which is the change that matters. The
- * whole hint used to be gated on an empty composer, so the two keys that differ mid-turn — ⏎
- * steers the running turn, ⌘⏎ waits for it to finish — were only ever legible when there was
- * nothing to send with them. The instant you typed the correction that makes the choice real,
- * the only thing that explained the choice disappeared. ⌘⏎ was undiscoverable by construction.
+ * Idle says ⏎ / ⇧⏎ and nothing else, because ⌘⏎ idle is not a third option: the flag is set,
+ * `holdUntilIdle` finds nothing running and returns at once, and the message sends exactly as ⏎
+ * would. Listing "after this" with no *this* would be teaching a key that does nothing.
  *
- * Idle keeps saying ⏎ / ⇧⏎ and nothing else, because ⌘⏎ idle is not a third option: the flag is
- * set, `holdUntilIdle` finds nothing running and returns at once, and the message sends exactly
- * as ⏎ would. Listing "after this" with no *this* would be teaching a key that does nothing.
+ * While he works it names what each key does to the turn in flight. Once you have typed, the
+ * Steer now / After this turn control takes over the job and wears the same keys — the whole
+ * hint used to vanish at exactly that moment, which made ⌘⏎ undiscoverable by construction.
  */
-const ComposerHint: FC = () => (
-  <AuiIf
-    condition={(s) =>
-      s.thread.isRunning || (s.composer.isEmpty && s.composer.attachments.length === 0)
-    }
-  >
-    <div className="text-muted-foreground/40 pointer-events-none me-1 flex items-center gap-3 text-[10px] select-none">
-      <AuiIf condition={(s) => !s.thread.isRunning}>
-        <span>
-          <kbd className="font-sans">⏎</kbd> send
-        </span>
+const ComposerHint: FC<{ running: boolean }> = ({ running }) => (
+  // Long enough, beside the placeholder, to run into it in a narrow composer — where it steps
+  // aside. The keys still work; Stop is on its button.
+  <div className="text-muted-foreground/60 pointer-events-none absolute end-4 top-4 flex items-center gap-1.5 text-[11px] select-none @max-[36rem]:hidden">
+    {running ? (
+      <>
+        <span>⏎ steers him</span>
         <span aria-hidden>·</span>
-        <span>
-          <kbd className="font-sans">⇧⏎</kbd> new line
-        </span>
-      </AuiIf>
-      {/* Named by what each does to the turn in flight, not by "send" twice. Steering keeps
-          everything the turn has found; queuing starts fresh once it is over. */}
-      <AuiIf condition={(s) => s.thread.isRunning}>
-        <span>
-          <kbd className="font-sans">⏎</kbd> steer now
-        </span>
+        <span>⌘⏎ waits for the turn</span>
         <span aria-hidden>·</span>
-        <span>
-          <kbd className="font-sans">⌘⏎</kbd> send after
-        </span>
-      </AuiIf>
-    </div>
-  </AuiIf>
+        <span>esc stops</span>
+      </>
+    ) : (
+      <>
+        <span>⏎ send</span>
+        <span aria-hidden>·</span>
+        <span>⇧⏎ new line</span>
+      </>
+    )}
+  </div>
+);
+
+/** The other half of `SelectionQuoteToolbar`: what a quote looks like once it's actually
+ *  attached, so it's obvious what's about to be sent along with the message rather than a
+ *  silent extra a person only discovers after sending. `ComposerPrimitive.Quote` already
+ *  renders nothing when there's no quote set, so no extra `AuiIf` here. */
+const ComposerQuoteStrip: FC = () => (
+  <ComposerPrimitive.Quote className="border-s-kith/50 bg-kith-soft/30 flex items-start gap-2 rounded-lg border-s-2 px-3 py-2 text-xs">
+    <Reply className="text-kith/80 mt-0.5 size-3.5 shrink-0" />
+    <span className="min-w-0 flex-1 leading-relaxed">
+      <span className="text-kith me-1">Replying to</span>
+      <ComposerPrimitive.QuoteText className="text-muted-foreground line-clamp-2 inline" />
+    </span>
+    <ComposerPrimitive.QuoteDismiss
+      aria-label="Remove quote"
+      className="text-muted-foreground/70 hover:text-foreground shrink-0"
+    >
+      <XIcon className="size-3.5" />
+    </ComposerPrimitive.QuoteDismiss>
+  </ComposerPrimitive.Quote>
 );
 
 /**
@@ -763,33 +602,12 @@ const ComposerHint: FC = () => (
  * Rendered above the input rather than below it, so adding an image does not push the caret
  * you are typing in. Nothing shows when nothing is attached.
  *
- * It used to say the strip was "absent for a model that cannot take images, because the
- * workspace only installs the adapter when the provider says the model accepts one". That
- * stopped being true when the adapter became unconditional and started accepting any file:
- * a spreadsheet could not be attached at all, and on a model without vision the paperclip
- * simply vanished. Whether to inline a picture or hand him a path is decided on the server,
- * next to the model config — not here by hiding a button.
+ * Whether to inline a picture or hand him a path is decided on the server, next to the model
+ * config — not here by hiding a button.
  */
-/** The other half of `SelectionQuoteToolbar`: what a quote looks like once it's actually
- *  attached, so it's obvious what's about to be sent along with the message rather than a
- *  silent extra a person only discovers after sending. `ComposerPrimitive.Quote` already
- *  renders nothing when there's no quote set, so no extra `AuiIf` here. */
-const ComposerQuoteStrip: FC = () => (
-  <ComposerPrimitive.Quote className="border-border/50 bg-muted/40 flex items-start gap-2 rounded-lg border-s-2 border-s-kith/60 px-2.5 py-1.5 text-xs">
-    <Reply className="text-muted-foreground/60 mt-0.5 size-3.5 shrink-0" />
-    <ComposerPrimitive.QuoteText className="text-muted-foreground min-w-0 flex-1 line-clamp-2 leading-relaxed" />
-    <ComposerPrimitive.QuoteDismiss
-      aria-label="Remove quote"
-      className="text-muted-foreground/60 hover:text-foreground shrink-0"
-    >
-      <XIcon className="size-3.5" />
-    </ComposerPrimitive.QuoteDismiss>
-  </ComposerPrimitive.Quote>
-);
-
 const ComposerAttachmentStrip: FC = () => (
   <AuiIf condition={(s) => s.composer.attachments.length > 0}>
-    <div className="flex flex-wrap gap-1.5 px-1 pt-1">
+    <div className="flex flex-wrap gap-1.5 px-0.5">
       <ComposerPrimitive.Attachments>{() => <AttachmentUI />}</ComposerPrimitive.Attachments>
     </div>
   </AuiIf>
@@ -819,22 +637,24 @@ const AttachButton: FC = () => {
         }}
       />
       <TooltipIconButton
-        tooltip="Attach a file"
-        side="bottom"
+        tooltip="Attach files"
+        side="top"
         type="button"
         variant="ghost"
         size="icon"
-        className="size-7 rounded-full"
+        aria-label="Attach files"
+        className="text-muted-foreground hover:text-foreground size-[30px] rounded-lg [&_svg]:size-[15px]"
         onClick={() => input.current?.click()}
       >
-        <Paperclip className="size-4" />
+        <Plus />
       </TooltipIconButton>
     </>
   );
 };
 
 /**
- * Send, while he is working — which means steer, and must not go near the runtime.
+ * Send, while he is working — which means steer, or wait for the turn, and must not go near the
+ * runtime either way.
  *
  * `ComposerPrimitive.Send` cannot be used here. Everything it sends goes through
  * `performRoundtrip`, whose first line is `abortController.abort()`: the run in flight is
@@ -842,133 +662,158 @@ const AttachButton: FC = () => {
  * "send" that quietly stops the work it was meant to redirect is worse than no button, which is
  * what was here before.
  *
- * So this is the same path the Enter key takes — post the text to the running turn, clear the
- * box — and the two are deliberately identical, because a keystroke and a button that claim to
- * do the same thing should.
+ * So this is the same path the keys take — ⏎ posts the text to the running turn, ⌘⏎ holds it in
+ * `queued-send` until the turn has genuinely ended and only then sends it normally — and the two
+ * are deliberately identical, because a keystroke and a button that claim to do the same thing
+ * should.
  */
-const SteerButton: FC = () => {
+const SteerButton: FC<{ mode: SteerMode }> = ({ mode }) => {
   const composer = useComposerRuntime();
   const text = useAuiState((s) => s.composer.text);
   const canSend = useAuiState((s) => !s.composer.isEmpty);
   const here = useConversationId();
+  const after = mode === "after";
 
   return (
-    <TooltipIconButton
-      tooltip="Send to the turn he is running — it keeps what it has found"
-      side="bottom"
+    <button
       type="button"
-      variant="default"
-      size="icon"
       disabled={!canSend}
-      className="aui-composer-send size-7 rounded-full"
-      aria-label="Steer this turn"
+      title={
+        after
+          ? "Send when this turn ends — it starts fresh after he finishes"
+          : "Send to the turn he is running — it keeps what it has found"
+      }
+      className="aui-composer-send bg-kith text-primary-foreground hover:bg-kith/90 flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] px-3 text-xs font-semibold transition-colors disabled:opacity-50"
+      aria-label={after ? "Send after this turn" : "Steer this turn"}
       onClick={() => {
         // The pane this button is in, not the process's last-writer-wins guess — see `rich-input`.
         if (!here || !text.trim()) return;
-        void steerTurn(here, text);
+        const said = text;
         composer.setText("");
+        if (after) {
+          void holdUntilIdle(here, said, (held) => {
+            composer.setText(held);
+            // A tick, so the store holds the restored text before the send reads it.
+            window.setTimeout(() => composer.send(), 0);
+          });
+        } else {
+          void steerTurn(here, said);
+        }
       }}
     >
-      <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
-    </TooltipIconButton>
+      {after ? <Clock3 className="size-3.5" aria-hidden /> : <CornerDownRight className="size-3.5" aria-hidden />}
+      {after ? "Send after" : "Steer"}
+    </button>
   );
 };
 
-const ComposerAction: FC<{ conversationId: string }> = ({ conversationId }) => {
+const ComposerAction: FC<{
+  conversationId: string;
+  mode: SteerMode;
+  onMode: (mode: SteerMode) => void;
+  /** The reading a `/fold` just left, which the ring shows until the next turn measures. */
+  afterFold?: ContextLedger;
+}> = ({ conversationId, mode, onMode, afterFold }) => {
+  const running = useAuiState((s) => s.thread.isRunning);
+  const hasText = useAuiState((s) => !s.composer.isEmpty);
+
   return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-between gap-2">
-      {/* The running-agents indicator, and the door to the agent map. Left of the row, away from
-          the send cluster, and absent entirely until this conversation has a workflow. */}
-      <div className="flex min-w-0 items-center">
-        <AgentsChip conversationId={conversationId} />
-      </div>
-      <div className="flex items-center gap-1.5">
-        <ComposerHint />
-        <AttachButton />
-        <AuiIf condition={(s) => s.thread.capabilities.dictation}>
-          <AuiIf condition={(s) => s.composer.dictation == null}>
-            <ComposerPrimitive.Dictate asChild>
-              <TooltipIconButton
-                tooltip="Voice input"
-                side="bottom"
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="aui-composer-dictate size-7 rounded-full"
-                aria-label="Start voice input"
-              >
-                <MicIcon className="aui-composer-dictate-icon size-4" />
-              </TooltipIconButton>
-            </ComposerPrimitive.Dictate>
-          </AuiIf>
-          <AuiIf condition={(s) => s.composer.dictation != null}>
-            <ComposerPrimitive.StopDictation asChild>
-              <TooltipIconButton
-                tooltip="Stop dictation"
-                side="bottom"
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="aui-composer-stop-dictation text-destructive size-7 rounded-full"
-                aria-label="Stop voice input"
-              >
-                <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current" />
-              </TooltipIconButton>
-            </ComposerPrimitive.StopDictation>
-          </AuiIf>
+    <div className="aui-composer-action-wrapper @container relative flex min-w-0 items-center gap-1 px-2 pt-1.5 pb-2">
+      <AttachButton />
+      {/* While he works and you have typed, what the button will do is the question — so the
+          choice sits beside the attach button. Commands are `/`, which the placeholder says; a
+          "/ Commands" button here only repeated it. */}
+      {running && hasText ? (
+        <>
+          <SteerModeToggle mode={mode} onMode={onMode} />
+          <span aria-hidden className="bg-border mx-1 h-4 w-px shrink-0" />
+        </>
+      ) : null}
+      <ThinkingChip />
+      <AccessChip />
+      <ModelChip />
+      {/* No workflow chip: the title bar's pill already says a workflow is running and opens its
+          agent map, and a finished run's map is on its card in the thread. */}
+      <div className="min-w-2 flex-1" />
+      <AuiIf condition={(s) => s.thread.capabilities.dictation}>
+        <AuiIf condition={(s) => s.composer.dictation == null}>
+          <ComposerPrimitive.Dictate asChild>
+            <TooltipIconButton
+              tooltip="Voice input"
+              side="top"
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="aui-composer-dictate size-7 rounded-lg"
+              aria-label="Start voice input"
+            >
+              <MicIcon className="aui-composer-dictate-icon size-4" />
+            </TooltipIconButton>
+          </ComposerPrimitive.Dictate>
         </AuiIf>
-        {/* One button, and what it does depends on whether you have typed anything.
-         *
-         * It was two while a turn ran — a square Stop beside an arrow Send — which is a choice
-         * presented at the moment you are least interested in making one. Every other assistant
-         * settles this the same way and it is the right way: an empty box while something is
-         * running can only mean stop, and a box with words in it can only mean send them.
-         *
-         * The two intents are still both reachable, because they are still different: Stop ends
-         * the run and loses what it found; sending steers, and keeps every tool result so far.
-         * You get whichever one your input is already asking for. */}
-        <AuiIf condition={(s) => s.thread.isRunning && s.composer.isEmpty}>
+        <AuiIf condition={(s) => s.composer.dictation != null}>
+          <ComposerPrimitive.StopDictation asChild>
+            <TooltipIconButton
+              tooltip="Stop dictation"
+              side="top"
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="aui-composer-stop-dictation text-destructive size-7 rounded-lg"
+              aria-label="Stop voice input"
+            >
+              <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current" />
+            </TooltipIconButton>
+          </ComposerPrimitive.StopDictation>
+        </AuiIf>
+      </AuiIf>
+      <ContextRing afterFold={afterFold} />
+      {/* One button, and what it does depends on whether you have typed anything.
+       *
+       * It was two while a turn ran — a square Stop beside an arrow Send — which is a choice
+       * presented at the moment you are least interested in making one. Every other assistant
+       * settles this the same way and it is the right way: an empty box while something is
+       * running can only mean stop, and a box with words in it can only mean send them.
+       *
+       * The two intents are still both reachable, because they are still different: Stop ends
+       * the run and loses what it found; sending steers, and keeps every tool result so far.
+       * You get whichever one your input is already asking for — and Escape stops from the box. */}
+      {running && !hasText ? (
+        <>
           {/* Stop says so, rather than being inferred from a closed connection.
               `Cancel` stops this window reading; the `/stop` it posts is what ends the turn on the
               server. Two actions because they are two different things — which is the distinction
               the adapter used to collapse, so that leaving a conversation killed the work in it.
               Order does not matter: neither depends on the other. */}
           <ComposerPrimitive.Cancel asChild>
-            <TooltipIconButton
-              tooltip="Stop — ends the turn and loses what it found"
-              side="bottom"
+            <button
               type="button"
-              variant="ghost"
-              size="icon"
-              className="aui-composer-cancel size-7 rounded-full"
+              title="Stop — ends the turn and loses what it found"
               aria-label="Stop generating"
+              className="aui-composer-cancel border-foreground/15 bg-accent text-foreground hover:bg-accent/70 flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] border px-3 text-xs font-semibold transition-colors"
               onClick={() => {
                 if (conversationId) void stopTurn(conversationId);
               }}
             >
-              <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
-            </TooltipIconButton>
+              <SquareIcon className="aui-composer-cancel-icon size-2.5 fill-current" />
+              Stop
+            </button>
           </ComposerPrimitive.Cancel>
-        </AuiIf>
-        <AuiIf condition={(s) => s.thread.isRunning && !s.composer.isEmpty}>
-          <SteerButton />
-        </AuiIf>
-        <AuiIf condition={(s) => !s.thread.isRunning}>
-          <ComposerPrimitive.Send asChild>
-            <TooltipIconButton
-              tooltip="Send message"
-              side="bottom"
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-send size-7 rounded-full"
-              aria-label="Send message"
-            >
-              <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
-            </TooltipIconButton>
-          </ComposerPrimitive.Send>
-        </AuiIf>
-      </div>
+        </>
+      ) : null}
+      {running && hasText ? <SteerButton mode={mode} /> : null}
+      {!running ? (
+        <ComposerPrimitive.Send asChild>
+          <button
+            type="button"
+            title="Send message"
+            aria-label="Send message"
+            className="aui-composer-send bg-kith text-primary-foreground hover:bg-kith/90 disabled:bg-accent disabled:text-muted-foreground/75 flex size-8 shrink-0 items-center justify-center rounded-[10px] transition-colors"
+          >
+            <ArrowUpIcon className="aui-composer-send-icon size-[15px]" strokeWidth={2.4} />
+          </button>
+        </ComposerPrimitive.Send>
+      ) : null}
     </div>
   );
 };
@@ -976,371 +821,89 @@ const ComposerAction: FC<{ conversationId: string }> = ({ conversationId }) => {
 const MessageError: FC = () => {
   return (
     <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="aui-message-error-root border-destructive bg-destructive/10 text-destructive dark:bg-destructive/5 mt-2 rounded-md border p-3 text-sm dark:text-red-200">
+      <ErrorPrimitive.Root className="aui-message-error-root border-destructive/40 bg-destructive/10 text-destructive rounded-xl border px-3.5 py-2.5 text-[13px]">
         <ErrorPrimitive.Message className="aui-message-error-message line-clamp-2" />
       </ErrorPrimitive.Root>
     </MessagePrimitive.Error>
   );
 };
 
+/**
+ * One of his turns: the run strip, the answer, what the turn made, and the footer.
+ *
+ * The layout is decided by `planTurn` from the *shape* of the message — which kinds of part, in
+ * which order — so it is recomputed when a part arrives and not on every streamed token. The
+ * shape travels through the selector as a string, one character per part, which compares by
+ * value where an array would compare by identity and re-render the turn on every chunk.
+ */
 const AssistantMessage: FC = () => {
-  const {
-    ToolFallback: ToolFallbackComponent = ToolFallback,
-    ToolGroup,
-    ReasoningGroup,
-  } = useContext(ThreadComponentsContext);
-
-  const ACTION_BAR_PT = "pt-1.5";
-  // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
-  const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
+  const { ToolFallback: ToolFallbackComponent = ToolFallback } = useContext(ThreadComponentsContext);
+  const code = useAuiState((s) =>
+    s.message.parts
+      .map((part) => KIND_CODE[kindOf(part as { type: string; name?: string }, STEER_PART)])
+      .join(""),
+  );
+  const kinds = useMemo(() => kindsFromCode(code), [code]);
+  const finished = useAuiState((s) => s.message.status?.type !== "running");
+  const plan = useMemo(() => planTurn(kinds, finished), [kinds, finished]);
+  const components = usePartComponents(ToolFallbackComponent);
 
   return (
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
       data-role="assistant"
-      className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
+      className="fade-in slide-in-from-bottom-1 animate-in relative duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
     >
-      <div data-slot="aui_assistant-message-name" className="mb-1.5 flex items-center gap-2 px-2">
-        <PresenceOrb size={7} />
-        <span className="font-mono text-[11px] tracking-wide text-kith/90">Kith</span>
-      </div>
-      <div
-        data-slot="aui_assistant-message-content"
-        className="text-foreground px-2 leading-relaxed wrap-break-word"
-      >
-        <MessagePrimitive.GroupedParts
-          groupBy={groupPartByType({
-            reasoning: ["group-chainOfThought", "group-reasoning"],
-            "tool-call": ["group-chainOfThought", "group-tool"],
-            "standalone-tool-call": [],
-          })}
-        >
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-chainOfThought":
-                return <ActivityRun group={part}>{children}</ActivityRun>;
-              case "group-tool":
-                if (ToolGroup) {
-                  return <ToolGroup group={part}>{children}</ToolGroup>;
-                }
-                /* Flat. The disclosure moved out to the chain that contains this run, so a
-                 * second one here would mean opening the strip only to find another closed
-                 * row inside it — two clicks to read one command. `ActivityRun` summarises
-                 * across the whole chain, which is the only level at which the summary is
-                 * true: a run is almost always length 1, because he thinks between calls. */
-                return children;
-              case "group-reasoning": {
-                if (ReasoningGroup) {
-                  return <ReasoningGroup group={part}>{children}</ReasoningGroup>;
-                }
-                // Ghost, not the default bordered card, when it does get the full disclosure —
-                // a collapsed "Reasoning" used to be the heaviest object in a turn for the part
-                // of it a reader is least often after. `ReasoningRun` decides, by length,
-                // whether this one is worth a disclosure at all.
-                return <ReasoningRun group={part}>{children}</ReasoningRun>;
-              }
-              case "text":
-                return <MarkdownText />;
-              case "reasoning":
-                return <Reasoning {...part} />;
-              case "tool-call":
-                return part.toolUI ?? <ToolFallbackComponent {...part} />;
-              case "data":
-                // The adapter turns the turn's stats into one of these. It is drawn in the
-                // message footer rather than here — it is metadata about the turn, and a
-                // number in the body reads as something he said. Every other data part is
-                // somebody else's and keeps the library's renderer.
-                if (part.name === USAGE_PART) return null;
-                // What you said into the running turn, drawn where it actually landed. It sits
-                // inside his message because that is the truth of it — it went into the prompt
-                // mid-turn, between two of his rounds, not before the turn began.
-                if (part.name === STEER_PART) {
-                  const said = (part.data as { text?: string } | undefined)?.text ?? "";
-                  return said ? <SteeredIn text={said} /> : null;
-                }
-                return part.dataRendererUI;
-              case "indicator":
-                // The bare dot means "working". When the turn can say *what* it is working on
-                // — folding to make room, retrying a dropped round — that line replaces it
-                // rather than sitting under it: two pulsing dots one above the other is one
-                // signal too many, and the specific one is strictly better than the generic.
-                return <WorkingIndicator />;
-              default:
-                return null;
-            }
-          }}
-        </MessagePrimitive.GroupedParts>
+      {/* Not `aui_assistant-message-content` any more: find-in-thread reads that slot as *prose*,
+          and the strip's header, counts and calls are not. The slot moved onto what he wrote —
+          each beat's sentence and the answer — so ⌘F finds his words and never a command line. */}
+      <article data-slot="kith_turn" className="text-foreground flex flex-col gap-3.5">
+        {plan.strip ? (
+          <RunStrip plan={plan} components={components} />
+        ) : (
+          <FlatTurn plan={plan} kinds={kinds} components={components} />
+        )}
+        {plan.strip && plan.answer !== null ? (
+          <AnswerProse index={plan.answer} components={components} />
+        ) : null}
         {/* What the turn *made*, under the turn, open. A design is not a step worth auditing —
             it is the output, and it was invisible inside the tool chain's closed disclosure. */}
         <DesignsInTurn />
         <MessageError />
-      </div>
-
-      <div
-        data-slot="aui_assistant-message-footer"
-        className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
-      >
-        <BranchPicker />
-        <AssistantActionBar />
-        <div className="flex-1" />
-        <MessageTime />
-        <TurnUsageFooter />
-      </div>
+        <TurnFooter />
+      </article>
     </MessagePrimitive.Root>
   );
 };
 
 /**
- * Something you said into a turn that was already running.
- *
- * Marked as yours and set apart, because it is the one thing inside his message that he did not
- * write. Placed at the round it actually entered the prompt rather than at the top — a steer
- * that arrived after four tool calls did not influence those four, and showing it above them
- * would claim it did.
+ * The footer under a finished answer: copy, restore files to here, retry — and what the turn
+ * cost, in one quiet line. The clock time it used to show is on that line's tooltip: the design
+ * gives the footer to the turn's price and its model, and the day is established by the
+ * conversation you are in.
  */
-const SteeredIn: FC<{ text: string }> = ({ text }) => (
-  <div className="border-kith/30 bg-kith-soft/40 my-2 rounded-lg border-s-2 px-3 py-2">
-    <div className="text-kith/80 mb-0.5 text-[10px] font-medium tracking-wide uppercase">
-      you, mid-turn
-    </div>
-    <p className="text-foreground/85 text-sm whitespace-pre-wrap">{text}</p>
-  </div>
-);
-
-/**
- * One run of work, as one line.
- *
- * **Why the chain and not the tool run.** `ToolRun` already collapsed consecutive tool calls,
- * and almost never fired: `groupBy` splits a chain into alternating `group-tool` and
- * `group-reasoning`, and Kith thinks between calls, so nearly every tool run has length one and
- * fell through to a bare row. A real transcript came out as twelve call rows interleaved with
- * five rows reading only "Reasoning" — seventeen rows of apparatus around five sentences, and
- * five of them carried no information at all. The grouping was not missing; it was applied one
- * level too deep to ever have anything to group.
- *
- * So the unit is the chain: everything between two things he *said*. That is also the honest
- * unit for a reader, who is asking "what did he do between these two paragraphs", not "how many
- * calls were adjacent".
- *
- * Collapsed by default, and nothing is hidden — the calls, their output and the thinking are
- * all one click away, drawn by the same components as before against the same rail.
- */
-const ActivityRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, children }) => {
-  /* Joined into one string rather than an array, for the reason `ToolRun` gives: the state
-   * selector compares by identity, so a fresh array every render is a render every render. The
-   * reasoning marker rides in the same string to keep this to one subscription. */
-  const joined = useAuiState((s) =>
-    group.indices
-      .map((index) => {
-        const part = s.message.parts[index];
-        if (!part) return "";
-        if (part.type === "tool-call") return part.toolName;
-        return part.type === "reasoning" ? THOUGHT_MARK : "";
-      })
-      .join(RUN_SEPARATOR),
-  );
-
-  /* When the chain holds exactly one call, its own phrase — "ran ./domaincheck2.sh --test" —
-   * rather than the count. A count is only a summary when there is something to summarise;
-   * "1 command" is strictly less than the row it replaced, and this is the common case, since
-   * he usually says something between calls. Unconditional and self-contained so it stays one
-   * subscription returning a plain string: it answers "" whenever there is not exactly one. */
-  const sole = useAuiState((s) => {
-    const calls = group.indices
-      .map((index) => s.message.parts[index])
-      .filter((part) => part?.type === "tool-call");
-    if (calls.length !== 1) return "";
-    const call = calls[0] as { toolName: string; args?: Record<string, unknown> };
-    return summaryLine(callText(describeCall(call.toolName, call.args)));
-  });
-
-  const entries = joined.split(RUN_SEPARATOR).filter(Boolean);
-  const names = entries.filter((one) => one !== THOUGHT_MARK);
-  const thought = entries.length > names.length;
-  const running = group.status.type === "running";
-  const run = summariseRun(names);
-
-  /* "3 commands · thought", or the single call's own phrase. No duration on the thinking:
-   * reasoning parts do not carry one here — `ReasoningTrigger` takes a `duration` prop that
-   * nothing in this thread supplies — and a number invented for the sake of the line would be
-   * the one part of this summary a reader could not check. */
-  const summary = [sole || run.text, thought ? "thought" : ""].filter(Boolean).join(" · ");
-
-  /* Nothing to say and nothing to open. A chain that is only a brief thought is drawn inline by
-   * `ReasoningRun` already; wrapping that in "· thought ›" would put a disclosure in front of the
-   * one line it was hiding.
-   *
-   * **Latched, and that is a fix rather than a flourish.** This read `!names.length && !running`
-   * directly, so a chain that had been running with no calls stopped being a disclosure the moment
-   * the turn ended — and a changed element type at this position unmounts everything below it.
-   * `ReasoningRoot` keeps your open/closed choice in a `useState` and promises, in its own
-   * docstring, that "the first manual toggle takes over permanently". It did, until the end of the
-   * turn: a reasoning block opened while reading snapped shut the instant the answer finished,
-   * which is the one moment anybody would notice.
-   *
-   * So a chain that has earned the disclosure keeps it for as long as it is on screen. The cost is
-   * a header on a brief thought that would look tidier without one — paid, because the alternative
-   * costs the reader what they had open. A conversation read back from the transcript never ran
-   * here and draws the resting shape, which is why this is per mount. */
-  const disclosed = useLatched(names.length > 0 || running);
-  if (!disclosed) return <>{children}</>;
-
-  return (
-    <div data-slot="aui_chain-of-thought" className="my-2">
-      <ToolGroupRoot variant="ghost">
-        <ToolGroupTrigger
-          count={names.length}
-          active={running}
-          summary={summary}
-          icons={run.icons}
-        />
-        <ToolGroupContent>
-          {/* The rail, kept — it is what makes the machinery read as a log beside the prose
-              rather than more prose. `border-foreground/20` rather than the token, because
-              `--border` is 12% alpha and `border-border/50` computed to six percent: present in
-              the DOM, invisible on the screen. */}
-          <div className="border-foreground/20 mt-1 space-y-0.5 border-s ps-3.5">{children}</div>
-        </ToolGroupContent>
-      </ToolGroupRoot>
-
-      {/* A way into a plugin's tab, outside the collapse — one card per plugin per run, at the
-          level the *result* of the run lives at. It used to hang off `ToolRun`, which now
-          renders flat, so it moved up with the disclosure rather than being lost with it. */}
-      <PluginRunOutcome names={names} />
-    </div>
-  );
-};
-
-/** Stands in for a reasoning part while the chain's contents are read as one joined string. A
- *  unit separator already delimits entries, so this only has to be something no tool is named. */
-const THOUGHT_MARK = "\u0002thought";
-
-
-/** A unit separator: safe in a way a comma or a space is not, since tool names are joined and
- *  split back apart. */
-const RUN_SEPARATOR = "\u001f";
-
-/** Below this many characters, a reasoning block is a one-line narration ("Let me check the
- *  API.") rather than an actual chain of thought — and giving it the same disclosure as a real
- *  one (its own row, a chevron, a click to read three words) is the thing making a turn with a
- *  reasoning blurb before every tool call look busier than it is. Long enough to catch a real
- *  sentence or two before switching over. */
-const REASONING_INLINE_MAX = 160;
-
-/**
- * A run of reasoning, collapsed to quiet inline text when it's short enough to just read, or
- * the full disclosure when it's substantial enough to be worth collapsing.
- *
- * The split isn't about row count — it's that "Reasoning ›" and three words behind it is a
- * worse deal than just showing the three words. A genuine multi-sentence chain of thought still
- * gets the full trigger; the difference is whether there's enough there to want to hide by
- * default.
- */
-const ReasoningRun: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({ group, children }) => {
-  const length = useAuiState((s) =>
-    group.indices.reduce((total, index) => {
-      const part = s.message.parts[index];
-      return total + (part && part.type === "reasoning" ? part.text.length : 0);
-    }, 0),
-  );
-  const running = group.status.type === "running";
-  const brief = !running && length > 0 && length <= REASONING_INLINE_MAX;
-
-  if (brief) {
-    return (
-      <div className="text-muted-foreground/60 my-1 text-xs italic leading-relaxed [&_p]:my-0">
-        {children}
-      </div>
-    );
-  }
-
-  return (
-    <ReasoningRoot streaming={running} variant="ghost" className="mb-0">
-      <ReasoningTrigger active={running} />
-      <ReasoningContent aria-busy={running}>
-        <ReasoningText>{children}</ReasoningText>
-      </ReasoningContent>
-    </ReasoningRoot>
-  );
-};
-
-/**
- * What the turn cost, on the footer row with the rest of the turn's metadata.
- *
- * It was a line in the message body, which put a number where a sentence goes — and on a
- * reopened conversation there was one of them per model round, so a reply that took a dozen
- * rounds arrived as a column of six-figure token counts with the writing somewhere inside it.
- * The rounds are folded into one part on the way in now (see `toThreadMessages`); this is where
- * the one figure lands.
- */
-/** This turn's usage part, or undefined. Serialised because the selector compares by identity. */
-const useTurnUsage = (): TurnUsage | undefined => {
-  const encoded = useAuiState((s) => {
-    const part = s.message.parts.find((one) => one.type === "data" && one.name === USAGE_PART) as
-      | { data?: unknown }
-      | undefined;
-    return part?.data ? JSON.stringify(part.data) : "";
-  });
-  if (!encoded) return undefined;
-  try {
-    return JSON.parse(encoded) as TurnUsage;
-  } catch {
-    return undefined;
-  }
-};
-
-/** The working indicator, upgraded to a reason whenever the turn has one.
- *
- *  Decided on the usage itself rather than on whether `<TurnStatus>` would render something:
- *  an element is truthy even when the component returns null, so `status ?? dot` would have
- *  silently removed the working indicator in every ordinary turn. */
-const WorkingIndicator: FC = () => {
+const TurnFooter: FC = () => {
   const usage = useTurnUsage();
-  const explained = Boolean(usage?.retrying || (usage?.folded && (usage.rounds ?? []).length === 0));
-  if (explained && usage) return <TurnStatus usage={usage} />;
-  return (
-    <span
-      data-slot="aui_assistant-message-indicator"
-      className="animate-pulse font-sans"
-      aria-label="Assistant is working"
-    >
-      {"\u25CF"}
-    </span>
-  );
-};
-
-const TurnUsageFooter: FC = () => {
-  const usage = useTurnUsage();
-  if (!usage) return null;
-  return <TurnTokens usage={usage} />;
-};
-
-/**
- * When the turn happened, on the footer row beside what it cost.
- *
- * Clock time only — the day is established by the conversation you are in, and a full date on
- * every message is noise in a thread you have been in all afternoon. The title carries the whole
- * thing for the one you actually want to pin down.
- *
- * Same weight as the token count next to it, deliberately: both are metadata about the turn, and
- * a timestamp that competes with the reply for attention is a worse timestamp.
- */
-const MessageTime: FC = () => {
+  /* Quiet until the turn is over. The strip's header is the live line while he works; a price
+   * ticking up under a half-finished reply is a second clock for the same thing. */
+  const running = useAuiState((s) => s.message.status?.type === "running");
   const at = useAuiState((s) => s.message.createdAt);
-  if (!at) return null;
-  const iso = at instanceof Date ? at.toISOString() : String(at);
-  const clock = time(iso);
-  if (!clock) return null;
+  const iso = at ? (at instanceof Date ? at.toISOString() : String(at)) : "";
+  const stamp = iso ? when(iso) : "";
   return (
-    <span
-      data-slot="kith_message-time"
-      className="text-muted-foreground/45 me-2 font-mono text-[10px] tabular-nums select-none"
-      title={when(iso)}
+    <div
+      data-slot="aui_assistant-message-footer"
+      className="text-muted-foreground/75 -mt-1 flex min-h-[26px] min-w-0 items-center gap-0.5 text-[11px]"
     >
-      {clock}
-    </span>
+      <BranchPicker />
+      <AssistantActionBar />
+      {usage && !running ? <TurnFooterStats usage={usage} title={stamp || undefined} /> : null}
+    </div>
   );
 };
+
+const footerButton =
+  "text-muted-foreground/75 hover:text-foreground size-[26px] rounded-[7px] p-0 [&_svg]:size-[13px]";
 
 const AssistantActionBar: FC = () => {
   const { checkpoints, reload, turnOffset } = useCheckpoints();
@@ -1361,6 +924,7 @@ const AssistantActionBar: FC = () => {
     .sort((a, b) => b.turnIndex - a.turnIndex)[0];
 
   const onRestore = async () => {
+    if (!candidate) return;
     const ok = await confirm({
       title: "Restore files to this point?",
       description:
@@ -1384,40 +948,22 @@ const AssistantActionBar: FC = () => {
     <ActionBarPrimitive.Root
       hideWhenRunning
       autohide="not-last"
-      className="aui-assistant-action-bar-root text-muted-foreground animate-in fade-in col-start-3 row-start-2 -ms-1 flex gap-1 duration-200"
+      className="aui-assistant-action-bar-root animate-in fade-in -ms-1.5 flex items-center gap-0.5 duration-200"
     >
       <CopyMessage />
+      {/* Only when there is something to go back to. It sat in a "…" menu of its own, one click
+          deeper than it needed to be; the confirmation it opens is the same, and is the part that
+          makes a destructive action safe to put in reach. */}
+      {candidate ? (
+        <TooltipIconButton tooltip="Restore files to here" className={footerButton} onClick={() => void onRestore()}>
+          <RotateCcw />
+        </TooltipIconButton>
+      ) : null}
       <ActionBarPrimitive.Reload asChild>
-        <TooltipIconButton tooltip="Refresh">
+        <TooltipIconButton tooltip="Retry this turn" className={footerButton}>
           <RefreshCwIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.Reload>
-      {/* Only when there is something in it. The menu's other item was "Export as Markdown",
-          and with that gone a turn with no checkpoint behind it had a `…` that opened an empty
-          box — a control that does nothing is worse than no control. */}
-      {candidate ? (
-        <ActionBarMorePrimitive.Root>
-          <ActionBarMorePrimitive.Trigger asChild>
-            <TooltipIconButton tooltip="More" className="data-[state=open]:bg-accent">
-              <MoreHorizontalIcon />
-            </TooltipIconButton>
-          </ActionBarMorePrimitive.Trigger>
-          <ActionBarMorePrimitive.Content
-            side="bottom"
-            align="start"
-            sideOffset={6}
-            className="aui-action-bar-more-content bg-popover/95 text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[8rem] overflow-hidden rounded-xl border p-1.5 shadow-lg backdrop-blur-sm"
-          >
-            <ActionBarMorePrimitive.Item
-              onSelect={onRestore}
-              className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
-            >
-              <RotateCcw className="size-4" />
-              Restore files to here
-            </ActionBarMorePrimitive.Item>
-          </ActionBarMorePrimitive.Content>
-        </ActionBarMorePrimitive.Root>
-      ) : null}
     </ActionBarPrimitive.Root>
   );
 };
@@ -1456,7 +1002,7 @@ const CopyMessage: FC = () => {
   };
 
   return (
-    <TooltipIconButton tooltip="Copy" onClick={() => void onCopy()} disabled={!text}>
+    <TooltipIconButton tooltip="Copy" onClick={() => void onCopy()} disabled={!text} className={footerButton}>
       {copied ? (
         <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
       ) : (
@@ -1470,13 +1016,15 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-kith-soft text-foreground rounded-2xl rounded-br-md border border-[color-mix(in_oklab,var(--kith)_22%,transparent)] px-4 py-2 wrap-break-word empty:hidden">
+        {/* The design's bubble: the raised surface, 16px corners with the one nearest you cut to
+            4px, 14px type. It was a pale amber pill, which spent Kith's colour on your words. */}
+        <div className="aui-user-message-content peer bg-accent text-foreground max-w-[520px] rounded-[16px_16px_4px_16px] px-3.5 py-2.5 text-[14px] leading-[1.5] wrap-break-word empty:hidden">
           {/* Rendered, not printed. The composer can make lists and tables now, and a bubble
               showing their source is a message that looks nothing like the one you composed. */}
           <MessagePrimitive.Parts components={{ Text: UserMarkdownText }} />
@@ -1502,7 +1050,7 @@ const UserActionBar: FC = () => {
       className="aui-user-action-bar-root flex flex-col items-end"
     >
       <ActionBarPrimitive.Edit asChild>
-        <TooltipIconButton tooltip="Edit" className="aui-user-action-edit">
+        <TooltipIconButton tooltip="Edit" className="aui-user-action-edit text-muted-foreground/75">
           <PencilIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.Edit>
@@ -1514,21 +1062,21 @@ const EditComposer: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
+      className="flex flex-col [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
     >
-      <ComposerPrimitive.Root className="aui-edit-composer-root border-border/60 dark:border-muted-foreground/15 ms-auto flex w-full max-w-[85%] flex-col rounded-(--composer-radius) border bg-(--composer-bg) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-none">
+      <ComposerPrimitive.Root className="aui-edit-composer-root border-input bg-card ms-auto flex w-full max-w-[85%] flex-col rounded-2xl border">
         <ComposerPrimitive.Input
-          className="aui-edit-composer-input text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base outline-none"
+          className="aui-edit-composer-input text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[14px] outline-none"
           autoFocus
         />
         <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
           <ComposerPrimitive.Cancel asChild>
-            <Button variant="ghost" size="sm" className="h-8 rounded-full px-3.5">
+            <Button variant="ghost" size="sm" className="h-8 rounded-[10px] px-3.5">
               Cancel
             </Button>
           </ComposerPrimitive.Cancel>
           <ComposerPrimitive.Send asChild>
-            <Button size="sm" className="h-8 rounded-full px-3.5">
+            <Button size="sm" className="bg-kith text-primary-foreground hover:bg-kith/90 h-8 rounded-[10px] px-3.5">
               Update
             </Button>
           </ComposerPrimitive.Send>
@@ -1543,7 +1091,7 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({ className, ...rest
     <BranchPickerPrimitive.Root
       hideWhenSingleBranch
       className={cn(
-        "aui-branch-picker-root text-muted-foreground -ms-2 me-2 inline-flex items-center text-xs",
+        "aui-branch-picker-root text-muted-foreground/75 -ms-2 me-1 inline-flex items-center text-[11px]",
         className,
       )}
       {...rest}
@@ -1553,7 +1101,7 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({ className, ...rest
           <ChevronLeftIcon />
         </TooltipIconButton>
       </BranchPickerPrimitive.Previous>
-      <span className="aui-branch-picker-state font-medium">
+      <span className="aui-branch-picker-state tabular-nums">
         <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
       </span>
       <BranchPickerPrimitive.Next asChild>

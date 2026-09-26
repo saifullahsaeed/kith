@@ -7,6 +7,7 @@ import { PromptProvider } from "@/components/ui/prompt";
 import { useBackendConfig } from "@/hooks/use-backend-config";
 import { useLiveUpdates } from "@/hooks/use-live";
 import { useSetup } from "@/hooks/use-setup";
+import { ServerConfigProvider } from "@/lib/server-config";
 
 /**
  * The states, in the order they can be answered: is the server there, is Kith set up,
@@ -53,7 +54,9 @@ export default function App() {
           the first and throws on the second, which is why asking for a name needs a real dialog. */}
       <PromptProvider>
         <ContextMenu />
-        <Workspace config={config} onSaveConfig={updateConfig} onConnectionSaved={reload} />
+        <ServerConfigProvider config={config} onSaveConfig={updateConfig}>
+          <Workspace config={config} onSaveConfig={updateConfig} onConnectionSaved={reload} />
+        </ServerConfigProvider>
       </PromptProvider>
     </ConfirmProvider>
   );

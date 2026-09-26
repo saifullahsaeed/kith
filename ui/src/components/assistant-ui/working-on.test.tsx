@@ -66,7 +66,7 @@ describe("a long checklist folds", () => {
     working(nine);
     render(<WorkingOn conversationId="c-1" />);
 
-    expect(await screen.findByText("4/9")).toBeInTheDocument();
+    expect(await screen.findByText("4 / 9")).toBeInTheDocument();
   });
 
   it("shows what is next, which is the only other line worth a glance", async () => {

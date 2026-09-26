@@ -193,6 +193,10 @@ function fallbackVerb(name: string): string {
 export interface DescribedCall {
   /** What he did, as a phrase: "ran", "searched the web for". */
   verb: string;
+  /** The same phrase while it is still happening: "running", "searching the web for". */
+  doing: string;
+  /** Whose tool it was, when it is not his own: an MCP server's label or a plugin's name. */
+  badge?: string;
   /** The thing he did it to, taken from the argument the phrase is about. "" when the
    *  phrase is complete on its own ("checked his reminders"). */
   subject: string;
@@ -207,30 +211,155 @@ export interface DescribedCall {
  *  works. Stripped from what's shown; the real, full command a person typed is still there
  *  untouched in the expanded arguments, this only shortens the collapsed line. */
 function shortenShellCommand(command: string): string {
-  return command.replace(/^cd\s+\S+\s*&&\s*/, "");
+  // `cd X && …`, `cd X; …` and `cd X` on a line of its own before the real command are all the
+  // same prefix; only the first was stripped, so a multi-line script read "Ran cd ~/Desktop/…"
+  // on every row and the command itself was cut off.
+  return command.replace(/^\s*cd\s+\S+\s*(?:&&|;|\n)\s*/, "");
 }
 
 /** One tool call, in English: what he did, the thing he did it to, and an icon for the kind
  *  of work it was. */
-export function describeCall(name: string, args?: Record<string, unknown>): DescribedCall {
+/**
+ * The Browser plugin's commands, in the same voice as the table above.
+ *
+ * Plugin tools are named `plugin__<id>__<command>` and are not in `TOOL` — they come and go with
+ * what is installed, and the server test holds that table to the registry. Without this, 560
+ * browser calls in his recent transcripts each read "plugin  browser  look", which is the
+ * function's name with its underscores taken out, not a sentence about what he did.
+ */
+const PLUGIN_VERB: Record<string, Record<string, { verb: string; of?: string }>> = {
+  browser: {
+    open: { verb: "opened", of: "url" },
+    read: { verb: "read the page" },
+    click: { verb: "clicked", of: "text" },
+    type: { verb: "typed into", of: "into" },
+    press: { verb: "pressed", of: "key" },
+    scroll: { verb: "scrolled", of: "by" },
+    look: { verb: "looked at the page" },
+    resize: { verb: "resized the page to", of: "preset" },
+    show: { verb: "opened the Browser tab" },
+    back: { verb: "went back" },
+    forward: { verb: "went forward" },
+    reload: { verb: "reloaded the page" },
+  },
+};
+
+/** Past tense to present, by first word, for a row that is still running. English does not
+ *  derive these, so the irregular ones are written out; anything missing keeps its past form,
+ *  which reads fine under a spinner. */
+const PRESENT: Record<string, string> = {
+  ran: "running", read: "reading", wrote: "writing", edited: "editing", searched: "searching",
+  opened: "opening", started: "starting", checked: "checking", stopped: "stopping",
+  traced: "tracing", looked: "looking", got: "getting", found: "finding", renamed: "renaming",
+  put: "putting", saved: "saving", exchanged: "exchanging", set: "setting", updated: "updating",
+  worked: "working", handed: "handing over", laid: "laying", remembered: "remembering",
+  let: "letting", cleared: "clearing", reached: "reaching", took: "taking", changed: "changing",
+  added: "adding", ticked: "ticking", linked: "linking", unlinked: "unlinking", clicked: "clicking",
+  typed: "typing", pressed: "pressing", scrolled: "scrolling", resized: "resizing",
+  "re-read": "re-reading", "re-shelved": "re-shelving", went: "going", reloaded: "reloading",
+  is: "", "set up": "setting up",
+};
+
+function presentOf(verb: string): string {
+  const [first = "", ...rest] = verb.split(" ");
+  const now = PRESENT[first];
+  if (now === undefined) return verb;
+  return [now, ...rest].filter(Boolean).join(" ");
+}
+
+/** The arguments that are paths, whose values read better relative to the project. */
+const PATH_ARGS = new Set(["path", "paths", "folder", "directory"]);
+
+/** A path as a person reads it: relative inside the project, `~` for home. */
+export function shortPath(path: string, root?: string | null): string {
+  const clean = path.trim();
+  if (root) {
+    const base = root.replace(/\/+$/, "");
+    if (clean === base) return ".";
+    if (clean.startsWith(`${base}/`)) return clean.slice(base.length + 1);
+  }
+  return clean.replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
+}
+
+/** `github` → `GitHub` is beyond a table; `github` → `Github` is at least a name. */
+const labelled = (id: string) => id.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+function subjectOf(raw: unknown, root?: string | null, paths = false): string {
+  const one = (value: unknown) => (paths ? shortPath(String(value), root) : String(value));
+  // A list reads as a list, not as `["a.py","b.py"]`. Three is the point at which naming them
+  // all stops being an aid and starts being the reason the row wraps.
+  if (Array.isArray(raw)) {
+    return raw.length > 3
+      ? `${raw.slice(0, 3).map(one).join(", ")} +${raw.length - 3} more`
+      : raw.map(one).join(", ");
+  }
+  return raw === undefined || raw === null ? "" : one(raw);
+}
+
+export function describeCall(
+  name: string,
+  args?: Record<string, unknown>,
+  /** The project's folder, so paths inside it read as relative. */
+  root?: string | null,
+): DescribedCall {
+  // Someone else's tool: a plugin command or an MCP server's.
+  const plugin = /^plugin__(.+?)__(.+)$/.exec(name);
+  if (plugin) {
+    const [, id, command] = plugin as unknown as [string, string, string];
+    const known = PLUGIN_VERB[id]?.[command];
+    const verb = known?.verb ?? command.replace(/_/g, " ");
+    const firstString = Object.values(args ?? {}).find((one) => typeof one === "string");
+    const subject = known ? subjectOf(known.of ? args?.[known.of] : undefined) : subjectOf(firstString);
+    const kind = id === "browser" ? GROUP.web : GROUP.skills;
+    return {
+      verb,
+      doing: presentOf(verb),
+      subject,
+      icon: kind.icon,
+      tone: kind.tone,
+      ...(id === "browser" ? { group: "web" as const } : { badge: labelled(id), group: "skills" as const }),
+    };
+  }
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (mcp) {
+    const [, server, tool] = mcp as unknown as [string, string, string];
+    const verb = tool.replace(/_/g, " ");
+    const firstString = Object.values(args ?? {}).find((one) => typeof one === "string");
+    return {
+      verb,
+      doing: verb,
+      subject: subjectOf(firstString),
+      badge: labelled(server),
+      icon: GROUP.tools.icon,
+      tone: GROUP.tools.tone,
+      group: "tools",
+    };
+  }
+
   const entry = TOOL[name];
   const group = entry ? GROUP[entry.group] : undefined;
   // Fall back to the singular the plural tools used to take. Old calls are replayed out of
   // the transcript on every resumed turn, so a week-old conversation must not lose the one
   // piece of information on its rows — `read a.py` degrading to a bare `read`.
   const raw = entry?.of ? (args?.[entry.of] ?? args?.[SINGULAR[entry.of] ?? ""]) : undefined;
-  // A list reads as a list, not as `["a.py","b.py"]`. Three is the point at which naming them
-  // all stops being an aid and starts being the reason the row wraps.
-  let subject = Array.isArray(raw)
-    ? raw.length > 3
-      ? `${raw.slice(0, 3).map(String).join(", ")} +${raw.length - 3} more`
-      : raw.map(String).join(", ")
-    : raw === undefined || raw === null
-      ? ""
-      : String(raw);
+  let subject = subjectOf(raw, root, Boolean(entry?.of && PATH_ARGS.has(entry.of)));
   if (name === "shell" && subject) subject = shortenShellCommand(subject);
+  // `edit_files` names no file in its own arguments — they are inside each edit — so without
+  // this every edit read as a bare "edited".
+  if (name === "edit_files" && !subject && Array.isArray(args?.edits)) {
+    const files = [
+      ...new Set(
+        (args.edits as Record<string, unknown>[])
+          .map((edit) => edit?.path ?? args?.path)
+          .filter((path): path is string => typeof path === "string"),
+      ),
+    ];
+    subject = subjectOf(files, root, true);
+  }
+  const verb = entry?.verb ?? fallbackVerb(name);
   return {
-    verb: entry?.verb ?? fallbackVerb(name),
+    verb,
+    doing: presentOf(verb),
     // Coerced rather than asserted: `view_task` is about an id, and a number rendered as a
     // React child is fine but a number that has been typed as a string is not.
     subject,
@@ -242,7 +371,8 @@ export function describeCall(name: string, args?: Record<string, unknown>): Desc
 
 /** The whole phrase for one call, for a tooltip or a title attribute. */
 export function callText(call: DescribedCall): string {
-  return [call.verb, call.subject].filter(Boolean).join(" ");
+  const said = [call.verb, call.subject].filter(Boolean).join(" ");
+  return said.charAt(0).toUpperCase() + said.slice(1);
 }
 
 /** Longest a one-line summary may be before it stops being one. Measured against the strip at
@@ -296,7 +426,7 @@ export interface SummarisedRun {
 export function summariseRun(names: string[]): SummarisedRun {
   const counts = new Map<string, number>();
   for (const name of names) {
-    const key = TOOL[name]?.group ?? "tools";
+    const key = describeCall(name).group ?? "tools";
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return {

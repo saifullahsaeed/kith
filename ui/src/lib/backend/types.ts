@@ -51,12 +51,34 @@ export interface ContextLedger {
   charsPerToken?: number;
 }
 
+/**
+ * What one model request reported, as the server's `stats` event carries it.
+ *
+ * Typed as numbers only until now, which was a small lie with a visible cost: `model`,
+ * `provider` and `finishReason` are strings, and `costUsd` is null when the provider does not
+ * price a request — so the adapter could only ever read the token counts, and a turn's price
+ * and which model answered it were dropped on the floor.
+ */
+export interface RoundStats {
+  promptTokens?: number;
+  responseTokens?: number;
+  reasoningTokens?: number;
+  cachedTokens?: number;
+  cacheWriteTokens?: number;
+  uncachedTokens?: number;
+  costUsd?: number | null;
+  finishReason?: string | null;
+  model?: string | null;
+  provider?: string | null;
+  [key: string]: number | string | null | undefined;
+}
+
 /** One event in the server's newline-delimited chat stream. */
 export type BackendEvent =
   | { type: "delta"; role: "reasoning" | "text"; text: string }
   | { type: "tool_call"; id: string; name: string; arguments: JsonObject }
   | { type: "tool_result"; id: string; name: string; result: JsonValue }
-  | { type: "stats"; stats: Record<string, number> }
+  | { type: "stats"; stats: RoundStats }
   | { type: "context"; context: ContextLedger }
   /* Two things emit this, with different things to say about it.
    *

@@ -478,3 +478,65 @@ describe("a tab you have opened stays open", () => {
     expect(screen.queryByText("body:work")).not.toBeInTheDocument();
   });
 });
+
+describe("the title bar's strip", () => {
+  /** The node the header renders for the strip. Created per test so nothing leaks between them. */
+  function slot() {
+    const element = document.createElement("div");
+    element.setAttribute("data-testid", "bar");
+    document.body.appendChild(element);
+    return element;
+  }
+
+  afterEach(() => {
+    document.querySelectorAll('[data-testid="bar"]').forEach((one) => one.remove());
+  });
+
+  it("draws a one-pane window's tabs in the bar, not over the pane", () => {
+    useLayout.setState({ tree: pane([work, roadmap]), focused: "" });
+    const bar = slot();
+    const { container } = render(<LayoutView render={body} bar={{ slot: bar }} />);
+
+    expect(bar.querySelectorAll('[role="tab"]')).toHaveLength(2);
+    expect(container.querySelector('[data-pane] [role="tablist"]')).toBeNull();
+    // Still the same strip: its tab still switches the pane below it.
+    fireEvent.click(screen.getByText("Board"));
+    expect(screen.getByText("body:board")).toBeInTheDocument();
+  });
+
+  it("leaves every pane its own strip once there are several", () => {
+    const bar = slot();
+    const { container } = render(<LayoutView render={body} bar={{ slot: bar }} />);
+
+    expect(bar.querySelector('[role="tab"]')).toBeNull();
+    expect(container.querySelectorAll('[data-pane] [role="tablist"]')).toHaveLength(2);
+  });
+
+  it("puts `after` at the end of the tabs", () => {
+    useLayout.setState({ tree: pane([work]), focused: "" });
+    const bar = slot();
+    render(<LayoutView render={body} bar={{ slot: bar, after: <button type="button">more</button> }} />);
+
+    const strip = bar.querySelector('[role="tablist"]')!;
+    const order = Array.from(strip.querySelectorAll('[role="tab"], button:not([aria-label^="Close"])'));
+    expect(order.map((one) => one.textContent)).toEqual(["Work", "more"]);
+  });
+
+  it("names what a tab is doing, in its tag and its tooltip", () => {
+    const chat = { surface: "chat" as const, conversationId: "c1" };
+    useLayout.setState({ tree: pane([chat]), focused: "" });
+    const bar = slot();
+    render(
+      <LayoutView
+        render={body}
+        bar={{ slot: bar }}
+        titleFor={() => "devices table breaks"}
+        stateFor={() => ({ tone: "working", tag: "Working", said: "He is working here" })}
+      />,
+    );
+
+    const tab = bar.querySelector('[role="tab"]')!;
+    expect(tab).toHaveTextContent("Working");
+    expect(tab.getAttribute("title")).toBe("devices table breaks — He is working here");
+  });
+});

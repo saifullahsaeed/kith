@@ -495,14 +495,23 @@ def timeline(conversation_id: str) -> list[dict]:
                 call["result"] = entry.get("result")
         elif kind == "stats":
             stats = entry.get("stats") or {}
-            assistant()["parts"].append(
-                {
-                    "kind": "usage",
-                    "uncached": int(stats.get("uncachedTokens") or 0),
-                    "cached": int(stats.get("cachedTokens") or 0),
-                    "out": int(stats.get("responseTokens") or 0),
-                }
-            )
+            usage: dict[str, Any] = {
+                "kind": "usage",
+                "uncached": int(stats.get("uncachedTokens") or 0),
+                "cached": int(stats.get("cachedTokens") or 0),
+                "out": int(stats.get("responseTokens") or 0),
+                # When the round landed, so a reopened turn can say how long it worked — the
+                # same "Worked 4m 12s" the live stream shows — rather than a bare "Worked".
+                "at": entry.get("at") or "",
+            }
+            # What it cost and who answered. Dropped here until now, so every reopened turn's
+            # footer had token counts and no price or model, while the live copy had both.
+            if isinstance(stats.get("costUsd"), (int, float)):
+                usage["costUsd"] = float(stats["costUsd"])
+            for key in ("model", "provider"):
+                if stats.get(key):
+                    usage[key] = str(stats[key])
+            assistant()["parts"].append(usage)
         elif kind == "context":
             # One per turn, written when it ends — a reading of how full the window was, not a
             # thing that happened, so only the final one is still true. Recording all forty

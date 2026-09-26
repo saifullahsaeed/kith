@@ -11,6 +11,7 @@ import {
 import { Thread, latestUsage } from "@/components/assistant-ui/thread";
 import { CheckpointsProvider } from "@/components/assistant-ui/checkpoints-context";
 import { ConversationProvider } from "@/lib/conversation";
+import { ProjectRootProvider } from "@/lib/project-root";
 import { SessionBar } from "@/components/chat/session-bar";
 import { ThreadSkeleton } from "@/components/chat/thread-skeleton";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
@@ -609,6 +610,7 @@ export function ChatPane({
                 chat sent one next. The pane has always known; there was no way to ask from inside
                 a message. */}
             <ConversationProvider id={id}>
+              <ProjectRootProvider projectId={projectId}>
               <CheckpointsProvider
                 conversationId={id}
                 /* Turns above this page. Checkpoints are tagged with an absolute turn index and
@@ -656,6 +658,7 @@ export function ChatPane({
                   ) : null}
                 </div>
               </CheckpointsProvider>
+              </ProjectRootProvider>
             </ConversationProvider>
           </ErrorBoundary>
         </div>

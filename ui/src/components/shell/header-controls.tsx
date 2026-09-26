@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 // OpenRouter's full reasoning-effort scale — see `openai_compat.REASONING_EFFORTS` on the
 // server. "None" is a deliberate, per-turn override ("not this time"), distinct from the
 // standing think toggle in Settings; "Default" leaves that standing toggle in charge.
-const EFFORTS = [
+export const EFFORTS = [
   { value: "", label: "Default", hint: "Let the model decide — usually the right answer." },
   { value: "none", label: "None", hint: "No reasoning at all, just this once. Fastest and cheapest." },
   { value: "minimal", label: "Minimal", hint: "The lightest touch of reasoning — barely more than none." },

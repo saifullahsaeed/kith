@@ -1,10 +1,9 @@
 /**
- * The chip on the composer and the map it opens.
+ * The agent map, drawn once for the window.
  *
- * The chip is the only sign in the chat that a workflow is going — its turn has ended — so it has
- * to be there exactly while one exists and say what is happening. The map has to put every agent
- * in the phase it ran in and, on a click, show what no list can: the prompt it was given and
- * what it said back.
+ * It opens for whichever conversation asks — the title bar's pill, the Work panel, the thread's
+ * workflow card — and has to put every agent in the phase it ran in and, on a click, show what no
+ * list can: the prompt it was given and what it said back.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,7 +17,7 @@ vi.mock("@/hooks/use-activity", () => ({
   useActivity: () => ({ status: null, activity: feed.activity, refresh: () => undefined }),
 }));
 
-const { AgentsChip } = await import("./agent-map");
+const { AgentMapHost } = await import("./agent-map");
 
 const at = (s: number) => new Date(Date.UTC(2026, 8, 25, 10, 0, s)).toISOString();
 
@@ -52,27 +51,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("the chip on the composer", () => {
-  it("is not there until the conversation has a workflow", () => {
-    const { container } = render(<AgentsChip conversationId="c1" />);
+describe("the host", () => {
+  it("draws nothing until a conversation asks for its map", () => {
+    const { container } = render(<AgentMapHost />);
     expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText("Agent map")).toBeNull();
   });
 
-  it("counts the agents working, and names the phase", () => {
-    feed.activity = [
-      run("started", "devices-screen", { phases: ["Survey", "Build"] }),
-      run("phase", "Build"),
-      agent("a", "running", { objective: "discover-module", role: "builder", phase: "Build" }),
-      agent("b", "running", { objective: "api-route", role: "builder", phase: "Build" }),
-    ];
-    render(<AgentsChip conversationId="c1" />);
-    expect(screen.getByRole("button", { name: /agent map/i }).textContent).toContain("2 agents · Build");
-  });
-
-  it("stays after the run ends, so the map is still one click away", () => {
-    feed.activity = [run("started", "x"), run("finished", "The workflow finished", {}, 30)];
-    render(<AgentsChip conversationId="c1" />);
-    expect(screen.getByRole("button", { name: /agent map/i }).textContent).toContain("workflow finished");
+  it("opens for the conversation that asked, whichever that is", () => {
+    feed.activity = [run("started", "x")];
+    render(<AgentMapHost />);
+    act(() => useAgentMap.getState().show("c2"));
+    expect(screen.getByText("Agent map")).toBeTruthy();
+    expect(screen.getByText(/No workflow has run in this conversation yet/)).toBeTruthy();
   });
 });
 
@@ -96,8 +87,8 @@ describe("the map", () => {
   });
 
   it("opens from the chip and files every agent under its phase", () => {
-    render(<AgentsChip conversationId="c1" />);
-    fireEvent.click(screen.getByRole("button", { name: /agent map/i }));
+    render(<AgentMapHost />);
+    act(() => useAgentMap.getState().show("c1"));
 
     expect(screen.getByText("Agent map")).toBeTruthy();
     expect(screen.getByText("3 agents · click an agent for details")).toBeTruthy();
@@ -109,8 +100,8 @@ describe("the map", () => {
   });
 
   it("shows what an agent was told and what it said, on a click", () => {
-    render(<AgentsChip conversationId="c1" />);
-    fireEvent.click(screen.getByRole("button", { name: /agent map/i }));
+    render(<AgentMapHost />);
+    act(() => useAgentMap.getState().show("c1"));
     fireEvent.click(screen.getByRole("button", { name: /conventions/ }));
 
     expect(screen.getByText("Routes live in do_GET.")).toBeTruthy();
@@ -119,8 +110,8 @@ describe("the map", () => {
   });
 
   it("shows a builder's patch", () => {
-    render(<AgentsChip conversationId="c1" />);
-    fireEvent.click(screen.getByRole("button", { name: /agent map/i }));
+    render(<AgentMapHost />);
+    act(() => useAgentMap.getState().show("c1"));
     fireEvent.click(screen.getByRole("button", { name: /api-route/ }));
     expect(screen.getByText("/p/api-route.patch")).toBeTruthy();
   });
@@ -129,15 +120,17 @@ describe("the map", () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => new Response(JSON.stringify({ stopping: true }), { status: 200 }));
-    render(<AgentsChip conversationId="c1" />);
-    fireEvent.click(screen.getByRole("button", { name: /agent map/i }));
+    render(<AgentMapHost />);
+    act(() => useAgentMap.getState().show("c1"));
     fireEvent.click(screen.getByRole("button", { name: /stop workflow/i }));
     expect(fetch).toHaveBeenCalledWith("/api/workflows/wf-1/stop", { method: "POST" });
   });
 
-  it("does not open for another conversation's request", () => {
-    render(<AgentsChip conversationId="c1" />);
-    act(() => useAgentMap.getState().show("c2"));
+  it("closes when asked", () => {
+    render(<AgentMapHost />);
+    act(() => useAgentMap.getState().show("c1"));
+    expect(screen.getByText("Agent map")).toBeTruthy();
+    act(() => useAgentMap.getState().close());
     expect(screen.queryByText("Agent map")).toBeNull();
   });
 });
