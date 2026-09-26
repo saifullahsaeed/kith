@@ -933,6 +933,15 @@ def _migrations():
         if "provider_model" not in held:
             conn.execute("ALTER TABLE conversations ADD COLUMN provider_model TEXT NOT NULL DEFAULT ''")
 
+    def v51_conversation_workflow_mode(conn):
+        # Whether he may start a workflow in this chat without being asked. The `/workflow`
+        # prefix opts one message in; this opts a whole session in, so a long piece of work can
+        # be fanned out where it splits and done directly where it does not — instead of the
+        # person guessing per message, and paying for agents on a task one turn would finish.
+        held = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
+        if "workflow_mode" not in held:
+            conn.execute("ALTER TABLE conversations ADD COLUMN workflow_mode INTEGER NOT NULL DEFAULT 0")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -984,6 +993,7 @@ def _migrations():
         v48_turn_composition,
         v49_turn_failures,
         v50_conversation_hosts_are_per_model,
+        v51_conversation_workflow_mode,
     ]
 
 

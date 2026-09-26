@@ -146,3 +146,22 @@ def project_of(path: Path, conversation_id: str) -> int | None:
     with session(path) as db:
         row = db.get(Conversation, conversation_id)
         return int(row.project_id) if row is not None and row.project_id else None
+
+
+def workflow_mode_of(path: Path, conversation_id: str) -> bool:
+    """Whether workflow mode is on in this conversation. False for one that does not exist."""
+    if not conversation_id:
+        return False
+    with session(path) as db:
+        row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
+        return bool(row and row.workflow_mode)
+
+
+def set_workflow_mode(path: Path, conversation_id: str, on: bool) -> bool:
+    """Turn workflow mode on or off. True when the conversation exists."""
+    with session(path) as db:
+        row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
+        if row is None:
+            return False
+        row.workflow_mode = 1 if on else 0
+        return True

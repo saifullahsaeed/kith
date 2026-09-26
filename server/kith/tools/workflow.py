@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import json
 import re
 import shutil
@@ -60,6 +61,10 @@ MAX_AGENTS = 30
 #: nobody is watching must not be the thing that is still spending money tomorrow.
 MAX_SECONDS = 60 * 60
 
+#: How many times one run may be resumed without the person asking. Each failed resume wakes
+#: him again, so without a bound a run that keeps breaking is a loop with a bill.
+MAX_RESUMES = 3
+
 #: How much of the result rides in the note that wakes the conversation. The rest is one read
 #: away in `result.json`, and the note says so.
 RESULT_PREVIEW_CHARS = 6_000
@@ -72,7 +77,11 @@ HELPER = "kith_workflow.py"
 
 DESCRIPTION = (
     f"Run a workflow: a short Python script that fans work out to agents and runs in the "
-    f"background. ONLY when the person's message starts with {PREFIX} — otherwise this refuses. "
+    f"background. Allowed when their message starts with {PREFIX} or workflow mode is on in this "
+    "chat (your context says which) — otherwise this refuses. Only worth it when the work really "
+    "splits; do small work yourself. To fix and resume a run that failed or was stopped, pass "
+    "resume=<run id> (with the corrected script, or no script to rerun it as it was): agents whose "
+    "prompt is unchanged come back from the earlier run instantly instead of running again. "
     "Write the decomposition as code: survey first if you need to, then parallel() over the "
     "parts, then review. It returns at once with a run id; end your turn by saying what you "
     "started. When it finishes you get a new turn with the result, one line per agent, and a "
@@ -103,19 +112,58 @@ DESCRIPTION = (
 @tool(
     "run_workflow",
     DESCRIPTION,
-    {"script": {**STR, "description": "The whole workflow script, starting with META."}},
-    required=("script",),
+    {
+        "script": {**STR, "description": "The whole workflow script, starting with META."},
+        "resume": {
+            **STR,
+            "description": (
+                "A run id from this chat to fix and resume. Its finished agents are reused where "
+                "the script asks them the same thing. Leave script empty to rerun it unchanged."
+            ),
+        },
+    },
 )
 def run_workflow(path: Path, args: dict):
-    if not session_context.workflows_allowed():
+    conversation = session_context.current()
+    resume = str(args.get("resume") or "").strip()
+    earlier = _earlier_run(resume, conversation) if resume else None
+    if resume and earlier is None:
+        return {"error": f"There is no run {resume} from this chat to resume."}
+    # Resuming a run this chat already started needs no fresh opt-in: the person agreed to that
+    # run, and fixing it is finishing what they agreed to — including in the turn that wakes
+    # when it breaks, which nobody typed a prefix into. Bounded, because that same turn wakes
+    # again if the fix fails too: a run that keeps breaking must reach a person, not loop.
+    if (
+        earlier is not None
+        and earlier["depth"] >= MAX_RESUMES
+        and session_context.workflow_permission() != "asked"
+    ):
+        return {
+            "error": (
+                f"{resume} has already been resumed {earlier['depth']} times. Stop here and tell them "
+                "what keeps failing — a fourth try should be their call."
+            )
+        }
+    # A new run needs someone there. The turn a finished run wakes is nobody's: letting it start
+    # the next workflow is how a mode left on becomes a chain of runs spending money overnight.
+    if earlier is None and session_context.unattended():
+        return {
+            "error": (
+                "Nobody is here to agree to a new workflow. Report what you have, and start the next "
+                "one when they are back — resuming a run that broke is still allowed."
+            )
+        }
+    if not session_context.workflows_allowed() and earlier is None:
         return {
             "error": (
                 f"Workflows run only when the person asks for one — their message starts with "
-                f"{PREFIX}. Do the work in this turn instead, or suggest they send it as a "
-                f"{PREFIX} request if it really wants fanning out."
+                f"{PREFIX} — or when workflow mode is on in this chat. Do the work in this turn "
+                f"instead, or suggest a {PREFIX} request if it really wants fanning out."
             )
         }
     script = str(args.get("script") or "")
+    if not script.strip() and earlier is not None:
+        script = earlier["script"]
     meta, problem = read_meta(script)
     if problem:
         return {"error": problem}
@@ -128,22 +176,37 @@ def run_workflow(path: Path, args: dict):
             )
         }
 
-    conversation = session_context.current()
     run = workflows.start(conversation, meta["name"], meta["description"], meta["phases"], folder="")
     if run is None:
         busy = workflows.running(conversation)
         return {
             "error": (
-                f"A workflow is already running here ({busy.name if busy else 'another'}). Wait "
-                "for it to report, or ask them to stop it from the Work panel."
+                f"A workflow is already running here ({busy.name if busy else 'another'}, "
+                f"{busy.id if busy else ''}). check_workflow shows where it is; stop_workflow ends it."
             )
         }
+    if earlier is not None:
+        run.resumed_from = resume
+        run.reuse = earlier["reuse"]
 
     folder = paths.base_dir() / ".kith" / "scratch" / "workflows" / run.id
     try:
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "tmp").mkdir(exist_ok=True)
+        (folder / "tmp").mkdir(parents=True, exist_ok=True)
+        (folder / "agents").mkdir(exist_ok=True)
         (folder / "script.py").write_text(script, encoding="utf-8")
+        (folder / "run.json").write_text(
+            json.dumps(
+                {
+                    "run": run.id,
+                    "conversation": conversation,
+                    "name": run.name,
+                    "started": run.started,
+                    "resumed_from": run.resumed_from,
+                    "depth": (earlier["depth"] + 1) if earlier is not None else 0,
+                }
+            ),
+            encoding="utf-8",
+        )
         shutil.copyfile(settings.SERVER_ROOT / "workflow" / HELPER, folder / HELPER)
     except OSError as exc:
         workflows.end(run, workflows.FAILED, f"The workflow `{run.name}` could not start: {exc}")
@@ -160,7 +223,7 @@ def run_workflow(path: Path, args: dict):
         name=f"workflow-{run.id}",
         daemon=True,
     ).start()
-    return {
+    answer = {
         "run": run.id,
         "name": run.name,
         "phases": run.phases,
@@ -170,6 +233,216 @@ def run_workflow(path: Path, args: dict):
             "phase does. You will get a new turn with the result when it finishes."
         ),
     }
+    if earlier is not None:
+        answer["resumed_from"] = resume
+        answer["reusable"] = len(run.reuse)
+    return answer
+
+
+@tool(
+    "check_workflow",
+    "See where a workflow in this chat has got to: its state and phase, every agent with what it "
+    "is doing or what it came back with, what it has cost, and the script's log. Use it when they "
+    "ask how it is going, before starting another, or when a run failed — the log and the failed "
+    "agents are how you find what to fix before resuming it with run_workflow(resume=...).",
+    {"run": {**STR, "description": "The run id. Empty for the latest run in this chat."}},
+)
+def check_workflow(path: Path, args: dict):
+    conversation = session_context.current()
+    run_id = str(args.get("run") or "").strip()
+    run = workflows.get(run_id) if run_id else workflows.latest(conversation)
+    if run is not None and run.conversation != conversation:
+        run = None
+    if run is None:
+        found = _earlier_run(run_id, conversation) if run_id else None
+        if found is None:
+            return {
+                "error": "No workflow has run in this chat."
+                if not run_id
+                else f"No run {run_id} in this chat."
+            }
+        # A run the server no longer holds — it restarted, and the run ended with it.
+        return {
+            "run": run_id,
+            "state": "ended with a server restart",
+            "folder": found["folder"],
+            "finished_agents": len(found["reuse"]),
+            "log": _log_tail(Path(found["folder"]) / "run.log"),
+            "next": "Resume it with run_workflow(resume=...) — its finished agents are reused.",
+        }
+    now = run.ended or time.time()
+    agents = []
+    for one in sorted(run.agents.values(), key=lambda a: a.get("started", 0)):
+        entry = {
+            "label": one.get("label", ""),
+            "kind": one.get("kind", ""),
+            "phase": one.get("phase", ""),
+            "state": "failed" if one.get("failed") else one.get("state", ""),
+            "calls": one.get("calls", 0),
+        }
+        if one.get("cost"):
+            entry["cost"] = f"${float(one['cost']):.2f}"
+        if one.get("state") == "done":
+            entry["outcome"] = one.get("outcome") or one.get("tally", "")
+            if one.get("report"):
+                entry["said"] = str(one["report"])[:400]
+        elif one.get("steps"):
+            last = one["steps"][-1]
+            entry["doing"] = f"{last.get('tool')} {json.dumps(last.get('args') or {})[:120]}"
+        if one.get("reused"):
+            entry["reused"] = True
+        agents.append(entry)
+    answer: dict = {
+        "run": run.id,
+        "name": run.name,
+        "state": run.state,
+        "phase": run.phase,
+        "elapsed": _took(now - run.started),
+        "agents": agents,
+        "folder": run.folder,
+    }
+    if run.resumed_from:
+        answer["resumed_from"] = run.resumed_from
+    spent = sum(float(one.get("cost") or 0) for one in run.agents.values())
+    if spent:
+        answer["cost_so_far"] = f"${spent:.2f}"
+    log = _log_tail(Path(run.folder) / "run.log") if run.folder else ""
+    if log:
+        answer["log"] = log
+    if run.state != workflows.RUNNING:
+        answer["note"] = run.note
+        if run.state in (workflows.FAILED, workflows.STOPPED):
+            answer["next"] = (
+                "Fix the script (it is in the folder as script.py) and call "
+                f'run_workflow(script=..., resume="{run.id}"): agents asked the same thing are '
+                "reused, so only what changed runs again."
+            )
+    return answer
+
+
+@tool(
+    "stop_workflow",
+    "Stop a workflow running in this chat — when it is heading the wrong way and letting it finish "
+    "would only cost money. Its script ends and every agent stops at its next step; you still get "
+    "the turn that reports what finished, and can resume it later with run_workflow(resume=...).",
+    {"run": {**STR, "description": "The run id. Empty for the one running in this chat."}},
+)
+def stop_workflow(path: Path, args: dict):
+    conversation = session_context.current()
+    run_id = str(args.get("run") or "").strip()
+    run = workflows.get(run_id) if run_id else workflows.running(conversation)
+    if run is None or run.conversation != conversation:
+        return {
+            "error": "No workflow is running in this chat."
+            if not run_id
+            else f"No run {run_id} in this chat."
+        }
+    if not workflows.stop(run.id):
+        return {"error": f"{run.id} is not running — it already {run.state}."}
+    return {"stopping": run.id, "note": "It stops at the next step; the run's report comes as a new turn."}
+
+
+def _earlier_run(run_id: str, conversation: str) -> dict | None:
+    """A run of this chat, read back from its folder: its script and its finished agents.
+
+    From the folder rather than the board, so a run the server lost in a restart can still be
+    resumed — its agents' results were written down as each finished.
+    """
+    if not run_id or not re.fullmatch(r"wf-[0-9a-f]{6}", run_id):
+        return None
+    folder = paths.base_dir() / ".kith" / "scratch" / "workflows" / run_id
+    try:
+        header = json.loads((folder / "run.json").read_text(encoding="utf-8"))
+        script = (folder / "script.py").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(header, dict) or header.get("conversation") != conversation:
+        return None
+    reuse: dict[str, dict] = {}
+    for record in sorted((folder / "agents").glob("*.json")) if (folder / "agents").is_dir() else []:
+        try:
+            one = json.loads(record.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(one, dict) and one.get("key"):
+            reuse[str(one["key"])] = one
+    return {"script": script, "reuse": reuse, "folder": str(folder), "depth": int(header.get("depth") or 0)}
+
+
+def _ask_key(message: dict) -> str:
+    """What an agent() call asked, as a hash: same kind, prompt, schema and starting patches."""
+    after = [str(one.get("diff") or "") for one in (message.get("after") or []) if isinstance(one, dict)]
+    asked = {
+        "kind": str(message.get("kind") or "scout"),
+        "prompt": str(message.get("prompt") or "").strip(),
+        "schema": message.get("schema"),
+        "after": after,
+    }
+    return hashlib.sha256(json.dumps(asked, sort_keys=True, default=str).encode()).hexdigest()[:24]
+
+
+def _keep(run: workflows.Run, key: str, record: dict) -> None:
+    """Write down what a finished agent produced, so a resumed run can reuse it."""
+    try:
+        (Path(run.folder) / "agents" / f"{key}.json").write_text(
+            json.dumps({"key": key, **record}, default=str), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def _reused(run: workflows.Run, message: dict, record: dict, agents: _Agents) -> object:
+    """Answer an agent() call from the run this one resumes. Costs nothing and takes no slot."""
+    value = record.get("value")
+    kind = str(record.get("kind") or message.get("kind") or "scout")
+    label = str(message.get("label") or "").strip() or str(record.get("label") or "")
+    if kind == "builder" and isinstance(value, dict) and str(value.get("diff") or "").strip():
+        # Its patch is copied into this run's folder, so a finished run's patches are all in one
+        # place however many resumes it took to get there.
+        patch = Path(run.folder) / Path(str(value.get("patch_file") or f"{_slug(label)}.patch")).name
+        try:
+            patch.write_text(str(value["diff"]), encoding="utf-8")
+            value = {**value, "patch_file": str(patch)}
+        except OSError:
+            pass
+    agent_id = uuid.uuid4().hex[:6]
+    workflows.note_agent(
+        run,
+        agent_id,
+        state="done",
+        label=label,
+        kind=kind,
+        phase=run.phase,
+        reused=True,
+        started=time.time(),
+        tally=f"reused from {run.resumed_from}",
+        outcome=str(record.get("outcome") or ""),
+        report=str(record.get("report") or "")[:1500],
+        patch=str(value.get("patch_file") or "") if isinstance(value, dict) else "",
+    )
+    try:
+        from kith.services.activity import feed
+
+        for state in ("running", "done"):
+            feed.publish(
+                "errand",
+                f"reused from {run.resumed_from}",
+                errand={
+                    "id": agent_id,
+                    "state": state,
+                    "objective": label,
+                    "role": kind,
+                    "run": run.id,
+                    "phase": run.phase,
+                    "reused": True,
+                },
+                conversation=run.conversation,
+            )
+    except Exception:
+        pass
+    agents.record(f'- {kind} "{label}" — reused from {run.resumed_from}', 0.0)
+    _keep(run, str(record.get("key") or _ask_key(message)), {**record, "value": value})
+    return value
 
 
 def read_meta(script: str) -> tuple[dict, str]:
@@ -281,8 +554,17 @@ def _drive(run: workflows.Run, path: Path) -> None:
                 op = message.get("op")
                 if op == "agent":
                     ident = message.get("id")
+                    message["_key"] = _ask_key(message)
                     if run.halt.is_set():
                         reply({"id": ident, "ok": False, "error": "the workflow was stopped"})
+                    elif message["_key"] in run.reuse:
+                        reply(
+                            {
+                                "id": ident,
+                                "ok": True,
+                                "value": _reused(run, message, run.reuse[message["_key"]], agents),
+                            }
+                        )
                     elif not agents.take_slot():
                         reply(
                             {"id": ident, "ok": False, "error": f"this run has sent its {MAX_AGENTS} agents"}
@@ -497,7 +779,9 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
                 raise _Failed("the agent's report did not end with the JSON the schema asked for")
 
         tally = str(answer.get("looked_at") or "")
+        key = str(message.get("_key") or _ask_key(message))
         if kind == "scout":
+            _keep(run, key, {"kind": kind, "label": label, "value": shaped, "report": said[:1500]})
             mark(
                 "done",
                 tally or "reported",
@@ -532,7 +816,13 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents):
             outcome=outcome,
         )
         agents.record(f'- builder "{label}" — {outcome}', cost)
-        return {"report": shaped, "diff": diff, "patch_file": patch_file, "label": label}
+        built = {"report": shaped, "diff": diff, "patch_file": patch_file, "label": label}
+        _keep(
+            run,
+            key,
+            {"kind": kind, "label": label, "value": built, "report": said[:1500], "outcome": outcome},
+        )
+        return built
     finally:
         if worktree:
             from kith.infra.workspace import worktrees
@@ -686,6 +976,11 @@ def _closing_note(
         f"The workflow `{run.name}` ({run.id}) {how} after {took} — {count} "
         f"agent{'s' if count != 1 else ''}, ${agents.cost:.2f}."
     )
+    if run.resumed_from:
+        reused = sum(1 for line in agents.lines if "reused from" in line)
+        head += (
+            f" It resumed {run.resumed_from}, reusing {reused} finished agent{'s' if reused != 1 else ''}."
+        )
     if why and state != workflows.FINISHED:
         head += f" Why: {why}."
     parts = [head]
@@ -709,8 +1004,18 @@ def _closing_note(
             "Nothing has been applied. Read the patches, `git apply` the ones you want from the "
             "project root, check they fit together, and run the tests."
         )
+    if state in (workflows.FAILED, workflows.STOPPED):
+        parts.append(
+            f"To fix it: check_workflow shows the failed agents and the log; correct the script and "
+            f'call run_workflow(script=..., resume="{run.id}") — agents asked the same thing are reused.'
+        )
     parts.append(f"Everything the run wrote is in {run.folder}.")
     return "\n\n".join(parts)
+
+
+def _took(seconds: float) -> str:
+    minutes, rest = divmod(int(max(0, seconds)), 60)
+    return f"{minutes}m{rest:02d}s" if minutes else f"{rest}s"
 
 
 def _log_tail(log: Path) -> str:

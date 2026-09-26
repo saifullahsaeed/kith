@@ -63,6 +63,11 @@ class Run:
     #: hundred lines and a busy conversation pushes a run's lines out of it within minutes —
     #: after which a window opened fresh had no way to draw a run that was still going.
     agents: dict[str, dict] = field(default_factory=dict)
+    #: The run this one resumes, and what that run's agents already produced, by the hash of
+    #: what each was asked. An agent() call that matches one is answered from here instead of
+    #: being run again — which is what makes "fix the script and resume" cost only the fix.
+    resumed_from: str = ""
+    reuse: dict[str, dict] = field(default_factory=dict)
 
     def public(self) -> dict:
         return {
@@ -78,6 +83,7 @@ class Run:
             "state": self.state,
             "said": self.said,
             "cost": self.cost,
+            "resumed_from": self.resumed_from,
             "agents": sorted(
                 (dict(one) for one in self.agents.values()), key=lambda one: one.get("started", 0)
             ),
@@ -113,6 +119,13 @@ def start(conversation: str, name: str, description: str, phases: list[str], fol
 
 def get(run_id: str) -> Run | None:
     return _RUNS.get(run_id)
+
+
+def latest(conversation: str) -> Run | None:
+    """The newest run this process knows about for a conversation, running or not."""
+    with _LOCK:
+        mine = [one for one in _RUNS.values() if one.conversation == conversation]
+    return max(mine, key=lambda one: one.started) if mine else None
 
 
 def running(conversation: str) -> Run | None:

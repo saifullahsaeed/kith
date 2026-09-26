@@ -77,6 +77,8 @@ export const keys = {
   /** Workflow runs and their agents, from the server's board. Refetched when a run or agent
    *  changes state on the feed — see `useRuns` — rather than on a change kind of its own. */
   workflows: (conversationId: string) => ["workflows", conversationId] as const,
+  /** Whether he may start workflows in this chat without the `/workflow` prefix. */
+  workflowMode: (conversationId: string) => ["workflow-mode", conversationId] as const,
   /** One conversation's stored messages — what opening it needs. */
   conversation: (id: string) => ["conversation", id] as const,
   /** Standing jobs only. The Work panel is open the whole time and needs nothing else. */

@@ -180,6 +180,8 @@ def presence_block(path: Path) -> str:
     if typed_in:
         lines.append(f"This message was sent from a terminal, in {typed_in}.")
 
+    lines += _workflow_lines()
+
     last = repo.activity.last_activity_at(path)
     since = clock.humanize_since(last)
     if since:
@@ -197,3 +199,42 @@ def presence_block(path: Path) -> str:
         extra = f" (+{len(waiting) - 1} more)" if len(waiting) > 1 else ""
         lines.append(f"Next reminder {clock.humanize_until(nxt['fire_at'])}: {nxt['note']}{extra}.")
     return "\n".join(lines)
+
+
+def _workflow_lines() -> list[str]:
+    """Whether he may start a workflow this turn, and whether one is already running here.
+
+    Said here, with the clock, because both are true of this turn and no other: workflow mode can
+    be switched off between two messages, and a run that was going an hour ago has finished. A
+    tool description cannot carry either — it is the same on every turn — and the decision to
+    fan out is made before any tool is called, so this is the only place the fact can be when it
+    matters.
+    """
+    from kith.services import workflows
+
+    lines: list[str] = []
+    why = session_context.workflow_permission()
+    if why == "mode":
+        lines.append(
+            "Workflow mode is ON in this chat: you may start a workflow (run_workflow) without being "
+            "asked. Use one when the work splits into independent parts big enough to be worth "
+            "their own agents — several packages, a survey then builders then a review. Do small or "
+            "tightly coupled work yourself; a fan-out on a one-turn task is wasted money."
+        )
+    elif why == "asked":
+        lines.append(
+            "They asked for a workflow (/workflow). Use one if the work really splits; if it is small "
+            "enough to do in this turn, do it directly and say in a sentence why you did not fan out."
+        )
+    try:
+        running = workflows.running(session_context.current())
+    except Exception:
+        running = None
+    if running is not None:
+        working = sum(1 for one in running.agents.values() if one.get("state") != "done")
+        where = f", in {running.phase}" if running.phase else ""
+        lines.append(
+            f"A workflow is running in this chat: `{running.name}` ({running.id}){where}, "
+            f"{working} agent{'s' if working != 1 else ''} working. check_workflow shows where it is."
+        )
+    return lines

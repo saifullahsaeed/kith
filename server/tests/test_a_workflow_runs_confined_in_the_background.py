@@ -141,7 +141,9 @@ class TestOnlyWhenAsked:
 
         from kith.api.routes import chat
 
-        assert "may_run_workflows(asks_for_workflow(opening))" in inspect.getsource(chat.begin_turn)
+        assert "may_run_workflows(_workflow_permission(conversation_id, opening))" in inspect.getsource(
+            chat.begin_turn
+        )
 
 
 class TestTheScriptIsCheckedBeforeAnythingRuns:
@@ -588,3 +590,153 @@ finish("ok")
         )
         assert by_label["look"]["prompt"] == "what is in kept.py"
         assert run.id == listed["run"]
+
+
+class TestWorkflowMode:
+    """The prefix opts one message in; the mode opts a whole chat in, so he decides where a long
+    session's work is worth fanning out — and nothing about the prefix changes."""
+
+    def _conversation(self, on: bool) -> str:
+        from kith.api.routes import chat
+        from kith.infra.db import repositories as repo
+        from kith.settings import AGENT_DB_PATH as _unused  # noqa: F401 - patched by conftest
+
+        conversation_id = f"c-{uuid.uuid4().hex[:6]}"
+        repo.conversations.create(chat.AGENT_DB_PATH, conversation_id, "t", "s")
+        repo.conversations.set_workflow_mode(chat.AGENT_DB_PATH, conversation_id, on)
+        return conversation_id
+
+    def test_the_turn_is_opted_in_by_the_mode_or_the_prefix(self):
+        from kith.api.routes import chat
+
+        on, off = self._conversation(True), self._conversation(False)
+        assert chat._workflow_permission(on, "do the thing") == "mode"
+        assert chat._workflow_permission(off, "do the thing") == ""
+        assert chat._workflow_permission(off, "/workflow do the thing") == "asked"
+        assert chat._workflow_permission(on, "/workflow do the thing") == "asked"
+
+    def test_he_is_told_which_it_is(self):
+        from kith.services import memory_context
+
+        with session_context.may_run_workflows("mode"):
+            assert "Workflow mode is ON" in "\n".join(memory_context._workflow_lines())
+        with session_context.may_run_workflows("asked"):
+            said = "\n".join(memory_context._workflow_lines())
+            assert "/workflow" in said and "do it directly" in said
+        assert memory_context._workflow_lines() == []
+
+    def test_he_is_told_a_run_is_going(self, project: Path):
+        from kith.services import memory_context
+
+        run = workflows.start("conv-seen", "port-rag", "", ["Build"], folder=str(project))
+        assert run is not None
+        run.phase = "Build"
+        with session_context.working_in("conv-seen"):
+            said = "\n".join(memory_context._workflow_lines())
+        assert "`port-rag`" in said and "check_workflow" in said
+        workflows.end(run, workflows.FINISHED, "done")
+
+    def test_the_mode_lets_run_workflow_start_without_the_prefix(self, db: Path, project: Path, agents):
+        with session_context.working_in("conv-mode"), session_context.may_run_workflows("mode"):
+            answer = workflow.run_workflow(db, {"script": 'META = {"name": "m"}\nfinish(agent("look"))'})
+        assert answer.get("run"), answer
+        _wait(answer["run"])
+
+    def test_nobody_present_can_start_a_new_one(self, db: Path, project: Path, agents):
+        """The turn a finished run wakes is nobody's; a mode left on must not chain runs overnight."""
+        with (
+            session_context.working_in("conv-mode"),
+            session_context.may_run_workflows("mode"),
+            session_context.nobody_watching(),
+        ):
+            answer = workflow.run_workflow(db, {"script": 'META = {"name": "m"}\nfinish(1)'})
+        assert "Nobody is here" in answer["error"]
+
+
+@needs_confinement
+class TestKithHasFullControlOfARun:
+    """He can see where a run has got to, stop it, and — when it breaks — fix the script and resume
+    it, with what already finished reused rather than paid for twice."""
+
+    def test_check_shows_the_agents_and_stop_ends_it(self, db: Path, project: Path, monkeypatch):
+        release = threading.Event()
+
+        def slow(path, kind, objective, conversation, *, give_up=None, **kw):
+            while not release.is_set() and not (give_up and give_up()):
+                time.sleep(0.02)
+            return {"findings": "done"}, _Report()
+
+        monkeypatch.setattr(workers, "run_agent", slow)
+        started = _start(
+            db,
+            'META = {"name": "long", "phases": ["Look"]}\nwith phase("Look"):\n    agent("look", label="looker")',
+        )
+        time.sleep(0.6)
+        with session_context.working_in("conv-1"):
+            seen = workflow.check_workflow(db, {})
+            assert seen["state"] == "running" and seen["phase"] == "Look"
+            assert seen["agents"][0]["label"] == "looker" and seen["agents"][0]["state"] == "running"
+            assert workflow.stop_workflow(db, {})["stopping"] == started["run"]
+        run = _wait(started["run"])
+        assert run.state == workflows.STOPPED
+        release.set()
+
+    def test_another_chat_cannot_see_or_stop_it(self, db: Path, project: Path, agents):
+        started = _start(db, 'META = {"name": "mine"}\nfinish(1)')
+        _wait(started["run"])
+        with session_context.working_in("someone-else"):
+            assert "error" in workflow.check_workflow(db, {"run": started["run"]})
+            assert "error" in workflow.stop_workflow(db, {"run": started["run"]})
+
+    def test_a_broken_run_is_fixed_and_resumed_reusing_what_finished(self, db: Path, project: Path, agents):
+        broken = """
+META = {"name": "fixme"}
+first = agent("survey the code", label="survey")
+second = agent("boom now", label="builder-ish")
+finish([first, second])
+"""
+        run = _wait(_start(db, broken)["run"])
+        assert run.state == workflows.FAILED
+        assert "resume=" in run.note
+        with session_context.working_in("conv-1"):
+            seen = workflow.check_workflow(db, {"run": run.id})
+        assert "next" in seen and "resume" in seen["next"]
+        calls_before = len(agents)
+
+        fixed = broken.replace("boom now", "build it now")
+        # Resuming needs no fresh opt-in: the person agreed to this run.
+        with session_context.working_in("conv-1"):
+            again = workflow.run_workflow(db, {"script": fixed, "resume": run.id})
+        assert again.get("resumed_from") == run.id and again["reusable"] == 1
+        second = _wait(again["run"])
+        assert second.state == workflows.FINISHED, second.note
+        assert _result(second) == ["report: survey the code", "report: build it now"]
+        # Only the changed agent ran again.
+        assert [one["objective"] for one in agents[calls_before:]] == ["build it now"]
+        assert "reusing 1 finished agent" in second.note
+
+    def test_a_run_lost_to_a_restart_can_still_be_resumed(self, db: Path, project: Path, agents):
+        run = _wait(_start(db, 'META = {"name": "r"}\nfinish(agent("look once"))')["run"])
+        workflows.forget_all()  # the server restarted
+        with session_context.working_in("conv-1"):
+            seen = workflow.check_workflow(db, {"run": run.id})
+            assert seen["state"] == "ended with a server restart" and seen["finished_agents"] == 1
+            again = workflow.run_workflow(db, {"resume": run.id})
+        calls_before = len(agents)
+        second = _wait(again["run"])
+        assert _result(second) == "report: look once"
+        assert len(agents) == calls_before, "the finished agent was reused, not run again"
+
+    def test_resuming_is_bounded(self, db: Path, project: Path, agents, monkeypatch):
+        monkeypatch.setattr(workflow, "MAX_RESUMES", 1)
+        script = 'META = {"name": "loop"}\nraise RuntimeError("still broken")'
+        first = _wait(_start(db, script)["run"])
+        with session_context.working_in("conv-1"):
+            second = _wait(workflow.run_workflow(db, {"resume": first.id})["run"])
+            refused = workflow.run_workflow(db, {"resume": second.id})
+        assert "resumed 1 times" in refused["error"]
+
+    def test_only_this_chats_runs_can_be_resumed(self, db: Path, project: Path, agents):
+        run = _wait(_start(db, 'META = {"name": "mine"}\nfinish(1)')["run"])
+        with session_context.working_in("someone-else"):
+            assert "no run" in workflow.run_workflow(db, {"resume": run.id})["error"].lower()

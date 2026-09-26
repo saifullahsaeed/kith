@@ -23,6 +23,7 @@ import {
   ModelChip,
   SteerModeToggle,
   ThinkingChip,
+  WorkflowModeChip,
   type SteerMode,
 } from "@/components/assistant-ui/composer-bar";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
@@ -732,8 +733,9 @@ const ComposerAction: FC<{
       <ThinkingChip />
       <AccessChip />
       <ModelChip />
-      {/* No workflow chip: the title bar's pill already says a workflow is running and opens its
-          agent map, and a finished run's map is on its card in the thread. */}
+      {/* Workflow *mode*, a setting like the three beside it — not a status. That a workflow is
+          running is the title bar's pill, and a finished run's map is on its card in the thread. */}
+      <WorkflowModeChip />
       <div className="min-w-2 flex-1" />
       <AuiIf condition={(s) => s.thread.capabilities.dictation}>
         <AuiIf condition={(s) => s.composer.dictation == null}>

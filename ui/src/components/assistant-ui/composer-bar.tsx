@@ -15,6 +15,7 @@
  */
 
 import { useAuiState } from "@assistant-ui/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   ChevronDown,
@@ -22,6 +23,7 @@ import {
   Layers,
   Lightbulb,
   Maximize2,
+  Network,
   Shield,
   ShieldAlert,
   ShieldCheck,
@@ -37,6 +39,7 @@ import { foldNow } from "@/lib/commands";
 import { useConversationId } from "@/lib/conversation";
 import type { ContextLedger } from "@/lib/backend/types";
 import { Go } from "@/lib/go";
+import { keys } from "@/lib/query-keys";
 import { pathForContext, pathForSettings } from "@/lib/router";
 import { useServerConfig } from "@/lib/server-config";
 import { cn } from "@/lib/utils";
@@ -565,5 +568,64 @@ export function SteerModeToggle({
         </>,
       )}
     </div>
+  );
+}
+
+/* ── Workflows ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Workflow mode for this chat: whether he may fan work out to agents on his own judgement.
+ *
+ * Off, a workflow runs only when a message starts with `/workflow`. On, he decides — fanning out
+ * where a long piece of work splits and doing small things directly — which is the point: typing
+ * the prefix on a task one turn would finish pays for agents that were never needed. Per chat,
+ * because it is a way of working on one piece of work, and stored on the server so every window
+ * on the chat agrees. Absent until the chat exists, since there is nothing to store it on.
+ */
+export function WorkflowModeChip() {
+  const conversation = useConversationId();
+  const cache = useQueryClient();
+  const { data: on = false } = useQuery({
+    queryKey: keys.workflowMode(conversation),
+    queryFn: async (): Promise<boolean> => {
+      const response = await fetch(`/api/chat/${encodeURIComponent(conversation)}/workflow-mode`);
+      if (!response.ok) return false;
+      return Boolean(((await response.json()) as { on?: boolean }).on);
+    },
+    enabled: Boolean(conversation),
+  });
+  if (!conversation) return null;
+
+  const flip = async () => {
+    const next = !on;
+    cache.setQueryData(keys.workflowMode(conversation), next);
+    const response = await fetch(`/api/chat/${encodeURIComponent(conversation)}/workflow-mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: next }),
+    }).catch(() => null);
+    if (!response?.ok) void cache.invalidateQueries({ queryKey: keys.workflowMode(conversation) });
+  };
+
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={() => void flip()}
+      title={
+        on
+          ? "Workflow mode is on: he fans work out to agents when it splits. Click to turn off."
+          : "Workflow mode is off: workflows run only with /workflow. Click to let him decide."
+      }
+      className={cn(
+        chip,
+        on
+          ? "bg-kith-soft/50 text-kith hover:bg-kith-soft/70"
+          : "text-foreground/55 hover:text-foreground hover:bg-accent/60",
+      )}
+    >
+      <Network className="size-[13px]" aria-hidden />
+      {on ? "Workflows on" : "Workflows"}
+    </button>
   );
 }

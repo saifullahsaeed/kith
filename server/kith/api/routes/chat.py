@@ -446,6 +446,16 @@ def _watching(unattended: bool):
         yield
 
 
+def _workflow_permission(conversation_id: str, opening: str) -> str:
+    """Why this turn may start a workflow: "asked", "mode", or "" for not at all."""
+    if asks_for_workflow(opening):
+        return "asked"
+    try:
+        return "mode" if repo.conversations.workflow_mode_of(AGENT_DB_PATH, conversation_id) else ""
+    except Exception:
+        return ""
+
+
 def begin_turn(
     conversation_id: str,
     config,
@@ -535,9 +545,10 @@ def begin_turn(
                 session_context.working_in(conversation_id),
                 session_context.arriving_from(sent_from),
                 _watching(unattended),
-                # Read off the opening message, so only a person typing `/workflow` opts a turn
-                # in — a turn the scheduler opens starts with the scheduler's words, never theirs.
-                session_context.may_run_workflows(asks_for_workflow(opening)),
+                # The opening message asking for one, or the person having turned workflow mode
+                # on for this chat. A turn the scheduler opens starts with the scheduler's words,
+                # so only the mode can let one of those start a workflow.
+                session_context.may_run_workflows(_workflow_permission(conversation_id, opening)),
             ):
                 # Reading the transcript and building the prompt happen *here*, not on the
                 # request path, because building it can fold — and a fold is a summarisation

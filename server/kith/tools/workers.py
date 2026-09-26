@@ -172,9 +172,11 @@ WITHHELD = frozenset(
         # decide whether that is worth interrupting anyone for.
         "ask",
         "reach_out",
-        # Starting a workflow. One run cannot become a tree of them, and the opt-in that permits
-        # one belongs to the person's message, which no agent has.
+        # Starting, watching or stopping a workflow. One run cannot become a tree of them, and
+        # the opt-in that permits one belongs to the person, which no agent is.
         "run_workflow",
+        "check_workflow",
+        "stop_workflow",
     }
 )
 

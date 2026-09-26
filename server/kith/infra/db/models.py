@@ -238,6 +238,9 @@ class Conversation(Base):
     #: The model `provider_order` ranks the hosts of. An order is only meaningful for the model
     #: it was worked out for; blank on rows older than the column.
     provider_model: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Whether he may start workflows here without the `/workflow` prefix. Off by default: a
+    #: fan-out of agents is spend the person turns on, per chat.
+    workflow_mode: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class TurnLog(Base):

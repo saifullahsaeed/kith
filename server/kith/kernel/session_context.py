@@ -288,29 +288,39 @@ def working_from(directory: str | None, mirror_of: str | None = None) -> Iterato
         _isolated.reset(token)
 
 
-#: Whether the person asked for a workflow on this turn. Set by the turn from its opening
-#: message and read by exactly one handler, `run_workflow`, which refuses without it.
-_workflows: ContextVar[bool] = ContextVar("kith_workflows_allowed", default=False)
+#: Why this turn may start a workflow, if it may: "asked" when the opening message started with
+#: `/workflow`, "mode" when workflow mode is on for the conversation, "" when neither. Read by
+#: `run_workflow`, which refuses on "", and by the ambient block, which tells him which it is.
+_workflows: ContextVar[str] = ContextVar("kith_workflows_allowed", default="")
 
 
 def workflows_allowed() -> bool:
-    """Did the message that opened this turn start with ``/workflow``?
+    """May this turn start a workflow — was it asked for, or is workflow mode on here?
 
     A fact about the turn rather than a parameter, for the same reason as :func:`unattended`: a
     tool handler is called as ``run(path, args)``, and the one handler that cares cannot be
-    handed anything. False in a test, in a script, and in every turn the scheduler opens — the
-    honest default, because only a person typing the prefix can truthfully claim otherwise.
+    handed anything. False in a test and in a script — the honest default, because only a person
+    typing the prefix or turning the mode on can truthfully claim otherwise.
     """
+    return bool(_workflows.get())
+
+
+def workflow_permission() -> str:
+    """``"asked"``, ``"mode"`` or ``""`` — see :data:`_workflows`."""
     return _workflows.get()
 
 
 @contextmanager
-def may_run_workflows(allowed: bool) -> Iterator[None]:
-    """Run a block as a turn the person opted into workflows on, when ``allowed``."""
-    if not allowed:
+def may_run_workflows(reason: str | bool) -> Iterator[None]:
+    """Run a block as a turn that may start workflows, for ``reason`` ("asked" or "mode").
+
+    ``True`` is read as "asked", so a caller that only knows yes or no still works.
+    """
+    why = "asked" if reason is True else (reason or "")
+    if not why:
         yield
         return
-    token = _workflows.set(True)
+    token = _workflows.set(str(why))
     try:
         yield
     finally:
