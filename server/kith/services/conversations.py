@@ -237,11 +237,17 @@ def latest_summary(conversation_id: str) -> dict:
     Last-write-wins by walking the append-only file: each fold appends a new summary event
     covering more of the conversation, and only the last one is current.
     """
-    found: dict = {}
-    for entry in read(conversation_id):
-        if entry.get("type") == "summary":
-            found = {"through": int(entry.get("through") or 0), "text": str(entry.get("text") or "")}
-    return found
+    found = summaries(conversation_id)
+    return found[-1] if found else {}
+
+
+def summaries(conversation_id: str) -> list[dict]:
+    """Every folded brief, oldest first — see `history.prior_brief` for why one is not enough."""
+    return [
+        {"through": int(entry.get("through") or 0), "text": str(entry.get("text") or "")}
+        for entry in read(conversation_id)
+        if entry.get("type") == "summary"
+    ]
 
 
 def latest_reading(conversation_id: str) -> dict:

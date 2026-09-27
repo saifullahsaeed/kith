@@ -149,6 +149,40 @@ _FOLD_ABOVE_SHARE = 0.8
 #: runs before.
 _CHARS_PER_TOKEN = 3.7
 
+#: How many of :data:`SECTIONS` a summariser's answer must carry to be taken as a brief.
+_SECTIONS_TO_COUNT = 4
+
+
+def is_a_brief(text: str) -> bool:
+    """Did the summariser write a brief, or something else?
+
+    A fold stores whatever comes back as the only memory of what it replaced, so an answer that
+    is not a brief is not "a worse brief" — it is the conversation erased. Measured 2026-09-26: on
+    a 500k-token conversation the summariser answered as if it were the next turn ("Two things:
+    it's finished, and I was wrong about one of my own numbers…"), 1,270 characters with no
+    heading at all, and that replaced 3,478 transcript entries. A majority of the headings, not
+    all six: the instruction asks for every one, but a brief that dropped a section is still a
+    brief, and one with none is not.
+    """
+    return sum(f"## {section}" in text for section in SECTIONS) >= _SECTIONS_TO_COUNT
+
+
+def prior_brief(conversation_id: str) -> dict:
+    """The brief to build on: the latest one that is a brief, else the latest at all.
+
+    Only the latest used to count, so one bad fold stood until the next — reused on every turn,
+    and carried forward into the next fold as "[Summary so far]", which is the one thing that
+    made its loss permanent. Falling back past it resumes from the last good fold instead, and
+    the stretch after that is summarised again. A conversation whose briefs all predate the
+    headings (2026-08-17) has no good one and keeps its latest, exactly as before.
+    """
+    from kith.services import conversations
+
+    briefs = conversations.summaries(conversation_id) if conversation_id else []
+    good = [one for one in briefs if is_a_brief(one["text"])]
+    return (good or briefs or [{}])[-1]
+
+
 #: Ceiling on how much new territory one summarisation call may be asked to read, when the
 #: model's own window is unknown. Deliberately not `max_chars` — that is the threshold for
 #: when the *whole conversation* is worth folding, not what a single *request* can actually
@@ -217,7 +251,7 @@ def fold(
     transcript, and supplies a real (fail-safe) summariser. Returns the same
     ``(messages, new_brief_or_None)`` — the caller persists a non-None brief.
     """
-    from kith.services import conversations, tuning
+    from kith.services import tuning
 
     # `force` is what makes a fold something you can ask for.
     #
@@ -233,7 +267,7 @@ def fold(
     # accumulation onto the previous one.
     max_chars = 1 if force else _budget_chars(config, tool_chars)
     keep_recent = int(tuning.value("history_keep_recent"))
-    prior = conversations.latest_summary(conversation_id) if conversation_id else {}
+    prior = prior_brief(conversation_id)
     window = int(getattr(config, "context_window", 0) or 0)
     return compact(
         history,
@@ -268,10 +302,10 @@ def fold_dry(
     before it sends. The caller has to say so out loud, because a screen whose whole purpose is
     that its numbers are the real numbers must not quietly show a prompt about to be replaced.
     """
-    from kith.services import conversations, tuning
+    from kith.services import tuning
 
     max_chars = _budget_chars(config, tool_chars)
-    prior = conversations.latest_summary(conversation_id) if conversation_id else {}
+    prior = prior_brief(conversation_id)
     folded, fresh = compact(
         history,
         lambda _text: "",  # never summarise — see above
@@ -332,7 +366,9 @@ def _summarize(text: str, config, host: str) -> str:
                 return ""
             if event.get("type") == "delta" and event.get("role") == "text":
                 parts.append(event.get("text") or "")
-        return "".join(parts).strip()
+        brief = "".join(parts).strip()
+        # An answer that is not a brief is a failure, not a worse brief — see `is_a_brief`.
+        return brief if is_a_brief(brief) else ""
     except Exception:
         return ""
 

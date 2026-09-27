@@ -23,7 +23,7 @@ instruction said.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from kith.services import history
 
@@ -131,3 +131,69 @@ class TestTheFoldStillWorks:
         convo = [{"role": "user", "content": "x" * 5_000}, {"role": "assistant", "content": "y" * 5_000}]
         kept, made = history.compact(convo, lambda _t: "", {}, max_chars=1, keep_recent=1)
         assert kept == convo and made is None
+
+
+#: What the summariser actually returned on 2026-09-26 — a reply, not a brief — and it replaced
+#: 3,478 transcript entries of a 500k-token conversation.
+_A_REPLY = (
+    "Two things: it's finished, and I was wrong about one of my own numbers.\n\n"
+    "**Backend: 1671 passed, 1 skipped** — clean, including the 19 new Time off tests."
+)
+
+
+def _a_brief(said: str) -> str:
+    return "\n\n".join(f"## {section}\n{said}" for section in history.SECTIONS)
+
+
+class TestAnAnswerThatIsNotABriefIsNotKept:
+    def test_a_reply_is_not_a_brief(self):
+        assert not history.is_a_brief(_A_REPLY)
+        assert history.is_a_brief(_a_brief("something"))
+
+    def test_the_summariser_calls_it_a_failure(self, monkeypatch):
+        """Which `compact` already knows how to survive: the history is left alone."""
+        from kith.config import default_config
+        from kith.llm import ollama
+
+        def answers_instead(prompt, config, host, tools=None):
+            yield {"type": "delta", "role": "text", "text": _A_REPLY}
+
+        monkeypatch.setattr(ollama, "stream_once", answers_instead)
+        config = replace(default_config(), api_key="", base_url="")
+        assert history._summarize("the conversation", config, "host") == ""
+
+    def test_a_real_brief_still_comes_back(self, monkeypatch):
+        from kith.config import default_config
+        from kith.llm import ollama
+
+        def summarises(prompt, config, host, tools=None):
+            yield {"type": "delta", "role": "text", "text": _a_brief("done")}
+
+        monkeypatch.setattr(ollama, "stream_once", summarises)
+        config = replace(default_config(), api_key="", base_url="")
+        assert history._summarize("the conversation", config, "host") == _a_brief("done")
+
+
+class TestABadFoldAlreadyStoredIsPassedOver:
+    def test_the_last_good_brief_is_built_on(self, db):
+        from kith.services import conversations
+
+        conversation = conversations.start(db, "testing")["id"]
+        conversations.record_summary(conversation, 10, _a_brief("the first ten"))
+        conversations.record_summary(conversation, 20, _A_REPLY)
+        assert history.prior_brief(conversation) == {"through": 10, "text": _a_brief("the first ten")}
+
+    def test_briefs_from_before_the_headings_are_kept_as_they_were(self, db):
+        """A conversation folded before 2026-08-17 has no good brief to fall back to, and refolding
+        it from nothing would be a bill for no reason."""
+        from kith.services import conversations
+
+        conversation = conversations.start(db, "testing")["id"]
+        conversations.record_summary(conversation, 10, "an old paragraph")
+        conversations.record_summary(conversation, 20, "a later paragraph")
+        assert history.prior_brief(conversation) == {"through": 20, "text": "a later paragraph"}
+
+    def test_a_conversation_never_folded_has_none(self, db):
+        from kith.services import conversations
+
+        assert history.prior_brief(conversations.start(db, "testing")["id"]) == {}
