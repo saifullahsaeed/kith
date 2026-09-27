@@ -249,9 +249,11 @@ TUNABLES: tuple[Tunable, ...] = (
         "its patch. Larger than a scout's, and for a reason rather than generosity: a scout "
         "stops when it knows the answer, and a builder is not finished until the edit is "
         "actually made — reading four files and then writing three is most of the budget "
-        "before it starts. Too small and patches come back half-applied, which is worse than "
-        "none at all.",
-        default=16,
+        "before it starts. The last third is kept for writing. Too small and patches come back "
+        "half-applied, which is worse than none at all.",
+        # 16 until 2026-09-27. On a large repository that was all orientation: eleven builders on
+        # sadeef-v2 spent 17 to 41 calls reading and one of them wrote anything.
+        default=30,
         group="context",
         minimum=4,
         maximum=40,

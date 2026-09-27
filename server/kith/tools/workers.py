@@ -9,7 +9,7 @@ builders across two runs whose prompts named parallel work. So the choice moved 
 always right.
 
 Two kinds, and the difference between them is entirely in the tables below — what each may
-use, what it is told, how many rounds it gets, and which model it runs on:
+use, what it is told, how many rounds it gets, how it ends, and which model it runs on:
 
 **A scout reads.** It is given :data:`GIVEN` and `run_tool` enforces that set as well as showing
 it, so naming `write_file` anyway gets a refusal rather than a write.
@@ -229,7 +229,9 @@ BUILDER_BRIEF = (
     "you are working in a "
     "private copy of the repository that nobody else can see. Everything you read on the way "
     "is discarded when you finish. What survives is your patch and a few hundred words.\n\n"
-    "So read as much as you need, and do not summarise as you go.\n\n"
+    "Your rounds are few, and reading spends them. Read what the change touches, then start "
+    "editing — do not map the whole repository first. When you are told the end is near, stop "
+    "reading and make the edits you have not made yet.\n\n"
     "You can read, search, look things up, and edit files in your copy. You cannot commit, "
     "push, run a command, run the tests, file anything, remember anything, or ask anyone a "
     "question. If the change needs one of those, make the edits you can and say plainly in "
@@ -249,6 +251,32 @@ BUILDER_BRIEF = (
 )
 
 
+#: What a builder is told when the last third of its rounds begins. Its own text rather than the
+#: turn's `_LANDING_DIRECTIVE`, which says to write a working file, add a deliverable and tick a
+#: checklist — three tools a builder does not have. A builder lands by making the change.
+BUILDER_LANDING = (
+    "(You're near the end of your rounds. Stop reading and make the edits now — `edit_files` "
+    "for files that exist, `write_file` for new ones. Your patch is only what you have actually "
+    "changed in your copy, so part of the change, made, is worth more than all of it described. "
+    "Then say in your report what you did not get to.)"
+)
+
+
+def _no_landing(rounds: int) -> int:
+    """A scout's reserve: none. Its output is its last message, which `_final_answer` forces."""
+    return 0
+
+
+def _last_third(rounds: int) -> int:
+    """A builder's reserve: the last third of its rounds, given to writing.
+
+    Off, a builder read until its budget ran out. Measured over the workflows of 2026-09-26 on
+    sadeef-v2: eleven builders, 17 to 41 tool calls each, one patch between them, and the reports
+    say it — "I ran out of my tool budget while reading, before I wrote a line."
+    """
+    return rounds // 3
+
+
 #: What each role is: what it may do, what it is told, how long it gets, and what it runs on.
 #: A table rather than branches, so adding a role is data and reading the difference between
 #: two of them is one glance rather than a diff of two near-identical functions.
@@ -257,12 +285,16 @@ ROLES: dict[str, dict] = {
         "given": lambda: set(GIVEN),
         "brief": lambda: SCOUT_BRIEF,
         "rounds": lambda: int(tuning.value("subtask_rounds")),
+        "reserve": _no_landing,
+        "landing": "",
         "model": lambda: str(tuning.value("scout_model") or "").strip(),
     },
     "builder": {
         "given": lambda: set(GIVEN) | set(WRITING),
         "brief": lambda: BUILDER_BRIEF,
         "rounds": lambda: int(tuning.value("builder_rounds")),
+        "reserve": _last_third,
+        "landing": BUILDER_LANDING,
         # Always the main model, and not a knob. A builder writes code that is kept, and a
         # cheap model's patch costs more to review than it saved to produce.
         "model": lambda: "",
@@ -345,6 +377,7 @@ def run_agent(
     started = _scratchpad(config.system or "", shape["brief"](), objective) if carried is None else carried
     report = _Report()
     began = time.monotonic()
+    budget = rounds if rounds is not None else shape["rounds"]()
 
     # Everything below happens with a builder pinned to its own copy. This single `with` is the
     # entire isolation mechanism: `paths.base_dir` reads it, every path in the application goes
@@ -365,15 +398,16 @@ def run_agent(
             # command, and a builder asked for a mockup opened a real browser window with one.
             # Neither has been through the classification above.
             tool_host(path, mcp=[], plugin=[]),
-            max_rounds=rounds if rounds is not None else shape["rounds"](),
+            max_rounds=budget,
             allow=tools if tools is not None else shape["given"](),
             # The parent's conversation, which is not about recording anything — nothing here
             # reaches the transcript. It keeps this on the same upstream as the conversation that
             # sent it, so the persona it shares with that conversation is a cache read.
             conversation_id=conversation,
-            # See `frozen.begin`: an agent's output is its final message, so rounds spent being
-            # told to write files and file deliverables are rounds thrown away.
-            landing_reserve=0,
+            # Per role — see `ROLES`. A scout's output is its final message, so it has no landing;
+            # a builder's is its edits, so its last third is for making them.
+            landing_reserve=shape["reserve"](budget),
+            landing_directive=shape["landing"],
         ):
             report.saw(event)
             if watch is not None:

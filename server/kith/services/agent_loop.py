@@ -641,6 +641,7 @@ def stream_agent(
     conversation_id: str = "",
     steer: Callable[[], str] | None = None,
     landing_reserve: int | None = None,
+    landing_directive: str = "",
 ) -> Iterator[dict]:
     """Run the tool loop for one turn.
 
@@ -666,6 +667,7 @@ def stream_agent(
             conversation_id=conversation_id,
             steer=steer,
             landing_reserve=landing_reserve,
+            landing_directive=landing_directive,
         )
 
 
@@ -719,8 +721,14 @@ def _run_turn(
     conversation_id: str = "",
     steer: Callable[[], str] | None = None,
     landing_reserve: int | None = None,
+    landing_directive: str = "",
 ) -> Iterator[dict]:
     """Run the tool loop.
+
+    ``landing_directive`` replaces what the reserve says when it opens, for a caller whose way of
+    landing is not this turn's. A builder's work is the edit it makes in its copy, so its landing
+    is "make the change now", and the default — a working file, a deliverable, a checklist —
+    names three tools a builder does not have.
 
     ``conversation_id`` picks the OpenRouter stickiness id. A conversation is the right
     unit for it: every round in it shares a prompt prefix, and shares it with nothing else,
@@ -744,6 +752,7 @@ def _run_turn(
     turn = frozen.begin(config, agent_db_path, conversation_id, max_rounds, landing_reserve)
     config, room, offload_result = turn.config, turn.room, turn.offload
     budget, reserve, landing_effort = turn.budget, turn.reserve, turn.landing_effort
+    landing_text = landing_directive or _LANDING_DIRECTIVE
     routing = turn.routing
     mcp_names = tool_host.mcp_names
     plugin_names = tool_host.plugin_names
@@ -806,7 +815,7 @@ def _run_turn(
 
         # Hand the reserve over to landing — once, so the directive isn't repeated.
         if not landing and round_index >= budget - reserve:
-            yield _directive(convo, _LANDING_DIRECTIVE)
+            yield _directive(convo, landing_text)
             landing = True
         if landing:
             schemas = [s for s in schemas if s["function"]["name"] not in _NOT_WHILE_LANDING]
@@ -907,7 +916,7 @@ def _run_turn(
             if _worth_retrying(failure) and failed_rounds <= _FAILED_ROUNDS_BEFORE_LANDING:
                 yield _directive(convo, _ROUND_FAILED_DIRECTIVE)
                 continue
-            yield _directive(convo, _LANDING_DIRECTIVE)
+            yield _directive(convo, landing_text)
             landing = True
             continue
 

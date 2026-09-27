@@ -105,7 +105,12 @@ DESCRIPTION = (
     'with phase("Build"): ...   log(text)   finish(value) — value is the result you are handed.\n\n'
     f"The script has no network and no files beyond its own folder; it only orchestrates. "
     f"Limits: {AT_ONCE} agents at once, {MAX_AGENTS} per run, {MAX_SECONDS // 60} minutes. "
-    "Builders cannot run commands or tests."
+    "Builders cannot run commands or tests.\n\n"
+    "Size a builder's job to what it can finish. It starts knowing nothing, spends most of its "
+    "rounds finding its way, and has only the last third for editing: give each one a change of "
+    "a few files — one screen, one endpoint, one module — and name those files in its prompt. "
+    '"Rework the ten screens" as one builder comes back as an empty patch; ten builders, one '
+    "screen each, come back as ten."
 )
 
 

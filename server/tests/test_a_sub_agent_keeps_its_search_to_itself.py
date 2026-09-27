@@ -149,10 +149,11 @@ class TestItStartsFromNothing:
 class TestItHasNoLandingPhase:
     def test_the_reserve_is_off_for_a_worker(self, db: Path):
         """Landing exists because a turn that gathers for forty rounds and gets cut off leaves
-        nothing behind. A worker's output *is* its last message, and `_final_answer` already
+        nothing behind. A scout's output *is* its last message, and `_final_answer` already
         forces that — so the reserve buys nothing, and the directive it comes with tells the
         worker to write to a file, add a deliverable and tick off a checklist, all of which it
-        deliberately cannot do."""
+        deliberately cannot do. A builder is the exception, with a landing of its own: see
+        `test_a_builder_lands_by_editing.py`."""
         from kith.config import default_config
 
         worker = frozen.begin(default_config(), db, "", 6, 0)
