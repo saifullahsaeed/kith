@@ -642,15 +642,50 @@ class TestWorkflowMode:
         assert answer.get("run"), answer
         _wait(answer["run"])
 
-    def test_nobody_present_can_start_a_new_one(self, db: Path, project: Path, agents):
-        """The turn a finished run wakes is nobody's; a mode left on must not chain runs overnight."""
+    def test_without_the_mode_nobody_present_can_start_a_new_one(self, db: Path, project: Path, agents):
+        """The prefix is a yes to one message, and the turn a finished run wakes is not it."""
         with (
-            session_context.working_in("conv-mode"),
-            session_context.may_run_workflows("mode"),
+            session_context.working_in("conv-asked"),
+            session_context.may_run_workflows("asked"),
             session_context.nobody_watching(),
         ):
             answer = workflow.run_workflow(db, {"script": 'META = {"name": "m"}\nfinish(1)'})
         assert "Nobody is here" in answer["error"]
+
+    def test_in_the_mode_a_woken_turn_can_start_the_next_step(self, db: Path, project: Path, agents):
+        """Survey, then build, then review: the second and third start in the turn the one before
+        wakes. Refusing that is how three runs were refused in one evening with the person right
+        there — and the work they were for got done serially, and half done."""
+        with (
+            session_context.working_in("conv-chain"),
+            session_context.may_run_workflows("mode"),
+            session_context.nobody_watching(),
+        ):
+            answer = workflow.run_workflow(db, {"script": 'META = {"name": "next"}\nfinish(1)'})
+        assert answer.get("run"), answer
+        assert _wait(answer["run"]).unwatched
+
+    def test_but_the_chain_has_an_end(self, db: Path, project: Path, agents):
+        """A mode left on must not chain runs overnight: past a few in a row it reaches a person."""
+        for _ in range(workflow.MAX_UNWATCHED_RUNS):
+            run = workflows.start("conv-long", "step", "", [], folder="", unwatched=True)
+            assert run is not None
+            workflows.end(run, workflows.FINISHED, "done")
+        with (
+            session_context.working_in("conv-long"),
+            session_context.may_run_workflows("mode"),
+            session_context.nobody_watching(),
+        ):
+            answer = workflow.run_workflow(db, {"script": 'META = {"name": "m"}\nfinish(1)'})
+        assert "in a row" in answer["error"]
+
+    def test_a_run_the_person_started_resets_the_chain(self):
+        for unwatched in (True, True, False, True):
+            run = workflows.start("conv-reset", "step", "", [], folder="", unwatched=unwatched)
+            assert run is not None
+            workflows.end(run, workflows.FINISHED, "done")
+            time.sleep(0.01)  # `started` orders them
+        assert workflows.unwatched_in_a_row("conv-reset") == 1
 
 
 @needs_confinement

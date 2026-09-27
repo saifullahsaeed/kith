@@ -68,6 +68,9 @@ class Run:
     #: being run again — which is what makes "fix the script and resume" cost only the fix.
     resumed_from: str = ""
     reuse: dict[str, dict] = field(default_factory=dict)
+    #: Started in a turn nobody opened — the one a finished run or process wakes. See
+    #: :func:`unwatched_in_a_row`.
+    unwatched: bool = False
 
     def public(self) -> dict:
         return {
@@ -94,7 +97,14 @@ _RUNS: dict[str, Run] = {}
 _LOCK = threading.Lock()
 
 
-def start(conversation: str, name: str, description: str, phases: list[str], folder: str) -> Run | None:
+def start(
+    conversation: str,
+    name: str,
+    description: str,
+    phases: list[str],
+    folder: str,
+    unwatched: bool = False,
+) -> Run | None:
     """Open a run, or None when this conversation already has one going.
 
     One at a time per conversation. Two workflows fanning out over the same repository at once
@@ -111,6 +121,7 @@ def start(conversation: str, name: str, description: str, phases: list[str], fol
             description=description,
             phases=list(phases),
             folder=folder,
+            unwatched=unwatched,
         )
         _RUNS[run.id] = run
     say(run, "started", name, description=description, phases=list(phases), folder=folder)
@@ -126,6 +137,28 @@ def latest(conversation: str) -> Run | None:
     with _LOCK:
         mine = [one for one in _RUNS.values() if one.conversation == conversation]
     return max(mine, key=lambda one: one.started) if mine else None
+
+
+def unwatched_in_a_row(conversation: str) -> int:
+    """How many of this conversation's newest runs were started with nobody there, back to the
+    last one a person's turn started.
+
+    The bound on a chain in workflow mode: survey, then build, then review is three runs, and the
+    second and third start in the turn the one before wakes. In memory like the rest of the
+    board, so a restart forgets the chain — and a restart is also the end of every run in it.
+    """
+    with _LOCK:
+        mine = sorted(
+            (one for one in _RUNS.values() if one.conversation == conversation),
+            key=lambda one: one.started,
+            reverse=True,
+        )
+    count = 0
+    for one in mine:
+        if not one.unwatched:
+            break
+        count += 1
+    return count
 
 
 def running(conversation: str) -> Run | None:

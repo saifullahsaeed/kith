@@ -65,6 +65,11 @@ MAX_SECONDS = 60 * 60
 #: him again, so without a bound a run that keeps breaking is a loop with a bill.
 MAX_RESUMES = 3
 
+#: How many new runs may start in a row with nobody there, in workflow mode. A survey, a build
+#: and a review is a chain of three, and the second and third start in the turn the one before
+#: wakes. Past that it has to reach a person: a mode left on must not chain runs overnight.
+MAX_UNWATCHED_RUNS = 3
+
 #: How much of the result rides in the note that wakes the conversation. The rest is one read
 #: away in `result.json`, and the note says so.
 RESULT_PREVIEW_CHARS = 6_000
@@ -149,15 +154,28 @@ def run_workflow(path: Path, args: dict):
                 "what keeps failing — a fourth try should be their call."
             )
         }
-    # A new run needs someone there. The turn a finished run wakes is nobody's: letting it start
-    # the next workflow is how a mode left on becomes a chain of runs spending money overnight.
-    if earlier is None and session_context.unattended():
-        return {
-            "error": (
-                "Nobody is here to agree to a new workflow. Report what you have, and start the next "
-                "one when they are back — resuming a run that broke is still allowed."
-            )
-        }
+    # A new run in a turn nobody opened — the one a finished run or test wakes. Refused unless
+    # workflow mode is on, because the mode is the person's standing yes and the prefix is only
+    # a yes to one message. Even then bounded: that turn is exactly where the next step of a
+    # survey → build → review chain belongs (three of these were refused in one evening while
+    # the person was right there), and also how a mode left on would spend money overnight.
+    unwatched = session_context.unattended()
+    if earlier is None and unwatched:
+        if session_context.workflow_permission() != "mode":
+            return {
+                "error": (
+                    "Nobody is here to agree to a new workflow. Report what you have, and start the "
+                    "next one when they are back — resuming a run that broke is still allowed."
+                )
+            }
+        chained = workflows.unwatched_in_a_row(conversation)
+        if chained >= MAX_UNWATCHED_RUNS:
+            return {
+                "error": (
+                    f"{chained} workflows have started in a row here with nobody watching. Stop, "
+                    "tell them what those runs found, and let them start the next one."
+                )
+            }
     if not session_context.workflows_allowed() and earlier is None:
         return {
             "error": (
@@ -181,7 +199,9 @@ def run_workflow(path: Path, args: dict):
             )
         }
 
-    run = workflows.start(conversation, meta["name"], meta["description"], meta["phases"], folder="")
+    run = workflows.start(
+        conversation, meta["name"], meta["description"], meta["phases"], folder="", unwatched=unwatched
+    )
     if run is None:
         busy = workflows.running(conversation)
         return {
