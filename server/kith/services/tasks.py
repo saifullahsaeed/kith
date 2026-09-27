@@ -34,8 +34,42 @@ FILED_THIS_TURN = "tasks_filed_this_turn"
 #: one of them was locked. See `_verify_approvable`.
 PLANNED_THIS_TURN = "tasks_planned_this_turn"
 
+#: Tasks whose closing has been shown what the person said when they were filed, this turn. See
+#: `_their_words_first`.
+SHOWN_THEIR_WORDS = "tasks_shown_what_they_said"
+
 #: How much of a brief has to exist before "done" is believable.
 _VERIFY_MIN_BRIEF = 80
+
+#: How much of their message rides in a refusal. A pasted log or a long brief is still theirs, but
+#: the ask is almost always in the first screenful.
+_THEIR_WORDS_CHARS = 2_000
+
+
+def _what_they_said(detail: dict) -> str:
+    """The person's own message this task was filed under, or "".
+
+    The last thing they typed in this conversation before the task was created — a woken turn's
+    note is the harness speaking and is recorded as `system`, so it is never mistaken for them. A
+    task filed before this conversation began has nothing before it here, and gets "".
+    """
+    conversation = detail.get("conversation_id") or session_context.current()
+    filed = str(detail.get("created_at") or "")
+    if not conversation or not filed:
+        return ""
+    from kith.services import conversations
+
+    try:
+        entries = conversations.read(conversation)
+    except Exception:
+        return ""
+    said = ""
+    for entry in entries:
+        if str(entry.get("at") or "") > filed:
+            break
+        if entry.get("type") == "message" and entry.get("role") == "user":
+            said = str(entry.get("content") or "")
+    return said.strip()[:_THEIR_WORDS_CHARS]
 
 
 def _verify_done(path: Path, a: dict) -> dict | None:
@@ -59,11 +93,14 @@ def _verify_done(path: Path, a: dict) -> dict | None:
         return None  # nothing written down to check against
 
     checks = [c for c in (a.get("verification") or []) if isinstance(c, dict) and c.get("requirement")]
+    unchecked = [i.get("text") for i in (detail.get("checklist") or []) if not i.get("done")]
+    said = _what_they_said(detail)
     if not checks:
-        unchecked = [i.get("text") for i in (detail.get("checklist") or []) if not i.get("done")]
+        _mark_shown(a["id"], said)
         return {
             "blocked": "This task has a brief, so it can't be closed without checking your work against it.",
             "what_was_asked": brief,
+            **({"what_they_said": said} if said else {}),
             "unchecked_checklist_items": unchecked,
             "deliverables_attached": len(detail.get("deliverables") or []),
             "next": (
@@ -128,7 +165,49 @@ def _verify_done(path: Path, a: dict) -> dict | None:
             ),
         }
 
-    return None
+    return _their_words_first(a["id"], said, body, unchecked)
+
+
+def _mark_shown(task_id, said: str) -> None:
+    if said and session_context.in_turn():
+        session_context.turn_notes().setdefault(SHOWN_THEIR_WORDS, set()).add(int(task_id))
+
+
+def _their_words_first(task_id, said: str, body: str, unchecked: list) -> dict | None:
+    """Once per task per turn, a close that passed his own brief is shown the person's words.
+
+    The brief is his translation of what they asked, and a translation can pass its own check
+    while missing the point. Measured 2026-09-26: "make sure that you do have option to configure
+    everything … and seed some data to show me" became five tasks titled "… through the API", and
+    all five closed with every requirement met and none of their 27 checklist items ticked — while
+    no screen could reach a single one of the new endpoints. Asked "why is nothing closed", he
+    found it in three tool calls. The words were there all along; nothing put them in front of him
+    at the moment he graded his own work.
+
+    One refusal, then it closes on the same call, so this costs a round rather than a loop — and
+    only in a turn, since outside one there is nowhere to remember that it was shown.
+    """
+    if not said or not session_context.in_turn():
+        return None
+    shown = session_context.turn_notes().setdefault(SHOWN_THEIR_WORDS, set())
+    if int(task_id) in shown:
+        return None
+    shown.add(int(task_id))
+    return {
+        "blocked": (
+            "That checks it against your own brief. Before it closes, check it against what they "
+            "actually said when it was filed."
+        ),
+        "what_they_said": said,
+        "checked": body,
+        **({"unchecked_checklist_items": unchecked} if unchecked else {}),
+        "next": (
+            "Read what_they_said as them, looking at what you built the way they will — on the "
+            "screen, not through the API. If all of it is true, call update_task again with the "
+            "same verification and it closes. If any of it is not, add it as a requirement with "
+            "met=false, which keeps the task open. Tick the checklist items you did."
+        ),
+    }
 
 
 def _out_of_scope(path: Path, project_id: int | None) -> dict | None:

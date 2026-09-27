@@ -19,6 +19,7 @@ it in a tray nobody empties.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 from kith.infra.db import repositories as repo
 from kith.kernel import session_context
@@ -118,6 +119,62 @@ class TestACleanPassWithNobodyWatching:
                 {"requirement": "frontend tests pass", "met": True, "evidence": "12 passed"},
             ],
         )
+        assert _status(db, task["id"]) == "done"
+
+
+class TestTheirWordsComeBeforeTheClose:
+    """His brief is his translation of what they asked. "Make sure that you do have option to
+    configure everything … and seed some data to show me" became five tasks titled "… through the
+    API", every one closed with every requirement met — and no screen could reach any of it. So a
+    close that passes his own brief is shown their words once, and closes on the next call."""
+
+    MET: ClassVar[list[dict]] = [
+        {"requirement": "lists every model", "met": True, "evidence": "catalog.py:40"},
+        {"requirement": "frontend tests pass", "met": True, "evidence": "12 passed"},
+    ]
+
+    def _filed_after(self, db: Path, said: str) -> tuple[str, dict]:
+        from kith.services import conversations
+
+        conversation = conversations.start(db, "testing")["id"]
+        conversations.record(db, conversation, "user", said)
+        conversations.record(
+            db, conversation, "system", "Something you started in the background has finished."
+        )
+        return conversation, _a_task(db)
+
+    def test_the_first_close_is_shown_what_they_said(self, db: Path):
+        conversation, task = self._filed_after(db, "let me change the model from the settings screen")
+        with session_context.working_in(conversation), session_context.a_turn():
+            out = _close(db, task["id"], self.MET)
+        result = out.get("result") or {}
+        assert "blocked" in result, out
+        assert result["what_they_said"] == "let me change the model from the settings screen"
+        assert _status(db, task["id"]) != "done"
+
+    def test_the_same_verification_then_closes_it(self, db: Path):
+        """Once, not a loop: having been shown, he decides."""
+        conversation, task = self._filed_after(db, "let me change the model from the settings screen")
+        with session_context.working_in(conversation), session_context.a_turn():
+            _close(db, task["id"], self.MET)
+            _close(db, task["id"], self.MET)
+        assert _status(db, task["id"]) == "done"
+
+    def test_a_wake_note_is_not_taken_for_them(self, db: Path):
+        """The last message before the task is the harness's; theirs is the one before it."""
+        conversation, task = self._filed_after(db, "the real ask")
+        with session_context.working_in(conversation), session_context.a_turn():
+            out = _close(db, task["id"], self.MET)
+        assert (out.get("result") or {}).get("what_they_said") == "the real ask"
+
+    def test_a_task_filed_before_they_said_anything_here_just_closes(self, db: Path):
+        from kith.services import conversations
+
+        task = _a_task(db)
+        conversation = conversations.start(db, "testing")["id"]
+        conversations.record(db, conversation, "user", "something later and unrelated")
+        with session_context.working_in(conversation), session_context.a_turn():
+            _close(db, task["id"], self.MET)
         assert _status(db, task["id"]) == "done"
 
 
