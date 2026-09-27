@@ -165,7 +165,62 @@ def _verify_done(path: Path, a: dict) -> dict | None:
             ),
         }
 
+    # A second opinion, when one is reachable, decides which of the two paths below runs:
+    #   - it doubts the close  -> hand back with the score (its own message)
+    #   - it clears the close   -> close now, skipping the always-once self-check
+    #   - no opinion (local model, network down, not OpenRouter) -> fall through unchanged
+    # It shares `_their_words_first`'s once-per-turn latch, so a doubt and the self-check cannot
+    # both spend a round on the same task.
+    verdict = _score_close(a["id"], brief, body, said)
+    if isinstance(verdict, dict):
+        return verdict
+    if verdict is True:
+        return None  # the scorer cleared it — close without the self-check round
+
     return _their_words_first(a["id"], said, body, unchecked)
+
+
+def _score_close(task_id, brief: str, body: str, said: str):
+    """Ask an outside scorer about an all-met close. dict = hand back, True = cleared, None = no opinion.
+
+    None on "no scorer configured", "the scorer had no opinion", or "not inside a turn" — all of
+    which mean the existing self-check should decide, exactly as before this existed. True only when
+    a scorer is present and confident; a dict only when it genuinely doubts, and then it takes the
+    latch so the self-check does not also fire.
+    """
+    from kith.config import default_config
+    from kith.services import scoring
+
+    if not session_context.in_turn():
+        return None
+    shown = session_context.turn_notes().setdefault(SHOWN_THEIR_WORDS, set())
+    if int(task_id) in shown:
+        return None
+    try:
+        verdict = scoring.doubts_the_close(said, brief, body, config=default_config())
+    except Exception:
+        verdict = None
+    if verdict is None:
+        return None  # no opinion — the self-check path takes over
+    doubts, score = verdict
+    if not doubts:
+        return True  # the scorer agrees it is done
+    shown.add(int(task_id))
+    return {
+        "blocked": (
+            "You marked every requirement met, but a check of your evidence against what they "
+            f"asked scores this {score:.0%} likely to be what they actually wanted — low enough "
+            "to look again before it closes."
+        ),
+        **({"what_they_said": said} if said else {}),
+        "checked": body,
+        "next": (
+            "Read what they asked as them, and look at what you built the way they will — on the "
+            "screen, not through the API. If it truly holds, call update_task again with the same "
+            "verification and it closes. If it does not, add the gap as a requirement with "
+            "met=false, which keeps the task open."
+        ),
+    }
 
 
 def _mark_shown(task_id, said: str) -> None:
