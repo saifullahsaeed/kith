@@ -8,8 +8,8 @@ builders across two runs whose prompts named parallel work. So the choice moved 
 (`/workflow`) and the decomposition moved into code, and what is left here is the part that was
 always right.
 
-Two kinds, and the difference between them is entirely in the tables below — what each may
-use, what it is told, how many rounds it gets, how it ends, and which model it runs on:
+Three kinds, and the difference between them is entirely in the tables below — what each may
+use, what it is told, how many rounds it gets, and which model it runs on:
 
 **A scout reads.** It is given :data:`GIVEN` and `run_tool` enforces that set as well as showing
 it, so naming `write_file` anyway gets a refusal rather than a write.
@@ -20,8 +20,20 @@ bent into the copy and no tool knows it moved. What comes back is a unified diff
 holding the conversation applies it — a changed worktree left for someone to integrate is not
 an option for a program that often runs with nobody there.
 
-**Neither can start a workflow**, so one run cannot become a tree of them, and neither can ask
+**A verifier checks a change against what the person asked.** :data:`GIVEN` plus
+:data:`CHECKING`, in a copy with the change applied, on the stronger model by default.
+
+Builders and verifiers may run the project's tests and checks (:data:`CHECKING`) because they
+run them inside their copy's boundary (`confinement.copy_profile`): writes only in the copy, no
+network but localhost.
+
+**None of them can start a workflow**, so one run cannot become a tree of them, and none can ask
 anyone anything — nobody is watching an agent's scratchpad.
+
+Every agent starts with the project it is working in — who it is, its references, what Kith
+has learned about it (:func:`project_brief`) — the way a Claude Code subagent starts with the
+project's CLAUDE.md. Before this, every builder spent its first rounds rediscovering the repo,
+and the workflow scripts pasted a 400–680-word preamble into every prompt to make up for it.
 """
 
 from __future__ import annotations
@@ -82,17 +94,15 @@ GIVEN = frozenset(
 
 #: What a **builder** adds to :data:`GIVEN`, and the entire difference between the two roles.
 #:
-#: Four tools, and the smallness is the design. A builder is a worker that can change files in
-#: its own copy of the repository and hand back a patch; it is not a second agent with a life
-#: of its own. Everything in :data:`WITHHELD` is withheld from it too — it cannot commit,
-#: publish, run a command, file a task, remember anything, ask anyone, or send a worker of its
-#: own. The only new verb is "edit".
+#: A handful of tools, and the smallness is the design. A builder is a worker that can change
+#: files in its own copy of the repository and hand back a patch; it is not a second agent with
+#: a life of its own. Everything in :data:`WITHHELD` is withheld from it too — it cannot commit,
+#: publish, run a shell, file a task, remember anything, ask anyone, or send a worker of its
+#: own. The new verbs are "edit" and, from :data:`CHECKING`, "run the tests on what I edited".
 #:
-#: **Why no `shell` and no `run_tests`, when a builder obviously wants both.** They have side
-#: effects outside the worktree — a package installed, a port bound, a database migrated — and
-#: side effects are precisely what would stop two builders sharing a round. The parallelism is
-#: worth more than the convenience, and the main agent can run the tests on the patch it just
-#: applied — the agent that made the change should read the failure.
+#: **Still no `shell`.** A shell reaches anything the boundary allows, for as long as it likes,
+#: and a builder has no reason to want more than the project's own check and test commands —
+#: which `check_code` and `run_tests` already are.
 WRITING = frozenset(
     {
         "write_file",
@@ -105,6 +115,20 @@ WRITING = frozenset(
         "update_design_system",
     }
 )
+
+#: What a **builder** and a **verifier** may run: the project's own tests, inside their copy.
+#:
+#: Withheld from every agent until the copy could hold a command. Two things made it safe to
+#: give: `confinement.copy_profile` — writes only inside the copy, no network but localhost —
+#: and `engine/run/testing._run_in_copy`, which runs the suite synchronously outside the process
+#: table, so six builders are six runs and none of them wakes the conversation. The copy carries
+#: the project's dependency folders (`worktrees._carry_dependencies`), so the suite can import
+#: what it imports. `check_code`, already in :data:`GIVEN`, runs inside the same boundary when
+#: the agent is in a copy.
+#:
+#: Why it matters more than any brief: an agent that can run the code stops when the code works.
+#: One that cannot hands back a patch whose first `ImportError` is found by someone else.
+CHECKING = frozenset({"run_tests"})
 
 #: What an agent is deliberately not given, and why. Kept as a real list rather than "the
 #: rest of the registry" so that adding a tool forces the question — the test pairs this with
@@ -154,16 +178,13 @@ WITHHELD = frozenset(
         "schedule",
         "cancel_schedule",
         "list_schedules",
-        # Runs things. Withheld for two reasons at once: they have side effects, and side
-        # effects are exactly what would stop several of these sharing a round. `run_tests`
-        # is the one that will keep being asked for, and the answer is that the agent holding
-        # the conversation runs them on the patch it applies — the one who made the change
-        # should read the failure.
+        # Runs things with effects outside the copy: a process that outlives the agent, a shell
+        # that can reach anything, an installer. `run_tests` is the exception and lives in
+        # :data:`CHECKING`, because it runs inside the copy's boundary and ends before it returns.
         "shell",
         "start_process",
         "stop_process",
         "check_process",
-        "run_tests",
         "install_language_support",
         # Reaches a person. `ask` holds a turn open until someone answers, and nobody is
         # watching a scratchpad — the question would be asked of an empty room while the main
@@ -223,19 +244,33 @@ SCOUT_BRIEF = (
 #: now true — and the failure mode flips with it: the risk is no longer a finder describing
 #: found code as built, it is a builder describing intended code as built. Its patch is the
 #: only evidence that survives, so the brief points at the patch rather than at prose.
+#:
+#: **Its budget is told to it up front, not announced near the end.** Until 2026-09-28 the last
+#: third of a builder's rounds opened with an injected "you're near the end, make the edits now"
+#: — the same kind of mid-turn directive the main loop has been shedding, and a patch over the
+#: cause rather than a fix for it. The cause was a builder that started knowing nothing about the
+#: project and could not run what it wrote, so it read until it was sure. It now starts with the
+#: project (:func:`project_brief`) and can check its own work (:data:`CHECKING`), and it is told
+#: its round count before it begins, which is information rather than an interruption. A
+#: builder that still comes back empty is the script's to handle — `revise()` it, visibly.
 BUILDER_BRIEF = (
     "You are working as an isolated builder right now. A workflow — a script you wrote a "
     "moment ago, in the conversation this came from — handed you one thing to change, and "
     "you are working in a "
     "private copy of the repository that nobody else can see. Everything you read on the way "
     "is discarded when you finish. What survives is your patch and a few hundred words.\n\n"
-    "Your rounds are few, and reading spends them. Read what the change touches, then start "
-    "editing — do not map the whole repository first. When you are told the end is near, stop "
-    "reading and make the edits you have not made yet.\n\n"
-    "You can read, search, look things up, and edit files in your copy. You cannot commit, "
-    "push, run a command, run the tests, file anything, remember anything, or ask anyone a "
-    "question. If the change needs one of those, make the edits you can and say plainly in "
-    "your report what still needs running or deciding.\n\n"
+    "You have {rounds} rounds. Reading spends them, and the project notes below already tell "
+    "you where things are: read what the change touches, then start editing — do not map the "
+    "whole repository first. Aim to be making edits within the first third of your rounds.\n\n"
+    "You can read, search, look things up, edit files in your copy, and check your work: "
+    "`check_code` on a file you changed, and `run_tests` (filtered to the tests nearest "
+    "your change). Your copy has the project's dependencies, and these commands run confined to "
+    "it — they can write only in the copy and cannot reach the network. You cannot commit, "
+    "push, run a shell, file anything, remember anything, or ask anyone a question. If the "
+    "change needs one of those, make the edits you can and say plainly in your report what "
+    "still needs running or deciding.\n\n"
+    "Done means the check is clean on the files you touched and the nearest tests pass — or, if "
+    "they cannot pass for a reason outside your change, your report says exactly why.\n\n"
     "Your edits ARE the deliverable — the patch is taken from your copy automatically, so "
     "never paste code into your report and never describe an edit you did not actually make. "
     "An edit you only described is the one failure that cannot be caught downstream: the agent "
@@ -245,61 +280,152 @@ BUILDER_BRIEF = (
     "copy. So:\n"
     "- Say what you changed and why, in a sentence or two.\n"
     "- Name every file you touched, with `path:line` for anything subtle.\n"
-    "- Say plainly what you could NOT do, and what still needs running, testing or deciding.\n"
+    "- Say what you checked and what it said: the check, the tests you ran and their counts.\n"
+    "- Say plainly what you could NOT do, and what still needs testing or deciding.\n"
     "- If you changed nothing, say so and say why — that is a real answer, not a failure.\n"
     "No preamble, no restating the objective, no offers to do more."
 )
 
 
-#: What a builder is told when the last third of its rounds begins. Its own text rather than the
-#: turn's `_LANDING_DIRECTIVE`, which says to write a working file, add a deliverable and tick a
-#: checklist — three tools a builder does not have. A builder lands by making the change.
-BUILDER_LANDING = (
-    "(You're near the end of your rounds. Stop reading and make the edits now — `edit_files` "
-    "for files that exist, `write_file` for new ones. Your patch is only what you have actually "
-    "changed in your copy, so part of the change, made, is worth more than all of it described. "
-    "Then say in your report what you did not get to.)"
+#: What a **verifier** is told it is: the reader who is hard to convince.
+#:
+#: Its own role rather than a scout with a sterner prompt, for three reasons that are all in the
+#: record. Review agents read the brief Kith wrote, and "an option to configure everything"
+#: became five tasks titled "…through the API", all closed as met — so a verifier is handed the
+#: person's own words and told they outrank the brief. A reviewer that cannot run anything
+#: checked the unchanged tree in two of the first seven workflows — so a verifier always works
+#: in a copy with the change applied and may run the tests. And the model that builds is the one
+#: measured worst at auditing against a spec — so a verifier defaults to the strong model.
+VERIFIER_BRIEF = (
+    "You are working as an isolated verifier right now. A workflow handed you a change that "
+    "has already been made — it is applied in the private copy you are working in — and what "
+    "the person actually asked for. Your job is to establish whether the change does what they "
+    "asked, and you are hard to convince.\n\n"
+    "- Their words outrank any brief. The workflow's own description of the task may have "
+    "narrowed it; you are checking against what they said.\n"
+    "- Check for yourself. Read the changed code, run `check_code` and `run_tests` in this copy "
+    "(they run confined to it). A claim in a report is not evidence; a line of code, a passing "
+    "test or a failing one is.\n"
+    "- When you are not sure something is met, it is not met — say what would settle it.\n"
+    "- Look for what is missing as hard as for what is wrong: a requested piece that nobody "
+    "built fails the change as surely as a bug does.\n\n"
+    "You cannot change files, commit, run a shell, file anything or ask anyone anything.\n\n"
+    "Report, in this order: a verdict in one line (met, not met, or partly met); then each "
+    "thing they asked for with met or not met and the evidence — `path:line` or the test "
+    "name and its result; then what you could not check. No preamble, no offers to do more."
 )
 
 
 def _no_landing(rounds: int) -> int:
-    """A scout's reserve: none. Its output is its last message, which `_final_answer` forces."""
+    """No role has a landing reserve. A scout's and a verifier's output is their last message,
+    which `_final_answer` forces; a builder is told its budget up front instead (see
+    :data:`BUILDER_BRIEF`)."""
     return 0
 
 
-def _last_third(rounds: int) -> int:
-    """A builder's reserve: the last third of its rounds, given to writing.
+#: The models a workflow may ask for by name, and what each means. An alias rather than a model
+#: id, so a script cannot name a model this install has never been set up for — and so the
+#: choice of *which* strong or fast model stays in Settings, where the person makes it.
+MODELS = ("main", "strong", "fast")
 
-    Off, a builder read until its budget ran out. Measured over the workflows of 2026-09-26 on
-    sadeef-v2: eleven builders, 17 to 41 tool calls each, one patch between them, and the reports
-    say it — "I ran out of my tool budget while reading, before I wrote a line."
-    """
-    return rounds // 3
+
+def model_for(alias: str) -> str:
+    """The model id an alias stands for here, or "" for the conversation's own model."""
+    if alias == "strong":
+        return str(tuning.value("strong_model") or "").strip()
+    if alias == "fast":
+        return str(tuning.value("scout_model") or "").strip()
+    return ""
 
 
 #: What each role is: what it may do, what it is told, how long it gets, and what it runs on.
 #: A table rather than branches, so adding a role is data and reading the difference between
 #: two of them is one glance rather than a diff of two near-identical functions.
+#:
+#: ``model`` is an alias from :data:`MODELS` — the default for that role, which a workflow can
+#: override per agent. ``copy`` says whether the role always works in a private copy: a builder
+#: to edit in, a verifier to run the tests in. A scout gets one only when it is sent ``after``
+#: earlier patches.
 ROLES: dict[str, dict] = {
     "scout": {
         "given": lambda: set(GIVEN),
         "brief": lambda: SCOUT_BRIEF,
         "rounds": lambda: int(tuning.value("subtask_rounds")),
         "reserve": _no_landing,
-        "landing": "",
-        "model": lambda: str(tuning.value("scout_model") or "").strip(),
+        "model": "fast",
+        "copy": False,
     },
     "builder": {
-        "given": lambda: set(GIVEN) | set(WRITING),
+        "given": lambda: set(GIVEN) | set(WRITING) | set(CHECKING),
         "brief": lambda: BUILDER_BRIEF,
         "rounds": lambda: int(tuning.value("builder_rounds")),
-        "reserve": _last_third,
-        "landing": BUILDER_LANDING,
-        # Always the main model, and not a knob. A builder writes code that is kept, and a
-        # cheap model's patch costs more to review than it saved to produce.
-        "model": lambda: "",
+        "reserve": _no_landing,
+        # The conversation's own model, not a knob of its own. A builder writes code that is
+        # kept, and a cheap model's patch costs more to review than it saved to produce. A
+        # workflow may still ask for "strong".
+        "model": "main",
+        "copy": True,
+    },
+    "verifier": {
+        "given": lambda: set(GIVEN) | set(CHECKING),
+        "brief": lambda: VERIFIER_BRIEF,
+        "rounds": lambda: int(tuning.value("builder_rounds")),
+        "reserve": _no_landing,
+        "model": "strong",
+        "copy": True,
     },
 }
+
+
+#: How much of the project's `memory.md` rides in an agent's brief. The main turn lets it bid
+#: for room against everything else; an agent has nothing else, but it also has one job, and
+#: the first screenfuls of a project's memory are its conventions and its warnings.
+PROJECT_MEMORY_CHARS = 12_000
+
+
+def project_brief(path: Path, conversation: str) -> str:
+    """What an agent should know about the project before it starts, or "" outside one.
+
+    The project's name, folder and description; its references; and the start of what Kith has
+    learned about it (`memory.md`). The board is left out on purpose — which tasks are open is
+    the main agent's business, and a builder that reads a task list starts planning.
+
+    Built once per workflow run and handed to every agent, so every agent's system prompt is
+    byte-identical after its role's brief and the provider's prefix cache serves the second
+    agent onwards. Never raises: an agent without its project notes is an agent that has to look,
+    which is what they all did until now.
+    """
+    try:
+        from kith.services import project_context
+
+        project = project_context.resolve(path, conversation)
+        if not project:
+            return ""
+        name = str(project.get("name") or "").strip()
+        directory = str(project.get("directory") or "").strip()
+        description = " ".join(str(project.get("description") or "").split())[:800]
+        lines = [f"[The project you are working in: {name}]"]
+        if directory:
+            lines.append(
+                f"Folder: {directory} (your copy mirrors it — absolute paths into it are bent into your copy)"
+            )
+        if description:
+            lines.append(description)
+        parts = ["\n".join(lines)]
+        for key, text in project_context.sections(path, project):
+            if key == "project_references" and text:
+                parts.append(text)
+            elif key == "project_memory" and text:
+                if len(text) > PROJECT_MEMORY_CHARS:
+                    cut = text.rfind("\n", 0, PROJECT_MEMORY_CHARS)
+                    text = (
+                        text[: cut if cut > 0 else PROJECT_MEMORY_CHARS]
+                        + f"\n… ({len(text) - PROJECT_MEMORY_CHARS:,} more characters in .kith/memory.md in your copy)"
+                    )
+                parts.append(text)
+        return "\n\n".join(part for part in parts if part.strip())
+    except Exception:
+        return ""
 
 
 class WorkerError(RuntimeError):
@@ -345,6 +471,10 @@ def run_agent(
     carried: list[dict] | None = None,
     tools: set[str] | None = None,
     rounds: int | None = None,
+    model: str = "",
+    effort: str = "",
+    context: str | None = None,
+    schema=None,
 ) -> tuple[dict, _Report]:
     """One agent, start to finish. Returns its answer and the report it was assembled from.
 
@@ -353,40 +483,69 @@ def run_agent(
     half-done. ``watch`` sees every event as it happens; a workflow uses it to put the agent's
     steps in the Work panel, since they are thrown away on purpose and reach nothing else.
 
-    ``carried``, ``tools`` and ``rounds`` exist for one caller: the repair round a workflow runs
-    when an agent was asked for JSON and did not end with any. It is handed the agent's brief,
-    objective and report plus one more question, with no tools and a single round.
+    ``model`` is an alias from :data:`MODELS` ("" for the role's default) and ``effort`` a
+    reasoning effort; both override the conversation's for this agent only. ``context`` is the
+    project brief (:func:`project_brief`) — passed in by a workflow, which builds it once per run
+    so every agent shares it, and built here when it is None.
+
+    ``schema`` gives the agent a `submit` tool whose parameters are that shape (see
+    `tools/submission`), and the agent ends on a valid call to it. The value comes back as
+    ``answer["submitted"]``. An agent that never calls it ends the ordinary way, and the caller
+    falls back to reading JSON out of its report.
+
+    ``carried``, ``tools`` and ``rounds`` exist for the repair round a workflow runs when an agent
+    was asked for JSON and gave none, and for `revise`, which continues a builder in its copy.
     """
     # Imported here, not at module scope. `kith.tools.host` lives in this package's `__init__`,
     # which imports the workflow tool, which imports this module, so the edge only exists at
     # call time. `agent_loop` is the other direction of the same knot: it is handed a `ToolHost`
     # precisely so it never imports the tool layer, and this is where the loop is needed back.
     from kith.config import default_config, merge_overrides, ollama_host
+    from kith.domain.enums import REASONING_EFFORTS
     from kith.infra.workspace import worktrees
     from kith.services.agent_loop import stream_agent
     from kith.tools import host as tool_host
+    from kith.tools import submission
 
     shape = ROLES.get(kind) or ROLES["scout"]
     give_up = give_up or (lambda: stopping.asked_to_stop(conversation))
 
     config = default_config()
-    chosen = shape["model"]()
+    chosen = model_for(model or shape["model"])
+    overrides: dict = {}
     if chosen:
-        config = merge_overrides(config, {"model": chosen})
+        overrides["model"] = chosen
+    if effort and effort in REASONING_EFFORTS:
+        overrides["effort"] = effort
+    if overrides:
+        config = merge_overrides(config, overrides)
 
-    started = _scratchpad(config.system or "", shape["brief"](), objective) if carried is None else carried
+    budget = rounds if rounds is not None else shape["rounds"]()
+    if context is None:
+        context = project_brief(path, conversation)
+    started = (
+        _scratchpad(config.system or "", brief_for(kind, budget), objective, context)
+        if carried is None
+        else carried
+    )
     report = _Report()
     began = time.monotonic()
-    budget = rounds if rounds is not None else shape["rounds"]()
+
+    host = tool_host(path, mcp=[], plugin=[])
+    allow = set(tools if tools is not None else shape["given"]())
+    handed: dict = {}
+    if schema is not None:
+        host = submission.with_submit(host, schema, handed)
+        allow.add(submission.NAME)
 
     # Everything below happens with a builder pinned to its own copy. This single `with` is the
     # entire isolation mechanism: `paths.base_dir` reads it, every path in the application goes
     # through `paths.resolve` to get there, and `permissions` reads it to know the copy is a
-    # folder it may write in. For a scout `worktree` is "" and this is a no-op, which is the
-    # honest shape — an agent that cannot write needs nowhere private to write in.
-    # `mirror_of` is not optional: without it an absolute path into the real project is honoured
-    # as written, and a builder edits your files while its copy sits empty. See
-    # `paths._bent_into_the_copy`.
+    # folder it may write in. `confinement.in_copy` reads it too, which is what puts a builder's
+    # `run_tests` and `check_code` inside the copy's boundary. For a scout `worktree` is "" and
+    # this is a no-op. `mirror_of` is not optional: without it an absolute path into the real
+    # project is honoured as written, and a builder edits your files while its copy sits empty.
+    # See `paths._bent_into_the_copy`.
     with session_context.working_from(worktree, mirror_of=str(_source_of(worktree)) if worktree else ""):
         for event in stream_agent(
             started,
@@ -397,17 +556,14 @@ def run_agent(
             # loop allows whatever it offered — so an agent was being handed every plugin
             # command, and a builder asked for a mockup opened a real browser window with one.
             # Neither has been through the classification above.
-            tool_host(path, mcp=[], plugin=[]),
+            host,
             max_rounds=budget,
-            allow=tools if tools is not None else shape["given"](),
+            allow=allow,
             # The parent's conversation, which is not about recording anything — nothing here
             # reaches the transcript. It keeps this on the same upstream as the conversation that
             # sent it, so the persona it shares with that conversation is a cache read.
             conversation_id=conversation,
-            # Per role — see `ROLES`. A scout's output is its final message, so it has no landing;
-            # a builder's is its edits, so its last third is for making them.
             landing_reserve=shape["reserve"](budget),
-            landing_directive=shape["landing"],
         ):
             report.saw(event)
             if watch is not None:
@@ -415,20 +571,34 @@ def run_agent(
                     watch(event)
                 except Exception:
                     pass  # a progress line must never be the thing that takes an agent down
+            if "value" in handed:
+                # Handed back through `submit`: finished, not stopped.
+                break
             if give_up():
                 report.stopped()
                 break
 
         answer = report.done()
-        if kind == "builder":
-            # A builder did change things, so the scout's "this describes the code as found"
-            # would be false of its report — the one sentence that must never be.
+        if "value" in handed:
+            answer["submitted"] = handed["value"]
+            answer["findings"] = (
+                report.text.strip() or report.said_before.strip() or "(handed back through submit)"
+            )
+        if kind != "scout":
+            # A builder did change things, and a verifier is judging a change that was made, so
+            # the scout's "this describes the code as found" would be false of either's report.
             answer.pop("describes", None)
-            if worktree:
-                answer["patch"] = _patch(worktrees.diff_in(Path(worktree)), answer)
+        if kind == "builder" and worktree:
+            answer["patch"] = _patch(worktrees.diff_in(Path(worktree)), answer)
 
     _record_cost(path, kind, objective, report, began)
     return answer, report
+
+
+def brief_for(kind: str, rounds: int) -> str:
+    """The role's brief, with its round count filled in where the brief says how long it has."""
+    shape = ROLES.get(kind) or ROLES["scout"]
+    return shape["brief"]().replace("{rounds}", str(rounds))
 
 
 def _record_cost(path: Path, role: str, objective: str, report: _Report, began: float) -> None:
@@ -524,34 +694,38 @@ def _patch(diff: str, answer: dict) -> str:
     return ""
 
 
-def follow_on(kind: str, objective: str, said: str, ask: str) -> list[dict]:
-    """An agent's conversation so far — brief, objective, report — with one more question on the end.
+def follow_on(
+    kind: str, objective: str, said: str, ask: str, context: str = "", rounds: int = 1
+) -> list[dict]:
+    """An agent's conversation so far — brief, objective, report — with one more message on the end.
 
-    For the repair round a workflow runs when an agent asked for JSON ended without any: the
-    agent is handed back exactly what it was told and what it said, and asked only for the
-    object. Built here, not by the caller, so the brief and persona match the original run and
-    the repair reads the same cached prefix.
+    For the repair round a workflow runs when an agent asked for JSON ended without any, and for
+    `revise`, which sends a builder back into its copy with feedback. The agent is handed back
+    exactly what it was told and what it said. Built here, not by the caller, so the brief,
+    persona and project notes match the original run and the follow-on reads the same cached
+    prefix.
     """
     from kith.config import default_config
 
-    shape = ROLES.get(kind) or ROLES["scout"]
     return [
-        *_scratchpad(default_config().system or "", shape["brief"](), objective),
+        *_scratchpad(default_config().system or "", brief_for(kind, rounds), objective, context),
         {"role": "assistant", "content": said},
         {"role": "user", "content": ask},
     ]
 
 
-def _scratchpad(persona: str, brief: str, objective: str) -> list[dict]:
-    """The worker's entire conversation: who it is, and what it was sent for.
+def _scratchpad(persona: str, brief: str, objective: str, context: str = "") -> list[dict]:
+    """The worker's entire conversation: who it is, what project it is in, and what it was sent for.
 
     Two messages, and nothing carried over from the turn that called it. That is the contract
     in both directions — the caller's context does not leak in, which is what makes this
     cheap, and so the objective has to stand on its own, which is what the tool description
-    asks for and what a vague one fails at.
+    asks for and what a vague one fails at. The project brief sits in the system message after
+    the role's brief, where it is identical for every agent of a run.
     """
+    system = "\n\n".join(part for part in (persona, brief, context) if part)
     return [
-        {"role": "system", "content": f"{persona}\n\n{brief}" if persona else brief},
+        {"role": "system", "content": system},
         {"role": "user", "content": objective},
     ]
 

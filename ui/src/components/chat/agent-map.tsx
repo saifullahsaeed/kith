@@ -1,7 +1,7 @@
 import { Check, CircleSlash, Loader2, Network, Square, X } from "lucide-react";
 import { useState } from "react";
 
-import { useRuns, type Agent, type Run } from "@/components/chat/workflows";
+import { kindOf, useRuns, type Agent, type Run } from "@/components/chat/workflows";
 import {
   Dialog,
   DialogContent,
@@ -100,7 +100,7 @@ function AgentNode({
 }) {
   const state = stateOf(agent);
   const elapsed = (agent.endedAt || now) - agent.startedAt;
-  const builder = agent.role === "builder";
+  const kind = kindOf(agent.role);
   return (
     // The tick joining this node to its column's bracket, drawn by the `before:` pseudo-element.
     <li className="before:bg-border relative before:absolute before:top-1/2 before:-left-3 before:h-px before:w-3">
@@ -124,10 +124,10 @@ function AgentNode({
           </span>
         </span>
         <span className="text-muted-foreground flex items-center gap-1.5 pl-4 text-[10.5px] whitespace-nowrap tabular-nums">
-          {builder ? (
-            <span className="font-medium text-amber-600 dark:text-amber-400/90">builder</span>
+          {agent.role === "scout" ? (
+            <span>{kind.word}</span>
           ) : (
-            <span>scout</span>
+            <span className={`font-medium ${kind.text}`}>{kind.word}</span>
           )}
           <span>·</span>
           <span>{took(elapsed)}</span>
@@ -190,7 +190,7 @@ function Details({ agent, now }: { agent: Agent; now: number }) {
             {agent.objective}
           </div>
           <div className="text-muted-foreground text-[11px] tabular-nums">
-            {agent.role === "builder" ? "builder" : "scout"} · {state}
+            {kindOf(agent.role).word} · {state}
             {agent.phase ? ` · ${agent.phase}` : ""} · {took(elapsed)}
             {agent.calls ? ` · ${agent.calls} calls` : ""}
             {agent.cost ? ` · ${money(agent.cost)}` : ""}

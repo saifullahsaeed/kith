@@ -350,23 +350,36 @@ function Ring({ className }: { className?: string }) {
   );
 }
 
-/** What kind of agent it is, in words. A builder is editing a copy of your repository and a
- *  scout is not, and that difference must survive someone who cannot tell blue from amber. */
+/** The kinds of agent a workflow sends, in words, and the colour each is drawn in. A builder
+ *  edits a copy of your repository, a verifier checks a change against what you asked, a merge
+ *  puts builders' patches together, and a scout only reads — a difference that must survive
+ *  someone who cannot tell the colours apart, so the word is always there. */
+export const KINDS: Record<string, { word: string; text: string; chip: string }> = {
+  scout: { word: "scout", text: "text-blue-600 dark:text-blue-300", chip: "bg-blue-500/14 dark:bg-blue-400/14" },
+  builder: { word: "builder", text: "text-kith", chip: "bg-kith-soft" },
+  verifier: {
+    word: "verifier",
+    text: "text-emerald-700 dark:text-emerald-300",
+    chip: "bg-emerald-500/14 dark:bg-emerald-400/14",
+  },
+  merge: { word: "merge", text: "text-violet-700 dark:text-violet-300", chip: "bg-violet-500/14 dark:bg-violet-400/14" },
+};
+
+export function kindOf(role: string) {
+  return KINDS[role] ?? KINDS.scout;
+}
+
 function Kind({ role, chip = true, quiet = false }: { role: string; chip?: boolean; quiet?: boolean }) {
-  const builder = role === "builder";
+  const kind = kindOf(role);
   return (
     <span
       className={cn(
         "shrink-0 text-[10px] font-bold uppercase tracking-[0.06em]",
         chip && "rounded-[5px] px-1.5 py-0.5",
-        quiet
-          ? "text-muted-foreground/80"
-          : builder
-            ? cn("text-kith", chip && "bg-kith-soft")
-            : cn("text-blue-600 dark:text-blue-300", chip && "bg-blue-500/14 dark:bg-blue-400/14"),
+        quiet ? "text-muted-foreground/80" : cn(kind.text, chip && kind.chip),
       )}
     >
-      {builder ? "builder" : "scout"}
+      {kind.word}
     </span>
   );
 }

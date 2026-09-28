@@ -267,7 +267,20 @@ TUNABLES: tuple[Tunable, ...] = (
         "with. Blank means the same model as everything else. A scout greps, reads and "
         "reports — instruction-following rather than judgement — so a smaller model is "
         "usually the right trade, and six scouts in one round is six streams of whatever is "
-        "named here. A builder always uses the main model: it is writing code he will keep.",
+        'named here. A workflow asks for it per agent with model="fast".',
+        default="",
+        group="context",
+        kind="text",
+    ),
+    Tunable(
+        key="strong_model",
+        env="KITH_STRONG_MODEL",
+        label="Model a verifier uses",
+        help="Which model checks work against what was asked, when that should be a stronger "
+        "one than he thinks with. Blank means the same model as everything else. Checking a "
+        "change against a spec is the job a cheap model does worst — measured: one that builds "
+        "competently still certified three of five requested fields as complete — so verifiers "
+        'use this by default, and a workflow can ask for it on any agent with model="strong".',
         default="",
         group="context",
         kind="text",

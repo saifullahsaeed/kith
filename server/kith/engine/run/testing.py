@@ -35,9 +35,13 @@ back exactly as if it had been fast, because the parsing runs on the whole log e
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import shlex
+import signal
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -289,6 +293,11 @@ def run(path: str = ".", filter_: str = "", wait: float | None = None) -> dict[s
     command = _narrowed(runner, filter_, root)
     full_command = f"cd {shlex.quote(str(root))} && {command}"
 
+    # A workflow agent's copy: run it here, confined, and wait. See `_run_in_copy`.
+    boxed = _run_in_copy(runner, command, root)
+    if boxed is not None:
+        return boxed
+
     # Checked before starting, rather than started-and-caught, so a *different* reason
     # `start` might refuse (the whole registry is full, say) surfaces as itself instead of
     # being misread as this same collision — both errors happen to say "already running".
@@ -341,9 +350,14 @@ def run(path: str = ".", filter_: str = "", wait: float | None = None) -> dict[s
         }
 
     output = processes.full_output(_PROCESS_NAME)
-    passed = state.get("exitCode") == 0
     processes.stop(_PROCESS_NAME)  # done either way; free the name for the next run
 
+    return _verdict(runner, command, output, state.get("exitCode"))
+
+
+def _verdict(runner: Runner, command: str, output: str, exit_code: int | None) -> dict[str, Any]:
+    """What a finished run comes to: counts, the failing names, and the log when it failed."""
+    passed = exit_code == 0
     missing = _not_installed(runner, output)
     if missing:
         # Distinguished from a failing suite, because they call for opposite actions: one is
@@ -376,6 +390,61 @@ def run(path: str = ".", filter_: str = "", wait: float | None = None) -> dict[s
         # a suite that collected no tests also exits zero on some runners.
         result["log"] = output[-800:]
     return result
+
+
+#: How long a test run inside a workflow agent's copy may take before it is ended. The agent
+#: waits for it — there is no later turn for a worker to be told the answer in.
+IN_COPY_SECONDS = 600.0
+
+
+def _run_in_copy(runner: Runner, command: str, root: Path) -> dict[str, Any] | None:
+    """The suite run from inside a worker's copy: confined, synchronous, or None if not in one.
+
+    Not through the process table, and that is three separate reasons. A worker has no later
+    turn, so "still running, it will come back to you" would be a promise nobody keeps. The
+    table is keyed per conversation and every worker runs on its parent's, so six builders would
+    all be the same `run-tests` and five would be refused. And a finished entry there wakes the
+    parent conversation, which would hear about a builder's test run as though it had started
+    one itself.
+
+    Inside `confinement.copy_profile`: writes only in the copy, no network but localhost. That
+    boundary is the reason a builder may run tests at all — see `tools/workers.CHECKING`.
+    """
+    from kith.infra import confinement
+
+    try:
+        boxed = confinement.in_copy(["bash", "-c", command])
+    except confinement.ConfinementError as exc:
+        raise TestingError(str(exc)) from None
+    if boxed is None:
+        return None
+    argv, env = boxed
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=str(root),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise TestingError(f"Could not start the tests in this copy: {exc}") from None
+    try:
+        raw, _ = process.communicate(timeout=IN_COPY_SECONDS)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
+        raw, _ = process.communicate()
+        return {
+            "ran": command,
+            "runner": runner.name,
+            "ok": False,
+            "note": f"Ended after {int(IN_COPY_SECONDS // 60)} minutes. Run one file with `filter` instead.",
+            "log": (raw or b"").decode(errors="replace")[-MAX_LOG:],
+        }
+    return _verdict(runner, command, (raw or b"").decode(errors="replace"), process.returncode)
 
 
 def _next_wait(elapsed: float | None) -> float:

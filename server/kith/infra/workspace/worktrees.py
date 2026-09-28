@@ -30,9 +30,12 @@ That is not hypothetical. On the first real use of this, the agent wrote `CONVEN
 hunting for a file that was not there and produced no patch at all. It diagnosed the cause
 itself from `.gitignore`.
 
-So :func:`_carry_notes` copies it in. Everything *else* untracked stays out, and deliberately:
-``--include-untracked`` writes an object for every untracked file in the tree, which in a
-repository with a stale ignore file means whatever large thing is sitting in it.
+So :func:`_carry_notes` copies it in, and :func:`_carry_untracked` copies the untracked source
+files git would list — the ones written this session and not committed yet, which are exactly
+the ones a builder is told to extend. Copied by hand rather than with ``--include-untracked``,
+which writes an object for every untracked file in the tree, including whatever large thing a
+stale ignore file lets through. The dependency folders the project's checks need are cloned in
+last (:func:`_carry_dependencies`).
 
 **Detached, always.** A worktree on a branch takes that branch — git refuses to check the
 same branch out twice, so a worker opened on `master` would make the real checkout fail. A
@@ -134,7 +137,11 @@ def open_for(worker_id: str) -> Path | None:
         made = _git("worktree", "add", "--detach", str(where), start, cwd=source, timeout=_TIMEOUT)
         if made.exit_code == 0:
             _carry_notes(source, where)
+            _carry_untracked(source, where)
             _baseline(where)
+            # After the baseline, and it would not matter if it were before: these are ignored
+            # in the source, so `add -A` never stages them and they can never reach a diff.
+            _carry_dependencies(source, where)
 
     if made.exit_code != 0:
         # Left as a failure rather than a silent fall back to the real tree. "He could not be
@@ -222,6 +229,107 @@ def _not_a_note(directory: str, names: list[str]) -> set[str]:
     return skipped
 
 
+def _carry_untracked(source: Path, copy: Path) -> None:
+    """Copy in the source files git is not tracking yet, because `stash create` will not.
+
+    The files a main agent wrote an hour ago and has not committed are the ones a builder is
+    most often told to extend, and a copy seeded from `stash create` alone does not have them —
+    the builder is sent to edit a file that is not there. Only what git would *show* as
+    untracked (`--exclude-standard`), so nothing the project ignores is carried, and nothing
+    under `.kith`, which :func:`_carry_notes` has already handled with its own rules.
+
+    Carried before the baseline, so they are part of what the worker was handed and never come
+    back in its diff unless it changes them. Never raises, for the reason `_carry_notes` gives.
+    """
+    try:
+        listed = _git("ls-files", "--others", "--exclude-standard", "-z", cwd=source, timeout=_TIMEOUT)
+        if listed.exit_code != 0:
+            return
+        for name in listed.output.split("\0"):
+            name = name.strip()
+            if not name or name == ".kith" or name.startswith(".kith/"):
+                continue
+            origin = source / name
+            try:
+                if not origin.is_file() or origin.is_symlink() or origin.stat().st_size > _LARGEST_UNTRACKED:
+                    continue
+                target = copy / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(origin, target)
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+
+#: The largest untracked file carried into a copy. A source file somebody is writing is well
+#: under this; past it, it is generated output that happens not to be ignored.
+_LARGEST_UNTRACKED = 2_000_000
+
+#: The folders a project's own checks and tests run on, carried into every copy.
+#:
+#: A copy is a bare `git worktree`, so it has none of them: `tsc` in a copy resolves no import,
+#: `pytest` finds no package, and `npx` goes looking for the network. A builder given
+#: `check_code` was being given a checker that could not check.
+DEPENDENCY_DIRS = ("node_modules", ".venv", "venv")
+
+
+def _carry_dependencies(source: Path, copy: Path) -> None:
+    """Clone the source's dependency folders into the copy, copy-on-write.
+
+    Cloned with APFS `clonefile`, which copies a whole tree in one call without copying its
+    data — measured on this repository, 483 MB of `node_modules` in 0.46 s and no disk until a
+    file is changed. A clone rather than a symlink because a symlink named `node_modules` is not
+    matched by the `node_modules/` ignore line, so it would arrive in the worker's diff as a new
+    file; and because a builder's test run may write into its own dependencies without touching
+    yours.
+
+    Only folders git itself calls ignored, found by asking git rather than by walking the tree,
+    so a project that tracks a `venv/` of its own is not duplicated and nothing under `.kith` is
+    ever matched. Where cloning is not possible — another filesystem, another OS — the copy
+    simply goes without, which is what it had before. Never raises.
+    """
+    try:
+        listed = _git(
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            cwd=source,
+            timeout=_TIMEOUT,
+        )
+        if listed.exit_code != 0:
+            return
+        for name in listed.output.split("\0"):
+            name = name.strip().rstrip("/")
+            if not name or name.startswith(".kith") or Path(name).name not in DEPENDENCY_DIRS:
+                continue
+            origin = source / name
+            target = copy / name
+            if not origin.is_dir() or target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            clone(origin, target)
+    except Exception:
+        pass
+
+
+def clone(origin: Path, target: Path) -> bool:
+    """Copy-on-write clone of a file or a whole tree. False where the filesystem cannot."""
+    import ctypes
+    import sys
+
+    if sys.platform != "darwin":
+        return False
+    try:
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        return libc.clonefile(str(origin).encode(), str(target).encode(), ctypes.c_int(0)) == 0
+    except Exception:
+        return False
+
+
 def _stage_everything(worktree: Path) -> None:
     """Stage the copy as it stands, `.kith` included even where the project ignores it.
 
@@ -299,6 +407,32 @@ def apply_in(worktree: Path, patches: list[str]) -> str:
     return ""
 
 
+def merge_in(worktree: Path, patches: list[str]) -> list[str]:
+    """Apply several patches into one copy, each on its own. One entry per patch: "" or why not.
+
+    Unlike :func:`apply_in` this does not stop at the first refusal and does not re-baseline:
+    it is how a workflow puts its builders' work together, so the answer it owes is *which*
+    patches fit, and the diff taken afterwards is the whole of what did. A patch that does not
+    apply is left out entirely — `git apply` is atomic per patch — rather than half applied.
+    """
+    outcome: list[str] = []
+    for number, patch in enumerate(patches, start=1):
+        if not patch.strip():
+            outcome.append("")
+            continue
+        holder = worktree.parent / f".{worktree.name}.merging-{number}.patch"
+        try:
+            holder.write_text(patch if patch.endswith("\n") else patch + "\n", encoding="utf-8")
+            done = _git("apply", "--whitespace=nowarn", str(holder), cwd=worktree, timeout=_TIMEOUT)
+        except OSError as exc:
+            outcome.append(f"could not be written out to apply: {exc}")
+            continue
+        finally:
+            holder.unlink(missing_ok=True)
+        outcome.append("" if done.exit_code == 0 else (done.output.strip()[:300] or "git apply refused it"))
+    return outcome
+
+
 def diff_in(worktree: Path) -> str:
     """Everything the worker changed in its copy, as one patch that will apply to the real tree.
 
@@ -341,19 +475,50 @@ def close(worktree: Path) -> None:
 
     Never raises. This runs in the teardown of a worker that has already produced its report,
     and a failure to tidy up must not turn a finished piece of work into an error.
+
+    **Refuses anything that is not one of the copies.** It ends in `rmtree`, and on 2026-09-28 a
+    caller handed it ``Path("")`` — a builder whose copy had been stubbed to "" — which is the
+    current directory: it deleted the whole server folder, source, virtualenv and data, from
+    under a test run. So the path must be absolute and must sit directly inside the copies'
+    own folder (:func:`_home`), or nothing happens at all.
     """
+    if not _is_a_copy(worktree):
+        return
     source = _repo_root(base_dir())
     try:
         if source is not None:
             _git("worktree", "remove", "--force", str(worktree), cwd=source, timeout=_TIMEOUT)
         if worktree.exists():
             shutil.rmtree(worktree, ignore_errors=True)
+        # What its commands were given to write in, and the boundary they ran under. Both named
+        # from the copy, which has just been proven to be one.
+        from kith import settings
+        from kith.infra import confinement
+
+        shutil.rmtree(confinement.scratch_for(worktree), ignore_errors=True)
+        (Path(settings.DATA_DIR) / confinement.PROFILES / f"copy-{worktree.name}.sb").unlink(missing_ok=True)
         if source is not None:
             # Without this git keeps `.git/worktrees/<name>` and still believes the checkout
             # exists, so re-using the same worker id later fails with "already registered".
             _git("worktree", "prune", cwd=source, timeout=_TIMEOUT)
     except Exception:
         pass
+
+
+def _is_a_copy(worktree: Path) -> bool:
+    """Whether ``worktree`` is a path this module made: absolute, and directly inside :func:`_home`.
+
+    Checked on the path as given and as resolved, so neither ``Path("")``, a relative path, nor a
+    symlink pointing out of the copies' folder can reach `rmtree`.
+    """
+    try:
+        text = str(worktree)
+        if not text or not worktree.is_absolute():
+            return False
+        home = _home().resolve()
+        return worktree.resolve().parent == home and worktree.parent.resolve() == home
+    except (OSError, ValueError):
+        return False
 
 
 def prune(keep_seconds: int = KEEP_SECONDS) -> list[str]:

@@ -29,23 +29,25 @@ class TestEveryToolIsClassified:
     def test_nothing_is_left_unclassified(self):
         """Add a tool, and this asks you which side of the wall it is on."""
         registry = set(tools.names())
-        missing = sorted(registry - workers.GIVEN - workers.WRITING - workers.WITHHELD)
+        missing = sorted(registry - workers.GIVEN - workers.WRITING - workers.CHECKING - workers.WITHHELD)
         assert not missing, (
-            f"{missing} are registered but classified nowhere. Add each to GIVEN, WRITING or "
-            "WITHHELD in tools/workers.py — a tool that edits a file in the worktree belongs "
-            "in WRITING, and anything with an effect outside the worktree belongs in WITHHELD."
+            f"{missing} are registered but classified nowhere. Add each to GIVEN, WRITING, CHECKING "
+            "or WITHHELD in tools/workers.py — a tool that edits a file in the worktree belongs "
+            "in WRITING, one that runs the project's own checks inside the copy's boundary in "
+            "CHECKING, and anything with an effect outside the worktree belongs in WITHHELD."
         )
 
     def test_nothing_classified_has_since_disappeared(self):
         """The other direction: a renamed or deleted tool leaves a name here that means nothing."""
         registry = set(tools.names())
-        stale = sorted((workers.GIVEN | workers.WRITING | workers.WITHHELD) - registry)
+        stale = sorted((workers.GIVEN | workers.WRITING | workers.CHECKING | workers.WITHHELD) - registry)
         assert not stale, f"{stale} are classified in tools/workers.py but no longer registered"
 
-    def test_the_three_lists_do_not_overlap(self):
-        assert not (workers.GIVEN & workers.WITHHELD)
-        assert not (workers.GIVEN & workers.WRITING)
-        assert not (workers.WRITING & workers.WITHHELD)
+    def test_the_lists_do_not_overlap(self):
+        named = (workers.GIVEN, workers.WRITING, workers.CHECKING, workers.WITHHELD)
+        for i, one in enumerate(named):
+            for other in named[i + 1 :]:
+                assert not (one & other)
 
 
 class TestTheWallHolds:
@@ -119,9 +121,20 @@ class TestABuilderIsAScoutPlusFourTools:
         builder = workers.ROLES["builder"]["given"]()
         assert builder >= workers.GIVEN
 
-    def test_the_only_difference_is_writing(self):
+    def test_the_only_difference_is_writing_and_checking(self):
         builder = workers.ROLES["builder"]["given"]()
-        assert builder - workers.GIVEN == set(workers.WRITING)
+        assert builder - workers.GIVEN == set(workers.WRITING) | set(workers.CHECKING)
+
+    def test_a_verifier_checks_but_cannot_write(self):
+        verifier = workers.ROLES["verifier"]["given"]()
+        assert verifier - workers.GIVEN == set(workers.CHECKING)
+        assert not (verifier & workers.WRITING)
+
+    def test_only_roles_that_work_in_a_copy_may_run_the_tests(self):
+        """`run_tests` from a role with no copy would run in the real tree, unconfined."""
+        for role, shape in workers.ROLES.items():
+            if workers.CHECKING & shape["given"]():
+                assert shape["copy"], f"a {role} may run tests but is not given a copy to run them in"
 
     def test_a_scout_still_cannot_write(self):
         scout = workers.ROLES["scout"]["given"]()
@@ -137,5 +150,5 @@ class TestABuilderIsAScoutPlusFourTools:
         """
         for role in workers.ROLES:
             given = workers.ROLES[role]["given"]()
-            for name in ("commit", "publish", "shell", "start_process", "run_tests", "ask", "remember"):
+            for name in ("commit", "publish", "shell", "start_process", "ask", "remember"):
                 assert name not in given, f"a {role} must not be able to {name}"

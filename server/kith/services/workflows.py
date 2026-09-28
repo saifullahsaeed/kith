@@ -71,6 +71,8 @@ class Run:
     #: Started in a turn nobody opened — the one a finished run or process wakes. See
     #: :func:`unwatched_in_a_row`.
     unwatched: bool = False
+    #: The most this run may spend, in dollars. A hard ceiling — see `tools/workflow`.
+    budget: float = 0.0
 
     def public(self) -> dict:
         return {
@@ -87,6 +89,7 @@ class Run:
             "said": self.said,
             "cost": self.cost,
             "resumed_from": self.resumed_from,
+            "budget": self.budget,
             "agents": sorted(
                 (dict(one) for one in self.agents.values()), key=lambda one: one.get("started", 0)
             ),
@@ -251,6 +254,20 @@ def finished_since_last_look() -> dict[str, list[str]]:
             if run.conversation and run.note:
                 by_chat.setdefault(run.conversation, []).append(run.note)
     return by_chat
+
+
+def claim(run: Run) -> str:
+    """Take a finished run's note for the turn that waited on it, so it does not also wake the chat.
+
+    The other way a note is heard: `run_workflow(wait=true)` holds its turn until the run ends
+    and hands the note back as the tool's result. Marked reported here, under the same lock
+    :func:`finished_since_last_look` reads it under, so exactly one of the two gets it.
+    """
+    with _LOCK:
+        if run.state == RUNNING or run.reported:
+            return ""
+        run.reported = True
+        return run.note
 
 
 def forget_all() -> None:

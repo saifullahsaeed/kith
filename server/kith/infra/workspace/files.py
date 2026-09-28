@@ -772,14 +772,27 @@ def check_code(path: str = ".") -> dict:
         probe = probe.parent
     target = found or target
 
+    from kith.infra import confinement
+
     for marker, command, label in _CHECKERS:
         if not (target / marker).is_file():
             continue
+        argv: list[str] = ["bash", "-lc", command]
+        env: dict[str, str] | None = None
+        # A worker's copy runs its check inside the copy's boundary: a project's build is
+        # arbitrary code, and a builder's is code a model just wrote.
+        try:
+            boxed = confinement.in_copy(argv)
+        except confinement.ConfinementError as exc:
+            return {"ran": "", "checker": label, "problems": str(exc)}
+        if boxed is not None:
+            argv, env = boxed
         proc = subprocess.run(
-            ["bash", "-lc", command],
+            argv,
             capture_output=True,
             cwd=str(target),
             timeout=_EXEC_TIMEOUT,
+            env=env,
         )
         out = (proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")).strip()
         return {

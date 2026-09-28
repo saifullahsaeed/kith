@@ -77,6 +77,13 @@ def agents(monkeypatch):
                 "looked_at": "edit_files",
                 "patch": "--- a/x\n+++ b/x\n@@\n-a\n+b\n",
             }, _Report()
+        if kw.get("schema") is not None:
+            # What run_agent hands back when the agent answered through `submit`.
+            return {
+                "findings": "found",
+                "looked_at": "grep",
+                "submitted": {"files": ["a.py", "b.py"]},
+            }, _Report()
         if "JSON value" in objective:
             return {
                 "findings": 'found\n```json\n{"files": ["a.py", "b.py"]}\n```',
@@ -89,9 +96,9 @@ def agents(monkeypatch):
     return seen
 
 
-def _start(db: Path, script: str, conversation: str = "conv-1") -> dict:
+def _start(db: Path, script: str, conversation: str = "conv-1", **more) -> dict:
     with session_context.working_in(conversation), session_context.may_run_workflows(True):
-        return workflow.run_workflow(db, {"script": script})
+        return workflow.run_workflow(db, {"script": script, **more})
 
 
 def _wait(run_id: str, seconds: float = 30) -> workflows.Run:
@@ -165,7 +172,12 @@ class TestTheScriptIsCheckedBeforeAnythingRuns:
             'META = {"name": "port", "description": "d", "phases": ["A", "B"]}'
         )
         assert problem == ""
-        assert meta == {"name": "port", "description": "d", "phases": ["A", "B"]}
+        assert {k: meta[k] for k in ("name", "description", "phases")} == {
+            "name": "port",
+            "description": "d",
+            "phases": ["A", "B"],
+        }
+        assert meta["budget_usd"] == workflow.DEFAULT_BUDGET_USD
 
 
 @needs_confinement
@@ -215,12 +227,21 @@ finish({"found": found, "reports": reports, "piped": piped})
 
     def test_an_unknown_kind_is_refused(self, db: Path, project: Path, agents):
         script = 'META = {"name": "k"}\ntry:\n    agent("x", kind="wizard")\nexcept AgentFailed as e:\n    finish(str(e))'
-        run = _wait(_start(db, script)["run"])
+        # Named by the rehearsal, before the run exists...
+        refused = _start(db, script)
+        assert "no 'wizard' kind" in refused["error"] and "script.py line 3" in refused["error"]
+        assert not workflows.listing()
+        # ...and still refused at run time for a script that skipped it.
+        run = _wait(_start(db, script, rehearse=False)["run"])
         assert "no 'wizard' kind" in _result(run)
         assert not agents, "no model is paid for a request that could never run"
 
     def test_a_script_that_crashes_still_reports_why(self, db: Path, project: Path, agents):
-        run = _wait(_start(db, 'META = {"name": "c"}\nraise ValueError("the script fell over")')["run"])
+        run = _wait(
+            _start(db, 'META = {"name": "c"}\nraise ValueError("the script fell over")', rehearse=False)[
+                "run"
+            ]
+        )
         assert run.state == workflows.FAILED
         assert "the script fell over" in run.note
 
@@ -765,13 +786,285 @@ finish([first, second])
     def test_resuming_is_bounded(self, db: Path, project: Path, agents, monkeypatch):
         monkeypatch.setattr(workflow, "MAX_RESUMES", 1)
         script = 'META = {"name": "loop"}\nraise RuntimeError("still broken")'
-        first = _wait(_start(db, script)["run"])
+        first = _wait(_start(db, script, rehearse=False)["run"])
         with session_context.working_in("conv-1"):
-            second = _wait(workflow.run_workflow(db, {"resume": first.id})["run"])
-            refused = workflow.run_workflow(db, {"resume": second.id})
+            second = _wait(workflow.run_workflow(db, {"resume": first.id, "rehearse": False})["run"])
+            refused = workflow.run_workflow(db, {"resume": second.id, "rehearse": False})
         assert "resumed 1 times" in refused["error"]
 
     def test_only_this_chats_runs_can_be_resumed(self, db: Path, project: Path, agents):
         run = _wait(_start(db, 'META = {"name": "mine"}\nfinish(1)')["run"])
         with session_context.working_in("someone-else"):
             assert "no run" in workflow.run_workflow(db, {"resume": run.id})["error"].lower()
+
+
+# --------------------------------------------------------------------------------------------- #
+# Saved workflows, rehearsal, merge, revise, budget, wait — added 2026-09-28.
+# --------------------------------------------------------------------------------------------- #
+
+
+def _git_project(project: Path) -> Path:
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=project, check=True)
+    (project / ".gitignore").write_text(".kith/\n")
+    (project / "base.py").write_text("base\n")
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-qm", "first"], cwd=project, check=True)
+    return project
+
+
+@pytest.fixture
+def builders(project: Path, monkeypatch):
+    """Real copies of a real repository, and builders that write the file their prompt names.
+
+    A prompt "write NAME" writes NAME in the builder's own copy; a revision appends to it. What
+    comes back is the copy's real diff, so merge and revise are exercised against git.
+    """
+    from kith.infra.workspace import worktrees
+
+    _git_project(project)
+    # `worktrees` bound `base_dir` at import, so the project fixture's patch does not reach it;
+    # `root` is read fresh on every call.
+    monkeypatch.setattr(paths, "root", lambda: project)
+    seen: list[dict] = []
+
+    def fake(path, kind, objective, conversation, **kw):
+        seen.append({"kind": kind, "objective": objective, **kw})
+        copy = Path(kw.get("worktree") or "")
+        if kind == "builder" and kw.get("worktree"):
+            carried = kw.get("carried")
+            asked = str(carried[-1]["content"]) if carried else objective
+            name = asked.split("write ", 1)[1].split()[0] if "write " in asked else "revised.py"
+            target = copy / name
+            target.write_text((target.read_text() if target.exists() else "") + f"{name} line\n")
+            if kw.get("watch"):
+                kw["watch"]({"type": "stats", "stats": {"costUsd": 0.01}})
+            return {"findings": f"wrote {name}", "patch": worktrees.diff_in(copy)}, _Report()
+        return {"findings": f"report: {objective.splitlines()[0]}"}, _Report()
+
+    monkeypatch.setattr(workers, "run_agent", fake)
+    return seen
+
+
+@needs_confinement
+class TestTheCopyStubbedToNothingDeletesNothing:
+    def test_a_builder_with_an_empty_copy_leaves_the_working_directory_alone(
+        self, db: Path, project: Path, agents, tmp_path: Path, monkeypatch
+    ):
+        """The regression: an empty copy path reached `rmtree` and took the whole folder."""
+        here = tmp_path / "cwd"
+        here.mkdir()
+        (here / "precious.txt").write_text("keep me")
+        monkeypatch.chdir(here)
+        run = _wait(_start(db, 'META = {"name": "b"}\nfinish(agent("change x", kind="builder"))')["run"])
+        assert run.state == workflows.FINISHED, run.note
+        assert (here / "precious.txt").read_text() == "keep me"
+
+
+@needs_confinement
+class TestARehearsalGoesFirst:
+    def test_a_crash_comes_back_in_the_turn_and_nothing_starts(self, db: Path, project: Path, agents):
+        answer = _start(db, 'META = {"name": "c"}\nwith parallel([lambda: agent("a")]) as reports:\n    pass')
+        assert "crashed in a rehearsal" in answer["error"]
+        assert not workflows.listing() and not agents
+
+    def test_an_agent_sent_another_agents_report_is_named(self, db: Path, project: Path, agents):
+        script = (
+            'META = {"name": "twice"}\n'
+            'def survey():\n    return agent("look at the code")\n'
+            'finish(agent(survey(), label="recheck"))'
+        )
+        answer = _start(db, script)
+        assert "another agent's report" in answer["error"] and "script.py line 4" in answer["error"]
+        assert not agents
+
+    def test_a_verifier_without_the_change_is_warned_about(self, db: Path, project: Path, agents):
+        script = (
+            'META = {"name": "w"}\n'
+            'built = agent("change x", kind="builder")\n'
+            'finish(agent("check it", kind="verifier"))'
+        )
+        answer = _start(db, script)
+        assert any("unchanged tree" in one for one in answer["rehearsal_warnings"])
+        _wait(answer["run"])
+
+    def test_a_model_that_is_not_an_alias_is_refused(self, db: Path, project: Path, agents):
+        answer = _start(db, 'META = {"name": "m"}\nfinish(agent("x", model="gpt-9"))')
+        assert "model must be one of" in answer["error"]
+
+    def test_every_shipped_workflow_rehearses_clean(self, db: Path, project: Path):
+        inputs = {
+            "args": {
+                "goal": "add a thing",
+                "areas": ["a", "b"],
+                "change": "rename x",
+                "question": "where is y",
+            },
+            "asked": "please add the thing",
+            "budget": 5,
+        }
+        for script in sorted(workflow.shipped_library().glob("*.py")):
+            refused, warnings = workflow.rehearse(script.read_text(), inputs)
+            assert refused == "", f"{script.name}: {refused}"
+            assert not any("unchanged tree" in one for one in warnings), f"{script.name}: {warnings}"
+
+
+@needs_confinement
+class TestSavedWorkflows:
+    def test_the_shipped_ones_are_in_the_description(self):
+        from kith.tools import registry
+
+        described = registry.get("run_workflow").description
+        for name in ("build-feature", "review-changes", "audit", "migrate-sites"):
+            assert f"- {name}:" in described
+
+    def test_one_runs_by_name_with_its_args_and_their_words(
+        self, db: Path, project: Path, agents, monkeypatch
+    ):
+        mine = project / ".kith" / "workflows"
+        mine.mkdir(parents=True)
+        (mine / "echo.py").write_text('META = {"name": "echo"}\nfinish({"args": ARGS, "asked": ASKED})')
+        monkeypatch.setattr(workflow, "_their_words", lambda conversation: "make it blue")
+        with session_context.working_in("conv-1"), session_context.may_run_workflows(True):
+            answer = workflow.run_workflow(db, {"name": "echo", "args": {"colour": "blue"}})
+        run = _wait(answer["run"])
+        assert _result(run) == {"args": {"colour": "blue"}, "asked": "make it blue"}
+
+    def test_an_unknown_name_is_refused(self, db: Path, project: Path, agents):
+        with session_context.working_in("conv-1"), session_context.may_run_workflows(True):
+            answer = workflow.run_workflow(db, {"name": "no-such-thing"})
+        assert "no saved workflow" in answer["error"] and "build-feature" in answer["error"]
+
+    def test_one_workflow_can_run_another_as_a_step(self, db: Path, project: Path, agents):
+        mine = project / ".kith" / "workflows"
+        mine.mkdir(parents=True)
+        (mine / "child.py").write_text('META = {"name": "child"}\nfinish(agent(f"look at {ARGS}"))')
+        run = _wait(_start(db, 'META = {"name": "parent"}\nfinish(workflow("child", "the api"))')["run"])
+        assert _result(run) == "report: look at the api"
+
+
+@needs_confinement
+class TestAVerifierIsHandedTheirWords:
+    def test_whatever_the_script_wrote(self, db: Path, project: Path, agents, monkeypatch):
+        monkeypatch.setattr(workflow, "_their_words", lambda conversation: "every screen, not just the API")
+        _wait(_start(db, 'META = {"name": "v"}\nfinish(agent("check the change", kind="verifier"))')["run"])
+        told = next(one for one in agents if one["kind"] == "verifier")["objective"]
+        assert "every screen, not just the API" in told
+        assert told.index("check the change") < told.index("every screen")
+
+
+@needs_confinement
+class TestPuttingItTogether:
+    def test_merge_applies_the_builders_patches_in_one_copy(self, db: Path, project: Path, builders):
+        script = (
+            'META = {"name": "m"}\n'
+            'a = agent("write one.py", kind="builder", label="one")\n'
+            'b = agent("write two.py", kind="builder", label="two")\n'
+            "merged = merge(a, b)\n"
+            'finish({"applied": merged["applied"], "clean": merged["clean"], "diff": merged["diff"]})'
+        )
+        run = _wait(_start(db, script)["run"])
+        assert run.state == workflows.FINISHED, run.note
+        result = _result(run)
+        assert result["applied"] == ["one", "two"] and result["clean"] is True
+        assert "one.py" in result["diff"] and "two.py" in result["diff"]
+        assert 'merge "merged"' in run.note and "apply that one" in run.note
+        assert (project / "base.py").read_text() == "base\n" and not (project / "one.py").exists()
+
+    def test_a_patch_that_does_not_fit_is_named_not_forced(self, db: Path, project: Path, builders):
+        script = (
+            'META = {"name": "m"}\n'
+            'a = agent("write same.py", kind="builder", label="first")\n'
+            'b = agent("write same.py", kind="builder", label="second")\n'
+            "merged = merge(a, b)\n"
+            'finish({"applied": merged["applied"], "conflicts": [c["label"] for c in merged["conflicts"]]})'
+        )
+        result = _result(_wait(_start(db, script)["run"]))
+        assert result == {"applied": ["first"], "conflicts": ["second"]}
+
+    def test_revise_carries_on_in_the_same_copy(self, db: Path, project: Path, builders):
+        script = (
+            'META = {"name": "r"}\n'
+            'built = agent("write first.py", kind="builder")\n'
+            'again = revise(built, "now write second.py as well")\n'
+            'finish(again["diff"])'
+        )
+        run = _wait(_start(db, script)["run"])
+        diff = _result(run)
+        assert "first.py" in diff and "second.py" in diff, "the revision kept the first edit"
+        revision = [one for one in builders if one.get("carried")]
+        assert revision and revision[0]["worktree"] == builders[0]["worktree"]
+
+    def test_every_copy_is_gone_when_the_run_ends(self, db: Path, project: Path, builders):
+        from kith.infra.workspace import worktrees
+
+        _wait(
+            _start(db, 'META = {"name": "g"}\nfinish(merge(agent("write x.py", kind="builder"))["agent"])')[
+                "run"
+            ]
+        )
+        left = (
+            [p for p in worktrees._home().iterdir() if not p.name.startswith(".")]
+            if worktrees._home().is_dir()
+            else []
+        )
+        assert left == []
+
+
+@needs_confinement
+class TestTheBudgetIsACeiling:
+    def test_agents_past_it_are_refused(self, db: Path, project: Path, monkeypatch):
+        sent: list[str] = []
+
+        def pricey(path, kind, objective, conversation, **kw):
+            sent.append(objective)
+            if kw.get("watch"):
+                kw["watch"]({"type": "stats", "stats": {"costUsd": 1.0}})
+            return {"findings": "ok"}, _Report(cost=1.0)
+
+        monkeypatch.setattr(workers, "run_agent", pricey)
+        script = (
+            'META = {"name": "b", "budget_usd": 1.5}\n'
+            "out = []\n"
+            "for i in range(4):\n"
+            "    try:\n"
+            '        out.append(agent(f"look {i}"))\n'
+            "    except AgentFailed as e:\n"
+            "        out.append(str(e))\n"
+            "finish(out)"
+        )
+        run = _wait(_start(db, script)["run"])
+        result = _result(run)
+        assert len(sent) == 2
+        assert "budget" in result[2] and "budget" in result[3]
+        assert "reached its $1.50 budget" in run.note
+
+    def test_the_script_can_see_what_is_left(self, db: Path, project: Path, agents):
+        run = _wait(_start(db, 'META = {"name": "b", "budget_usd": 2}\nfinish(budget.remaining())')["run"])
+        assert 1.9 < _result(run) <= 2.0
+
+    def test_a_budget_out_of_range_is_refused(self):
+        assert "budget_usd" in workflow.read_meta('META = {"name": "x", "budget_usd": 500}')[1]
+
+
+@needs_confinement
+class TestWaitingForAShortRun:
+    def test_the_result_comes_back_in_the_turn_and_does_not_wake_it_again(
+        self, db: Path, project: Path, agents
+    ):
+        answer = _start(db, 'META = {"name": "quick"}\nfinish(agent("look"))', wait=True)
+        assert answer["finished"] is True
+        assert "`quick`" in answer["result"] and "report: look" in answer["result"]
+        assert "conv-1" not in workflows.finished_since_last_look()
+
+
+@needs_confinement
+class TestPipelineStages:
+    def test_a_stage_may_take_the_item_and_its_index(self, db: Path, project: Path, agents):
+        run = _wait(
+            _start(db, 'META = {"name": "p"}\nfinish(pipeline([10, 20], lambda v, item, i: v + i))')["run"]
+        )
+        assert _result(run) == [10, 21]
