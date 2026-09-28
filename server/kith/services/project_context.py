@@ -99,15 +99,50 @@ def block(agent_db: Path, project: dict | None) -> str:
     it has no project would be paid for on every turn of every such conversation to say nothing.
     `memory_context` keeps its full listing in exactly that case, which is the right context for
     a chat that has not chosen yet.
+
+    Every section at full length. The prompt does not use this — it takes `sections` and lets
+    each one compete for the present-state budget on its own — but a caller that wants to show
+    the region whole, like the context screen, wants exactly this.
+    """
+    return "\n\n".join(text for _, text in sections(agent_db, project)).strip()
+
+
+def sections(agent_db: Path, project: dict | None) -> list[tuple[str, str]]:
+    """The project region as ``(key, text)`` pairs, in reading order, empty ones left out.
+
+    **Sections, not one block, and that is the whole of a fix.** The region used to reach the
+    prompt as a single block that could not be trimmed, bidding for a 4,800-character budget
+    that holds everything about the present. `memory.md` is deliberately uncapped, so the moment
+    a project had learned anything the block outgrew the budget and was dropped *entire*.
+    Measured on 2026-09-27: six of nine active projects — Vigil at 117,700 characters, Sadeef
+    One at 76,335 — lost their board, their git standing and their memory together, and the only
+    three that kept theirs were the ones whose `memory.md` was still the empty scaffold. The
+    feature worked until it had something to say.
+
+    Split, the cheap and decisive parts — which project, where its folder stands, what is in
+    flight — can no longer be evicted by the one part that grows without bound. `memory.md` bids
+    last and takes what is left; its heading says how long the file really is, so a section that
+    stops early reads as the start of a file rather than the whole of one.
     """
     if not project or not project.get("id"):
-        return ""
+        return []
     project_id = int(project["id"])
     name = str(project.get("name") or f"project #{project_id}")
     directory = str(project.get("directory") or "").strip()
 
-    parts = [_head(project_id, name, project, directory)]
-    parts.append(_tasks(agent_db, project_id, directory))
+    found = [
+        (
+            "project",
+            "\n\n".join(
+                p
+                for p in (
+                    _head(project_id, name, project, directory),
+                    _tasks(agent_db, project_id, directory),
+                )
+                if p
+            ),
+        )
+    ]
     if directory:
         # `project_memory.block` is the only one of these three that speaks when the folder is
         # missing, and it should be: it names the path and the fix. The other two stay quiet in
@@ -117,10 +152,10 @@ def block(agent_db: Path, project: dict | None) -> str:
         # project this is, and "## What you already know about this project for Sadeef Capital
         # Portal Security Testing — Capital Call" is that same fact again at four times the
         # length.
-        parts.append(project_memory.block(directory))
-        parts.append(project_memory.references_block(directory))
-        parts.append(_from_the_folder(agent_db, project_id, directory))
-    return "\n\n".join(part for part in parts if part).strip()
+        found.append(("project_memory", project_memory.block(directory)))
+        found.append(("project_references", project_memory.references_block(directory)))
+        found.append(("project_folder", _from_the_folder(agent_db, project_id, directory)))
+    return [(key, text.strip()) for key, text in found if text and text.strip()]
 
 
 def _head(project_id: int, name: str, project: dict, directory: str) -> str:
@@ -274,9 +309,15 @@ def named(agent_db: Path) -> str:
         return ""
     shown = ", ".join(f"#{row['id']} {row['name']}" for row in rows[:6])
     rest = f", +{len(rows) - 6} more" if len(rows) > 6 else ""
+    # No tool named. The line used to end "`list_projects` or `list_tasks` to look", and read as
+    # an instruction: measured on 2026-09-27, unbound chats opened with one of those calls 16% of
+    # the time, more than any other kind of chat — a "hey" answered with a board nobody asked
+    # about. Recognising that something belongs to a project is what the names are for, and that
+    # needs no call at all.
     return (
-        f"[Your projects] {shown}{rest}. This conversation is not in any of them — "
-        "`list_projects` or `list_tasks` to look, and start a chat inside one to work on it."
+        f"[Your projects] {shown}{rest}. This conversation is not in any of them. Answer what is "
+        "asked here; if it turns out to belong to one of them, say so and suggest opening a chat "
+        "inside it."
     )
 
 
@@ -307,6 +348,6 @@ def others(agent_db: Path, project_id: int) -> str:
     named = ", ".join(f"#{row['id']} {row['name']}" for row in rows[:6])
     rest = f", +{len(rows) - 6} more" if len(rows) > 6 else ""
     return (
-        f"[Your other projects] {named}{rest}. Not this conversation's work — `list_projects` or "
-        "`list_tasks` if you need to look, and a new conversation if you need to *change* one."
+        f"[Your other projects] {named}{rest}. Not this conversation's work — a new conversation "
+        "if you need to *change* one."
     )

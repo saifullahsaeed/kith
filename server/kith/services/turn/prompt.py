@@ -269,6 +269,8 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
                 # For the ledger, like `_live` itself — `openai_compat._to_openai` rebuilds every
                 # message from role and content alone, so nothing internal reaches a host.
                 "_project_chars": sizes.get("project", 0),
+                # The text those characters are, for the context screen — see `_present_state`.
+                "_project_text": sizes.get("project_text", ""),
                 # Same reasoning as the line above it. Inside "Where he is right now" a plugin
                 # digest is indistinguishable from the clock, and switching one off is the only
                 # thing a person can do about that number — so they have to be able to see it.
@@ -605,12 +607,28 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, abo
     # whole project — its plan, its columns, its folder's standing against the remote — and not
     # just `memory.md`, for exactly the same reason.
     #
-    # The one block that does not compete on relevance. A conversation bound to a project is
+    # The one region that does not compete on relevance. A conversation bound to a project is
     # *about* that project by construction, so scoring it against the last three messages would
     # only ever punish it for being asked a question in different words than the roadmap uses.
-    # It bids in the top tier and takes what it needs.
-    about_project = project_context.block(AGENT_DB_PATH, project)
-    candidates.append(present.Block("project", about_project, tier=present.WORTH_HAVING, score=1.0))
+    #
+    # It bids as sections, not as one block — see `project_context.sections` for the measurement
+    # that made that necessary. The order of the scores is the order of what he cannot work
+    # without: which project and what is in flight, then what somebody handed him or left in the
+    # folder, then his own memory of it, which is the one part that grows without bound and so
+    # the one that takes whatever room is left rather than deciding how much there is. Above the
+    # memories that were scored for this conversation for the same reason — a core memory is a
+    # few lines, and it must not be starved by a file that is tens of thousands of characters.
+    bids = {
+        "project": (1.0, True),
+        "project_references": (0.7, False),
+        "project_folder": (0.7, False),
+        "project_memory": (-0.5, True),
+    }
+    for key, text in project_context.sections(AGENT_DB_PATH, project):
+        score, trimmable = bids.get(key, (0.5, False))
+        candidates.append(
+            present.Block(key, text, tier=present.WORTH_HAVING, score=score, trimmable=trimmable)
+        )
     # What his plugins are holding, one capped line each.
     #
     # **Here rather than in `config.system` beside `skills.index()`**, and that placement is the
@@ -650,6 +668,12 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, abo
     # the number is what was sent rather than what was offered.
     if _sizes is not None:
         by_key = {block.key: len(block.text) for block in kept}
-        _sizes["project"] = by_key.get("project", 0)
+        # Every surviving section of the project region, as one number and one text. The number
+        # is what the ledger shows; the text is what the context screen splits the block by, and
+        # it has to be the text that was *sent* — a section trimmed to fit no longer matches the
+        # full region, so removing the full region from the block silently removed nothing.
+        mine = [block for block in kept if block.key.startswith("project") and block.key != "projects"]
+        _sizes["project_text"] = "\n\n".join(block.text for block in mine)
+        _sizes["project"] = len(_sizes["project_text"])
         _sizes["plugins"] = by_key.get("plugins", 0)
     return "\n\n".join(block.text for block in kept).strip()

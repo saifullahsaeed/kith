@@ -531,7 +531,18 @@ def category_text(
     digest = ""
     if key in ("live", "project", "plugins"):
         found = project_context.resolve(AGENT_DB_PATH, conversation_id)
-        region = project_context.block(AGENT_DB_PATH, found) if found else ""
+        # The sections that were sent, as the prompt recorded them. Recomputing the whole region
+        # stopped being the same text once it could be trimmed to fit: a section cut short no
+        # longer contains the full one, so removing the full one from the block removed nothing
+        # and the project was counted twice.
+        region = next(
+            (
+                str(m.get("_project_text") or "")
+                for m in messages
+                if m.get("role") == "system" and m.get("_live")
+            ),
+            "",
+        )
         # Recomputed the same way, and for the same reason: this splits the block by removing
         # each part's own text rather than by a stored character count, which says how big a
         # region is but not where in the block it sits. Three parts now, so `live` has to have

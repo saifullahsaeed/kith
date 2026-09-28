@@ -160,9 +160,14 @@ def block(project_dir: str | Path, name: str = "") -> str:
             "session would need — the command that actually runs the tests, where the real "
             "logic lives, a decision worth not undoing — write it there."
         )
+    # The length is in the heading because the heading is the one line that always survives. The
+    # present-state budget trims this section from the end when the file is long, and a section
+    # that simply stops reads as the whole file; "71,223 characters" beside it says it is not,
+    # and the path beside that says where the rest is.
     return (
         f"## What you already know about this project{label}\n"
-        f"From `{where}`. Anything under **Working here** is an instruction and holds for "
+        f"From `{where}` ({len(body):,} characters — if this section ends before the file does, "
+        f"the rest is in the file). Anything under **Working here** is an instruction and holds for "
         f"this whole project — it is not a note to consider, and it outranks your own habits "
         f"where they differ. The rest is what has been learned so far: keep it true, fix what "
         f"turns out to be wrong, and add what would have saved you time today.\n\n"
