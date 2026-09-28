@@ -942,6 +942,42 @@ def _migrations():
         if "workflow_mode" not in held:
             conn.execute("ALTER TABLE conversations ADD COLUMN workflow_mode INTEGER NOT NULL DEFAULT 0")
 
+    def v52_what_each_host_charged(conn):
+        """What each host has actually billed per model, so the ranking can read bills instead
+        of predicting them from quotes.
+
+        The quotes were wrong in the direction that costs most. Over Sep 13-27 on
+        deepseek-v4.1-flash, stored orders led with Together and put DeepSeek ninth to
+        thirteenth; Together billed $0.044 per million prompt tokens over 2,531 rounds and
+        DeepSeek $0.009 over 5,724. Every round's cost was already being written to its
+        transcript. Nothing read it back.
+
+        Running totals, not a row per round: the one question asked of this is "what does this
+        host cost per token, all told", and the per-round detail is in the transcripts, which is
+        what `services.host_costs.fill` builds the first totals from.
+
+        Every stored order is cleared, because every one of them was ranked on quotes. Blank
+        reads as "never ranked" — the same way v50 re-ranked the orders it could not trust — so
+        each conversation re-ranks on its next turn, once, and then keeps what it settles on.
+        That costs each conversation one cold prompt on the round it moves, against paying
+        Together's rate for every round after it.
+        """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS host_costs (
+                model             TEXT NOT NULL,
+                provider          TEXT NOT NULL,
+                rounds            INTEGER NOT NULL DEFAULT 0,
+                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                cached_tokens     INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd          REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (model, provider)
+            )
+            """
+        )
+        conn.execute("UPDATE conversations SET provider_order = '' WHERE provider_order != ''")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -994,6 +1030,7 @@ def _migrations():
         v49_turn_failures,
         v50_conversation_hosts_are_per_model,
         v51_conversation_workflow_mode,
+        v52_what_each_host_charged,
     ]
 
 

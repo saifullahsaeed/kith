@@ -380,3 +380,19 @@ class Worker(Base):
     #: Which project this belongs to, when it belongs to one. See migration v47 — nullable
     #: because work outside any project is a real thing.
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class HostCost(Base):
+    """One host's running bill for one model. See `v52_what_each_host_charged`."""
+
+    __tablename__ = "host_costs"
+
+    model: Mapped[str] = mapped_column(Text, primary_key=True)
+    #: The provider as a round names it — "DeepSeek", not the slug `deepseek`. A round carries
+    #: nothing else, and the endpoint table is what maps one onto the other.
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cached_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

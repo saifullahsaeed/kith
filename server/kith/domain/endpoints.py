@@ -40,23 +40,53 @@ roughly double the money. Asking for speed is not the same as saying price stopp
 Nothing here reduces availability. The order ships with `allow_fallbacks` on, exactly as a pin
 does, so a host being down costs a step down the list rather than a failed turn — and the step
 now lands on the next best host instead of an arbitrary one.
+
+**A quote is still only a prediction, and the bills were already on disk.** Everything above
+reads rates the hosts *publish*. Every round Kith sends records what it actually cost, and over
+Sep 13-27 on `deepseek/deepseek-v4.1-flash` the two disagreed about the one thing that
+mattered. Stored orders put Together first and DeepSeek ninth to thirteenth; Together then
+billed $0.044 per million prompt tokens across 2,531 rounds and DeepSeek $0.009 across 5,724.
+The gap is behaviour no price list states — 87.6% of Together's prompt tokens came back from
+cache against DeepSeek's 96.5%, and 8.0% of its mid-turn rounds lost the cache against 1.4% —
+and it cost $87.65 on the other hosts for work DeepSeek's rate would have done for about $21.
+So a host with enough rounds on record ranks on its own bill, and the quote survives only for
+hosts that have none, calibrated onto the bills' scale. See `priced`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import statistics
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 
-#: What share of a prompt arrives as cache reads, used to weigh the read rate against the
-#: fresh one. Measured, not guessed: 49,093,108 of 62,270,230 recorded prompt tokens on this
-#: install, across the last eight conversations. A constant rather than a setting because it
-#: is a property of how Kith prompts — one long stable prefix per conversation — and not a
-#: preference anyone should have to hold an opinion about.
+#: What share of a prompt arrives as cache reads, *for a model this install has never been
+#: billed for*. Once a model has rounds on record, its own share is used instead — see
+#: `priced` — because this number is a property of the traffic, and the traffic has moved:
+#: it was measured as 49,093,108 of 62,270,230 prompt tokens across eight conversations in
+#: August, and on deepseek-v4.1-flash over Sep 13-27 it was 0.898.
 CACHE_HIT_SHARE = 0.79
 
-#: How much of a round's tokens are the reply. Prompts here run to tens of thousands of tokens
-#: against replies in the hundreds, so output price is a real but small share of the bill, and a
-#: host cannot buy its way up this ranking by quoting a cheap completion rate on a dear prompt.
+#: How much of a round's tokens are the reply, under the same terms: the fallback for a model
+#: with no rounds on record. Measured on deepseek-v4.1-flash over Sep 13-27 it was 0.0021 —
+#: prompts had grown to hundreds of thousands of tokens against replies in the low thousands —
+#: which is why a guess held fixed for every model was weighting completion rates about thirty
+#: times too heavily by the time anyone measured it.
 OUTPUT_SHARE = 0.06
+
+#: How many rounds a host needs on record before its bill outranks its quote.
+#:
+#: Measured on deepseek-v4.1-flash over Sep 13-27, by drawing runs of consecutive rounds from
+#: each host's own record — which is how evidence about a host arrives, a conversation at a
+#: time — and comparing what the run cost with the host's two-week figure. The median error is
+#: 1.95x at 10 rounds, 1.54x at 30, 1.48x at 50 and 1.41x at 100. The calibrated quote, given
+#: every host's rates fitted from its own bills rather than read off a price list, is off by a
+#: median 1.42x; so by 100 rounds a host's bill is at least as good as the best a quote could
+#: ever be, and a real price list is worse than that fit.
+#:
+#: Erring high is the cheaper mistake. A host judged on too few rounds and demoted stops being
+#: sent conversations and so never collects the rounds that would clear it; a host judged on
+#: too many is still leading, and is collecting them.
+MIN_ROUNDS = 100
 
 #: Values within this of each other are the same value, and the other key decides between them.
 #: The three hosts at $0.150 are the case it was written for. Too tight and an accounting
@@ -102,13 +132,20 @@ class Endpoint:
     #: OpenRouter's own health flag. Below zero means deranked or disabled.
     status: int = 0
     uptime: float = 100.0
+    #: The figure the ranking compares, once `priced` has put every host on one scale: the
+    #: host's own bill when it has `MIN_ROUNDS` on record, its calibrated quote when it does
+    #: not. None on a row that was never priced, which ranks on `effective_price` alone.
+    cost_per_mtok: float | None = None
+    #: How many recorded rounds `cost_per_mtok` rests on. 0 means it is an estimate.
+    billed_rounds: int = 0
 
     def public(self) -> dict:
         """This host as the picker shows it — every number it would need to justify a pin.
 
-        `effective_price` is computed here rather than left to the client because it is the
-        number the ranking is actually made on, and a picker that ordered rows by one figure
-        while displaying another would be the same silent mismatch this module exists to fix.
+        The price is computed here rather than left to the client because it is the number
+        the ranking is actually made on, and a picker that ordered rows by one figure while
+        displaying another would be the same silent mismatch this module exists to fix.
+        `billedRounds` says which kind of number it is: a bill, or an estimate at 0.
         """
         return {
             "slug": self.slug,
@@ -119,7 +156,8 @@ class Endpoint:
             "promptPerMtok": _finite(self.prompt_per_mtok),
             "completionPerMtok": _finite(self.completion_per_mtok),
             "cacheReadPerMtok": _finite(self.cache_read_per_mtok),
-            "effectivePerMtok": _finite(effective_price(self)),
+            "effectivePerMtok": _finite(_cost(self)),
+            "billedRounds": self.billed_rounds,
             "throughput": self.throughput,
             "latencyMs": _finite(self.latency_ms),
             "uptime": self.uptime,
@@ -142,28 +180,130 @@ MIN_UPTIME = 95.0
 LOSSY = frozenset({"fp4", "int4"})
 
 
-def effective_price(endpoint: Endpoint) -> float:
-    """What a round on this host actually costs, in dollars per million tokens.
+@dataclass(frozen=True)
+class Bill:
+    """What one host has actually charged for one model, summed over every round it served.
 
-    This is the whole of what "cheapest" means here, and every ordering decision falls out of
-    it, so it is worth being explicit rather than reaching for the headline rate the way
-    OpenRouter's own sort does.
+    Named by `provider` as a round reports it — "DeepSeek", "DeepInfra" — because that is all
+    a response says about where it ran. Matching it to a slug is `_bill_for`'s job, done
+    against the endpoint table, which is the one place that has both spellings.
+    """
 
-    A prompt token costs the fresh rate when it misses the cache and the read rate when it
-    hits, so the input rate is the two blended at the ratio they actually arrive in. That one
-    line is the entire difference from `sort`: on the measured table it separates three hosts
-    quoting an identical $0.150 into $0.0339, $0.0434 and $0.0434, because one of them reads
-    cache at a fifth of what the others charge.
+    provider: str
+    rounds: int = 0
+    prompt_tokens: int = 0
+    cached_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+
+    def per_mtok(self) -> float:
+        """Dollars per million tokens of traffic — the unit `effective_price` quotes in, so a
+        bill and a quote are the same kind of number and the only difference left between them
+        is the one being measured."""
+        tokens = self.prompt_tokens + self.completion_tokens
+        return self.cost_usd / tokens * 1_000_000 if tokens > 0 else float("inf")
+
+
+def effective_price(
+    endpoint: Endpoint, cache_share: float = CACHE_HIT_SHARE, output_share: float = OUTPUT_SHARE
+) -> float:
+    """What a round on this host would cost going by its quote, in dollars per million tokens.
+
+    It is worth being explicit rather than reaching for the headline rate the way OpenRouter's
+    own sort does. A prompt token costs the fresh rate when it misses the cache and the read
+    rate when it hits, so the input rate is the two blended at the ratio they actually arrive
+    in. That one line is the entire difference from `sort`: at the fallback share it separates
+    three hosts quoting an identical $0.150 into $0.0339, $0.0434 and $0.0434, because one of
+    them reads cache at a fifth of what the others charge.
 
     Output is folded in at the share of a round it really is rather than left out, so a host
-    cannot quote a cheap completion rate on a dear prompt and buy its way up — and cannot be
-    ignored either, which at 4x the prompt rate it should not be.
+    cannot quote a cheap completion rate on a dear prompt and buy its way up.
+
+    The two shares are the traffic's, not the host's: `priced` passes the ones this model's
+    recorded rounds actually show, and the constants stand in only for a model never billed.
+    For a host with enough rounds of its own none of this is consulted — its bill is the price.
 
     An unquoted rate arrives as `inf` from `_per_million` and stays `inf` through this: a host
     that does not publish a price must never rank as though it were free.
     """
-    inputs = (1 - CACHE_HIT_SHARE) * endpoint.prompt_per_mtok + CACHE_HIT_SHARE * endpoint.cache_read_per_mtok
-    return (1 - OUTPUT_SHARE) * inputs + OUTPUT_SHARE * endpoint.completion_per_mtok
+    inputs = (1 - cache_share) * endpoint.prompt_per_mtok + cache_share * endpoint.cache_read_per_mtok
+    return (1 - output_share) * inputs + output_share * endpoint.completion_per_mtok
+
+
+def priced(endpoints: list[Endpoint], bills: Iterable[Bill]) -> list[Endpoint]:
+    """The same rows, each carrying what it should be expected to cost, all on one scale.
+
+    A host with `MIN_ROUNDS` on record is priced at its bill. That already contains everything
+    a price list leaves out — how much of the prompt it really serves from cache, how often it
+    loses the cache mid-turn, what a cache read really costs there — which is why it outranks
+    any arithmetic on quotes.
+
+    A host without that many is priced at its quote, with two corrections that both come from
+    the bills. The quote is for traffic shaped the way this model's actually is, not the way
+    `CACHE_HIT_SHARE` guessed. And it is scaled by how far the billed hosts' bills sat from
+    their own quotes: the median of those ratios, because the question is what an ordinary host
+    does, and one host with a pathological cache should not answer it. With each host's rates
+    fitted from its Sep 13-27 bills, that factor came out at 1.33 — a typical host billed a third
+    above what its rates predict for the same traffic — so an unbilled host is assumed ordinary
+    rather than assumed to be the one host whose cache never breaks. That is what lets it be
+    compared with a bill at all.
+
+    With no billed host there is nothing to calibrate against and the factor is 1; with no
+    rounds of this model at all the shares are the fallbacks — which together are exactly the
+    ranking this module made before it read a bill.
+    """
+    bills = [one for one in bills if one.rounds > 0 and _host(one.provider)]
+    by_host = {_host(one.provider): one for one in bills}
+    cache_share, output_share = _shape(bills)
+    quotes = [effective_price(one, cache_share, output_share) for one in endpoints]
+    matched = [_bill_for(one, by_host) for one in endpoints]
+    evidenced = [bill if bill is not None and bill.rounds >= MIN_ROUNDS else None for bill in matched]
+    ratios = [
+        bill.per_mtok() / quote
+        for bill, quote in zip(evidenced, quotes, strict=True)
+        if bill is not None and 0 < quote < float("inf")
+    ]
+    scale = statistics.median(ratios) if ratios else 1.0
+    return [
+        replace(one, cost_per_mtok=bill.per_mtok(), billed_rounds=bill.rounds)
+        if bill is not None
+        else replace(one, cost_per_mtok=quote * scale)
+        for one, bill, quote in zip(endpoints, evidenced, quotes, strict=True)
+    ]
+
+
+def _shape(bills: list[Bill]) -> tuple[float, float]:
+    """This model's cache share and output share, pooled over every host that served it, or
+    the fallbacks when nothing has. Pooled because they describe what Kith sends, which does
+    not change with where it lands."""
+    prompt = sum(one.prompt_tokens for one in bills)
+    completion = sum(one.completion_tokens for one in bills)
+    if prompt <= 0:
+        return CACHE_HIT_SHARE, OUTPUT_SHARE
+    return sum(one.cached_tokens for one in bills) / prompt, completion / (prompt + completion)
+
+
+def _host(text: str) -> str:
+    """A provider's name reduced to what its display name and its slug agree on.
+
+    A round reports "DeepInfra" or "OpenInference"; the table's slugs are `deepinfra/fp8` and
+    `open-inference/fp4`. Case, punctuation and the quantization suffix are the whole of the
+    difference, so they are what is dropped.
+    """
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _bill_for(endpoint: Endpoint, by_host: dict[str, Bill]) -> Bill | None:
+    """This row's bill, matched on the table's display name first — the same field a round's
+    `provider` is read from — and on the slug's host part when the row has no name.
+
+    Two rows from one host — `novita/fp8` and `novita/bf16`, or `baseten/fp8` listed twice —
+    share one bill, because a round does not say which of them served it.
+    """
+    for key in (_host(endpoint.name), _host(endpoint.slug.split("/")[0])):
+        if key and key in by_host:
+            return by_host[key]
+    return None
 
 
 def _healthy(endpoint: Endpoint) -> bool:
@@ -217,7 +357,7 @@ def _deduped(slugs) -> tuple[str, ...]:
 
 
 def _cost(endpoint: Endpoint) -> float:
-    return effective_price(endpoint)
+    return endpoint.cost_per_mtok if endpoint.cost_per_mtok is not None else effective_price(endpoint)
 
 
 def _slowness(endpoint: Endpoint) -> float:

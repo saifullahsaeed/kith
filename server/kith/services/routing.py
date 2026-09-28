@@ -15,6 +15,12 @@ conversation does; an existing one reads what it already decided, and reaches no
 
 The install-wide path — a step nobody is working, a history fold — has no conversation to
 remember anything on, so it ranks against a short-lived cache instead.
+
+**What a ranking is made on is the bills, where there are any.** The endpoint table says what
+each host quotes; `services.host_costs` says what each one has actually charged this install,
+and `domain.endpoints.priced` puts the two on one scale before anything is ranked. The table is
+still what gets ranked — health, throughput and new hosts come from nowhere else — but the
+price a host ranks on is its own record once it has one.
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ import requests
 from kith.domain import endpoints as endpoint_policy
 from kith.domain.chat import Config, Routing
 from kith.domain.connection import is_openrouter
-from kith.services import tuning
+from kith.services import host_costs, tuning
 
 log = logging.getLogger(__name__)
 
@@ -129,9 +135,10 @@ def table(config: Config, by: str = "") -> list[endpoint_policy.Endpoint]:
     failing silently: `provider.order` with an unrecognised name is simply ignored.
 
     Unranked — `by` blank or unknown — is returned in OpenRouter's own order rather than ours,
-    which is what a person who set `prefer_provider_by` to blank has asked to see.
+    which is what a person who set `prefer_provider_by` to blank has asked to see. The rows are
+    priced either way, so the figure the picker shows is the one a ranking would use.
     """
-    rows = _rows(config)
+    rows = _priced(config)
     if by not in endpoint_policy.ORDERINGS:
         return rows
     order = {slug: place for place, slug in enumerate(endpoint_policy.rank(rows, by))}
@@ -139,7 +146,17 @@ def table(config: Config, by: str = "") -> list[endpoint_policy.Endpoint]:
 
 
 def _fetch(config: Config, by: str) -> tuple[str, ...]:
-    return endpoint_policy.rank(_rows(config), by)
+    return endpoint_policy.rank(_priced(config), by)
+
+
+def _priced(config: Config) -> list[endpoint_policy.Endpoint]:
+    """The endpoint table with each host priced on its bill, or on its calibrated quote.
+
+    The bills are only read when there is a table to price: a model OpenRouter does not list has
+    nothing to rank, and the first read of an empty record is the one that fills it.
+    """
+    rows = _rows(config)
+    return endpoint_policy.priced(rows, host_costs.bills(config.model)) if rows else rows
 
 
 def _rows(config: Config) -> list[endpoint_policy.Endpoint]:
