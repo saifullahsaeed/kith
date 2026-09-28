@@ -44,7 +44,11 @@ import { cn } from "@/lib/utils";
 
 const KEY = "kith-companion-width";
 const MIN = 280;
-const MAX = 720;
+/** What the chat keeps, however wide the column is dragged. There is no cap on the column itself
+ *  any more — it stopped at 720px, which on a wide window left a browser or a board squeezed
+ *  beside a chat with room to spare — only this floor on the chat beside it, so the handle can
+ *  never be dragged past the point where the chat and its composer stop being usable. */
+const CHAT_MIN = 320;
 /** The design's column, measured: 424px beside a chat. */
 const DEFAULT = 424;
 
@@ -57,8 +61,10 @@ function readWidth(): number {
   }
 }
 
-export function clampWidth(width: number): number {
-  return Math.min(MAX, Math.max(MIN, Math.round(width)));
+/** A column width, no narrower than `MIN` and — given the space the chat and column share — no
+ *  wider than leaves the chat `CHAT_MIN`. */
+export function clampWidth(width: number, room = Infinity): number {
+  return Math.max(MIN, Math.min(room - CHAT_MIN, Math.round(width)));
 }
 
 export type CompanionPanel = {
@@ -232,8 +238,8 @@ export function Companions({
   const onMove = useCallback(
     (event: React.PointerEvent) => {
       if (!dragging) return;
-      const right = box.current?.getBoundingClientRect().right ?? 0;
-      setWidth(clampWidth(right - event.clientX));
+      const rect = box.current?.getBoundingClientRect();
+      setWidth(clampWidth((rect?.right ?? 0) - event.clientX, rect?.width));
     },
     [dragging],
   );
@@ -242,8 +248,8 @@ export function Companions({
     (event: React.PointerEvent) => {
       if (!dragging) return;
       setDragging(false);
-      const right = box.current?.getBoundingClientRect().right ?? 0;
-      const next = clampWidth(right - event.clientX);
+      const rect = box.current?.getBoundingClientRect();
+      const next = clampWidth((rect?.right ?? 0) - event.clientX, rect?.width);
       setWidth(next);
       settle(next);
     },
@@ -390,8 +396,9 @@ export function Companions({
             onPointerUp={end}
             onPointerCancel={end}
             onKeyDown={(event) => {
-              if (event.key === "ArrowLeft") setWidth((was) => clampWidth(was + 16));
-              else if (event.key === "ArrowRight") setWidth((was) => clampWidth(was - 16));
+              const room = box.current?.getBoundingClientRect().width;
+              if (event.key === "ArrowLeft") setWidth((was) => clampWidth(was + 16, room));
+              else if (event.key === "ArrowRight") setWidth((was) => clampWidth(was - 16, room));
               else return;
               event.preventDefault();
               settle(width);
@@ -414,7 +421,9 @@ export function Companions({
               "bg-[color-mix(in_oklab,var(--sidebar)_60%,var(--background))]",
               full ? "w-full flex-1" : "shrink-0",
             )}
-            style={full ? undefined : { width }}
+            // The chat's floor holds when the window shrinks too, not only while dragging: a column
+            // left wide on a big screen gives way instead of pushing the chat to nothing.
+            style={full ? undefined : { width, maxWidth: `calc(100% - ${CHAT_MIN}px)` }}
           >
             {bound ? (
               <LiveRow {...row} conversationId={conversationId ?? ""} />

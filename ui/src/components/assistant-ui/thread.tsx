@@ -21,10 +21,8 @@ import {
   AccessChip,
   ContextRing,
   ModelChip,
-  SteerModeToggle,
   ThinkingChip,
   WorkflowModeChip,
-  type SteerMode,
 } from "@/components/assistant-ui/composer-bar";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -35,12 +33,13 @@ import { useCheckpoints } from "@/components/assistant-ui/checkpoints-context";
 import { restoreCheckpoint } from "@/lib/backend/checkpoints";
 import { steerTurn, stopTurn } from "@/lib/commands";
 import { useConversationId } from "@/lib/conversation";
-import { dropHeld, heldMessage, holdUntilIdle, isHolding, subscribeHolding } from "@/lib/queued-send";
+import { dropHeld, heldMessage, isHolding, subscribeHolding } from "@/lib/queued-send";
 import { copyText } from "@/lib/files";
 import { when } from "@/lib/dates";
 import { STEER_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
 import { KIND_CODE, kindOf, kindsFromCode, planTurn } from "@/lib/turn-plan";
+import { expandCommand } from "@/lib/slash";
 import { splitWorkflowPrefix } from "@/lib/workflow-prefix";
 import { cn } from "@/lib/utils";
 import {
@@ -406,14 +405,6 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
   const empty = useAuiState((s) => s.composer.isEmpty && s.composer.attachments.length === 0);
   // A message that opens with `/workflow` may fan out into agents, and the box says so.
   const workflow = useAuiState((s) => splitWorkflowPrefix(s.composer.text).workflow);
-  /* Steer now, or after this turn — what the button does while he works. The keys do not move
-   * with it (⏎ steers, ⌘⏎ waits; see `rich-input`), so this is the mouse's version of the same
-   * choice, and it starts on "now" every turn because that is what Enter does. */
-  const [mode, setMode] = useState<SteerMode>("now");
-  useEffect(() => {
-    if (!running) setMode("now");
-  }, [running]);
-
   /* Escape stops the turn — from the box you type in, and only from there.
    *
    * Taken on the way *down*, because the editor claims Escape for itself: ProseMirror marks it
@@ -476,7 +467,7 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
             />
             {empty ? <ComposerHint running={running} /> : null}
           </div>
-        <ComposerAction conversationId={conversationId} mode={mode} onMode={setMode} afterFold={reading} />
+        <ComposerAction conversationId={conversationId} afterFold={reading} />
       </div>
       {workflow ? (
         <p className="text-muted-foreground flex items-center gap-2 px-1 text-xs">
@@ -663,73 +654,52 @@ const AttachButton: FC = () => {
  * "send" that quietly stops the work it was meant to redirect is worse than no button, which is
  * what was here before.
  *
- * So this is the same path the keys take — ⏎ posts the text to the running turn, ⌘⏎ holds it in
- * `queued-send` until the turn has genuinely ended and only then sends it normally — and the two
- * are deliberately identical, because a keystroke and a button that claim to do the same thing
- * should.
+ * So this is the path ⏎ takes: the text goes to the running turn. Waiting for the turn to end
+ * instead is ⌘⏎ and only ⌘⏎ — there was a "Steer now | After this turn" toggle beside the attach
+ * button for the mouse, and it was a second control for what the keys already say, crowding the
+ * model's name off the row whenever you typed during a turn.
  */
-const SteerButton: FC<{ mode: SteerMode }> = ({ mode }) => {
+const SteerButton: FC = () => {
   const composer = useComposerRuntime();
   const text = useAuiState((s) => s.composer.text);
   const canSend = useAuiState((s) => !s.composer.isEmpty);
   const here = useConversationId();
-  const after = mode === "after";
 
   return (
     <button
       type="button"
       disabled={!canSend}
-      title={
-        after
-          ? "Send when this turn ends — it starts fresh after he finishes"
-          : "Send to the turn he is running — it keeps what it has found"
-      }
+      title="Send to the turn he is running — it keeps what it has found. ⌘⏎ sends it after this turn instead."
       className="aui-composer-send bg-kith text-primary-foreground hover:bg-kith/90 flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] px-3 text-xs font-semibold transition-colors disabled:opacity-50"
-      aria-label={after ? "Send after this turn" : "Steer this turn"}
+      aria-label="Steer this turn"
       onClick={() => {
         // The pane this button is in, not the process's last-writer-wins guess — see `rich-input`.
         if (!here || !text.trim()) return;
         const said = text;
         composer.setText("");
-        if (after) {
-          void holdUntilIdle(here, said, (held) => {
-            composer.setText(held);
-            // A tick, so the store holds the restored text before the send reads it.
-            window.setTimeout(() => composer.send(), 0);
-          });
-        } else {
-          void steerTurn(here, said);
-        }
+        // Spelled out as a send would be — a steer never passes the adapter. See `lib/slash`.
+        void steerTurn(here, expandCommand(said));
       }}
     >
-      {after ? <Clock3 className="size-3.5" aria-hidden /> : <CornerDownRight className="size-3.5" aria-hidden />}
-      {after ? "Send after" : "Steer"}
+      <CornerDownRight className="size-3.5" aria-hidden />
+      Steer
     </button>
   );
 };
 
 const ComposerAction: FC<{
   conversationId: string;
-  mode: SteerMode;
-  onMode: (mode: SteerMode) => void;
   /** The reading a `/fold` just left, which the ring shows until the next turn measures. */
   afterFold?: ContextLedger;
-}> = ({ conversationId, mode, onMode, afterFold }) => {
+}> = ({ conversationId, afterFold }) => {
   const running = useAuiState((s) => s.thread.isRunning);
   const hasText = useAuiState((s) => !s.composer.isEmpty);
 
   return (
     <div className="aui-composer-action-wrapper @container relative flex min-w-0 items-center gap-1 px-2 pt-1.5 pb-2">
       <AttachButton />
-      {/* While he works and you have typed, what the button will do is the question — so the
-          choice sits beside the attach button. Commands are `/`, which the placeholder says; a
-          "/ Commands" button here only repeated it. */}
-      {running && hasText ? (
-        <>
-          <SteerModeToggle mode={mode} onMode={onMode} />
-          <span aria-hidden className="bg-border mx-1 h-4 w-px shrink-0" />
-        </>
-      ) : null}
+      {/* Nothing between the attach button and the settings: commands are `/`, which the
+          placeholder says, and steer-or-wait is ⏎ or ⌘⏎, which the hint says. */}
       <ThinkingChip />
       <AccessChip />
       <ModelChip />
@@ -803,7 +773,7 @@ const ComposerAction: FC<{
           </ComposerPrimitive.Cancel>
         </>
       ) : null}
-      {running && hasText ? <SteerButton mode={mode} /> : null}
+      {running && hasText ? <SteerButton /> : null}
       {!running ? (
         <ComposerPrimitive.Send asChild>
           <button

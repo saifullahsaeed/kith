@@ -19,7 +19,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   ChevronDown,
-  CornerDownLeft,
   Layers,
   Lightbulb,
   Maximize2,
@@ -518,55 +517,6 @@ export function ContextRing({ afterFold }: { afterFold?: ContextLedger }) {
           </div>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/* ── Steer now | After this turn ──────────────────────────────────────────────────────── */
-
-export type SteerMode = "now" | "after";
-
-/**
- * What the send button does while he is working: steer the turn in flight, or wait for it to
- * end. Each side wears its key, because the keys do not change with the choice — ⏎ steers,
- * ⌘⏎ waits — and a toggle that silently rebound Enter would be one more thing to remember.
- */
-export function SteerModeToggle({
-  mode,
-  onMode,
-}: {
-  mode: SteerMode;
-  onMode: (mode: SteerMode) => void;
-}) {
-  const option = (value: SteerMode, label: string, keys: ReactNode) => (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={mode === value}
-      onClick={() => onMode(value)}
-      className={cn(
-        "flex h-6 items-center gap-1.5 rounded-[7px] px-2.5 text-xs transition-colors",
-        mode === value ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {label}
-      <span className="text-muted-foreground/70 flex items-center text-[10px]">{keys}</span>
-    </button>
-  );
-  return (
-    <div
-      role="radiogroup"
-      aria-label="When he reads it"
-      className="border-border bg-background flex shrink-0 rounded-[9px] border p-0.5"
-    >
-      {option("now", "Steer now", <CornerDownLeft className="size-2.5" aria-hidden />)}
-      {option(
-        "after",
-        "After this turn",
-        <>
-          ⌘<CornerDownLeft className="size-2.5" aria-hidden />
-        </>,
-      )}
     </div>
   );
 }
