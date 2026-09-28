@@ -19,7 +19,6 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, replace
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -29,16 +28,15 @@ from kith.domain.tooling import ToolHost, itself
 from kith.kernel import session_context
 from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
-from kith.services import compaction, tuning
+from kith.services import brief, compaction, history, tuning
 from kith.services.turn import frozen
 from kith.services.turn.history import (
-    _FOLD_ABOVE_SHARE,
     _MAX_FOLDS,
     _compact_call_arguments,
     _compact_images,
     _compact_tool_history,
     _drop_oldest_exchange,
-    _room_is_tight,
+    _settle_pointers,
     _tool_result_message,
 )
 from kith.services.turn.meter import _record, measured
@@ -406,33 +404,30 @@ def _stream_once(messages, config: Config, host, tools=None, tool_choice: str = 
     return ollama.stream_once(messages, config, host, tools=None if tool_choice == "none" else tools)
 
 
-def _summarise(prompt: str, *, config: Config, host: str, routing=None) -> str:
-    """One text-only model call, for folding a long turn into notes.
+def _summarise(
+    messages: list[dict[str, Any]], *, config: Config, host: str, schemas: list[dict], routing=None
+) -> brief.Reply:
+    """The one model call that folds a long turn into notes. Never raises.
 
-    Deliberately not the turn's own conversation: the fold is a fresh, tool-less request whose
-    entire input is the stretch being summarised. Reusing the live `convo` would send the very
-    thing we are trying to shrink, and offering tools would invite it to go and do more work
-    instead of writing the note.
+    **Deliberately the turn's own conversation**, cut where the fold ends and with the
+    instruction appended — the reverse of what this was. It used to send a fresh, tool-less
+    request with the middle rendered as a transcript, on the argument that re-sending the live
+    history would send the very thing being shrunk. That is true and it is the cheap part: the
+    history up to the cut is exactly what the last round sent, so it is a cache read. The fresh
+    request was a cold read of all of it, a transcript that invites the model to carry on the
+    conversation, and — with the session id blanked to keep it out of the cache lineage — a
+    request that landed on whichever host happened to be first.
 
-    Cheap in the only sense that matters here — it is charged once and every round after it
-    reads a cached prefix again.
+    Same session, routing and tools as the rounds, for the same reason: a different tools block,
+    or a `tool_choice` that changes how it is rendered, is a different prompt. A model that uses
+    one of those tools has not written notes, and `brief.read` says so. Only the answer cap
+    changes, which is not part of the prompt.
     """
-    asked = [
-        {"role": "system", "content": "You write dense, specific handover notes to yourself."},
-        {"role": "user", "content": prompt},
-    ]
-    # Un-stick the reasoning effort and the session id: this is not part of the conversation's
-    # cache lineage and should not be pinned to it.
-    plain = replace(config, effort="", session_id="")
-    text = ""
-    for event in _stream_once(asked, plain, host, tools=None, tool_choice="none", routing=routing):
-        # `delta`/`role: text` is what both providers emit for prose — reasoning arrives on the
-        # same event type under a different role and is not the note.
-        if event.get("type") == "delta" and event.get("role") == "text":
-            text += str(event.get("text") or "")
-        elif event.get("type") == "error":
-            return ""
-    return text.strip()
+    capped = replace(config, num_predict=brief.tokens(config.context_window))
+    try:
+        return brief.read(_stream_once(messages, capped, host, tools=schemas, routing=routing))
+    except Exception as exc:  # a fold must never be what ends the turn
+        return brief.Reply("", None, f"failed: {exc}")
 
 
 @dataclass
@@ -546,13 +541,21 @@ def _make_room(
     host: str,
     offload=None,
     routing=None,
+    folds: int = 0,
 ) -> Iterator[dict]:
-    """Reduce the turn's history until the next request fits. Returns the reading after.
+    """Reduce the turn's history until the next request fits. Returns the reading after, and
+    how many folds the turn has now tried.
 
     A generator because the fold is worth announcing — it costs a model call and several
     seconds, and before the `compacting` event existed that wait was indistinguishable from a
-    slow provider. Driven with ``book = yield from _make_room(...)``, which forwards the events
-    and hands back the return value.
+    slow provider. Driven with ``book, folds = yield from _make_room(...)``, which forwards the
+    events and hands back the return value. ``folds`` goes in and comes back out because it is a
+    fact about the turn, not about the history: see `_MAX_FOLDS`.
+
+    The fold's own call is reported as a `stats` event tagged ``purpose: "fold"``, like every
+    model request — which is what puts it on the meter, the transcript and the session budget.
+    It used to be discarded, so the most expensive single request a long turn made was the one
+    nothing counted.
 
     Three moves, cheapest first, and the order is the whole design:
 
@@ -565,8 +568,9 @@ def _make_room(
     3. **Drop** whole exchanges. Guaranteed to free room and guaranteed to break the cache,
        which is exactly why it is last.
 
-    Two pressure signals feed it and they used to get two different responses. ``over`` is a
-    share of the whole window — the fold's own trigger, 80% by default. ``tight`` is `room`'s
+    Two pressure signals feed it and they used to get two different responses. ``over`` is the
+    fold point (`history.fold_at`), the same one the fold between turns uses, against the same
+    measure of the whole request. ``tight`` is `room`'s
     absolute ceiling, which also charges for the biggest single round-to-round growth seen so
     far, and can fire well under ``over`` on a turn that already had one huge round in it.
     ``over`` tried a real fold first and only fell back to shaving; ``tight`` went straight to
@@ -599,17 +603,39 @@ def _make_room(
 
     book = take_reading()
 
-    over = book.past(_FOLD_ABOVE_SHARE) if config.context_window > 0 else _room_is_tight(convo, 0)
+    # The whole request, in tokens at this turn's calibrated ratio — the ledger's own total, so
+    # the number that decides is the number the meter shows.
+    over = history.fold_due(book.used, config.context_window)
     tight = room.is_tight(conversation_chars(convo, schemas))
     if over or tight:
         folded = False
-        if compaction.already_folded(convo) < _MAX_FOLDS:
+        if folds < _MAX_FOLDS and compaction.can_fold(convo):
             yield {"type": "compacting", "used": book.used, "window": book.window}
-            folded = compaction.fold(convo, partial(_summarise, config=config, host=host, routing=routing))
-        if not folded:
-            # Either it has been folded as often as is worth paying for, or there was no safe
-            # place to cut. Fall back to the older shaving, which is lossy and breaks the
-            # prefix — and is still better than a turn that dies on a 400.
+            folds += 1
+            replies: list[brief.Reply] = []
+
+            def ask(request: list[dict[str, Any]]) -> str:
+                reply = _summarise(request, config=config, host=host, schemas=schemas, routing=routing)
+                replies.append(reply)
+                return reply.text
+
+            folded = compaction.fold(convo, ask)
+            for reply in replies:
+                spent = measured(reply.stats)
+                if spent:
+                    _record(spent)
+                    yield {"type": "stats", "stats": spent, "purpose": "fold", "outcome": reply.outcome}
+        if not folded and tight:
+            # Either it has been folded as often as is worth paying for, there was no safe place
+            # to cut, or the summary failed and the history was left as it was — and the room is
+            # genuinely running out. Fall back to the older shaving, which is lossy and breaks
+            # the prefix, and is still better than a turn that dies on a 400.
+            #
+            # Only then. Past the fold point alone is not short of room any more: on a large
+            # model the fold point is a fifth of the window, and shaving there would stub one
+            # more call's arguments on every round — moving the point the prefix breaks at,
+            # every round, for the rest of the turn. A turn out of folds grows, at cache-read
+            # price, until `tight` says otherwise.
             #
             # Tool history is deliberately not re-run here: the unconditional pass above has
             # already taken it to the live budget this round, and calling it again with the same
@@ -627,7 +653,13 @@ def _make_room(
     if dropped_any:
         book = take_reading()
 
-    return book
+    # Every move above takes results away oldest-first — stubbing, the fold, dropping — and a
+    # pointer always points back, so what one points at is the first thing to go. Made true again
+    # here, after the last of them and before the request is measured and sent.
+    if _settle_pointers(convo):
+        book = take_reading()
+
+    return book, folds
 
 
 def stream_agent(
@@ -791,6 +823,8 @@ def _run_turn(
     #: Rounds that came back with nothing in them, in a row. See
     #: `_EMPTY_ROUNDS_BEFORE_GIVING_UP`.
     empty_rounds = 0
+    #: Folds this turn has tried, whether or not they came back with notes. See `_MAX_FOLDS`.
+    folds = 0
 
     for round_index in range(budget):
         # Re-read tools each round so a tool Kith just built is usable right away.
@@ -855,7 +889,7 @@ def _run_turn(
                 plugin_names=plugin_names,
             )
 
-        book = yield from _make_room(
+        book, folds = yield from _make_room(
             convo,
             schemas,
             room,
@@ -864,6 +898,7 @@ def _run_turn(
             host=host,
             offload=offload_result,
             routing=routing,
+            folds=folds,
         )
 
         # Taken last, so it always describes the request about to be sent — not a reading from
@@ -1017,10 +1052,17 @@ def _run_turn(
         # destroyed that object part-way through the round loop. It happened to be survivable
         # only because every field of it is unpacked into a local immediately. One name, one
         # thing — the same correction `stop_switch` got in `routes/chat.py`.
-        calling: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
-        if content:
-            calling["content"] = content
-        convo.append(calling)
+        #
+        # **One assistant message per call, appended beside its own result**, rather than one
+        # message carrying the whole round. The next turn replays this turn from the transcript,
+        # and the transcript has never recorded which calls shared a round — so the replay was
+        # one call per message and the live round was not, and everything from the first batched
+        # round onward was a different prompt the next time it was sent: a cold write of the
+        # whole turn's traffic. Splitting here makes the two the same shape by construction. It
+        # is also the only shape that stays valid when a result brings pictures: those arrive as
+        # a `user` message straight after the result, and a batched round then had a tool result
+        # sitting after a user message, which a provider is entitled to refuse.
+        preamble = content or ""
 
         # Resolve every call in the round up front (ids, thrash-guard) so the only
         # thing left is running them — which lets a run of network-bound calls go
@@ -1042,7 +1084,9 @@ def _run_turn(
             seen = seen_calls.get(sig, 0)
             seen_calls[sig] = seen + 1
             repeat = _is_repeat(name, seen, dispatched)
-            planned.append({"id": call_id, "name": name, "arguments": arguments, "repeat": repeat})
+            planned.append(
+                {"id": call_id, "name": name, "arguments": arguments, "repeat": repeat, "raw": call}
+            )
 
         # Anything in this round that changes files moves the epoch on, so a call repeated
         # after it is judged against the new state rather than the old.
@@ -1100,8 +1144,15 @@ def _run_turn(
 
             # strict: results is a map over batch, so a length mismatch is a bug, not input.
             for step, result in zip(batch, results, strict=True):
-                yield {"type": "tool_result", "id": step["id"], "name": step["name"], "result": result}
+                calling: dict[str, Any] = {"role": "assistant", "tool_calls": [step["raw"]]}
+                if preamble:
+                    calling["content"] = preamble
+                    preamble = ""
+                convo.append(calling)
                 images = _images_from(result)
+                payload = json.dumps(without_image(result) if images else result)
+                answer = _tool_result_message(convo, step["name"], payload)
+                yield {"type": "tool_result", "id": step["id"], "name": step["name"], "result": result}
                 if images:
                     # A tool result is a JSON string and cannot carry an image part, so the
                     # pictures arrive as the next message instead. Without this he could take a
@@ -1113,14 +1164,14 @@ def _run_turn(
                     # for together and are usually looked at against each other — seven screens
                     # of the same app, in this case — so splitting them would put six turns of
                     # nothing between the first and the last.
-                    convo.append(_tool_result_message(convo, step["name"], json.dumps(without_image(result))))
+                    convo.append(answer)
                     parts: list[dict] = []
                     for picture in images:
                         parts.append({"type": "text", "text": f"Here is {picture['path'] or 'the image'}:"})
                         parts.append({"type": "image_url", "image_url": {"url": picture["image"]}})
                     convo.append({"role": "user", "content": parts})
                     continue
-                convo.append(_tool_result_message(convo, step["name"], json.dumps(result)))
+                convo.append(answer)
 
     # Out of tool budget — force a final answer so there's always a reply.
     yield from _final_answer(convo, config, host, schemas, routing=routing)

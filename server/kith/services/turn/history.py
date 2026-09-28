@@ -18,10 +18,31 @@ import json
 from typing import Any
 
 from kith.services import tuning
+from kith.services.turn import coverage
 
 #: Arguments that can be an entire file. Worth everything while the call is being made and
 #: nothing once it has run — the result already says whether it worked.
-_BULKY_ARGS = ("content", "new", "old")
+#: The argument fields that carry bulk rather than meaning. Measured over eighty transcripts:
+#: `write_file.content` 4.9M characters, `edit_files` edits' `new` 1.5M and `old` 0.3M, `shell`
+#: `command` 1.5M, `run_workflow.script` 0.25M — and after those, nothing else above 0.1M.
+_BULKY_ARGS = ("content", "new", "old", "command", "script")
+
+
+def stub_arguments(value: Any, stub_chars: int, where: str, *, key: str = "") -> Any:
+    """A call's arguments with every bulky string over ``stub_chars`` replaced by a note.
+
+    Walks nested lists and dicts, because the second-largest of them is nested: `edit_files`
+    carries its edits as a list, and a stub that only looked at top-level keys trimmed
+    `write_file` and let every diff through. Byte-stable on purpose — no age, no count — so a
+    call stubbed once is stubbed identically every time after. ``where`` says when it was sent.
+    """
+    if isinstance(value, dict):
+        return {k: stub_arguments(v, stub_chars, where, key=str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [stub_arguments(v, stub_chars, where, key=key) for v in value]
+    if isinstance(value, str) and key in _BULKY_ARGS and len(value) > stub_chars:
+        return f"…[{len(value):,} characters, sent {where}]"
+    return value
 
 
 #: What replaces an exchange dropped for room. Byte-stable on purpose — no count, no token
@@ -98,14 +119,9 @@ def _compact_call_arguments(convo: list[dict[str, Any]]) -> None:
                 continue
             if not isinstance(args, dict):
                 continue
-            trimmed = False
-            for key in _BULKY_ARGS:
-                value = args.get(key)
-                if isinstance(value, str) and len(value) > stub_chars:
-                    args[key] = f"…[{len(value):,} characters, sent earlier in this turn]"
-                    trimmed = True
-            if trimmed:
-                function["arguments"] = json.dumps(args)
+            stubbed = stub_arguments(args, stub_chars, "earlier in this turn")
+            if stubbed != args:
+                function["arguments"] = json.dumps(stubbed)
 
 
 def _compact_images(convo: list[dict[str, Any]]) -> None:
@@ -147,51 +163,22 @@ def _carries_image(message: dict[str, Any]) -> bool:
     )
 
 
-#: Share of the model's context that may fill before the history is folded into a summary.
-#:
-#: Not near the brim, because `ContextBudget` is the overflow guard and this is not — and a
-#: valve that only opens at the last moment opens during the rounds that can least afford to
-#: spend one on a summary. Not near the middle either: every round below this threshold is a
-#: round where the whole history re-sends at cache-read price, which is the cheap outcome.
-_FOLD_ABOVE_SHARE = 0.8
+#: When the history is folded is not decided here any more: `history.fold_at` is the one fold
+#: point for both folds, compared against the ledger's reading of the whole request. The share
+#: that stood here (80% of the window) and the check beside it measured only `content` strings,
+#: which missed tool-call arguments — about half of a replayed history — while the fold between
+#: turns measured the same history with them.
 
-
-#: How many folds a single turn will pay for before it gives up and lets `_drop_oldest_exchange`
-#: take over. Each fold costs a model call and summarises the previous summary, so the third one
-#: is buying very little with real money.
+#: How many folds a single turn will pay for before it gives up and lets shaving and
+#: `_drop_oldest_exchange` take over. Counted by the turn, attempts included: a fold absorbs the
+#: notes of the one before it, so a count of the notes still in the conversation never passed one
+#: and never stopped anything, and a fold that failed left no note to count at all.
 _MAX_FOLDS = 2
 
 
-#: Rough chars-per-token, matching `llm/caching.py`. Only used for the no-window fallback below,
-#: where being a little pessimistic is the safe direction.
+#: Rough chars-per-token, matching `llm/caching.py`, for sizing the live tool set against a
+#: window before any round has calibrated a real one.
 _CHARS_PER_TOKEN = 3.7
-
-
-#: What the old char-budget fallback compares against when the window is unknown. Same figure
-#: the shaving path has always used, so an install with no known window behaves exactly as
-#: before rather than inheriting a threshold derived from a window nobody can name.
-_UNKNOWN_WINDOW_CHARS = 80_000
-
-
-def _room_is_tight(convo: list[dict[str, Any]], window: int) -> bool:
-    """Should this conversation's history be reduced before the next request?
-
-    ``window`` is the model's context in tokens, or 0 when nobody knows — and 0 is
-    load-bearing here exactly as it is in `config.context_window`. An unknown window means we
-    cannot say what fraction of it we are using, so the honest answer is to fall back to an
-    absolute character budget and behave as this loop always did. Guessing a window would be
-    worse in both directions: guess high and a small model 400s mid-turn, guess low and every
-    turn is reduced for nothing.
-    """
-    held = sum(len(str(message.get("content") or "")) for message in convo)
-    if window <= 0:
-        return held > _UNKNOWN_WINDOW_CHARS
-    return held > window * _CHARS_PER_TOKEN * _FOLD_ABOVE_SHARE
-
-
-#: Below this a duplicate is not worth replacing — the pointer is not free either, and a short
-#: result carries its own answer.
-_DEDUPE_MIN_CHARS = 400
 
 
 def _already_in(convo: list[dict[str, Any]], name: str, content: str) -> int | None:
@@ -213,7 +200,7 @@ def _already_in(convo: list[dict[str, Any]], name: str, content: str) -> int | N
     Asking before appending keeps the history **append-only**, which is the property the cache
     needs. Nothing already sent is ever touched.
     """
-    if len(content) < _DEDUPE_MIN_CHARS:
+    if len(content) < coverage.MIN_CHARS:
         return None
     for index, message in enumerate(convo):
         if message.get("role") != "tool" or message.get("_deduped"):
@@ -224,7 +211,7 @@ def _already_in(convo: list[dict[str, Any]], name: str, content: str) -> int | N
 
 
 def _tool_result_message(convo: list[dict[str, Any]], name: str, payload: str) -> dict[str, Any]:
-    """The message to append for a tool result — the content, or a pointer to an identical one.
+    """The message to append for a tool result — the content, or a pointer to where it already is.
 
     Reading the same file twice puts two byte-identical copies in the window, and the second
     carries nothing the first lacks. Worth real money: in one measured session Kith read
@@ -235,21 +222,72 @@ def _tool_result_message(convo: list[dict[str, Any]], name: str, payload: str) -
     the pointer says where. And unlike stubbing it does not tempt him to read the file *again*
     to recover it, which is how a 1,200-character stub turns into fifteen full reads.
 
-    Two reads of a file he edited in between are not identical, so both survive. That difference
-    is the record of his own change and is the last thing to collapse.
+    **Identical is the rare case.** Measured Sep 13-27, 533 reads repeated a path already read that
+    turn and one was byte-identical; where a repeat does duplicate something, it is a window that
+    overlaps an earlier one. So a `read_file` result that is not an exact copy is asked the finer
+    question — which of its *lines* the turn already holds, unchanged — and only those are left out
+    (`coverage.reduced`, which also has the measurement of how often that is). Lines he changed are
+    never among them: a changed line is different text, and that difference is the record of his
+    own change.
+
+    ``_whole`` keeps what a pointer stands in for, because what it points at can be stubbed, folded
+    or dropped later in the turn — and a pointer to something no longer there is worse than the
+    duplicate. See `_settle_pointers`, which puts it back when that happens.
     """
-    if _already_in(convo, name, payload) is None:
-        return {"role": "tool", "tool_name": name, "content": payload}
-    return {
-        "role": "tool",
-        "tool_name": name,
-        "content": (
-            f"[identical to what `{name}` returned earlier in this turn — that result is still "
-            "above, in full, and unchanged. Nothing has been withheld and there is no need to "
-            "read it again.]"
-        ),
-        "_deduped": True,
-    }
+    if _already_in(convo, name, payload) is not None:
+        return {
+            "role": "tool",
+            "tool_name": name,
+            "content": (
+                f"[identical to what `{name}` returned earlier in this turn — that result is still "
+                "above, in full, and unchanged. Nothing has been withheld and there is no need to "
+                "read it again.]"
+            ),
+            "_deduped": True,
+            "_whole": payload,
+        }
+    shorter = coverage.reduced(convo, name, payload)
+    if shorter is not None:
+        return {"role": "tool", "tool_name": name, "content": shorter, "_deduped": True, "_whole": payload}
+    return {"role": "tool", "tool_name": name, "content": payload}
+
+
+def _settle_pointers(convo: list[dict[str, Any]]) -> bool:
+    """Make every pointer in the turn true again, after something moved. True if any changed.
+
+    A pointer is only as good as what it points at, and three things take results away mid-turn:
+    `_compact_tool_history` stubs the oldest once the live set is over budget, `compaction.fold`
+    replaces the middle with a summary, `_drop_oldest_exchange` removes the oldest exchange. Each goes oldest-first, and a pointer always points *back* — so
+    the thing pointed at is always the first to go, and the pointer, being small, survives it.
+    Left alone it would then send him to lines that are no longer anywhere in the conversation.
+
+    So the question each pointer answered is asked again, of the messages in front of it as they
+    are now, and a pointer whose answer changed takes the new one — which is the whole result
+    again when nothing above still holds its lines. The rule is one line long and needs no record
+    of what pointed where: **after this runs, every pointer is exactly what `_tool_result_message`
+    would write today.**
+
+    Cache-neutral by the same argument: a pointer only changes when something *before* it did, so
+    the prefix already broke at that earlier point and rewriting a later message costs nothing
+    more. A stubbed pointer is left as it is — it is a stub now, and putting the whole result back
+    would undo the budget that stubbed it.
+
+    Call it after the history has been reduced and before the request is measured and sent.
+    """
+    changed = False
+    for index, message in enumerate(convo):
+        whole = message.get("_whole")
+        if whole is None or message.get("_stubbed"):
+            continue
+        now = _tool_result_message(convo[:index], str(message.get("tool_name") or ""), whole)
+        if now["content"] == message.get("content"):
+            continue
+        message["content"] = now["content"]
+        if "_whole" not in now:
+            message.pop("_whole", None)
+            message.pop("_deduped", None)
+        changed = True
+    return changed
 
 
 #: What share of the window's worth of characters may be tool output held whole.

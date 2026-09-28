@@ -101,7 +101,7 @@ def begin(
         reserve=reserve,
         landing_effort=landing_effort,
         routing=routing_policy.for_conversation(config, agent_db_path, conversation_id),
-        room=ContextBudget(window=config.context_window, reserve=int(wanted_out)),
+        room=ContextBudget(window=config.context_window, reserve=int(wanted_out), model=config.model),
         offload=offload,
     )
 

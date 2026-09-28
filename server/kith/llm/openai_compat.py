@@ -571,30 +571,41 @@ def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     Tool results follow their assistant tool-call turn in order, so we pair them
     to the freshly-minted tool_call ids positionally.
+
+    **Everything here is normalised, because the next turn sends this again from a different
+    source.** A turn's own rounds come from the model; the same rounds on the next turn come
+    from the transcript. Any difference between the two — the provider's call id against a
+    minted one, the model's argument string against a re-serialised dict, a stray newline of
+    preamble — is a prompt that stops matching at that message, and a cache that re-bills
+    everything after it. So ids are always positional, arguments are always parsed and dumped
+    one way, and a tool-calling message's text is trimmed: both sources land on the same bytes.
+
+    The present-state block rides inside the message it belongs to. See `with_context`.
     """
     out: list[dict] = []
     pending_ids: list[str] = []
-    for message in messages:
+    for message in with_context(messages):
         role = message.get("role")
         if role == "assistant" and message.get("tool_calls"):
             pending_ids = []
             tool_calls = []
             for i, call in enumerate(message["tool_calls"]):
                 function = call.get("function") or {}
-                call_id = call.get("id") or f"call_{len(out)}_{i}"
-                arguments = function.get("arguments")
-                arguments = arguments if isinstance(arguments, str) else json.dumps(arguments or {})
+                call_id = f"call_{len(out)}_{i}"
                 tool_calls.append(
                     {
                         "id": call_id,
                         "type": "function",
-                        "function": {"name": function.get("name", ""), "arguments": arguments},
+                        "function": {
+                            "name": function.get("name", ""),
+                            "arguments": _arguments_text(function.get("arguments")),
+                        },
                     }
                 )
                 pending_ids.append(call_id)
-            out.append(
-                {"role": "assistant", "content": message.get("content") or None, "tool_calls": tool_calls}
-            )
+            text = message.get("content")
+            text = text.strip() if isinstance(text, str) else text
+            out.append({"role": "assistant", "content": text or None, "tool_calls": tool_calls})
         elif role == "tool":
             call_id = pending_ids.pop(0) if pending_ids else f"call_{len(out)}"
             out.append({"role": "tool", "tool_call_id": call_id, "content": message.get("content", "")})
@@ -603,6 +614,62 @@ def _to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             # attached). Passed through as-is either way: rebuilding it here would mean
             # this function knowing about modalities, which is the route's business.
             out.append({"role": role, "content": message.get("content", "")})
+    return out
+
+
+def _arguments_text(raw: Any) -> str:
+    """A call's arguments as the one string both of their sources produce.
+
+    Parsed and dumped rather than passed through: the model's own string has whatever spacing it
+    was generated with, and the transcript's copy is a dict. A string that is not JSON is left
+    alone — there is nothing to normalise it to, and changing it would change what was sent.
+    """
+    if isinstance(raw, str):
+        try:
+            return json.dumps(json.loads(raw or "{}"))
+        except ValueError:
+            return raw
+    return json.dumps(raw or {})
+
+
+#: How the present-state block is set apart from the person's words once it sits beside them.
+#: Tags rather than a heading: the block's own sections already use brackets and headings, and the
+#: one thing that must be unmistakable is where the person stopped typing.
+CONTEXT_OPEN = '<context from="kith">'
+CONTEXT_CLOSE = "</context>"
+
+
+def with_context(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The present-state block folded into the user message it was built for.
+
+    Internally it is its own `system` message — `_live` for the one built this turn, `_present`
+    for the ones earlier turns sent — because the ledger and the context screen need to count
+    and show it apart from the conversation. On the wire it must not be a system message.
+    Measured over two weeks on DeepSeek's own host: 87 of 89 turns opened with nothing cached
+    past the ~19k-token head, while the history behind it was 98% identical to the turn before.
+    A trailing system message is the shape a chat template gathers up and moves to the top, which
+    puts the per-turn clock straight after the head, where it breaks the cache for everything
+    that follows. Inside the user message it stays where it was written, and because earlier
+    turns' blocks are replayed exactly as they were sent, the prefix up to the new message
+    matches the turn before.
+
+    A block with no user message before it — a preview of the next turn's prompt, built between
+    turns — stays a system message; nothing is sent from there.
+    """
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        attached = message.get("role") == "system" and (message.get("_live") or message.get("_present"))
+        if attached and out and out[-1].get("role") == "user":
+            block = f"{CONTEXT_OPEN}\n{message.get('content') or ''}\n{CONTEXT_CLOSE}"
+            host = dict(out[-1])
+            said = host.get("content")
+            if isinstance(said, list):
+                host["content"] = [*said, {"type": "text", "text": block}]
+            else:
+                host["content"] = f"{said or ''}\n\n{block}" if said else block
+            out[-1] = host
+            continue
+        out.append(message)
     return out
 
 

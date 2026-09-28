@@ -31,8 +31,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from kith.llm import ledger
 from kith.services import agent_loop
-from kith.services.turn import history
+from kith.services import history as fold_policy
 
 #: A million-token model, as configured on this install.
 BIG = 1_050_000
@@ -67,20 +68,26 @@ def _convo(results: int, size: int = 9_000) -> list[dict[str, Any]]:
     return convo
 
 
+def _past_fold_point(convo: list[dict[str, Any]], window: int) -> bool:
+    """`_make_room`'s own question: the ledger's reading of the whole request, against the one
+    fold point both folds use."""
+    return fold_policy.fold_due(ledger.take(convo, window=window).used, window)
+
+
 def _compact_as_the_loop_does(convo: list[dict[str, Any]], window: int) -> None:
-    """Exactly what one round of `_make_room` does to the history.
+    """Exactly what one round of `_make_room` does to the history, short of a fold call.
 
     Kept faithful to the loop deliberately. This helper used to gate *everything* behind
     `_room_is_tight`, which stopped being what the loop does when tool history moved to an
     unconditional pass sized by the window — and because the helper duplicated the loop rather
     than calling it, every test in this file went on passing while pinning a contract the code
     no longer had. If `_make_room` changes, this changes with it.
+
+    Images and call arguments are shaved only when `room.is_tight`, which never fires before a
+    round has been measured — so a round with no measurement behind it, which is what this is,
+    shaves neither. Past the fold point alone is a reason to fold, not to shave.
     """
-    agent_logic_window = window
-    agent_loop._compact_tool_history(convo, window=agent_logic_window)
-    if agent_loop._room_is_tight(convo, window):
-        agent_loop._compact_images(convo)
-        agent_loop._compact_call_arguments(convo)
+    agent_loop._compact_tool_history(convo, window=window)
 
 
 def _first_divergence(a: list[dict], b: list[dict]) -> int | None:
@@ -130,11 +137,10 @@ class TestThePrefixSurvivesTheNextRound:
 
 
 class TestTheValveStillOpens:
-    def test_an_unknown_window_keeps_the_old_behaviour(self):
-        """0 is load-bearing — it means nobody can say how much room there is. Guessing high
-        400s a small model mid-turn, so the honest answer is to trim as before."""
+    def test_an_unknown_window_still_ages_out_tool_output(self):
+        """0 is load-bearing — it means nobody can say how much room there is. The tool pass
+        falls back to its absolute budget, so a long unknown-window turn is still trimmed."""
         convo = _convo(12)
-        assert agent_loop._room_is_tight(convo, 0) is True
         _compact_as_the_loop_does(convo, 0)
         stubbed = [m for m in convo if m.get("role") == "tool" and len(str(m.get("content"))) < 9_000]
         assert stubbed, "an unknown window must still be compacted"
@@ -142,40 +148,37 @@ class TestTheValveStillOpens:
     def test_a_small_model_over_its_share_is_still_reduced(self):
         """14 results is ~126k characters, past 80% of a 40,960-token window."""
         convo = _convo(14)
-        assert agent_loop._room_is_tight(convo, SMALL) is True
+        assert _past_fold_point(convo, SMALL) is True
         _compact_as_the_loop_does(convo, SMALL)
         assert sum(len(str(m.get("content") or "")) for m in convo) < 14 * 9_000
 
     def test_a_small_model_with_room_is_left_alone_too(self):
-        """The gate is a share of the window, not a special case for big models. 12 results is
-        ~108k characters — 71% of a 40,960-token window — and fits.
-
-        Note this one passes through the unconditional tool pass as well, and survives it
-        because a 40,960-token window buys a live budget of ~18,000 characters... which it does
-        NOT fit inside. See the amended assertion: a small model's live set is genuinely small,
-        and the honest statement here is about the *fold*, not about nothing happening."""
+        """The fold point caps at 80% of the window, not a special case for big models. 12 results
+        is ~108k characters — about 29k tokens of a 32,768-token fold point — and fits."""
         convo = _convo(12)
-        assert agent_loop._room_is_tight(convo, SMALL) is False
+        assert _past_fold_point(convo, SMALL) is False
 
     def test_a_turn_that_really_is_enormous_gets_trimmed(self):
-        """The relief valve. Past 80% of the window, losing the cache beats losing the turn."""
+        """The relief valve. Past the fold point, losing the cache beats losing the turn."""
         convo = _convo(350)
         held = sum(len(str(m.get("content") or "")) for m in convo)
-        assert held > BIG * history._CHARS_PER_TOKEN * history._FOLD_ABOVE_SHARE
-        assert agent_loop._room_is_tight(convo, BIG) is True
+        assert held > fold_policy.fold_at(BIG) * 3.7
+        assert _past_fold_point(convo, BIG) is True
         _compact_as_the_loop_does(convo, BIG)
         assert sum(len(str(m.get("content") or "")) for m in convo) < held
 
     def test_the_threshold_is_where_it_claims_to_be(self):
         """Just under and just over, so the boundary is pinned rather than implied."""
-        budget_chars = BIG * history._CHARS_PER_TOKEN * history._FOLD_ABOVE_SHARE
+        budget_chars = fold_policy.fold_at(BIG) * 3.7
         under = [{"role": "tool", "content": "x" * int(budget_chars * 0.9)}]
         over = [{"role": "tool", "content": "x" * int(budget_chars * 1.1)}]
-        assert agent_loop._room_is_tight(under, BIG) is False
-        assert agent_loop._room_is_tight(over, BIG) is True
+        assert _past_fold_point(under, BIG) is False
+        assert _past_fold_point(over, BIG) is True
 
-    def test_an_unknown_window_falls_back_to_an_absolute_budget(self):
+    def test_an_unknown_window_folds_at_the_setting(self):
         """Not "always compact" — that was the old behaviour and it meant a two-message
-        conversation on a local model was run through the compactor on every round."""
-        assert agent_loop._room_is_tight(_convo(1), 0) is False
-        assert agent_loop._room_is_tight(_convo(12), 0) is True
+        conversation on a local model was run through the compactor on every round — and not
+        "never", which is what a threshold made of an unknown window would be."""
+        assert _past_fold_point(_convo(1), 0) is False
+        enormous = [{"role": "tool", "content": "x" * int(fold_policy.fold_at(0) * 3.7 * 1.1)}]
+        assert _past_fold_point(enormous, 0) is True

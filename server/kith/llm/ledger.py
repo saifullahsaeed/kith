@@ -199,6 +199,12 @@ def take(
             project_chars += mine
             plugin_chars += theirs
             live_chars += size - mine - theirs
+        elif role == "system" and message.get("_present"):
+            # An earlier turn's present-state block, replayed beside the message it was sent with
+            # (see `openai_compat.with_context`). It was "where he is" on its own turn; on every
+            # turn after, it is part of what was said, and filed under "Who he is" — where an
+            # unmarked system message lands — it would read as the persona growing every turn.
+            said_chars += size
         elif role == "system" and message.get("_summary"):
             # The folded brief — a summary of the older turns. A `system` message on the wire, but
             # the conversation compressed, so it is counted with the conversation rather than under
@@ -251,15 +257,23 @@ def take(
         else:
             built_in_chars += size
 
+    # The live block is one region cut three ways, so its three lines are cut from the block's
+    # cost rather than rounded separately. Rounded apart, 3,000 characters of project and 1,033 of
+    # everything else come to 810 + 279 tokens against 1,090 for the block whole — a line that
+    # appears to add to the total when it only divides it.
+    project_tokens = _tokens(project_chars, ratio)
+    plugin_tokens = _tokens(plugin_chars, ratio)
+    live_tokens = _tokens(live_chars + project_chars + plugin_chars, ratio) - project_tokens - plugin_tokens
+
     lines = (
         Line("persona", "Persona", _tokens(persona_chars, ratio)),
         Line("system", "How you work", _tokens(system_chars, ratio)),
         Line("built_in_tools", "System tools", _tokens(built_in_chars, ratio)),
         Line("mcp_tools", "MCP tools", _tokens(mcp_chars, ratio)),
         Line("plugin_tools", "Plugin tools", _tokens(plugin_tool_chars, ratio)),
-        Line("project", "The project he is in", _tokens(project_chars, ratio)),
-        Line("plugins", "Plugins", _tokens(plugin_chars, ratio)),
-        Line("live", "Where he is right now", _tokens(live_chars, ratio)),
+        Line("project", "The project he is in", project_tokens),
+        Line("plugins", "Plugins", plugin_tokens),
+        Line("live", "Where he is right now", live_tokens),
         Line("directives", "Turn directives", _tokens(directive_chars, ratio)),
         Line("messages", "Messages", _tokens(said_chars, ratio)),
         Line("summary", "Summary of older turns", _tokens(summary_chars, ratio)),

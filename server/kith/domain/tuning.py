@@ -380,20 +380,29 @@ TUNABLES: tuple[Tunable, ...] = (
         maximum=20_000,
         unit="characters",
     ),
+    # `history_max_chars` stood here: the fold point for a model whose window was unrecorded,
+    # while a known window folded at 80% of itself. Two thresholds measuring two different things,
+    # and the one that applied on this install was 838,860 tokens. `fold_at_tokens` replaced both.
     Tunable(
-        key="history_max_chars",
-        env="KITH_HISTORY_MAX_CHARS",
-        label="Conversation kept in full (no known window)",
-        help="Only used when his model's context window is unrecorded — a local model, or one "
-        "adopted before its window was known. With a known window he folds at 80% of it "
-        "automatically, scaled to that model, and this is ignored. High enough here and "
-        "nothing is ever summarised on an unknown-window model (the prompt just grows); too "
-        "low and he loses the detail of what was said earlier in the same chat.",
-        default=120_000,
+        key="fold_at_tokens",
+        env="KITH_FOLD_AT_TOKENS",
+        label="Fold the conversation at",
+        help="How large one request may grow before the older part of the conversation is folded "
+        "into a brief — between messages and in the middle of a long one alike. Never more than "
+        "80% of the model's window, so a small local model folds at its own size. Higher and every "
+        "round re-reads more, and each time the prompt cache misses the whole of it is billed "
+        "again; lower and he folds more often and works from a summary of more of the chat.",
+        # 200k, from measuring. Sep 13-27 on a million-token model, folding at 80% of the window
+        # (838,860 tokens): rounds over 300k were 48% of all rounds and 80% of the spend, and long
+        # chats swung between ~260k and ~800k. Cached, an 800k round cost $0.0024 on DeepSeek and
+        # uncached $0.12, so what the fold point really sets is the price of a cache miss — which
+        # is every turn after a pause, and every host change. Below 300k the costly rounds cannot
+        # happen, and 200k leaves the next round's growth room under it.
+        default=200_000,
         group="chat",
-        minimum=8_000,
+        minimum=20_000,
         maximum=4_000_000,
-        unit="characters",
+        unit="tokens",
     ),
     Tunable(
         key="history_keep_recent",
@@ -401,9 +410,10 @@ TUNABLES: tuple[Tunable, ...] = (
         label="Recent messages kept verbatim",
         help="How many of your most recent messages stay word-for-word — the tool calls "
         "each one made included, not just what was said — when older ones are folded into "
-        "a summary. Too few and he forgets what he just read or ran; too many and the fold "
-        "barely shrinks anything, since one message's worth of tool calls can be far "
-        "bigger than a plain reply.",
+        "a summary. Only yours count: a reminder or a background run reporting back does not. "
+        "Too few and he forgets what he just read or ran; too many and the fold barely shrinks "
+        "anything, since one message's worth of tool calls can be far bigger than a plain "
+        "reply — so they never take more than half the fold point, however many that leaves.",
         default=5,
         group="chat",
         minimum=1,

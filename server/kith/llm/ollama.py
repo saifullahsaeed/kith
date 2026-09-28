@@ -16,6 +16,7 @@ import requests
 
 from kith.domain.chat import Config
 from kith.domain.think_splitter import ThinkSplitter
+from kith.llm.openai_compat import with_context
 
 _NS_PER_SECOND = 1_000_000_000
 
@@ -64,9 +65,13 @@ def stream_once(
       and go again.
     - ``{"type": "error", "message": str}`` on any failure
     """
+    # The same message shapes the cloud path sends, so a local model reads the present-state
+    # block where a hosted one does — beside the message it was built for. Keys starting with an
+    # underscore are the loop's own bookkeeping (a pointer's full text, the ledger's markers) and
+    # are never sent; the cloud path rebuilds every message and drops them, so this one must too.
     payload: dict[str, Any] = {
         "model": config.model,
-        "messages": messages,
+        "messages": [{k: v for k, v in m.items() if not k.startswith("_")} for m in with_context(messages)],
         "stream": True,
         "think": config.think,
         "options": {"num_ctx": config.num_ctx, "num_predict": config.num_predict},

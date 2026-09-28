@@ -23,9 +23,11 @@ import flask
 import pytest
 
 from kith.api.routes import chat
-from kith.services import conversations, history
+from kith.services import brief, conversations, history
 
-BRIEF = "They agreed the meter reads the last turn's reading."
+BRIEF = "\n\n".join(
+    f"## {section}\nThey agreed the meter reads the last turn's reading." for section in brief.SECTIONS
+)
 
 
 @pytest.fixture
@@ -38,7 +40,7 @@ def app_context():
 @pytest.fixture
 def no_model(monkeypatch):
     """The summariser, stubbed. A fold must never make a network call in a test."""
-    monkeypatch.setattr(history, "_summarize", lambda text, config, host: BRIEF)
+    monkeypatch.setattr(history, "_summarize", lambda *args, **kwargs: brief.Reply(BRIEF, None, "brief"))
 
 
 #: One id per call, because the transcript is a file and `record_event` appends to it.

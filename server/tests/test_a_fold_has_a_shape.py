@@ -25,23 +25,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from kith.services import history
+from kith.services import brief, history
+
+#: What a first fold asks for, and what a fold built on an earlier brief asks for.
+_INSTRUCTION = brief.instruction("The conversation above")
+_CONTINUING = brief.instruction("The conversation above", earlier="[Summary]", continuing=True)
 
 
 class TestTheInstructionAsksForAShape:
     def test_every_section_is_named_in_the_instruction(self):
-        for heading in history.SECTIONS:
-            assert f"## {heading}" in history._INSTRUCTION, heading
+        for heading in brief.SECTIONS:
+            assert f"## {heading}" in _INSTRUCTION, heading
 
     def test_the_sections_are_asked_for_in_order(self):
-        found = [history._INSTRUCTION.index(f"## {h}") for h in history.SECTIONS]
+        found = [_INSTRUCTION.index(f"## {h}") for h in brief.SECTIONS]
         assert found == sorted(found)
 
     def test_the_person_is_one_of_them(self):
         """The section whose absence caused the whole thing. It is first because what was
         wanted is what everything else in the brief is in service of."""
-        assert history.SECTIONS[0] == "What they asked for"
-        assert "What the person wanted" in history._INSTRUCTION
+        assert brief.SECTIONS[0] == "What they asked for"
+        assert "What the person wanted" in _INSTRUCTION
 
     def test_that_section_asks_for_intent_and_not_a_replay(self):
         """Found by running it. The first draft asked for every request "quoted in their own
@@ -49,30 +53,40 @@ class TestTheInstructionAsksForAShape:
         lines, down to "keepgoimh", then the output cap arrived in the middle of section two
         and five of six sections were never written. `_what_they_asked` already carries those
         words; the brief paying for them again starves the parts only it can say."""
-        assert "NOT a replay of their messages" in history._INSTRUCTION
-        assert "carried forward separately" in history._INSTRUCTION
+        assert "NOT a replay of their messages" in _INSTRUCTION
+        assert "carried forward separately" in _INSTRUCTION
 
     def test_it_asks_for_quotes_rather_than_paraphrase(self):
         """The old one only said what *not* to do — "do not add, guess, or infer". A negative
         constraint prevents invention; it does not produce fidelity."""
-        assert "Quote rather than paraphrase" in history._INSTRUCTION
+        assert "Quote rather than paraphrase" in _INSTRUCTION
 
     def test_it_still_forbids_inventing(self):
         """The one thing worth keeping from the old instruction."""
-        assert "Invent nothing" in history._INSTRUCTION
+        assert "Invent nothing" in _INSTRUCTION
 
     def test_it_says_what_to_do_with_its_own_previous_brief(self):
-        """`compact` prefixes a refold with `[Summary so far]` — the model is handed its own
-        last output and told nothing about it, so it compressed a summary. Do that on every
-        fold of a long conversation and the beginning decays to nothing."""
-        assert "[Summary so far]" in history._INSTRUCTION
-        assert "Do not summarise it again" in history._INSTRUCTION
+        """A refold used to hand the model its own last output and ask it to carry it forward,
+        and under a fixed cap it compressed it instead. Now the earlier brief is kept by the
+        code, and the model is told that and asked only for what is new — naming the summary it
+        is continuing by the header it can see in the prompt."""
+        assert "[Summary]" in _CONTINUING
+        assert "ONLY what is new" in _CONTINUING
+        assert "Do not summarise the earlier brief again" in _CONTINUING
+        assert "[Summary]" not in _INSTRUCTION, "a first fold has no earlier brief to talk about"
+
+    def test_it_starts_by_telling_it_to_stop(self):
+        """The instruction is the last message of a conversation in full flight, and the most
+        natural thing to do with one of those is to carry on with it — which is what two of ten
+        real folds did, 2026-09-11 and 2026-09-17."""
+        assert _INSTRUCTION.startswith("Stop here.")
+        assert "do not use any tool" in _INSTRUCTION
 
     def test_it_is_not_written_around_code(self):
         """Kith's conversations are spreadsheets, audits and research at least as often. A
         section called "files and code" would tilt every fold toward the one kind of work that
         names its artifacts in backticks."""
-        lowered = history._INSTRUCTION.lower()
+        lowered = _INSTRUCTION.lower()
         for biased in ("code", "codebase", "function", "repository"):
             assert biased not in lowered, biased
 
@@ -86,28 +100,27 @@ class TestTheBriefHasRoomToBeThatShape:
     def test_a_big_window_gets_more_than_a_paragraph(self):
         """The cap was the real ceiling: 1,600 tokens is right for a paragraph and cannot hold
         six sections, so it decided the output regardless of the instruction."""
-        assert history._summary_tokens(1_000_000) > 1_600
+        assert brief.tokens(1_000_000) > 1_600
 
     def test_it_never_grows_into_another_transcript(self):
         """A fold earns its cost by being far smaller than what it replaces."""
-        assert history._summary_tokens(10_000_000) == history._SUMMARY_MAX_TOKENS
+        assert brief.tokens(10_000_000) == brief.MAX_TOKENS
 
     def test_a_small_local_model_is_left_exactly_as_it_was(self):
         """40K of window cannot spare more, and the floor is what this was for its whole life
         before the sections existed — so this change cannot regress that install."""
-        assert history._summary_tokens(40_000) == history._SUMMARY_MIN_TOKENS
+        assert brief.tokens(40_000) == brief.MIN_TOKENS
 
     def test_an_unknown_window_gets_the_floor(self):
-        """Guessing a share of a number nobody recorded is worse in both directions — the same
-        argument `_budget_chars` makes for falling back to a flat knob."""
-        assert history._summary_tokens(0) == history._SUMMARY_MIN_TOKENS
-        assert history._summary_tokens(-1) == history._SUMMARY_MIN_TOKENS
+        """Guessing a share of a number nobody recorded is worse in both directions."""
+        assert brief.tokens(0) == brief.MIN_TOKENS
+        assert brief.tokens(-1) == brief.MIN_TOKENS
 
     def test_it_scales_with_the_window_rather_than_being_a_constant(self):
         """The thing the old value got wrong. This module already argues the case, about the
         input side: a fixed count is far too small next to a 1M cloud model and far too large
         next to a 40K local one."""
-        assert history._summary_tokens(200_000) > history._summary_tokens(50_000)
+        assert brief.tokens(200_000) > brief.tokens(50_000)
 
 
 class TestTheFoldStillWorks:
@@ -142,7 +155,7 @@ _A_REPLY = (
 
 
 def _a_brief(said: str) -> str:
-    return "\n\n".join(f"## {section}\n{said}" for section in history.SECTIONS)
+    return "\n\n".join(f"## {section}\n{said}" for section in brief.SECTIONS)
 
 
 class TestAnAnswerThatIsNotABriefIsNotKept:
@@ -160,7 +173,9 @@ class TestAnAnswerThatIsNotABriefIsNotKept:
 
         monkeypatch.setattr(ollama, "stream_once", answers_instead)
         config = replace(default_config(), api_key="", base_url="")
-        assert history._summarize("the conversation", config, "host") == ""
+        reply = history._summarize([{"role": "user", "content": "fold"}], config, "host")
+        assert reply.text == ""
+        assert reply.outcome == "not a brief"
 
     def test_a_real_brief_still_comes_back(self, monkeypatch):
         from kith.config import default_config
@@ -171,7 +186,9 @@ class TestAnAnswerThatIsNotABriefIsNotKept:
 
         monkeypatch.setattr(ollama, "stream_once", summarises)
         config = replace(default_config(), api_key="", base_url="")
-        assert history._summarize("the conversation", config, "host") == _a_brief("done")
+        reply = history._summarize([{"role": "user", "content": "fold"}], config, "host")
+        assert reply.text == _a_brief("done")
+        assert reply.outcome == "brief"
 
 
 class TestABadFoldAlreadyStoredIsPassedOver:

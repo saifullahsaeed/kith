@@ -294,12 +294,14 @@ def full_messages(conversation_id: str) -> list[dict]:
     treats this axis (Claude Code keeps tool history until it compacts, rather than
     dropping it every turn) rather than trying to time-box around the staleness risk.
 
-    Reconstructed from the transcript's own ``tool_call``/``tool_result`` events rather
-    than the rounds they were originally batched into — nothing in the transcript records
-    which calls shared a round, and nothing needs to: ``openai_compat._to_openai`` pairs a
-    ``tool`` message to the assistant message immediately before it *positionally*, not by
-    id, so one call to its own result, in the order they actually resolved, is exactly the
-    shape it wants. ``pending`` is keyed by the transcript's own per-turn call id (unique
+    **It must rebuild what the turn sent, byte for byte**, because the next turn's cache is
+    exactly as long as the stretch where it does. One call per assistant message, each beside
+    its own result — the shape `agent_loop` itself appends, so the two agree by construction —
+    with the round's text on its first call, and the turn's closing message holding the last
+    round's words rather than every word of the turn glued together. A result that went out as
+    a pointer is replayed as the pointer (`_point_again`). What is still not replayed, on
+    purpose: directives, which are turn-local, and pictures, whose bytes the transcript drops.
+    ``pending`` is keyed by the transcript's own per-turn call id (unique
     only within the turn that produced it — the agent loop resets its counter at the start
     of every real turn) and is cleared at every user message rather than trusted to stay
     unique for the whole file, so a crashed turn's orphaned call can never be mistaken for
@@ -313,12 +315,45 @@ def full_messages(conversation_id: str) -> list[dict]:
     #: Which turn each `tool` message in `out` came from, so the old ones can be found once the
     #: newest turn is known — which it is not until the file has been read to the end.
     turn_of: dict[int, int] = {}
+    #: Which turn each tool-calling `assistant` message came from, for the same reason: its
+    #: arguments age out the way its result does.
+    calls_of: dict[int, int] = {}
+    #: What the model said in the round being read, and whether it has been placed yet. A round's
+    #: text is recorded before its `stats` line and its calls after it, so the text is held until
+    #: the round's first call arrives and rides on that call's message — the shape the turn sent.
+    said: list[str] = []
+    preamble = ""
+    #: Whether this turn recorded what it said round by round, which decides what its closing
+    #: message is. A turn that did says its last round's words; one with no `said` lines — from
+    #: before they were recorded, or written by something other than the turn recorder — keeps
+    #: the message exactly as it was recorded.
+    rounds_seen = False
     for entry in read(conversation_id):
         kind = entry.get("type")
         if kind == "message" and entry.get("role") in ("user", "assistant", "system"):
             if entry["role"] in ("user", "system"):
                 pending = {}  # a turn boundary — nothing from before it can still be open
                 turn += 1
+                said, preamble, rounds_seen = [], "", False
+            if entry["role"] == "assistant":
+                # The recorder's closing message is every word of the turn joined together, with
+                # the preambles of its tool rounds glued to the answer — "Let me get the specifics
+                # before Ianswer.I found it…" — which is a message the model never produced. When
+                # the rounds were recorded, the closing message is the last round's own text.
+                # A round's text moves to `preamble` when its `stats` line arrives, so the last
+                # round's words are there — plus anything streamed after it, which is what an
+                # interrupted round leaves.
+                #
+                # Falling back to the recorded message when the last round said nothing — a turn
+                # that ended on a tool call, or was stopped mid-round. Dropping it would be truer
+                # to the wire and would move every later message down one place, and a folded
+                # brief records where it stopped as a position in this list.
+                recorded = str(entry.get("content") or "")
+                text = ((preamble + "".join(said)).strip() or recorded) if rounds_seen else recorded
+                said, preamble = [], ""
+                if text:
+                    out.append({"role": "assistant", "content": text})
+                continue
             # A wake is `system` in the transcript and `user` on the wire, and the difference is
             # the difference between a record and a prompt.
             #
@@ -331,8 +366,28 @@ def full_messages(conversation_id: str) -> list[dict]:
             # prefix", its reading of a conversation that does not end in a turn. Fixed forward
             # rather than reverted: the transcript and the interface keep the honest role, and
             # only the prompt view puts it where the API expects a prompt.
-            role = "user" if entry["role"] == "system" else entry["role"]
-            out.append({"role": role, "content": entry.get("content") or ""})
+            #
+            # `_wake` says so to everything that reads this list and must not mistake it for the
+            # person: the fold's "what they asked for", and the count of their recent turns.
+            message: dict[str, Any] = {"role": "user", "content": entry.get("content") or ""}
+            if entry["role"] == "system":
+                message["_wake"] = True
+            out.append(message)
+        elif kind == "present":
+            # The present-state block this message was sent with. Kept on the message, not as one
+            # of its own, so everything that reads the person's words still reads only their words;
+            # `turn.prompt._assemble` puts it back beside them exactly as it went out.
+            for message in reversed(out):
+                if message.get("role") == "user":
+                    message.setdefault("_present", []).append(str(entry.get("text") or ""))
+                    break
+        elif kind == "said":
+            said.append(str(entry.get("text") or ""))
+            rounds_seen = True
+        elif kind == "stats" and entry.get("purpose") != "fold":
+            # A fold's own call is recorded as a `stats` line too, and it is not a round of this
+            # turn: nothing the turn said belongs to it.
+            preamble, said = "".join(said).strip(), []
         elif kind == "tool_call":
             call_id = str(entry.get("id") or "")
             if call_id:
@@ -341,19 +396,22 @@ def full_messages(conversation_id: str) -> list[dict]:
             call = pending.pop(str(entry.get("id") or ""), None)
             if call is None:
                 continue  # no matching call this turn — nothing safe to pair it to
-            out.append(
-                {
-                    "role": "assistant",
-                    "tool_calls": [
-                        {
-                            "function": {
-                                "name": call.get("name") or "",
-                                "arguments": call.get("arguments") or {},
-                            }
+            calling: dict[str, Any] = {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": call.get("name") or "",
+                            "arguments": call.get("arguments") or {},
                         }
-                    ],
-                }
-            )
+                    }
+                ],
+            }
+            if preamble:
+                calling["content"] = preamble
+                preamble = ""
+            calls_of[len(out)] = turn
+            out.append(calling)
             turn_of[len(out)] = turn
             out.append(
                 {
@@ -363,13 +421,43 @@ def full_messages(conversation_id: str) -> list[dict]:
                     "_call": call.get("arguments") or {},
                 }
             )
-    _let_go_of_old_results(out, turn_of, newest=turn)
+    _let_go_of_old_results(out, turn_of, newest=turn, calls_of=calls_of)
+    _point_again(out, turn_of)
     for message in out:
         message.pop("_call", None)
     return out
 
 
-def _let_go_of_old_results(out: list[dict], turn_of: dict[int, int], newest: int) -> None:
+def _point_again(out: list[dict], turn_of: dict[int, int]) -> None:
+    """Put back the pointers a turn sent in place of results it already held, in place.
+
+    A turn does not always send a result as it came: a byte-identical copy, or lines of a file it
+    already has, go out as a short note saying where they are (`turn.history._tool_result_message`).
+    The replay has to send the same note or the next turn's prompt stops matching this one's at
+    exactly that message. Recorded verbatim, though, a note outlives what it points at — the result
+    it names ages into a stub two turns later, and the replay would go on saying "still above, in
+    full" about something that is not.
+
+    So the note is worked out again here rather than stored: the same question, asked of the same
+    messages in front of it, gets the same answer on every turn — until something it relied on
+    ages out, at which point the answer changes to the truth. Results already trimmed are left
+    alone; they were trimmed from the full text, not from a note.
+    """
+    from kith.services.turn.history import _tool_result_message
+
+    for index in sorted(turn_of):
+        message = out[index]
+        if message.get("_trimmed"):
+            continue
+        raw = str(message.get("content") or "")
+        sent = _tool_result_message(out[:index], str(message.get("tool_name") or ""), raw)
+        if sent["content"] != raw:
+            out[index] = {**message, **sent}
+
+
+def _let_go_of_old_results(
+    out: list[dict], turn_of: dict[int, int], newest: int, calls_of: dict[int, int] | None = None
+) -> None:
     """Trim tool output from turns older than the last few, in place.
 
     Nothing used to. There are two things that shrink a conversation and neither is about age: the
@@ -400,8 +488,23 @@ def _let_go_of_old_results(out: list[dict], turn_of: dict[int, int], newest: int
     keep = int(tuning.value("keep_tool_turns") or 0)
     if keep <= 0:
         return
+    from kith.services.turn.history import stub_arguments
+
     stub_chars = int(tuning.value("tool_stub_chars") or 1_200)
     oldest_kept = newest - keep + 1
+    # The calls, by the same rule as their results. Nothing trimmed them: a result aged into a
+    # 1,200-character stub while the `write_file` body and the `edit_files` diff that produced it
+    # rode every later round in full. Measured in the four largest conversations on 2026-09-27,
+    # old arguments were 35–60% of the replayed history — up to 1.54M characters in one. The stub
+    # keeps every key and every short value, so what he did and to which file stays readable.
+    for index, from_turn in (calls_of or {}).items():
+        if from_turn >= oldest_kept:
+            continue
+        for call in out[index].get("tool_calls") or []:
+            function = call.get("function") or {}
+            arguments = function.get("arguments")
+            if isinstance(arguments, dict):
+                function["arguments"] = stub_arguments(arguments, stub_chars, "on an earlier turn")
     for index, from_turn in turn_of.items():
         if from_turn >= oldest_kept:
             continue
@@ -412,6 +515,10 @@ def _let_go_of_old_results(out: list[dict], turn_of: dict[int, int], newest: int
         name = message.get("tool_name") or "tool"
         what = message.get("_call") or {}
         about = what.get("path") or what.get("pattern") or what.get("command") or what.get("query")
+        if isinstance(about, str) and len(about) > _ABOUT_CHARS:
+            # A shell call's `command` can be a whole script. Named in full, the stub that exists
+            # to be short carried the ten thousand characters it was replacing the output of.
+            about = about[:_ABOUT_CHARS] + "…"
         # Still JSON, because the content of a `tool` message is a JSON-encoded result and
         # `_to_openai` hands it straight to the provider.
         message["content"] = json.dumps(
@@ -424,6 +531,11 @@ def _let_go_of_old_results(out: list[dict], turn_of: dict[int, int], newest: int
             # to avoid. A relative age is worth nothing anyway; that it is old is the whole point.
             + " on an earlier turn. Run it again if you still need it.]"
         )
+        message["_trimmed"] = True
+
+
+#: How much of a call's subject a trimmed result names.
+_ABOUT_CHARS = 160
 
 
 def timeline(conversation_id: str) -> list[dict]:

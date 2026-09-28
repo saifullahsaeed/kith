@@ -352,7 +352,9 @@ def _last_round(conversation_id: str) -> dict | None:
     """
     found: dict = {}
     for entry in conversations.read(conversation_id):
-        if entry.get("type") == "stats":
+        # A fold's call is billed and recorded like a round, but "the last round" on the meter
+        # means the last request the conversation itself made.
+        if entry.get("type") == "stats" and entry.get("purpose") != "fold":
             found = entry.get("stats") or {}
     if not found:
         return None
@@ -566,6 +568,11 @@ def category_text(
                     if part:
                         rest = rest.replace(part, "")
                 chunks.append(rest.strip())
+        elif role == "system" and message.get("_present"):
+            # An earlier turn's present-state block, replayed where it was sent. History now, so
+            # it is read with the conversation — the same bucket `ledger.take` counts it in.
+            if key == "messages":
+                chunks.append(f"context sent with that message: {text}")
         elif role == "system" and message.get("_summary"):
             if key == "summary":
                 chunks.append(text)

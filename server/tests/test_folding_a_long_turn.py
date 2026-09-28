@@ -9,15 +9,16 @@ Two hard constraints, and getting either wrong is worse than not folding at all:
   the result never changes again, so the cache breakpoint on the last message can be read on
   every round afterwards. A fold that leaves anything moving has bought nothing.
 
-What survives verbatim is also deliberate: the system prompt (it is the cached head) and the
-first thing his person said. That second one is not sentiment — a summary of the request is
-exactly the paraphrase that turned "discover models through the OpenRouter API" into "add model
-management" on a real project, and shipped the wrong feature.
+What survives verbatim is also deliberate: everything the turn was handed — the system prompt
+(it is the cached head) and the request it is answering, and in a conversation the brief and the
+recent turns between them. The request is not sentiment — a summary of it is exactly the
+paraphrase that turned "discover models through the OpenRouter API" into "add model management"
+on a real project, and shipped the wrong feature.
 """
 
 from __future__ import annotations
 
-from kith.services import compaction
+from kith.services import brief, compaction
 
 
 def _turn(steps: int) -> list[dict]:
@@ -135,43 +136,105 @@ class TestTheResultIsStable:
         convo.append({"role": "assistant", "content": "carrying on"})
         assert convo[: len(after_fold)] == after_fold
 
-    def test_a_failed_summary_still_leaves_a_stable_note(self):
-        """When the model cannot be reached the note must carry no counts. "9 steps" becoming
-        "11 steps" next round would invalidate the prefix from that point on every round —
-        which is the bug this module exists to avoid."""
-        first = _turn(30)
-        second = _turn(31)
+    def test_a_failed_summary_leaves_the_turn_as_it_was(self):
+        """It used to replace the middle with a note saying the summary could not be written —
+        right when this fired at 80% of the window and the room was needed whatever happened. It
+        fires at the fold point now, where it is about cost: a turn that has lost the results it
+        was working from re-reads them. When room really runs out, dropping exchanges makes it."""
+        convo = _turn(30)
+        before = [dict(m) for m in convo]
 
-        def explode(_prompt):
+        def explode(_request):
             raise RuntimeError("provider down")
 
-        compaction.fold(first, explode)
-        compaction.fold(second, explode)
-        note_one = next(m["content"] for m in first if m.get("_folded"))
-        note_two = next(m["content"] for m in second if m.get("_folded"))
-        assert note_one == note_two
-        assert not any(character.isdigit() for character in note_one)
+        assert compaction.fold(convo, explode) is False
+        assert convo == before
 
     def test_an_empty_summary_is_treated_as_a_failure(self):
         convo = _turn(30)
-        compaction.fold(convo, lambda _: "   ")
-        note = next(m["content"] for m in convo if m.get("_folded"))
-        assert "could not be written" in note
+        before = [dict(m) for m in convo]
+        assert compaction.fold(convo, lambda _: "   ") is False
+        assert convo == before
+
+
+class TestTheRequestIsTheTurnItself:
+    def test_it_is_the_turn_up_to_the_cut_with_the_instruction_last(self):
+        """The prompt the last round sent, cut where the fold ends — a cache read on the host that
+        already holds it — rather than a transcript of the middle, which no host had ever seen."""
+        convo = _turn(30)
+        seen: list[list[dict]] = []
+        end = compaction.cut_point(convo)
+
+        compaction.fold(convo, lambda request: seen.append(request) or "notes")
+
+        request = seen[0]
+        assert request[:-1] == _turn(30)[:end]
+        assert request[-1]["role"] == "user"
+        assert request[-1]["content"].startswith("Stop here.")
+
+    def test_everything_the_turn_was_handed_survives(self):
+        """In a conversation the head is the persona, the folded brief, the recent turns, the
+        message being answered and the present-state block. The old rule — the system prompt and
+        the first user message — kept the first thing ever said in the conversation and folded
+        the message the turn was actually answering into prose about it."""
+        handed = [
+            {"role": "system", "content": "persona"},
+            {"role": "system", "content": "[Summary of the earlier part]", "_summary": True},
+            {"role": "user", "content": "the first thing ever said"},
+            {"role": "assistant", "content": "an old reply"},
+            {"role": "user", "content": "add a model chooser, pulling models from the OpenRouter API"},
+            {"role": "system", "content": "the clock", "_live": True},
+        ]
+        convo = [*handed, *_turn(30)[2:]]
+
+        assert compaction.fold(convo, lambda _: "notes") is True
+
+        assert convo[: len(handed)] == handed
+        assert convo[len(handed)].get("_folded")
+
+    def test_a_turn_with_nothing_of_its_own_to_fold_is_left_alone(self):
+        """A long conversation and a short turn: there is a lot before the head and nothing after
+        it worth a call. Asked before announcing, so nobody is told a turn is folding."""
+        history = [m for i in range(40) for m in _turn(1)[1:]]
+        convo = [
+            {"role": "system", "content": "persona"},
+            *history,
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "the clock", "_live": True},
+            *_turn(3)[2:],
+        ]
+        assert compaction.can_fold(convo) is False
+        assert compaction.fold(convo, lambda _: "notes") is False
+
+
+def _notes(said: str) -> str:
+    return "\n\n".join(f"## {section}\n{said}" for section in brief.SECTIONS)
 
 
 class TestFoldingMoreThanOnce:
-    def test_a_second_fold_absorbs_the_first(self):
+    def test_a_second_fold_takes_the_first_into_its_middle(self):
         """One dense note rather than a chain of summaries, each further from the work."""
         convo = _turn(30)
         compaction.fold(convo, lambda _: "first notes")
         convo.extend(_turn(20)[2:])
         assert compaction.fold(convo, lambda _: "second notes") is True
-        assert compaction.already_folded(convo) == 1
+        notes = [m for m in convo if m.get("_folded")]
+        assert len(notes) == 1
+        assert "second notes" in notes[0]["content"]
 
-    def test_the_count_is_what_stops_it_folding_for_ever(self):
+    def test_the_first_notes_lasting_sections_are_kept_word_for_word(self):
+        """Summarising the previous summary is how the start of a long turn decays. The second
+        fold is told the first notes are kept, asked only for what is new, and the lasting
+        sections of the first are carried by the code."""
         convo = _turn(30)
-        compaction.fold(convo, lambda _: "notes")
-        assert compaction.already_folded(convo) == 1
-        # A fold that absorbs the previous one keeps the count at 1, so the guard in the agent
-        # loop is really "how many folds are live", which is the number worth capping.
-        assert compaction.already_folded(_turn(4)) == 0
+        compaction.fold(convo, lambda _: _notes("from the first stretch"))
+        convo.extend(_turn(20)[2:])
+        seen: list[list[dict]] = []
+        compaction.fold(convo, lambda request: seen.append(request) or _notes("from the second stretch"))
+
+        note = next(m["content"] for m in convo if m.get("_folded"))
+        done = note.split("## What was done")[1].split("## What was found")[0]
+        assert "from the first stretch" in done and "from the second stretch" in done
+        where = note.split("## Where it stands")[1]
+        assert "from the second stretch" in where and "from the first stretch" not in where
+        assert "ONLY what is new" in seen[0][-1]["content"]

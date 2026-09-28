@@ -40,7 +40,7 @@ def turn(monkeypatch):
     """A turn that does nothing, so what is asserted is the machinery around it."""
     seen: dict = {}
 
-    def _turn(recorder, messages, config, conversation_id, opening="", *, stop_switch=None):
+    def _turn(recorder, messages, config, conversation_id, opening="", *, stop_switch=None, tool_host=None):
         seen["messages"] = messages
         seen["opening"] = opening
         seen["stopping"] = stop_switch

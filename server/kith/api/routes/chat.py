@@ -28,11 +28,11 @@ from kith.schemas import (
     AnswerSchema,
     ChatRequestSchema,
 )
-from kith.services import conversations, history, questions, steering
+from kith.services import conversations, history, host_costs, questions, steering
 from kith.services.activity import describe_call, feed, short_args
 from kith.services.agent_loop import stream_agent, without_image
 from kith.services.turn import report
-from kith.services.turn.prompt import _build_messages, _conversation_chars
+from kith.services.turn.prompt import _build_messages, _conversation_chars, framing
 from kith.settings import AGENT_DB_PATH
 
 #: Turns in flight, by conversation, so Stop has something to set.
@@ -143,8 +143,16 @@ def fold_now(conversation_id: str):
     # was given, and a "before" measured from the same object as the "after" would report that
     # nothing changed.
     was = ledger.take(messages, chars_per_token=1.0)
+    config = default_config()
     folded, brief = history.fold(
-        messages, default_config(), conversation_id, ollama_host(), _tool_block_chars(), force=True
+        messages,
+        config,
+        conversation_id,
+        ollama_host(),
+        _tool_block_chars(),
+        force=True,
+        framing=framing(config),
+        schemas=tools.host(AGENT_DB_PATH).schemas(),
     )
     if brief is None:
         # Two different answers, and telling them apart is the point. `fold` declines either
@@ -563,9 +571,25 @@ def begin_turn(
                 # the reasoning effort, a slow provider — is wrong, because those come after.
                 #
                 folded: dict = {}
+                # One tool layer for the whole turn, and the fold before it. A fold is sent as a
+                # prefix of what this conversation last sent so it can be read from the cache,
+                # and the tools block sits in front of every message on the wire — a fold built
+                # with a second, separately snapshotted set of tools is a different prefix.
+                tool_host = tools.host(AGENT_DB_PATH)
                 messages = _build_messages(
-                    gather(), config, conversation_id, folded, tool_chars=_tool_block_chars()
+                    gather(),
+                    config,
+                    conversation_id,
+                    folded,
+                    tool_chars=_tool_block_chars(),
+                    schemas=tool_host.schemas(),
                 )
+                # The present-state block this turn is about to send, written down beside the
+                # message that started it. The next turn replays this turn from the transcript,
+                # and a block that existed only in memory is the one part of it that could never
+                # be replayed — so the prompt stopped matching at the first message of this turn
+                # and everything after it was re-billed. See `openai_compat.with_context`.
+                _record_present(conversation_id, messages)
                 if folded.get("happened"):
                     # Say so, and say how much went. The context reading the meter shows is
                     # taken *after* this, so a conversation several times over its window reads
@@ -589,7 +613,13 @@ def begin_turn(
                 # `yield` — the turn-log row saying what the turn spent, the feed's own "done" —
                 # never ran. Stopping is the one case where you most want that row.
                 for line in _turn(
-                    recorder, messages, config, conversation_id, opening, stop_switch=stop_switch
+                    recorder,
+                    messages,
+                    config,
+                    conversation_id,
+                    opening,
+                    stop_switch=stop_switch,
+                    tool_host=tool_host,
                 ):
                     live_turns.publish(live, line)
         except Exception as exc:
@@ -690,6 +720,13 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
     # about how many turns may run at once, which is not this change.
     for _ in live_turns.watch(live):
         pass
+
+
+def _record_present(conversation_id: str, messages: list[dict]) -> None:
+    """Write the turn's present-state block to the transcript, if the prompt carries one."""
+    live = next((m for m in reversed(messages) if m.get("role") == "system" and m.get("_live")), None)
+    if live is not None and conversation_id:
+        conversations.record_event(conversation_id, "present", {"text": str(live.get("content") or "")})
 
 
 def _deliver_steer(conversation_id: str) -> str:
@@ -979,9 +1016,14 @@ class _MindFeed:
                 self.context = reading
         elif kind == "stats":
             stats = event.get("stats") or {}
+            # What this host actually charged, added to its running bill — the number host
+            # ranking reads instead of the price list. See `services/host_costs`.
+            host_costs.observe(stats)
             fresh = int(stats.get("uncachedTokens") or 0)
             out = int(stats.get("responseTokens") or 0)
-            self.rounds += 1
+            # A fold is paid for and counted in the tokens, but it is not one of the turn's rounds.
+            if event.get("purpose") != "fold":
+                self.rounds += 1
             self.tokens_in += int(stats.get("promptTokens") or 0)
             self.tokens_out += out
             self.tokens_uncached += fresh
@@ -1190,6 +1232,7 @@ def _turn(
     opening: str = "",
     *,
     stop_switch: threading.Event | None = None,
+    tool_host=None,
 ):
     """One turn of the loop, streamed as it happens.
 
@@ -1223,8 +1266,9 @@ def _turn(
             # reach for another one; a service reaching down for it was the arrow pointing the
             # wrong way. Built once per turn, which is also where the language-server question
             # and the database path get answered once — both are inputs to the cached prompt
-            # prefix and must not change under a turn.
-            tools.host(AGENT_DB_PATH),
+            # prefix and must not change under a turn. Handed in by `work` when it has one,
+            # because the fold before the turn was built against the same host.
+            tool_host if tool_host is not None else tools.host(AGENT_DB_PATH),
             conversation_id=conversation_id,
             # Anything said while this turn is running, collected at the next round boundary.
             # A callable rather than the store itself: taking new input is this module's

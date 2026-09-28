@@ -15,7 +15,9 @@ the time was to move the *turn* out rather than the prompt.
 after the first request and anything that moves invalidates the persona sitting in front of it.
 The present-state block goes last, after the recent turns, because it carries the clock — the
 one part guaranteed to differ every turn, and therefore the one part that must never sit inside
-the cached prefix.
+the cached prefix. On the wire it rides inside the user message that starts the turn, and it is
+written to the transcript with that message, so the next turn replays it exactly where it was
+sent rather than dropping it — see `openai_compat.with_context` for what the old placement cost.
 
 `tool_chars` arrives as a number rather than being measured here. The fold needs to know how
 big the tools block is, and asking would mean this module importing `kith.tools` — an adapter,
@@ -28,6 +30,7 @@ from __future__ import annotations
 import base64
 import itertools
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from kith.config import model_capabilities, ollama_host
@@ -110,6 +113,7 @@ def _build_messages(
     _folded: dict | None = None,
     *,
     tool_chars: int = 0,
+    schemas: list[dict] | None = None,
 ):
     """The persona, then the turns, then the state he is in right now.
 
@@ -139,7 +143,15 @@ def _build_messages(
     # cached persona, before the recent turns — so it never disturbs the stable prefix, and it
     # is persisted so a fold is not re-run every turn. Below the size threshold this returns the
     # history untouched, so a short conversation is byte-for-byte what it was.
-    folded, fresh = history.fold(messages, config, conversation_id, ollama_host(), tool_chars=tool_chars)
+    folded, fresh = history.fold(
+        messages,
+        config,
+        conversation_id,
+        ollama_host(),
+        tool_chars=tool_chars,
+        framing=framing(config),
+        schemas=schemas,
+    )
     if fresh is not None and conversation_id:
         conversations.record_summary(conversation_id, fresh["through"], fresh["text"])
     # Reported rather than inferred by the caller. Comparing what went in against what comes
@@ -161,7 +173,9 @@ def _build_messages(
     return _assemble(out, folded, conversation_id)
 
 
-def as_sent(messages, config, conversation_id: str = "", *, tool_chars: int = 0):
+def as_sent(
+    messages, config, conversation_id: str = "", *, tool_chars: int = 0, schemas: list[dict] | None = None
+):
     """The same list a turn would send, built without sending anything or spending anything.
 
     For showing someone their own prompt. The question "what is actually in the context" has
@@ -186,18 +200,29 @@ def as_sent(messages, config, conversation_id: str = "", *, tool_chars: int = 0)
     if persona:
         out.append({"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()})
 
-    folded, pending = history.fold_dry(messages, config, conversation_id, tool_chars=tool_chars)
+    folded, pending = history.fold_dry(
+        messages, config, conversation_id, tool_chars=tool_chars, framing=framing(config), schemas=schemas
+    )
     return _assemble(out, folded, conversation_id), pending
 
 
-def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list[dict]:
-    """Turn a folded history into the message list a provider receives.
+def framing(config) -> Callable[[list[dict]], list[dict]]:
+    """How a fold frames the part of the history it summarises: the persona in front, and every
+    message replayed exactly as `_assemble` replays it.
 
-    Shared by `_build_messages` and `as_sent` so a preview of the prompt cannot drift from the
-    prompt. They differ in exactly one thing — whether they are allowed to pay for a fold — and
-    everything after that decision has to be the same list or the screen is describing a request
-    that is never made.
+    Handed to `history.fold` so a fold's request is a prefix of what the conversation last sent —
+    same head, same bytes, on the same host — and is read from the cache rather than paid for in
+    full. Built here because this module is the one that knows what the head is.
     """
+    persona = (config.system or "").strip()
+    head = [{"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()}] if persona else []
+    return lambda part: [*head, *_replayed(part)]
+
+
+def _replayed(folded: list[dict]) -> list[dict]:
+    """The folded history as the provider receives it — everything `_assemble` sends except the
+    persona in front and the present-state block at the end."""
+    out: list[dict] = []
     for message in folded:
         role = message.get("role")
         if role == "system":
@@ -249,11 +274,33 @@ def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list
         # cannot append to. Reversed, this once composed away a whole feature (the retired
         # canvas readings) and the unit test never noticed, because it called the step directly.
         out.append(_with_attachments(_with_diagrams(message)))
-    sizes: dict[str, int] = {}
+        # The present-state block this message was sent with on an earlier turn, put back where
+        # it went. It is history now, not the present — the ledger counts it with the
+        # conversation — but it has to be here, byte for byte, or the prompt stops matching the
+        # one that turn sent at the very message the turn began with.
+        for snapshot in message.get("_present") or []:
+            out.append({"role": "system", "content": snapshot, "_present": True})
+    return out
+
+
+def _assemble(out: list[dict], folded: list[dict], conversation_id: str) -> list[dict]:
+    """Turn a folded history into the message list a provider receives.
+
+    Shared by `_build_messages` and `as_sent` so a preview of the prompt cannot drift from the
+    prompt. They differ in exactly one thing — whether they are allowed to pay for a fold — and
+    everything after that decision has to be the same list or the screen is describing a request
+    that is never made.
+    """
+    out = out + _replayed(folded)
+    sizes: dict = {}
     # The subject comes off the folded history rather than being passed in, so a preview of
     # the prompt and the prompt itself cannot score memories differently — `as_sent` and
     # `_build_messages` both land here with the same list.
     now = _present_state(conversation_id, sizes, about=_subject(folded))
+    # Built for the message that starts this turn, and only for one that has not been sent with
+    # one already. Between turns — the context screen previewing what comes next — the last user
+    # message has its own, and a fresh block is still shown at the end as what the next message
+    # will carry.
     if now:
         # `_live` is for the ledger, not the provider — `openai_compat._to_openai` rebuilds
         # every message from role and content alone, so nothing internal can reach a host.
@@ -509,7 +556,8 @@ def _subject(messages: list[dict]) -> str:
     said = [
         str(m.get("content") or "")
         for m in messages
-        if m.get("role") == "user" and isinstance(m.get("content"), str)
+        # A wake is the harness speaking in the person's slot, not the person.
+        if m.get("role") == "user" and isinstance(m.get("content"), str) and not m.get("_wake")
     ]
     return "\n".join(said[-_SUBJECT_TURNS:])
 

@@ -14,19 +14,26 @@ what matters:
 
 What is kept verbatim, and why each one:
 
-* the system prompt — it is the cached head;
-* the first thing his person said — losing the actual request is the one unrecoverable loss,
-  and a summary of it is exactly the paraphrase that flattened "discover models through the
-  OpenRouter API" into "add model management" on a real project;
+* **everything the turn was handed** — the system prompt, and in a conversation the folded
+  brief, the recent turns, the message being answered and the block about the present. It is
+  the cached head, and it holds the request: losing the actual request is the one unrecoverable
+  loss, and a summary of it is exactly the paraphrase that flattened "discover models through
+  the OpenRouter API" into "add model management" on a real project. This used to keep "the
+  system prompt and the first user message", which in a conversation is the first thing ever
+  said in it — so the message the turn was answering, the brief and the verbatim questions were
+  all folded into prose about them;
 * the last `keep_last` messages — the work in progress, where the detail is still live.
 
 The middle becomes one message. Everything about it is fixed at the moment it is written, so
-it never changes again.
+it never changes again. The request that writes it is the turn's own prompt up to the cut, with
+the instruction appended — see `services.brief` for why that, and not a transcript of the middle.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from kith.services import brief
 
 #: How many messages at the end of the turn survive untouched. Generous on purpose: these are
 #: the rounds he is actually working in, and a fold that reaches into them replaces detail he
@@ -36,33 +43,12 @@ KEEP_LAST = 14
 #: Below this there is nothing worth folding — the call would cost more than the space it wins.
 MIN_TO_FOLD = 8
 
-_INSTRUCTION = """You are compacting your own working notes so you can keep going in a smaller space.
-
-Below is the middle stretch of a turn you are part-way through. Rewrite it as a handover to
-yourself. You will lose the originals, so anything not written down is gone.
-
-Cover, in this order, and only what is actually there:
-1. WHAT WAS ASKED — the goal in the requester's terms, not yours.
-2. WHAT IS DONE — decisions made, files created or changed (exact paths), commands that worked.
-3. WHAT IS TRUE — facts you established about the system: real names, real signatures, the
-   actual database or framework in use. Quote the specifics; a claim you cannot support is
-   worse than a gap.
-4. DEAD ENDS — what you already tried that did not work, and why. This is the most valuable
-   part: without it you will try it again.
-5. WHAT IS LEFT — the next concrete step.
-
-Be dense and specific. Paths, names, numbers, error messages. No preamble, no reassurance, no
-"I will continue" — this is a note to yourself, not a status report to anyone."""
-
 _HEADER = "[Earlier steps of this turn, folded into notes to make room:]\n\n"
 
-#: Written when the model cannot be reached. Byte-stable — no counts, no sizes — because a note
-#: that reads "9 steps" one round and "11 steps" the next invalidates the prefix from that point
-#: on every round, which is the bug this whole module exists to avoid.
-_FAILED = (
-    "[Earlier steps of this turn were folded to make room, and the summary could not be "
-    "written. Their results are gone from this conversation. Re-read anything you still need.]"
-)
+#: What the notes stand in for, as the instruction's subject. Not "the conversation": the turn's
+#: head — its request, and in a conversation the history before it — is kept, and a brief that
+#: re-told it would pay twice for it.
+_REPLACES = "Everything this turn did above, after the message it is answering,"
 
 
 def _open_calls_at(convo: list[dict[str, Any]]) -> list[int]:
@@ -99,34 +85,33 @@ def cut_point(convo: list[dict[str, Any]], keep_last: int = KEEP_LAST) -> int:
 
 
 def _keep_head(convo: list[dict[str, Any]]) -> int:
-    """How many messages at the front are kept as-is: the system prompt and the first ask."""
+    """How many messages at the front are kept as-is: everything the turn was handed.
+
+    In a conversation that ends at the present-state block (`_live`), which the prompt builder
+    always puts last, straight after the message being answered. A turn with no such block — a
+    builder, a sub-agent, a test — was handed a system prompt and one request, and keeps both.
+    """
+    live = [index for index, message in enumerate(convo) if message.get("_live")]
+    if live:
+        return live[-1] + 1
     head = 1 if convo and convo[0].get("role") == "system" else 0
     if head < len(convo) and convo[head].get("role") == "user":
         head += 1
     return head
 
 
-def _as_text(convo: list[dict[str, Any]]) -> str:
-    lines = []
-    for message in convo:
-        role = str(message.get("role") or "")
-        content = message.get("content")
-        if isinstance(content, list):
-            content = " ".join(
-                str(part.get("text") or "[picture]") for part in content if isinstance(part, dict)
-            )
-        text = str(content or "")
-        for call in message.get("tool_calls") or []:
-            function = call.get("function") or {}
-            text += f"\n[called {function.get('name')} {str(function.get('arguments') or '')[:400]}]"
-        if message.get("role") == "tool":
-            # `tool_name` is the key the agent loop tags results with; `name` is what a
-            # provider-shaped message would use. Accept either, so this reads a live
-            # conversation and a hand-built test one the same way.
-            role = f"result of {message.get('tool_name') or message.get('name') or 'a tool'}"
-        if text.strip():
-            lines.append(f"--- {role}:\n{text}")
-    return "\n\n".join(lines)
+def can_fold(convo: list[dict[str, Any]], keep_last: int = KEEP_LAST) -> bool:
+    """Is there a middle to fold? Asked before announcing one, so the person is not told a turn
+    is folding when there was nothing to fold."""
+    return len(convo) >= MIN_TO_FOLD and cut_point(convo, keep_last) > _keep_head(convo)
+
+
+def _earlier_notes(middle: list[dict[str, Any]]) -> str:
+    """The text of an earlier fold's notes inside the region about to be folded, or ""."""
+    for message in middle:
+        if message.get("_folded"):
+            return str(message.get("content") or "").removeprefix(_HEADER)
+    return ""
 
 
 def fold(
@@ -136,41 +121,47 @@ def fold(
 ) -> bool:
     """Replace the middle of `convo` in place with a summary of it. True if anything changed.
 
-    ``ask(prompt) -> str`` makes the one model call, and is injected rather than imported so
-    this is testable without a provider and so the caller decides which model and host to spend.
-    A caller that cannot summarise should still be able to fold — see `_FAILED`.
+    ``ask(messages) -> str`` makes the one model call and returns the notes, or "" when what came
+    back is not usable. It is handed the turn's own messages up to the cut with the instruction
+    appended, and is injected rather than imported so this is testable without a provider and so
+    the caller decides which model, tools and host to spend — which must be the turn's own, or
+    the request is not the prompt the host already holds.
+
+    **A failed summary leaves the turn exactly as it was.** This used to replace the middle with
+    a note saying the summary could not be written, which was right when the fold fired at 80% of
+    the window and the room was needed whatever happened. It fires at the fold point now, far
+    below that on a large model, where it is about cost rather than room — and a turn that has
+    lost the results it was working from re-reads them, which costs more than the fold saved.
+    When room genuinely runs out, `_drop_oldest_exchange` is what makes it.
+
+    A later fold in the same turn keeps the earlier notes' lasting sections as they are and asks
+    only for what is new (`brief.carried`): summarising the previous summary is how the start of a
+    long turn decays to nothing.
     """
-    if len(convo) < MIN_TO_FOLD:
+    if not can_fold(convo, keep_last):
         return False
     head = _keep_head(convo)
     end = cut_point(convo, keep_last)
-    if end <= head:
-        return False
 
-    middle = convo[head:end]
-    if not middle:
-        return False
-
+    earlier = _earlier_notes(convo[head:end])
+    continuing = brief.is_a_brief(earlier)
+    request = [
+        *convo[:end],
+        {
+            "role": "user",
+            "content": brief.instruction(
+                _REPLACES, earlier=_HEADER.strip() if earlier else "", continuing=continuing
+            ),
+        },
+    ]
     try:
-        notes = str(ask(f"{_INSTRUCTION}\n\n{_as_text(middle)}") or "").strip()
+        notes = str(ask(request) or "").strip()
     except Exception:
         notes = ""
+    if not notes:
+        return False
+    if continuing:
+        notes = brief.carried(earlier, notes)
 
-    folded = {"role": "user", "content": (_HEADER + notes) if notes else _FAILED, "_folded": True}
-    convo[head:end] = [folded]
+    convo[head:end] = [{"role": "user", "content": _HEADER + notes, "_folded": True}]
     return True
-
-
-def already_folded(convo: list[dict[str, Any]]) -> int:
-    """How many folds this turn has already done.
-
-    A very long turn can fold more than once, and a later fold deliberately takes the earlier
-    summary into its middle rather than preserving it — the alternative is a chain of summaries
-    with a little more distance from the work in each, and one dense note beats three vague ones.
-
-    The count is the guard on that: summarising a summary loses something every time, so past a
-    couple of passes there is nothing left worth another model call and the caller should let
-    the hard drop take over. Without this a turn that outgrows the window faster than folding
-    shrinks it would fold every round forever, paying for a summary each time.
-    """
-    return sum(1 for message in convo if message.get("_folded"))
