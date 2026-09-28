@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from array import array
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -137,6 +138,31 @@ def recent_memories(path: Path, limit: int = 8, project_id: int | None = None) -
     )
     with session(path) as db:
         return [_public(row) for row in db.scalars(query).all()]
+
+
+def recent_recall_with_vectors(
+    path: Path, limit: int = 32, project_id: int | None = None
+) -> list[tuple[dict, array]]:
+    """The latest scoped recall memories, each paired with its raw embedding vector.
+
+    For the injection ranker in :func:`services.memory_context.context_block`, which now decides
+    which recall memories ride along a turn by embedding similarity rather than word overlap.
+    :func:`_public` withholds the vector on purpose — it must never reach an API response or the
+    model's context — so the ranker cannot use :func:`recent_memories`, which returns public
+    rows. It needs the vectors, and this is the one place they are handed out, to a caller in the
+    service layer that scores with them and drops them. Scoped and bounded exactly like
+    :func:`recent_memories`; a row that was never embedded comes back with an empty vector, which
+    :func:`vectors.cosine` scores at 0, and the caller then falls back to lexical overlap for it.
+    """
+    query = (
+        select(Memory)
+        .where(Memory.level != "core")
+        .where(_scope(project_id))
+        .order_by(Memory.id.desc())
+        .limit(limit)
+    )
+    with session(path) as db:
+        return [(_public(row), unpack_vector(row.embedding)) for row in db.scalars(query).all()]
 
 
 def set_memory_level(path: Path, memory_id: int, level: str) -> dict | None:

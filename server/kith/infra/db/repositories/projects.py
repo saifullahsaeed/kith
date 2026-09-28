@@ -8,7 +8,7 @@ from sqlalchemy import delete, select, update
 
 from kith.domain.enums import PROJECT_STATUSES, TASK_ACTIVE, TASK_STATUSES
 from kith.infra.db.engine import as_dict, changed, session
-from kith.infra.db.models import Conversation, Project, Task
+from kith.infra.db.models import Conversation, Memory, Project, Task
 from kith.infra.db.repositories.tasks import list_tasks
 from kith.infra.db.support import notifies, utc_now_iso
 
@@ -84,6 +84,13 @@ def delete_project(path: Path, project_id: int) -> bool:
         # holding one conversation, which is the deleted project still on screen under an id
         # for a name. See ui/components/chat/history-panel.tsx → groupByProject.
         db.execute(update(Conversation).where(Conversation.project_id == project_id).values(project_id=None))
+        # And its memories become global rather than stranded. A project memory is admitted only
+        # in that project's chats (`memories._scope`), so a memory left pointing at a deleted
+        # project reaches no prompt at all — measured: two `core` memories stamped with a project
+        # that no longer existed were "always with you" in name and in front of nobody in fact.
+        # Global is the honest home for the same reason the tasks above are orphaned rather than
+        # cascaded: the fact outlives the grouping, and `recall` still reaches it either way.
+        db.execute(update(Memory).where(Memory.project_id == project_id).values(project_id=None))
         return changed(db.execute(delete(Project).where(Project.id == project_id))) > 0
 
 

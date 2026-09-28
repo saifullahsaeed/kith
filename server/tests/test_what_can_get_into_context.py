@@ -64,7 +64,10 @@ class TestNothingReturnsWithoutABound:
     # that nothing calls something" — flagged `find_symbol` for the same reason, which is when
     # patching the pattern list stopped being the fix. The words stay bare now, including
     # `fetch`, which has to keep matching `fetch_url`.
-    BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|glob|grep|requests\.")
+    # `glob\b` rather than `glob`: stripping prose removes comments and docstrings but not string
+    # literals, and a tool telling him a memory "is global" is not globbing anything. `rglob(` and
+    # `glob.glob(` still match.
+    BULK = re.compile(r"read_text|read_bytes|run_command|_capture|fetch|browse|glob\b|grep|requests\.")
     # `MAX_` rather than `_MAX_`: a bound is a bound whether the constant naming it is private
     # to its module or exported. `outline.MAX_BYTES` and `repomap.MAX_BUDGET_TOKENS` are as
     # real as `sandbox.files._MAX_WRITE`, and only the underscore told them apart.

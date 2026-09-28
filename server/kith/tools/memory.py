@@ -29,6 +29,16 @@ from kith.tools.registry import tool
         "tags": {"type": "array", "items": STR, "description": "Optional labels."},
         "importance": {**INT, "description": "0-10."},
         "level": {**STR, "enum": list(MEMORY_LEVELS), "description": "core | recall (default)."},
+        "scope": {
+            **STR,
+            "description": (
+                "Where it belongs. Leave this out and it is decided from what the note is about "
+                "— named or folder-pointed at a project goes there, otherwise it stays with this "
+                "chat's project, or global if the chat is in none. Set 'global' to keep it in "
+                "every chat, 'project' to force this chat's project, or a project id to file it "
+                "elsewhere."
+            ),
+        },
     },
     required=("content",),
 )
@@ -37,19 +47,44 @@ def remember(path: Path, args: dict):
     # undo: a snapshot goes stale on its own, a duplicate has to be told apart from the original
     # by hand, and a `core` memory is in every prompt until somebody notices.
     level = args.get("level") or "recall"
-    refusal = remembering.refuse(path, args["content"], level)
+    content = args["content"]
+    refusal = remembering.refuse(path, content, level)
     if refusal is not None:
         return refusal
-    # Stamped with the project this conversation is in, so a fact learned while working on one
-    # thing surfaces in that thing's chats rather than in every chat. Derived from the session,
-    # not asked of him — a flag he has to set is a flag he will not set, which is the failure
-    # mode written up all over this codebase; `adopt` binds the same way, off what he does. An
-    # unbound chat leaves it global (NULL), which is the old behaviour and the safe default: a
-    # fact with nowhere obvious to belong belongs everywhere, and `recall` reaches it regardless.
-    project_id = project_binding.bound_project(path)
-    return embeddings.remember(
-        path, args["content"], args.get("tags"), args.get("importance") or 0, level, project_id=project_id
+    # Scoped by what the memory is *about*, not only by where the chat is bound. The binding was
+    # the whole signal, so a fact settled in a quick unbound chat about one project became global
+    # and joined every chat's pool — a 2,374-char design-system memory did exactly that, in every
+    # prompt of every chat, until it was rescoped by hand. `scope_for` reads the content: a note
+    # that names a project or points at its folder goes there even against the binding, the
+    # binding stays the strong default otherwise, and the model can override outright with `scope`.
+    #
+    # The content is embedded once, here, and the vector is reused for both the scoping decision
+    # and storage rather than embedded twice.
+    vector = embeddings.embed(content)
+    bound = project_binding.bound_project(path)
+    scope = remembering.scope_for(path, content, bound, args.get("scope") or "", content_vector=vector)
+    made = repo.memories.add_memory(
+        path,
+        content,
+        args.get("tags"),
+        args.get("importance") or 0,
+        level,
+        embedding=vector,
+        project_id=scope.project_id,
     )
+    # The result says where it went and how to move it — a silent choice the model cannot see is a
+    # choice it cannot correct, which is how #95 stayed wrongly scoped in every prompt for a day.
+    made["scope"] = {
+        "project_id": scope.project_id,
+        "note": scope.why,
+        "to_change": (
+            "It rides in this project's chats; any chat can still `recall` it. To move it: "
+            "set scope='global' to keep it everywhere, or scope=<project id> to file it elsewhere."
+            if scope.project_id is not None
+            else "It is global — it rides in every chat. To tie it to a project, set scope=<project id>."
+        ),
+    }
+    return made
 
 
 @tool(

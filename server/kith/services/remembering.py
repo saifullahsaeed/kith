@@ -29,7 +29,9 @@ the shape.
 
 from __future__ import annotations
 
+import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
@@ -89,6 +91,22 @@ MAX_CORE = 20
 #: `list_memories` defaults to 50 rows. Both checks below have to see the whole shelf — a cap
 #: would make them silently wrong at exactly the size the failure was measured at, 51.
 _ALL = 100_000
+
+#: How close by meaning a memory has to be to a project, and how far it has to lead the
+#: runner-up, before its content alone reassigns it there. Measured on the live database with
+#: nomic-embed-text: unrelated pairs already score 0.3-0.5, the two orphaned tooling memories
+#: matched their nearest project at 0.572 and 0.608 with margins of 0.005 and 0.026, and the one
+#: unambiguous case (the Harrier codename note) matched at 0.862 with a 0.199 lead. A bar of 0.62
+#: with a 0.10 lead therefore keeps the ambiguous ones global and only reassigns the unmistakable
+#: — which is why this signal sits *behind* an exact name or folder match, never ahead of it.
+_SIMILAR_ENOUGH = 0.62
+_CLEAR_MARGIN = 0.10
+
+#: Below these, a project name or a folder basename is too generic to be evidence that a memory
+#: is about that project. Four for a name ("Kith", "Vigil"), five for a folder ("vigil",
+#: "sadeef-v2"): short enough to admit the real ones, long enough to keep an incidental word out.
+_MIN_NAME = 4
+_MIN_FOLDER = 5
 
 
 def refuse(path: Path, content: str, level: str) -> dict | None:
@@ -204,3 +222,162 @@ def _core_count(path: Path) -> int:
     return sum(
         1 for one in repo.memories.list_memories(path, limit=_ALL) or [] if str(one.get("level")) == "core"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Where a memory belongs — decided from what it is about, not where it was said.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class Scope:
+    """The project a new memory should be filed under, and a short line saying why.
+
+    ``project_id`` is None for a global memory — a fact that holds whatever the work is. ``why``
+    is handed back to the model in the tool result so the decision is visible and can be changed.
+    """
+
+    project_id: int | None
+    why: str
+
+
+def scope_for(
+    path: Path,
+    content: str,
+    bound_project_id: int | None,
+    scope: str = "",
+    content_vector: list[float] | None = None,
+) -> Scope:
+    """Which project a new memory belongs to, decided from what it is *about*.
+
+    Where a fact is learned is a weak proxy for what it is about. A note about the Harrier
+    codename, settled in an unbound "what should we call it" chat, was stored global and then rode
+    into every chat on the machine; a Sadeef One design-tokens note, and a missile-sim note, went
+    the same way. So content leads here, and the chat's binding is only the default.
+
+    Strongest signal first:
+
+    1. An explicit ``scope`` the model set — ``global``, ``project``, or a project id — is obeyed.
+       The override is there so the rule can be firm without being a trap; in practice it is
+       rarely needed, because the inference below already lands the common cases.
+    2. A project the content *names*, or whose *folder* it points at
+       (:func:`_projects_pointed_at`). Lexical and exact, so it cannot flap with phrasing, and it
+       is the signal that actually carries the measured misfiles — "Sadeef One design tokens"
+       names its project, "~/Kith/missile-sim" points at one's folder. Two different projects
+       pointed at is a tie the binding breaks if it is one of them, else meaning breaks it among
+       only those.
+    3. Only if nothing above decides: the content's meaning against each active project's profile,
+       and only when one is unmistakably closest (:func:`embeddings.closest_project`). Gated hard,
+       for the reason written on :data:`_SIMILAR_ENOUGH`.
+    4. The binding, or global (NULL) for a chat in no project — the old, safe default.
+    """
+    from kith.services import embeddings
+
+    projects = repo.projects.list_projects(path)
+    by_id = {int(p["id"]): p for p in projects}
+
+    explicit = _explicit_scope(scope, bound_project_id, by_id)
+    if explicit is not None:
+        return explicit
+
+    pointed = _projects_pointed_at(content, projects)
+    if len(pointed) == 1:
+        pid = next(iter(pointed))
+        return Scope(pid, f"filed under {_named(by_id, pid)} — its name or folder is in the note")
+    if len(pointed) > 1:
+        if bound_project_id in pointed:
+            return Scope(
+                bound_project_id, f"kept with this chat's project, {_named(by_id, bound_project_id)}"
+            )
+        among = [by_id[pid] for pid in pointed]
+        pid = embeddings.closest_project(content, content_vector, among, bar=0.0, margin=0.0)
+        pid = pid if pid is not None else sorted(pointed)[0]
+        return Scope(pid, f"filed under {_named(by_id, pid)} — the closest of the projects it mentions")
+
+    active = [p for p in projects if p.get("status") in ("active", "paused")]
+    guessed = embeddings.closest_project(
+        content, content_vector, active, bar=_SIMILAR_ENOUGH, margin=_CLEAR_MARGIN
+    )
+    if guessed is not None:
+        return Scope(guessed, f"filed under {_named(by_id, guessed)} — closest by meaning")
+
+    if bound_project_id is not None and bound_project_id in by_id:
+        return Scope(bound_project_id, f"kept with this chat's project, {_named(by_id, bound_project_id)}")
+    return Scope(None, "kept global — nothing in it tied it to a project")
+
+
+def _explicit_scope(scope: str, bound_project_id: int | None, by_id: dict[int, dict]) -> Scope | None:
+    """The scope the model asked for outright, or None to let the content decide.
+
+    An unrecognised value is not an error to raise — it falls through to inference, because the
+    model getting the argument slightly wrong should not lose the memory. A project id that does
+    not exist becomes global with a note, for the same reason.
+    """
+    text = (scope or "").strip().lower()
+    if not text:
+        return None
+    if text == "global":
+        return Scope(None, "global because you set scope=global")
+    if text == "project":
+        if bound_project_id is not None and bound_project_id in by_id:
+            return Scope(
+                bound_project_id,
+                f"kept with this chat's project, {_named(by_id, bound_project_id)} (scope=project)",
+            )
+        return Scope(None, "global — scope=project, but this chat is in no project")
+    digits = text.lstrip("#")
+    if digits.isdigit():
+        pid = int(digits)
+        if pid in by_id:
+            return Scope(pid, f"filed under {_named(by_id, pid)} because you set scope={scope}")
+        return Scope(None, f"global — you set scope={scope}, but there is no project #{pid}")
+    return None
+
+
+def _projects_pointed_at(content: str, projects: list[dict]) -> set[int]:
+    """The ids of every project the content names outright or whose folder it points at.
+
+    Lexical and exact on purpose: this is the signal that carries the real misfiles, and it must
+    not flap with phrasing the way a similarity score does. A project is pointed at when its
+    cleaned name appears as a whole phrase, or its folder's basename appears as a whole token;
+    both are word-boundaried and case-insensitive. Names shorter than four characters and folders
+    shorter than five are skipped as too generic to be evidence.
+    """
+    text = content or ""
+    hits: set[int] = set()
+    for project in projects:
+        pid = int(project["id"])
+        name = _clean_name(str(project.get("name") or ""))
+        if len(name) >= _MIN_NAME and _mentions(text, name):
+            hits.add(pid)
+            continue
+        directory = str(project.get("directory") or "")
+        folder = os.path.basename(directory.rstrip("/")) if directory else ""
+        if len(folder) >= _MIN_FOLDER and _mentions(text, folder):
+            hits.add(pid)
+    return hits
+
+
+def _clean_name(name: str) -> str:
+    """A project name cut down to the part a memory is likely to write: the head before a dash or
+    colon descriptor, with any parenthetical dropped. "Kith Sec — AI pentest system (isolated
+    lab)" becomes "Kith Sec"; "Asterion (working codename)" becomes "Asterion"."""
+    head = re.split(r"\s+[—-]\s+|:", name, maxsplit=1)[0]
+    head = re.sub(r"\([^)]*\)", "", head)
+    return " ".join(head.split())
+
+
+def _mentions(text: str, phrase: str) -> bool:
+    """Whether ``phrase`` appears in ``text`` as a whole token, case-insensitively. The boundary
+    treats a hyphen as part of the word so "missile-sim" matches inside "~/Kith/missile-sim" but
+    not inside "missile-simulator"."""
+    return re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text, re.I) is not None
+
+
+def _named(by_id: dict[int, dict], pid: int | None) -> str:
+    """A short human label for a project id, for the tool's explanation of where it filed the
+    memory."""
+    if pid is None:
+        return "no project (global)"
+    name = str((by_id.get(int(pid)) or {}).get("name") or "")
+    return f"project #{pid}" + (f" ({name})" if name else "")

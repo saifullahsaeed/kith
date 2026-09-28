@@ -12,8 +12,22 @@ from pathlib import Path
 
 from kith.domain import present
 from kith.infra.db import repositories as repo
+from kith.infra.db.vectors import cosine
 from kith.kernel import clock, session_context
+from kith.services import embeddings
 from kith.services.local_time import clock_line
+
+#: How close by meaning a recall memory has to be to what is being discussed before it rides
+#: along a turn unasked. Calibrated on the live database (58 memories) with nomic-embed-text:
+#: the worst of ten greetings ("hey", "thanks", "yo", "good morning", …) peaked at 0.501 cosine
+#: against the whole shelf, while a real question's on-subject memories sat at 0.55-0.86. A bar
+#: of 0.55 therefore clears every greeting by a margin and still admits a handful of on-topic
+#: memories per question (measured: 6 for a design question, 3 for a git one, 2 for the missile
+#: sim). It is higher than the lexical bar (:data:`present.RELEVANT_ENOUGH` = 0.34) because
+#: nomic's cosines have a high floor — unrelated pairs already score ~0.3-0.5 — so the two
+#: numbers are not comparable and must not be reconciled. Not a knob: `recall` reaches anything
+#: below it in one call.
+EMBED_RELEVANT = 0.55
 
 
 def context_block(
@@ -44,16 +58,23 @@ def context_block(
 
     An empty `about` therefore yields core only. That is correct rather than a degradation: the
     first turn of a brand-new chat is precisely the conversation this exists to keep clean.
+
+    **Which recall memory earns a slot is now decided by meaning, not shared words.** All memories
+    are already embedded (`services/embeddings`), nomic-embed-text runs locally, and `about` is a
+    few lines, so one embed call per turn — under a strict timeout, with the old lexical overlap
+    kept as the fallback — buys relevance that does not flicker with phrasing. "login" now reaches
+    a memory about "authentication"; it did not when the test was word overlap. See
+    :func:`_relevant_recall`.
     """
     core = repo.memories.memories_by_level(path, "core", core_limit, project_id)
-    # Fetched by recency and then *filtered* by subject, rather than fetched by subject. Recency
-    # is the cheap SQL bound that keeps this from scoring the whole table on every turn; the
-    # scoring below is what decides. Widened past `recent_limit` so the choice is made over a
-    # real candidate pool — taking the most recent eight and then scoring them would let one
-    # busy afternoon in another project push every relevant memory out of contention.
-    candidates = repo.memories.recent_memories(path, max(recent_limit * 4, 32), project_id)
-    earned = [m for m in present.eligible_memories(candidates, about) if m.get("level") != "core"]
-    earned = earned[:recent_limit]
+    # Fetched by recency and then *scored* by subject, rather than fetched by subject. Recency is
+    # the cheap SQL bound that keeps this from scoring the whole table on every turn; the scoring
+    # below is what decides. Widened past `recent_limit` so the choice is made over a real
+    # candidate pool — taking the most recent eight and then scoring them would let one busy
+    # afternoon in another project push every relevant memory out of contention. Carries each
+    # candidate's vector, which is what the semantic scoring needs and `recent_memories` withholds.
+    candidates = repo.memories.recent_recall_with_vectors(path, max(recent_limit * 4, 32), project_id)
+    earned = _relevant_recall(candidates, about)[:recent_limit]
 
     if not core and not earned:
         return ""
@@ -68,6 +89,43 @@ def context_block(
         lines.append("Related to what you're doing right now:")
         lines += [f"- {m['content']}" for m in earned]
     return "\n".join(lines)
+
+
+def _relevant_recall(candidates: list[tuple[dict, object]], about: str) -> list[dict]:
+    """The recall memories with enough to do with ``about`` to ride along, best first.
+
+    ``candidates`` are ``(memory, vector)`` pairs, all recall (core is fetched and added
+    separately). Embedding-first: ``about`` is embedded once, under the strict timeout in
+    :func:`embeddings.embed_for_injection` because this is the prompt path, and each candidate is
+    scored by cosine against its stored vector, kept above :data:`EMBED_RELEVANT`.
+
+    When no candidate is embedded, or the embed times out or Ollama is gone, the whole decision
+    falls back to :func:`present.eligible_memories` — the lexical overlap that was the rule before
+    this. Reusing it rather than re-deriving it is why that function is still the one definition of
+    "related by words", and the fallback is why recall never silently stops working on a machine
+    without embeddings, the same reason :func:`remembering._existing_twin` gives. A single
+    un-embedded straggler during a backfill is scored lexically in place, ordered against the
+    cosine-scored rest by how far each clears *its own* bar — so 0.55 and 0.34 are never pretended
+    to be the same scale.
+    """
+    about = (about or "").strip()
+    has_vectors = any(vector for _, vector in candidates)
+    about_vec = embeddings.embed_for_injection(about) if (about and has_vectors) else None
+
+    if about_vec is None:
+        # No usable embedding for this turn — defer wholesale to the lexical selector.
+        return present.eligible_memories([memory for memory, _ in candidates], about)
+
+    scored: list[tuple[float, dict]] = []
+    for memory, vector in candidates:
+        if vector:
+            score, bar = cosine(about_vec, vector), EMBED_RELEVANT
+        else:
+            score, bar = present.relevance(about, str(memory.get("content") or "")), present.RELEVANT_ENOUGH
+        if score >= bar:
+            scored.append((score - bar, memory))
+    scored.sort(key=lambda row: -row[0])
+    return [memory for _, memory in scored]
 
 
 def projects_block(path: Path) -> str:
