@@ -129,36 +129,6 @@ def work_block(path: Path) -> str:
     return "\n".join(lines)
 
 
-def messages_block(path: Path, project_id: int | None = None) -> str:
-    """The recent back-and-forth on his own channel with his person, and a nudge
-    if they've said something he hasn't answered.
-
-    Scoped to the conversation's project, like memory. The channel was global — the last eight
-    messages on every turn whatever the chat was about — so a brand-new chat about anything
-    opened with a security engagement's reach-outs ("I need an answer: the June test accounts
-    are dead", "Finished Wave 3C"). Now a project's chat shows that project's channel plus the
-    global notes, and the rest stays in the inbox, which shows everything regardless.
-
-    The unanswered-message nudge below is deliberately *not* scoped: a reply you owe your person
-    is a reply you owe them whatever chat you are in, so it surfaces everywhere.
-    """
-    recent = repo.messages.list_messages(path, limit=8, project_id=project_id, scoped=True)  # newest first
-    if not recent:
-        return ""
-    lines = ["[Your channel with your person — recent messages]"]
-    for m in reversed(recent):  # oldest -> newest
-        who = "You" if m.get("sender", "kith") == "kith" else "Them"
-        lines.append(f"{who}: {m['body']}")
-    pending = repo.messages.pending_user_messages(path, limit=5)
-    if pending:
-        lines.append("")
-        lines.append(
-            "↳ They've written to you and haven't heard back. If it deserves a reply, "
-            "answer them with reach_out (and act on it if it needs doing)."
-        )
-    return "\n".join(lines)
-
-
 def presence_block(path: Path) -> str:
     """The '[Right now]' block injected each turn: the time, how long since he
     last acted, and any reminders waiting or newly due.

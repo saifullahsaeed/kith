@@ -4,8 +4,13 @@ Same bleed as memory, on the channel. `messages_block` injected the last eight m
 turn whatever the chat was about, so a brand-new chat about anything opened with a security
 engagement's reach-outs — "I need an answer: the June test accounts are dead", "Finished Wave
 3C". A message already knows where it came from: its `link` is `/chat/<id>` or `/tasks/<id>`,
-which resolve to a project. `add_message` stamps that; the block shows a project's own channel
-plus the global notes, and the rest stays in the inbox, which still shows everything.
+which resolve to a project. `add_message` stamps that, and the stamp is still what scoped reads
+of the inbox filter on.
+
+Scoping turned out to be the wrong layer. With a project bound it narrowed the eight rows; with
+none — most chats — every budget stop and every question parked in an unbound chat was global,
+so a new "hey" still opened on eight of them. They were never conversation in the first place,
+and the prompt no longer reads the channel.
 """
 
 from __future__ import annotations
@@ -13,7 +18,8 @@ from __future__ import annotations
 import pytest
 
 from kith.infra.db import repositories as repo
-from kith.services import conversations, memory_context
+from kith.services import conversations
+from kith.services.turn import prompt as turn_prompt
 
 
 @pytest.fixture
@@ -50,31 +56,32 @@ class TestAMessageIsStampedFromItsLink:
         assert made["project_id"] is None
 
 
-class TestWhatTheBlockShows:
-    def _msgs(self, channel):
-        db, sec, erp, task_id, cid = channel
+class TestNoneOfItReachesThePrompt:
+    """The scoping above is what the inbox is filtered by. The prompt no longer reads the channel
+    at all: every row in it was the harness's note about some other conversation, shown to him as
+    "You: …", and a new chat that said "hey" was answered with eight of them."""
+
+    def _msgs(self, channel, monkeypatch):
+        db, sec, _erp, task_id, cid = channel
+        monkeypatch.setattr(turn_prompt, "AGENT_DB_PATH", db)
         repo.messages.add_message(db, "SEC: found an IDOR", link=f"/tasks/{task_id}", kind="delivered")
-        repo.messages.add_message(db, "ERP: odoo is slow", link=f"/chat/{cid}", kind="asked")
-        repo.messages.add_message(db, "GLOBAL: two github accounts", kind="note")
-        return db, sec, erp
+        repo.messages.add_message(db, "I need an answer: odoo is slow", link=f"/chat/{cid}", kind="asked")
+        repo.messages.add_message(db, "I stopped this session at $10.04", link="/messages", kind="stuck")
+        repo.messages.add_message(db, "GLOBAL: two github accounts", kind="reachout")
+        return db, sec
 
-    def test_a_project_chat_gets_its_own_and_the_global(self, channel):
-        db, sec, _erp = self._msgs(channel)
-        block = memory_context.messages_block(db, project_id=sec)
-        assert "found an IDOR" in block
-        assert "two github accounts" in block
+    def test_a_brand_new_unbound_chat_carries_none_of_it(self, channel, monkeypatch):
+        db, _sec = self._msgs(channel, monkeypatch)
+        state = turn_prompt._present_state(conversations.start(db, "hey")["id"], about="hey")
+        for said in ("found an IDOR", "odoo is slow", "stopped this session", "two github accounts"):
+            assert said not in state
+        assert "Your channel with your person" not in state
 
-    def test_a_project_chat_does_not_get_another_project_s(self, channel):
-        db, sec, _erp = self._msgs(channel)
-        block = memory_context.messages_block(db, project_id=sec)
-        assert "odoo is slow" not in block
-
-    def test_a_brand_new_unbound_chat_gets_only_the_global(self, channel):
-        db, _sec, _erp = self._msgs(channel)
-        block = memory_context.messages_block(db, project_id=None)
-        assert "two github accounts" in block
-        assert "found an IDOR" not in block
-        assert "odoo is slow" not in block
+    def test_a_project_chat_carries_none_of_its_own_either(self, channel, monkeypatch):
+        db, sec = self._msgs(channel, monkeypatch)
+        chat = conversations.start(db, "sec chat")
+        repo.conversations.set_project(db, chat["id"], sec)
+        assert "found an IDOR" not in turn_prompt._present_state(chat["id"], about="the IDOR")
 
 
 class TestTheInboxStillSeesEverything:

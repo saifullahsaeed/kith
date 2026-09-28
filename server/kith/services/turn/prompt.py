@@ -521,8 +521,8 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, abo
     """Everything about him that is true only at this moment, and everything about the project
     he is in — within one budget, with the sources competing for it.
 
-    Two regions. The first is about *him* — the clock, his memories, his channel, what he last
-    did. The second is about **one project**, and until it existed there was no such region:
+    Two regions. The first is about *him* — the clock, his memories, what he last did. The
+    second is about **one project**, and until it existed there was no such region:
     every active project and every active task across all of them arrived on every turn with no
     project named on any row.
 
@@ -542,17 +542,19 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, abo
     project_id = int(project["id"]) if project else None
     candidates: list[present.Block] = []
 
-    # Essential: the clock, and anyone waiting on a reply. Wrong by their absence rather than
-    # merely poorer for it, and both are small — the budget was never the reason to drop them.
+    # Essential: the clock. Wrong by its absence rather than merely poorer for it.
+    #
+    # **The channel used to sit beside it, and is gone on purpose.** It was the two-way inbox of
+    # July — his reach-outs, your replies — and it stopped being that when the inbox became a
+    # read-only alerts panel: nothing in the window or the CLI posts a reply any more. What kept
+    # arriving in that table was the harness's own bookkeeping about *other* conversations —
+    # questions parked in some chat, a session stopped at its budget, a deliverable filed — 255
+    # of 257 rows, rendered here as "You: …" so he read them as things he had told you, in the
+    # essential tier so no budget could drop them. A brand-new "hey" opened on eight of them and
+    # he answered those instead of you. Every one of them already lives in the conversation it
+    # is about; the alerts panel is where you see them all.
     candidates.append(
         present.Block("clock", memory_context.presence_block(AGENT_DB_PATH), tier=present.ESSENTIAL)
-    )
-    candidates.append(
-        present.Block(
-            "channel",
-            memory_context.messages_block(AGENT_DB_PATH, project_id),
-            tier=present.ESSENTIAL,
-        )
     )
 
     # Named, not described, whether or not this conversation is in one of them. He has to be
