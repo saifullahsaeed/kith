@@ -106,7 +106,7 @@ UI_DIST = _text("KITH_UI_DIST") or (str(SERVER_ROOT / "ui") if FROZEN else "")
 #: Here rather than in `kith/cli/` because `kith.settings` is the only module of this server the
 #: CLI package is permitted to import (see `test_the_cli_is_only_a_client`), and a second
 #: hand-bumped constant inside the CLI is how it came to say 0.1.0 while the app said 0.5.2.
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 #: Every released version of every bundled file, generated from the release tags by
 #: ``scripts/record_shipped.py``. Read by ``infra/seed.py`` to tell a file Kith wrote from one

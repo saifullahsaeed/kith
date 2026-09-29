@@ -7,7 +7,8 @@
     "v0.4.0",
     "v0.5.0",
     "v0.5.1",
-    "v0.5.2"
+    "v0.5.2",
+    "v0.6.0"
   ],
   "paths": {
     "persona/00-who.md": [
@@ -41,6 +42,7 @@
     ],
     "persona/30-how-you-read.md": [
       "636cb7ba369d12f6b5ff6f1ef1ffa401f143723dbbd1f91ed4871e8d0526b261",
+      "bcf4d9b523cdc87dea8cc61386f2b8f91bad8cbfd530ad80825c81f24e0bf8ce",
       "e66fb67b306c6595f92c5f334744ef0d5df48a64f2af187899bd2e81604a6b34",
       "f9ad2132aca501d2b5fe13fb002d7277e97fadc7dfa85c2868bb6924b337cb66"
     ],
@@ -54,14 +56,22 @@
       "8d6d59ab62c6df61a7f00a4a2c5e8c8c6426e09fdb2f2cf97e5e1704e4890673",
       "9974d84360074daefd7c56374d87e939dca8362243027bb31b4b2e16a0fc6764"
     ],
+    "skills/brainstorming/SKILL.md": [
+      "b80d243a045038e55969dac9fd71962a1db3f4d9c5c8005123404f0388fe5a93"
+    ],
     "skills/drawing-a-canvas/SKILL.md": [
       "8734fb4d8deb6263689b08f663e3631aae61b374a9aabab338bb53e3f7973b51"
     ],
     "skills/drawing-a-canvas/scripts/check_canvas.py": [
-      "d05ee654f32e8ba86cfbc178a5efacf805ddaee0d50dbb30c7a95b6a5e58dd93"
+      "d05ee654f32e8ba86cfbc178a5efacf805ddaee0d50dbb30c7a95b6a5e58dd93",
+      "f4085d422b516348544af809eea1ec39f4341298ba567cd15a219ebc94be3286"
     ],
     "skills/running-a-project/SKILL.md": [
-      "39428ead7b5c9a14dd6ac7c60be67a4dc53ed94c7ed874c1be50738d579f1b9d"
+      "39428ead7b5c9a14dd6ac7c60be67a4dc53ed94c7ed874c1be50738d579f1b9d",
+      "c7374fd56dd2d6e2ebd0a87ed83c524d0176d337a3f2987ee484f409a4506ed9"
+    ],
+    "skills/sending-workers/SKILL.md": [
+      "85095ac0fd9e9a046c490111eca91ffe978180f8559d4a52162b7e41b7669da5"
     ]
   }
 }
