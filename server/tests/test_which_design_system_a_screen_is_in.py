@@ -128,9 +128,7 @@ class TestPerProject:
         body = client.get(f"/api/design-system?projectId={pid}", headers=headers).get_json()
         assert json.loads(body["content"])["name"] == "Vigil"
 
-    def test_a_project_with_no_system_of_its_own_falls_back(
-        self, client, headers, never_the_real_workspace
-    ):
+    def test_a_project_with_no_system_of_its_own_falls_back(self, client, headers, never_the_real_workspace):
         from kith.infra.db import repositories as repo
         from kith.settings import AGENT_DB_PATH
 

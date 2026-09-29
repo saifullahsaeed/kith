@@ -163,7 +163,10 @@ class TestTheRequestThreadDoesNothingSlow:
         monkeypatch.setattr(
             route.history,
             "fold",
-            lambda *a, **k: ([{"role": "system", "content": "the stored brief", "_summary": True}, a[0][-1]], None),
+            lambda *a, **k: (
+                [{"role": "system", "content": "the stored brief", "_summary": True}, a[0][-1]],
+                None,
+            ),
         )
         monkeypatch.setattr(route, "stream_agent", lambda *a, **k: iter(()))
 

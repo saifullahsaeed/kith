@@ -95,7 +95,10 @@ class TestTheListIsTheOneTheRouterWouldUse:
         self._serving(
             monkeypatch,
             [
-                _row("dear", pricing={"prompt": "0.000002", "completion": "0.000008", "input_cache_read": "0.0000002"}),
+                _row(
+                    "dear",
+                    pricing={"prompt": "0.000002", "completion": "0.000008", "input_cache_read": "0.0000002"},
+                ),
                 _row("cheap"),
             ],
         )
@@ -111,6 +114,7 @@ class TestTheListIsTheOneTheRouterWouldUse:
     def test_a_table_that_cannot_be_read_is_an_empty_list_and_not_an_error(self, monkeypatch):
         """Same trade the router already makes: not knowing costs the old behaviour, and a
         settings screen that 500s because a host list was slow is worse than one saying so."""
+
         def refuse(*_args, **_kwargs):
             raise routing.requests.exceptions.ConnectionError("no network")
 
@@ -156,7 +160,9 @@ def _config(base_url: str = "https://openrouter.ai/api/v1") -> Config:
     )
 
 
-def _ask(monkeypatch, *, pinned: str, slugs: list[str], base_url: str = "https://openrouter.ai/api/v1") -> dict:
+def _ask(
+    monkeypatch, *, pinned: str, slugs: list[str], base_url: str = "https://openrouter.ai/api/v1"
+) -> dict:
     """The route, on its own app so the token gate is not what is under test here."""
     from kith.api.routes import endpoints as route
 

@@ -199,7 +199,9 @@ def _trimmed(act: str, answer: dict) -> dict:
     that are about tabs, one line each, the front one marked.
     """
     out: dict = {}
-    tabs = answer.get("tabs") if isinstance(answer.get("tabs"), list) else []
+    tabs = answer.get("tabs")
+    if not isinstance(tabs, list):
+        tabs = []
     front = str(answer.get("tab") or "")
     if len(tabs) > 1:
         out["tab"] = front

@@ -8,6 +8,7 @@ keeps but has to reach for, with the ``recall`` tool.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from kith.domain import present
@@ -91,7 +92,7 @@ def context_block(
     return "\n".join(lines)
 
 
-def _relevant_recall(candidates: list[tuple[dict, object]], about: str) -> list[dict]:
+def _relevant_recall(candidates: Sequence[tuple[dict, object]], about: str) -> list[dict]:
     """The recall memories with enough to do with ``about`` to ride along, best first.
 
     ``candidates`` are ``(memory, vector)`` pairs, all recall (core is fetched and added

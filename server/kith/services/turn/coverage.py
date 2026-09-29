@@ -65,7 +65,8 @@ _NUMBERED = re.compile(r" *(\d+)\t")
 MIN_CHARS = 400
 
 #: Where the copies of a line disagree — the file changed between two earlier reads. `None`, so it
-#: reads exactly like a line the turn does not hold at all: either way, the line goes in.
+#: reads exactly like a line the turn does not hold at all: either way, the line goes in. Tested as
+#: `is None` rather than `is _DISAGREE`, which is the same test but one pyright cannot narrow on.
 _DISAGREE = None
 
 
@@ -110,7 +111,7 @@ def reduced(convo: list[dict[str, Any]], name: str, payload: str) -> str | None:
 
     for path, number, segment in _segments(envelope["result"], paths):
         held = shown.get(_key(path), {}).get(number) if path else _DISAGREE
-        if held is _DISAGREE or held[0] != segment:
+        if held is None or held[0] != segment:
             flush()
             out.append(segment)
             continue
@@ -246,7 +247,7 @@ def _shown(reads: list[tuple[dict, list[str]]]) -> dict[str, dict[int, tuple[str
             held = shown.setdefault(_key(path), {})
             for number, segment in lines:
                 before = held.get(number, (segment, where))
-                agrees = before is not _DISAGREE and before[0] == segment
+                agrees = before is not None and before[0] == segment
                 held[number] = (segment, where) if agrees else _DISAGREE
     return shown
 

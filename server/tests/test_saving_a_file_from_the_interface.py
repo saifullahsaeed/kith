@@ -128,7 +128,10 @@ class TestRefusals:
         assert answer.status_code == 400
 
     def test_a_missing_path_is_refused(self, client, headers):
-        assert client.put("/api/workspace/file", json={"content": "<p>hi</p>"}, headers=headers).status_code == 400
+        assert (
+            client.put("/api/workspace/file", json={"content": "<p>hi</p>"}, headers=headers).status_code
+            == 400
+        )
 
     def test_saving_still_needs_the_token(self, client):
         answer = client.put("/api/workspace/file", json={"path": "a.html", "content": "<p>hi</p>"})

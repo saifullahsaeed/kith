@@ -232,9 +232,7 @@ def _from_design_system(doc: dict) -> System | None:
         if not size:
             continue
         entry: dict[str, Any] = {"size": size}
-        if str(spec.get("weight") or "").strip().isdigit():
-            entry["weight"] = int(spec["weight"])
-        elif isinstance(spec.get("weight"), (int, float)):
+        if str(spec.get("weight") or "").strip().isdigit() or isinstance(spec.get("weight"), (int, float)):
             entry["weight"] = int(spec["weight"])
         if spec.get("case") == "upper":
             entry["transform"] = "uppercase"
@@ -258,7 +256,9 @@ def _from_design_system(doc: dict) -> System | None:
             whole = spec
         else:
             whole = ", ".join(
-                part for part in [str((spec or {}).get("family") or ""), str((spec or {}).get("stack") or "")] if part
+                part
+                for part in [str((spec or {}).get("family") or ""), str((spec or {}).get("stack") or "")]
+                if part
             )
         if whole and re.fullmatch(r"[\w\s,\"'-]{1,120}", whole):
             fonts[str(role)] = whole
@@ -284,7 +284,9 @@ def _from_profile(doc: dict) -> System | None:
     print calibration would size a paragraph for a projector. Marked `derived` so the inspector
     can say where the numbers came from rather than implying anybody chose them.
     """
-    tokens = doc.get("tokens") if isinstance(doc.get("tokens"), dict) else {}
+    tokens = doc.get("tokens")
+    if not isinstance(tokens, dict):
+        tokens = {}
     colours_in = doc.get("colors") or tokens.get("colors")
     if not isinstance(colours_in, dict) or not colours_in:
         return None
@@ -301,6 +303,8 @@ def _from_profile(doc: dict) -> System | None:
             if not isinstance(spec, dict):
                 continue
             pt = spec.get("size_pt") or spec.get("pt") or spec.get("size")
+            if pt is None:
+                continue
             try:
                 px = round(float(pt) / body_pt * 16)
             except (TypeError, ValueError):
@@ -633,7 +637,7 @@ def save(
     if not doc.get("colors"):
         raise SystemError(
             "A design system needs at least one colour — that is what makes it a system rather "
-            "than a file. Give `colors` a name and a value, for instance {\"ink\": \"#1a1a1a\"}."
+            'than a file. Give `colors` a name and a value, for instance {"ink": "#1a1a1a"}.'
         )
 
     checked = _from_design_system(doc)

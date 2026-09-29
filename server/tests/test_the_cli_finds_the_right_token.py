@@ -20,6 +20,8 @@ import io
 import json
 import urllib.error
 import urllib.request
+from email.message import Message
+from typing import Any
 
 import pytest
 
@@ -39,14 +41,14 @@ def _server(accepts: str, calls: list[str], data_dir: str | None = None):
         held = request.headers.get("X-kith-token", "")
         if request.full_url.endswith("/api/health"):
             calls.append("health")
-            body = {"ok": True, "ollamaReachable": False}
+            body: dict[str, Any] = {"ok": True, "ollamaReachable": False}
             if data_dir is not None:
                 body["dataDir"] = data_dir
             return io.BytesIO(json.dumps(body).encode())
         calls.append(held)
         if held != accepts:
             raise urllib.error.HTTPError(
-                request.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error": "bad token"}')
+                request.full_url, 401, "Unauthorized", Message(), io.BytesIO(b'{"error": "bad token"}')
             )
         return io.BytesIO(b'{"ok": true}')
 
@@ -62,9 +64,7 @@ def two_installs(tmp_path, monkeypatch):
         directory.mkdir(parents=True)
         (directory / "api.token").write_text(f"{value}\n")
     monkeypatch.delenv("KITH_TOKEN", raising=False)
-    monkeypatch.setattr(
-        cli_client, "token_candidates", lambda: [home / "api.token", checkout / "api.token"]
-    )
+    monkeypatch.setattr(cli_client, "token_candidates", lambda: [home / "api.token", checkout / "api.token"])
     return home, checkout
 
 
@@ -142,9 +142,7 @@ def test_the_same_token_in_both_places_is_only_tried_once(tmp_path, monkeypatch)
         directory.mkdir(parents=True)
         (directory / "api.token").write_text("one-server-two-paths\n")
     monkeypatch.delenv("KITH_TOKEN", raising=False)
-    monkeypatch.setattr(
-        cli_client, "token_candidates", lambda: [home / "api.token", checkout / "api.token"]
-    )
+    monkeypatch.setattr(cli_client, "token_candidates", lambda: [home / "api.token", checkout / "api.token"])
 
     calls: list[str] = []
     monkeypatch.setattr(urllib.request, "urlopen", _server("nobody-has-this", calls))

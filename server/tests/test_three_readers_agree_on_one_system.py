@@ -35,7 +35,10 @@ FIXTURE = {
     "radius": {"card": 12},
     "space": [4, 8, 12, 16, 24, 40],
     "components": {
-        "button.primary": {"html": '<button data-k-component="button.primary">Save</button>', "use": "Commit."},
+        "button.primary": {
+            "html": '<button data-k-component="button.primary">Save</button>',
+            "use": "Commit.",
+        },
         "bad name!": {"html": "<div>never</div>"},
         "scripted": {"html": "<div><script>x</script></div>"},
     },
@@ -54,6 +57,7 @@ def checker():
     if "check_design_under_test" in sys.modules:
         return sys.modules["check_design_under_test"]
     spec = importlib.util.spec_from_file_location("check_design_under_test", script)
+    assert spec is not None and spec.loader is not None, script
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)

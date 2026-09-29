@@ -126,16 +126,19 @@ def read_design_system(path: Path, args: dict):
         "name": {**STR, "description": "What the system is called. The product's name, usually."},
         "colors": {
             "type": "object",
-            "description": "Token name to colour, e.g. {\"ink\": \"#1a1a1a\", \"accent\": \"#2f6f4f\"}. "
+            "description": 'Token name to colour, e.g. {"ink": "#1a1a1a", "accent": "#2f6f4f"}. '
             "Becomes var(--ds-ink) and var(--ds-accent) in a screen.",
         },
         "text": {
             "type": "object",
-            "description": "Type roles, e.g. {\"hero\": {\"size\": 44, \"weight\": 700}, "
-            "\"body\": {\"size\": 16}}. Becomes var(--ds-text-hero-size).",
+            "description": 'Type roles, e.g. {"hero": {"size": 44, "weight": 700}, '
+            '"body": {"size": 16}}. Becomes var(--ds-text-hero-size).',
         },
-        "radius": {"type": "object", "description": "Named radii, e.g. {\"card\": 12}."},
-        "fonts": {"type": "object", "description": "Font roles, e.g. {\"display\": \"Fraunces, Georgia, serif\"}."},
+        "radius": {"type": "object", "description": 'Named radii, e.g. {"card": 12}.'},
+        "fonts": {
+            "type": "object",
+            "description": 'Font roles, e.g. {"display": "Fraunces, Georgia, serif"}.',
+        },
         "space": {
             "type": "array",
             "items": {"type": "integer"},
@@ -143,9 +146,9 @@ def read_design_system(path: Path, args: dict):
         },
         "components": {
             "type": "object",
-            "description": "The inventory. Each entry is {\"html\": \"<the markup>\", \"use\": "
-            "\"one line on when to reach for it\"}, keyed by a name like \"button.primary\" or "
-            "\"card.metric\". The markup is dialect HTML — flex, tokens, data-k names. Pass null "
+            "description": 'The inventory. Each entry is {"html": "<the markup>", "use": '
+            '"one line on when to reach for it"}, keyed by a name like "button.primary" or '
+            '"card.metric". The markup is dialect HTML — flex, tokens, data-k names. Pass null '
             "as a value to remove one.",
         },
         "conventions": {
@@ -193,7 +196,7 @@ def update_design_system(path: Path, args: dict):
 @tool(
     "find_icons",
     "Icons for a screen, as finished inline SVG to paste where the icon goes. Ask for several "
-    "at once by what each is for — [\"search\", \"calendar\", \"patients\", \"inbox\", \"more\"] "
+    'at once by what each is for — ["search", "calendar", "patients", "inbox", "more"] '
     "— and each comes back as the best match plus a few alternatives by name. One consistent set "
     "(Lucide: 24px grid, one stroke weight), coloured by the surrounding text, so an icon in a "
     "button or a nav item takes the button's colour. Use these instead of Unicode symbols "
@@ -203,7 +206,7 @@ def update_design_system(path: Path, args: dict):
         "names": {
             **LIST_STR,
             "description": "What each icon is for, in plain words or as an exact icon name: "
-            "\"search\", \"user plus\", \"chevron-down\", \"bell\".",
+            '"search", "user plus", "chevron-down", "bell".',
         },
         "size": {
             **INT,
@@ -218,7 +221,7 @@ def find_icons(path: Path, args: dict):
 
     wanted = [one.strip() for one in many(args, "names", "name") if one and one.strip()]
     if not wanted:
-        return {"error": "Say what each icon is for — names: [\"home\", \"calendar\"]."}
+        return {"error": 'Say what each icon is for — names: ["home", "calendar"].'}
     if not icons.icons():
         return {"error": "The icon set is not installed — designing-a-screen/icons/lucide.json is missing."}
 

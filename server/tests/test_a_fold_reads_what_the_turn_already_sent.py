@@ -17,6 +17,7 @@ cost is counted either way.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 from kith import settings
 from kith.domain.chat import Config
@@ -54,7 +55,7 @@ def _frame(part: list[dict]) -> list[dict]:
 def _stream(text: str = "", *, finish: str = "stop", calls: list | None = None, stats: dict | None = None):
     """What a transport yields for one reply."""
     usage = {"finishReason": finish, "promptTokens": 1_000, "cachedTokens": 900, "costUsd": 0.01}
-    events = [{"type": "delta", "role": "text", "text": text}] if text else []
+    events: list[dict[str, Any]] = [{"type": "delta", "role": "text", "text": text}] if text else []
     events.append({"type": "turn", "content": text, "tool_calls": calls or [], "stats": stats or usage})
     return iter(events)
 

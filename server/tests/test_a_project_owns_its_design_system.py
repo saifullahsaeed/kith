@@ -235,7 +235,11 @@ class TestTheTools:
 
         answer = update_design_system(
             tmp_path / "agent.db",
-            {"project": project, "colors": {"ink": "#111"}, "components": {"evil": {"html": "<script>x</script>"}}},
+            {
+                "project": project,
+                "colors": {"ink": "#111"},
+                "components": {"evil": {"html": "<script>x</script>"}},
+            },
         )
         assert "error" in answer and "evil" in answer["error"]
 

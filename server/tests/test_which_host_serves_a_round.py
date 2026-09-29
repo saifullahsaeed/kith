@@ -343,7 +343,10 @@ class TestSettledOnceNotPerRound:
         monkeypatch.setattr(routing_policy, "_fetch", lambda config, by: ("deepseek", "alibaba"))
         tuning.apply({"openrouter_provider": "", "prefer_provider_by": "price"})
         assert routing_policy.for_conversation(self._config(), db, "c1").order == ("deepseek", "alibaba")
-        assert conversations.provider_order(db, "c1", "deepseek/deepseek-v4.1-flash") == ("deepseek", "alibaba")
+        assert conversations.provider_order(db, "c1", "deepseek/deepseek-v4.1-flash") == (
+            "deepseek",
+            "alibaba",
+        )
 
     def test_later_turns_read_the_row_and_never_re_rank(self, tmp_path, monkeypatch):
         """The network call is the tell: a second fetch means a second chance to move."""

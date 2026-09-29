@@ -59,13 +59,14 @@ class TestTheLookup:
 class TestTheMarkup:
     def test_it_takes_the_colour_of_the_text_around_it(self):
         svg = icons.markup("bell", size=16)
+        assert svg is not None
         assert 'stroke="currentColor"' in svg and 'fill="none"' in svg
         assert 'width="16"' in svg and 'viewBox="0 0 24 24"' in svg
 
     def test_every_icon_in_the_set_is_made_of_elements_the_board_draws(self):
         used = set()
         for name in icons.icons():
-            used.update(re.findall(r"<([a-z]+)", icons.markup(name)))
+            used.update(re.findall(r"<([a-z]+)", icons.markup(name) or ""))
         assert used <= PARSER_KEEPS, used - PARSER_KEEPS
 
 
@@ -101,6 +102,7 @@ def checker():
     try:
         if module is None:
             spec = importlib.util.spec_from_file_location("check_design_under_test", script)
+            assert spec is not None and spec.loader is not None, script
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             sys.modules[spec.name] = module
@@ -116,8 +118,7 @@ def test_the_checker_names_a_stand_in_and_passes_a_real_icon(checker, tmp_path, 
     monkeypatch.setattr(checker, "SHOTS", tmp_path / "shots")
     faked = tmp_path / "faked.html"
     faked.write_text(
-        '<body data-k-frame="mobile"><nav data-k="nav"><span>⌂</span> Home</nav>'
-        '<p>See all →</p></body>',
+        '<body data-k-frame="mobile"><nav data-k="nav"><span>⌂</span> Home</nav><p>See all →</p></body>',
         encoding="utf-8",
     )
     assert checker.check(faked) == 1

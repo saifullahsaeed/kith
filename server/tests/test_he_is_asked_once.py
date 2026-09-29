@@ -71,7 +71,7 @@ class TestTheNewestMessageIsNotDoubled:
                 "role": "user",
                 "content": "look at this",
                 "attachments": [{"name": "log.txt", "kind": "file"}],
-                "diagrams": ["flow: unknown node \"X\""],
+                "diagrams": ['flow: unknown node "X"'],
             },
         )
 

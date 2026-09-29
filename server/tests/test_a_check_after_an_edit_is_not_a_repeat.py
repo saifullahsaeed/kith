@@ -81,7 +81,10 @@ class TestAWriteIsNeverAStall:
         assert agent_loop._is_repeat("grep", seen=2) is True
 
     def test_a_refusal_cannot_be_read_as_success(self):
-        answer = agent_loop._run({"repeat": True, "name": "grep", "arguments": {}}, run=None)
+        def never(*_):
+            raise AssertionError("a refused repeat must not run")
+
+        answer = agent_loop._run({"repeat": True, "name": "grep", "arguments": {}}, run=never)
         assert "error" in answer and "note" not in answer
         assert "nothing was done" in answer["error"]
 

@@ -44,7 +44,7 @@ def _loud(rounds: int = 4) -> list[dict]:
     return convo
 
 
-def _brief(_text: str) -> str:
+def _brief(_messages: list[dict]) -> str:
     return "CI optimization is pushed in ce06d61."
 
 
