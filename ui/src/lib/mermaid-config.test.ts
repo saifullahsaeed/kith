@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { mermaidConfig, renderTarget, sweepOrphans } from "@/lib/mermaid-config";
+import { drawInTurn, mermaidConfig, renderTarget, sweepOrphans } from "@/lib/mermaid-config";
 
 function leftBehind(id: string) {
   const orphan = document.createElement("div");
@@ -138,5 +138,40 @@ describe("a drawing that is not a flowchart", () => {
     for (const kind of ["flowchart", "sequence", "xyChart", "pie", "quadrantChart", "timeline"]) {
       expect(config[kind]?.useMaxWidth, kind).toBe(true);
     }
+  });
+});
+
+describe("one render at a time", () => {
+  it("does not start a render while another is still using the scratch box", async () => {
+    // The race that turned the first diagram of a reply back into source: the second render
+    // emptied the shared box while the first was still laying out inside it.
+    const events: string[] = [];
+    let finishFirst!: () => void;
+    const first = drawInTurn(async () => {
+      const box = renderTarget();
+      const drawing = document.createElement("div");
+      box.append(drawing);
+      events.push("first starts");
+      await new Promise<void>((resolve) => (finishFirst = resolve));
+      events.push(box.contains(drawing) ? "first ends intact" : "first ends wiped");
+    });
+    const second = drawInTurn(async () => {
+      renderTarget();
+      events.push("second starts");
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toEqual(["first starts"]);
+    finishFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first starts", "first ends intact", "second starts"]);
+  });
+
+  it("keeps going after a render that failed", async () => {
+    const failed = drawInTurn(async () => {
+      throw new Error("would not lay out");
+    });
+    await expect(failed).rejects.toThrow("would not lay out");
+    await expect(drawInTurn(async () => "drawn")).resolves.toBe("drawn");
   });
 });

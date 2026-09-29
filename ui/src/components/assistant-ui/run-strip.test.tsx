@@ -100,6 +100,38 @@ describe("the run strip", () => {
     );
   });
 
+  it("draws an answer he gave mid-turn at full size, between two strips, not clamped in a beat", async () => {
+    const reply =
+      "Short answer: a weekend to post a review.\n\n## The architecture you're building\n\nWebhook, then a queue.";
+    server([
+      { kind: "text", text: "Checking what exists." },
+      { kind: "tool", id: "c1", name: "web_search", arguments: { query: "pr review bots" }, result: { ok: true, result: [] } },
+      { kind: "text", text: reply },
+      { kind: "tool", id: "c2", name: "shell", arguments: { command: "ls" }, result: { ok: true, result: { exit: 0 } } },
+      { kind: "text", text: "Scaffolded." },
+    ]);
+    open();
+
+    const heading = await screen.findByRole("heading", { name: "The architecture you're building" });
+    // Once, and outside every strip: an output is not a beat's sentence.
+    expect(screen.getAllByRole("heading", { name: "The architecture you're building" })).toHaveLength(1);
+    expect(heading.closest('[data-slot="kith_run-strip"]')).toBeNull();
+    expect(heading.closest("[data-kith-answer]")).not.toBeNull();
+    expect(times("Scaffolded.")).toBe(1);
+
+    const strips = document.querySelectorAll('[data-slot="kith_run-strip"]');
+    expect(strips).toHaveLength(2);
+    // The last strip speaks for the turn; the one above the mid-turn answer says what it did.
+    expect(strips[1]!.textContent).toContain("Worked");
+    expect(strips[0]!.textContent).toContain("1 search");
+    expect(strips[0]!.textContent).not.toContain("Worked");
+    // In the order it happened: strip, the reply, strip, the answer.
+    const order = [...document.querySelectorAll('[data-slot="kith_run-strip"], [data-kith-answer]')].map(
+      (el) => (el.matches("[data-kith-answer]") ? "answer" : "strip"),
+    );
+    expect(order).toEqual(["strip", "answer", "strip", "answer"]);
+  });
+
   it("draws a turn with no calls as prose, with no strip", async () => {
     server([
       { kind: "reasoning", text: "short thought" },

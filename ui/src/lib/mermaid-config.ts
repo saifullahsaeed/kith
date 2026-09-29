@@ -75,6 +75,24 @@ export function renderTarget(): HTMLElement {
   return scratch;
 }
 
+/**
+ * Run one render against the scratch box, after every render queued before it has settled.
+ *
+ * The box is shared and emptied at the start of every render, so two renders in flight at once
+ * is one render wiping the other's half-laid-out drawing. It happened on every reply with more
+ * than one diagram: they all settle on the same tick, the first to start lost its drawing to the
+ * second, threw, and was shown as source — "the diagram came out as code", for a diagram that was
+ * fine. Mermaid queues its own calls, but `renderTarget()` is ours and runs before the call
+ * reaches that queue, so the order has to be kept here.
+ */
+let drawing: Promise<unknown> = Promise.resolve();
+
+export function drawInTurn<T>(work: () => Promise<T>): Promise<T> {
+  const next = drawing.then(work, work);
+  drawing = next.catch(() => undefined);
+  return next;
+}
+
 /** Is this thing at the top of the body one of mermaid's leftovers?
  *
  *  Two rules, and the second is the one that matters. The first is exact — `d` plus an id one of

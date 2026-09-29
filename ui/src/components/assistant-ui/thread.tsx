@@ -11,9 +11,8 @@ import { useSlashCommands } from "@/components/assistant-ui/slash-commands";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { TurnFooterStats, latestUsage } from "@/components/assistant-ui/turn-usage";
 import {
-  AnswerProse,
   FlatTurn,
-  RunStrip,
+  TurnSections,
   usePartComponents,
   useTurnUsage,
 } from "@/components/assistant-ui/run-strip";
@@ -801,18 +800,21 @@ const MessageError: FC = () => {
 };
 
 /**
- * One of his turns: the run strip, the answer, what the turn made, and the footer.
+ * One of his turns: its runs of work and what he said between them, the answer, what the turn
+ * made, and the footer.
  *
  * The layout is decided by `planTurn` from the *shape* of the message — which kinds of part, in
  * which order — so it is recomputed when a part arrives and not on every streamed token. The
  * shape travels through the selector as a string, one character per part, which compares by
- * value where an array would compare by identity and re-render the turn on every chunk.
+ * value where an array would compare by identity and re-render the turn on every chunk. The one
+ * exception is a text part that grows into an output (`isOutput`) — its code flips once, from
+ * `t` to `T`, and the turn is laid out again then.
  */
 const AssistantMessage: FC = () => {
   const { ToolFallback: ToolFallbackComponent = ToolFallback } = useContext(ThreadComponentsContext);
   const code = useAuiState((s) =>
     s.message.parts
-      .map((part) => KIND_CODE[kindOf(part as { type: string; name?: string }, STEER_PART)])
+      .map((part) => KIND_CODE[kindOf(part as { type: string; name?: string; text?: string }, STEER_PART)])
       .join(""),
   );
   const kinds = useMemo(() => kindsFromCode(code), [code]);
@@ -831,13 +833,10 @@ const AssistantMessage: FC = () => {
           each beat's sentence and the answer — so ⌘F finds his words and never a command line. */}
       <article data-slot="kith_turn" className="text-foreground flex flex-col gap-3.5">
         {plan.strip ? (
-          <RunStrip plan={plan} components={components} />
+          <TurnSections plan={plan} components={components} />
         ) : (
           <FlatTurn plan={plan} kinds={kinds} components={components} />
         )}
-        {plan.strip && plan.answer !== null ? (
-          <AnswerProse index={plan.answer} components={components} />
-        ) : null}
         {/* What the turn *made*, under the turn, open. A design is not a step worth auditing —
             it is the output, and it was invisible inside the tool chain's closed disclosure. */}
         <DesignsInTurn />

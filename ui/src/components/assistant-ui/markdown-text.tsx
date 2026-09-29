@@ -14,6 +14,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { MermaidBlock } from "@/components/assistant-ui/mermaid-diagram";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { WideTable } from "@/components/ui/wide-table";
 import { copyText, linkTarget, looksLikeHisFile, useFileViewer, useOpenable } from "@/lib/files";
 import { grammarFor, highlight } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
@@ -272,9 +273,9 @@ const defaultComponents = memoizeMarkdownComponents({
   // bubbles. What was here was assistant-ui's stock styling, whose `w-full` is why a wide
   // table crushed its columns instead of scrolling.
   table: ({ className, ...props }) => (
-    <div className="kith-table">
+    <WideTable>
       <table className={cn("aui-md-table", className)} {...props} />
-    </div>
+    </WideTable>
   ),
   th: ({ className, ...props }) => <th className={cn("aui-md-th", className)} {...props} />,
   td: ({ className, ...props }) => <td className={cn("aui-md-td", className)} {...props} />,

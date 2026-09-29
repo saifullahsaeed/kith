@@ -5,9 +5,9 @@ import { AlertTriangle, Check, Copy, Maximize2, Pause, Play, RotateCw, X } from 
 
 import type { FlowValidation, MermaidAnimator, SceneMarker, Theme } from "mermaid-animator";
 
-import { OverlayButton } from "@/components/assistant-ui/overlay-button";
+import { DIAGRAM_TOOLBAR, OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { animatorTheme, defaultFlowColour } from "@/lib/animator-theme";
-import { toPng } from "@/lib/diagram";
+import { StillControls, toPng } from "@/lib/diagram";
 import { useConversationId } from "@/lib/conversation";
 import { useFlowFailures } from "@/lib/flow-failures";
 import { loopsForever } from "@/lib/flow-script";
@@ -394,6 +394,11 @@ export function AnimatedDiagram({
   }, [animator, wanted, visible, zoomed]);
 
   const ready = animator !== null;
+  /** A click on the drawing opens it full screen, as on the still diagram — once there is an
+   *  animation to open, and not at the end of a drag that selected a label. */
+  const open = () => {
+    if (ready && !window.getSelection()?.toString()) setZoomed(true);
+  };
   /** Which of the two drawings is the one on screen. The animation while it is playing or
    *  waiting to be played; the still diagram before it exists and after it has finished. */
   const showing = ready && !ended ? "animation" : "still";
@@ -412,8 +417,15 @@ export function AnimatedDiagram({
             The animator's container is mounted underneath it from the start and deliberately not
             hidden with `display: none` while it is being built — a container with no layout has
             no geometry, and geometry is what a route through a diagram is made of. */}
-        <div hidden={showing === "animation"} className={cn(error && !ready && "pb-6")}>
-          {still}
+        <div
+          hidden={showing === "animation"}
+          onClick={open}
+          title={ready ? "Open full screen" : undefined}
+          className={cn(error && !ready && "pb-6", ready && "cursor-zoom-in")}
+        >
+          {/* Until the animation exists — and for good, when its script does not compile — the
+              still is all there is, so it brings its own way to full screen. */}
+          <StillControls.Provider value={!ready}>{still}</StillControls.Provider>
         </div>
         {/* `[&>svg]:h-full!` is not a flourish. The animator strips the drawing's width and
             height and sizes it from its own injected `.ma-container svg { height: 100% }` — which
@@ -425,9 +437,11 @@ export function AnimatedDiagram({
           data-slot="kith_flow_stage"
           aria-hidden={showing !== "animation"}
           hidden={ready && showing !== "animation"}
+          onClick={open}
+          title={ready ? "Open full screen" : undefined}
           className={cn(
             "[&>svg]:h-full! [&>svg]:w-full!",
-            ready ? "relative" : "pointer-events-none absolute inset-0 opacity-0",
+            ready ? "relative cursor-zoom-in" : "pointer-events-none absolute inset-0 opacity-0",
           )}
           style={{ height: ready ? (height ?? DEFAULT_HEIGHT) : undefined }}
         />
@@ -444,7 +458,7 @@ export function AnimatedDiagram({
 
         {ready ? (
           <>
-            <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+            <div className={DIAGRAM_TOOLBAR}>
               <CopyFrame code={code} animator={animator} dark={dark} />
               <OverlayButton label="Open the diagram full screen" onClick={() => setZoomed(true)}>
                 <Maximize2 className="size-3.5" />

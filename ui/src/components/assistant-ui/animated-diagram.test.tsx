@@ -14,7 +14,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useContext } from "react";
+
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
+import { StillControls } from "@/lib/diagram";
 import { currentFlowFailures, useFlowFailures } from "@/lib/flow-failures";
 import { ConversationProvider } from "@/lib/conversation";
 import { PALETTE } from "@/lib/kith-palette";
@@ -363,6 +366,29 @@ describe("an animated mermaid fence", () => {
     expect(screen.getByText(/unknown node "Nowhere"/)).toBeInTheDocument();
     // Not a play button on something that is not playing.
     expect(screen.queryByLabelText("Pause the animation")).not.toBeInTheDocument();
+  });
+
+  it("lets the still bring its own full-screen control when the choreography will not compile", async () => {
+    // The real still is a bare `MermaidDiagram`, which draws its toolbar when told it is alone.
+    function Still() {
+      return <div data-testid="still" data-alone={String(useContext(StillControls))} />;
+    }
+    fake.validation = { ok: false, code: "BAD_STEP", message: 'flow: unexpected key "state" on a route step' };
+    render(inChat(<AnimatedDiagram code={CODE} still={<Still />} />));
+    await settle();
+    expect(fake.built).toHaveLength(0);
+    expect(screen.getByTestId("still").dataset.alone).toBe("true");
+  });
+
+  it("takes the still's controls back once the animation has its own", async () => {
+    function Still() {
+      return <div data-testid="still" data-alone={String(useContext(StillControls))} />;
+    }
+    render(inChat(<AnimatedDiagram code={CODE} still={<Still />} />));
+    await settle();
+    expect(fake.built).toHaveLength(1);
+    expect(screen.getByTestId("still").dataset.alone).toBe("false");
+    expect(screen.getByLabelText("Open the diagram full screen")).toBeInTheDocument();
   });
 
   it("says which line, when the validator knows", async () => {

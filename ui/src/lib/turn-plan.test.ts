@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { formatClock, formatWorked, kindsFromCode, planTurn } from "./turn-plan";
+import { formatClock, formatWorked, isOutput, kindsFromCode, planTurn } from "./turn-plan";
 
 const plan = (code: string) => planTurn(kindsFromCode(code));
 
 describe("planTurn", () => {
   it("draws a turn with no calls flat, with no strip", () => {
     // reasoning, then the answer, then the usage part
-    expect(plan("rto")).toEqual({ strip: false, beats: [], answer: null, flat: [0, 1] });
+    expect(plan("rto")).toEqual({ strip: false, beats: [], sections: [], answer: null, flat: [0, 1] });
   });
 
   it("makes one beat per sentence, and the last sentence the answer", () => {
@@ -80,6 +80,89 @@ describe("planTurn", () => {
     const out = plan("tcrrt");
     expect(out.beats).toEqual([{ head: 0, items: [1, 2, 3], calls: [1] }]);
     expect(out.answer).toBe(4);
+  });
+
+  it("lays a turn with no outputs out as one run, then the answer", () => {
+    const out = plan("tcctcto");
+    expect(out.sections).toEqual([
+      { kind: "run", beats: out.beats },
+      { kind: "output", index: 5 },
+    ]);
+  });
+
+  it("breaks the strip at an answer he gave mid-turn, instead of clamping it into a beat", () => {
+    // said, call, OUTPUT (a reply with a diagram), call, answer — the shape that hid his diagrams
+    const out = plan("tcTct");
+    expect(out.answer).toBe(4);
+    expect(out.sections).toEqual([
+      { kind: "run", beats: [{ head: 0, items: [1], calls: [1] }] },
+      { kind: "output", index: 2 },
+      { kind: "run", beats: [{ head: null, items: [3], calls: [3] }] },
+      { kind: "output", index: 4 },
+    ]);
+    // An output is never also a beat's sentence.
+    expect(out.beats.map((beat) => beat.head)).toEqual([0, null]);
+  });
+
+  it("keeps the thought that led to an output in the run before it", () => {
+    const out = plan("tcrTct");
+    expect(out.sections[0]).toEqual({ kind: "run", beats: [{ head: 0, items: [1, 2], calls: [1] }] });
+    expect(out.sections[1]).toEqual({ kind: "output", index: 3 });
+  });
+
+  it("starts a turn with its output when he answered before doing anything", () => {
+    const out = plan("rTct");
+    expect(out.sections).toEqual([
+      { kind: "run", beats: [{ head: null, items: [0], calls: [] }] },
+      { kind: "output", index: 1 },
+      { kind: "run", beats: [{ head: null, items: [2], calls: [2] }] },
+      { kind: "output", index: 3 },
+    ]);
+  });
+
+  it("puts work filed after the answer in the run above the answer, as before", () => {
+    const done = planTurn(kindsFromCode("tcTctcc"), true);
+    expect(done.answer).toBe(4);
+    expect(done.sections).toEqual([
+      { kind: "run", beats: [{ head: 0, items: [1], calls: [1] }] },
+      { kind: "output", index: 2 },
+      {
+        kind: "run",
+        beats: [
+          { head: null, items: [3], calls: [3] },
+          { head: null, items: [5, 6], calls: [5, 6] },
+        ],
+      },
+      { kind: "output", index: 4 },
+    ]);
+  });
+
+  it("draws an output streaming at the end of a live turn as the answer", () => {
+    const out = plan("tcT");
+    expect(out.answer).toBe(2);
+    expect(out.sections.at(-1)).toEqual({ kind: "output", index: 2 });
+  });
+
+  it("draws outputs in a turn with no calls flat, like any prose", () => {
+    expect(plan("rTo")).toEqual({ strip: false, beats: [], sections: [], answer: null, flat: [0, 1] });
+  });
+});
+
+describe("isOutput", () => {
+  it("leaves narration in the strip", () => {
+    expect(isOutput("I'll check what's actually shipping right now rather than answer from memory.")).toBe(false);
+    expect(isOutput("Found it — the regex can't match a space in a directory name.")).toBe(false);
+  });
+
+  it("takes anything a two-line row cannot hold", () => {
+    expect(isOutput("Here:\n\n```mermaid\ngraph TD\n  A --> B\n```")).toBe(true);
+    expect(isOutput("| tool | seat |\n|---|---|\n| a | $1 |")).toBe(true);
+    expect(isOutput("## The pipeline they all share\n\nshort")).toBe(true);
+    expect(isOutput("$$\nx^2\n$$")).toBe(true);
+  });
+
+  it("takes a long reply even without structure", () => {
+    expect(isOutput("word ".repeat(130))).toBe(true);
   });
 });
 

@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 
 import { MermaidDiagram } from "@/components/assistant-ui/mermaid-diagram";
+import { WideTable } from "@/components/ui/wide-table";
 import { linkTarget, useFileViewer } from "@/lib/files";
 import { CodeBlock } from "./code-block";
 import { MARKDOWN_PLUGINS, MARKDOWN_REHYPE } from "@/lib/markdown-plugins";
@@ -139,9 +140,9 @@ const MD: Components = {
   ),
   // Shared with chat and your bubbles — see `.kith-table` in index.css.
   table: (p) => (
-    <div className="kith-table">
+    <WideTable>
       <table {...p} />
-    </div>
+    </WideTable>
   ),
   pre: ({ children }) => <>{children}</>, // CodeBlock renders its own <pre>
   code: ({

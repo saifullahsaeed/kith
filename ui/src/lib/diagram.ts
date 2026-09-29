@@ -7,6 +7,20 @@
  * a thing that has been wrong once is a thing worth being able to run.
  */
 
+import { createContext } from "react";
+
+/**
+ * Whether a bare still diagram should carry its own controls — its toolbar and a click through to
+ * full screen.
+ *
+ * A bare still normally lives inside the animated diagram's figure, which has controls of its
+ * own. But those only exist once the animation is built, and a flow script that does not compile
+ * never builds one: what is left is a small still drawing with no way to open it — "diagrams have
+ * no preview option any more". The animated diagram says through this when the still is on its own.
+ * A context rather than a prop because the still arrives as an element made by its caller.
+ */
+export const StillControls = createContext(false);
+
 /**
  * Mermaid's SVG at its own size, and what that size is.
  *

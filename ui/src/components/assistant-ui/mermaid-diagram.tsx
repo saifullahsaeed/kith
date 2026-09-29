@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, Check, Copy, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from "lucide-react";
@@ -7,12 +7,18 @@ import { useAuiState } from "@assistant-ui/react";
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 
 import { AnimatedDiagram } from "@/components/assistant-ui/animated-diagram";
-import { OverlayButton } from "@/components/assistant-ui/overlay-button";
+import { DIAGRAM_TOOLBAR, OverlayButton } from "@/components/assistant-ui/overlay-button";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
-import { naturalSize, toPng } from "@/lib/diagram";
+import { StillControls, naturalSize, toPng } from "@/lib/diagram";
 import { hasFlowScript } from "@/lib/flow-script";
 import { PALETTE } from "@/lib/kith-palette";
-import { mermaidConfig, mermaidEngine, renderTarget, sweepOrphans } from "@/lib/mermaid-config";
+import {
+  drawInTurn,
+  mermaidConfig,
+  mermaidEngine,
+  renderTarget,
+  sweepOrphans,
+} from "@/lib/mermaid-config";
 import { useDarkMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -118,6 +124,11 @@ export function MermaidDiagram({
    *  failure is almost certainly a half-written diagram. */
   const [broken, setBroken] = useState(false);
   const [zoomed, setZoomed] = useState(false);
+  /** A bare still on its own, with no animation's controls around it — see `StillControls`. */
+  const alone = useContext(StillControls);
+  const zoom = () => {
+    if (!window.getSelection()?.toString()) setZoomed(true);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -139,12 +150,12 @@ export function MermaidDiagram({
           return;
         }
         // Drawn in a container of our own, off screen, rather than wherever mermaid would have
-        // put it — which is the body. See `renderTarget`.
-        const { svg: drawn } = await mermaid.render(
-          `kith-diagram-${(seq += 1)}`,
-          source,
-          renderTarget(),
-        );
+        // put it — which is the body. See `renderTarget`. And one at a time, because that
+        // container is shared — see `drawInTurn`.
+        const { svg: drawn } = await drawInTurn(() => {
+          mermaid.initialize(mermaidConfig(dark));
+          return mermaid.render(`kith-diagram-${(seq += 1)}`, source, renderTarget());
+        });
         if (cancelled) return;
         setSvg(drawn);
         setBroken(false);
@@ -169,13 +180,22 @@ export function MermaidDiagram({
   if (broken && !svg) return <>{fallback}</>;
 
   if (bare) {
-    return svg ? (
-      <div
-        className="flex justify-center overflow-x-auto [&_svg]:h-auto [&_svg]:max-w-full!"
-        dangerouslySetInnerHTML={{ __html: sized }}
-      />
-    ) : (
-      <Drawing />
+    if (!svg) return <Drawing />;
+    return (
+      <>
+        <div
+          onClick={alone ? zoom : undefined}
+          title={alone ? "Open full screen" : undefined}
+          className={cn(
+            "flex justify-center overflow-x-auto [&_svg]:h-auto [&_svg]:max-w-full!",
+            alone && "cursor-zoom-in",
+          )}
+          dangerouslySetInnerHTML={{ __html: sized }}
+        />
+        {/* Positioned against the figure it sits in, the same corner the animation's own use. */}
+        {alone ? <Toolbar svg={svg} dark={dark} onZoom={() => setZoomed(true)} /> : null}
+        {alone && zoomed ? <Lightbox svg={svg} onClose={() => setZoomed(false)} /> : null}
+      </>
     );
   }
 
@@ -199,8 +219,13 @@ export function MermaidDiagram({
                 `h-auto` keeps that in proportion. So a small diagram stays small, a wide one
                 fits, and nothing is ever drawn larger than it was laid out to be — which is
                 the rule the Lightbox has always used ("never magnified past 1"). */}
+            {/* A click on the drawing opens it, the way a picture in any other app does. Mouse only:
+                the keyboard's way in is the toolbar's button, and a focusable div wrapping an SVG
+                would read every label in it out as the name of a button. */}
             <div
-              className="flex justify-center overflow-x-auto p-4 [&_svg]:h-auto [&_svg]:max-w-full!"
+              onClick={zoom}
+              title="Open full screen"
+              className="flex cursor-zoom-in justify-center overflow-x-auto p-4 [&_svg]:h-auto [&_svg]:max-w-full!"
               // Mermaid's output — built by mermaid from the code he wrote, in a renderer that
               // already runs his shell commands. Rendered rather than escaped because an SVG
               // shown as text is the thing this component exists to stop doing.
@@ -249,9 +274,8 @@ function Toolbar({ svg, dark, onZoom }: { svg: string; dark: boolean; onZoom: ()
   }, [svg, dark]);
 
   return (
-    // Hidden until the diagram is hovered — two buttons parked on every picture is clutter,
-    // and clutter is the thing being fixed here. Kept reachable by keyboard regardless.
-    <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+    // On screen, quietly, all the time — see `DIAGRAM_TOOLBAR`.
+    <div className={DIAGRAM_TOOLBAR}>
       <OverlayButton
         label={state === "failed" ? "Could not copy the diagram" : "Copy the diagram as an image"}
         onClick={() => void copy()}

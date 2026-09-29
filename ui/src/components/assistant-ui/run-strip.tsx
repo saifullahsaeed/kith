@@ -42,7 +42,14 @@ import { STEER_PART, TURN_TIMING, USAGE_PART, type TurnTiming } from "@/lib/back
 import { useProjectRoot } from "@/lib/project-root";
 import { callText, describeCall, summariseRun, summaryLine } from "@/lib/tool-language";
 import { outcomeOf } from "@/lib/tool-row";
-import { formatClock, formatWorked, type Beat, type PartKind, type TurnPlan } from "@/lib/turn-plan";
+import {
+  formatClock,
+  formatWorked,
+  type Beat,
+  type PartKind,
+  type Section,
+  type TurnPlan,
+} from "@/lib/turn-plan";
 import { cn } from "@/lib/utils";
 import { useTicking } from "@/lib/use-ticking";
 
@@ -241,22 +248,77 @@ function useCallFacts(calls: readonly number[]): CallFacts {
   return useMemo(() => JSON.parse(encoded) as CallFacts, [encoded]);
 }
 
+/* ── the turn ─────────────────────────────────────────────────────────────────────────── */
+
+/** Whether a run did any work — one that only thought is drawn as the thought, not as a strip. */
+const didWork = (section: Section) =>
+  section.kind === "run" && section.beats.some((beat) => beat.calls.length > 0);
+
+/**
+ * A turn with work in it, top to bottom: each run of work as a strip, and what he said between
+ * them at reading size.
+ *
+ * One strip per run rather than one per turn, because he answers mid-turn — the pricing, then an
+ * `ask`; the architecture, then he starts building — and a single strip had to clamp those replies
+ * into two-line beats. The *last* strip that did work speaks for the turn: its state, its clock,
+ * how long it worked, how many steps. The ones above it are finished stretches of work and say
+ * only what they did.
+ */
+export function TurnSections({ plan, components }: { plan: TurnPlan; components: PartComponents }) {
+  let voice = -1;
+  plan.sections.forEach((section, index) => {
+    if (didWork(section)) voice = index;
+  });
+  return (
+    <>
+      {plan.sections.map((section, index) => {
+        if (section.kind === "output") {
+          return <AnswerProse key={`output-${section.index}`} index={section.index} components={components} />;
+        }
+        const first = section.beats[0];
+        const key = `run-${first?.head ?? first?.items[0] ?? index}`;
+        if (!didWork(section)) {
+          // Only thinking, and maybe a sentence: drawn as it is, like a turn with no calls.
+          return (
+            <div key={key} className="flex flex-col gap-2">
+              {section.beats.flatMap((beat) => [
+                ...beat.items.map((item) => (
+                  <MessagePrimitive.PartByIndex key={item} index={item} components={components} />
+                )),
+                ...(beat.head !== null
+                  ? [<AnswerProse key={beat.head} index={beat.head} components={components} />]
+                  : []),
+              ])}
+            </div>
+          );
+        }
+        return <RunStrip key={key} beats={section.beats} turn={index === voice} components={components} />;
+      })}
+    </>
+  );
+}
+
 /* ── the strip ────────────────────────────────────────────────────────────────────────── */
 
 type StripState = "working" | "waiting" | "done" | "stopped" | "failed";
 
 /**
- * The run: a header that says the whole turn in one line, and the beats under it.
+ * A run: a header that says it in one line, and the beats under it.
  *
- * Opens at Story for the turn at the bottom of the thread and folds to Summary for the ones you
- * have scrolled past — the design's "a finished turn you scrolled past" is one line. Either way
- * your own click takes over for as long as the message is on screen.
+ * The run that speaks for the turn (`turn`) opens at Story for the turn at the bottom of the thread
+ * and folds to Summary for the ones you have scrolled past — the design's "a finished turn you
+ * scrolled past" is one line. A run above an answer he gave mid-turn starts folded: the answer
+ * under it is the point, and the run is how he got there. Either way your own click takes over for
+ * as long as the message is on screen.
  */
 export function RunStrip({
-  plan,
+  beats,
+  turn,
   components,
 }: {
-  plan: TurnPlan;
+  beats: Beat[];
+  /** Whether this run carries the turn's own state — the last run that did work. */
+  turn: boolean;
   components: PartComponents;
 }) {
   const status = useAuiState((s) =>
@@ -265,8 +327,10 @@ export function RunStrip({
       : (s.message.status?.type ?? "complete"),
   );
   const isLast = useAuiState((s) => s.message.isLast);
-  const running = status === "running" || status === "requires-action";
-  const allCalls = useMemo(() => plan.beats.flatMap((beat) => beat.calls), [plan]);
+  const turnRunning = status === "running" || status === "requires-action";
+  /** A run above a later answer is finished even while the turn goes on. */
+  const running = turn && turnRunning;
+  const allCalls = useMemo(() => beats.flatMap((beat) => beat.calls), [beats]);
   const facts = useCallFacts(allCalls);
   const usage = useTurnUsage();
   const timing = useTurnTiming();
@@ -276,14 +340,16 @@ export function RunStrip({
     ? facts.waiting
       ? "waiting"
       : "working"
-    : status === "incomplete:cancelled"
-      ? "stopped"
-      : status.startsWith("incomplete")
-        ? "failed"
-        : "done";
+    : !turn
+      ? "done"
+      : status === "incomplete:cancelled"
+        ? "stopped"
+        : status.startsWith("incomplete")
+          ? "failed"
+          : "done";
 
   const [asked, setAsked] = useState<boolean | null>(null);
-  const expanded = asked ?? (running || isLast);
+  const expanded = asked ?? (turn && (running || isLast));
 
   /* Workflows are counted apart from the rest so the count can stay live: a workflow he started
    * is still running long after the turn that started it has finished, and the one-line summary
@@ -294,13 +360,23 @@ export function RunStrip({
   const run = summariseRun(facts.names.filter((name) => name !== "run_workflow" && name !== "ask"));
   const questions = facts.asked ? `asked ${facts.asked} question${facts.asked === 1 ? "" : "s"}` : "";
   const started = useStartedWorkflows(allCalls);
-  const steps = usage?.rounds?.length ?? 0;
+  const steps = turn ? (usage?.rounds?.length ?? 0) : 0;
   const worked =
-    timing?.endedAt && timing.startedAt ? formatWorked(timing.endedAt - timing.startedAt) : "";
+    turn && timing?.endedAt && timing.startedAt ? formatWorked(timing.endedAt - timing.startedAt) : "";
   const clock = running && timing ? formatClock(now - timing.startedAt) : "";
 
-  const label =
-    state === "working"
+  const summary = [
+    state === "waiting" ? questions : "",
+    run.text ? `${run.text}${running ? " so far" : ""}` : "",
+    state === "waiting" ? "" : questions,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  /* A run that does not speak for the turn is named by what it did: "3 searches · 1 skill". */
+  const label = !turn
+    ? summary || "Worked"
+    : state === "working"
       ? "Working"
       : state === "waiting"
         ? "Waiting for you"
@@ -313,14 +389,7 @@ export function RunStrip({
             : worked
               ? `Worked ${worked}`
               : "Worked";
-
-  const summary = [
-    state === "waiting" ? questions : "",
-    run.text ? `${run.text}${running ? " so far" : ""}` : "",
-    state === "waiting" ? "" : questions,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const detail = turn ? summary : "";
 
   return (
     <section
@@ -347,7 +416,8 @@ export function RunStrip({
         <StateGlyph state={state} />
         <span
           className={cn(
-            "shrink-0 font-semibold",
+            "font-semibold",
+            turn ? "shrink-0" : "min-w-0 truncate",
             state === "waiting" && "text-kith",
             state === "failed" && "text-destructive",
           )}
@@ -364,12 +434,12 @@ export function RunStrip({
             {clock}
           </span>
         ) : null}
-        {summary || workflows ? (
+        {detail || workflows ? (
           <>
             <span className="text-muted-foreground/75 shrink-0">·</span>
             <span className="text-muted-foreground flex min-w-0 items-center gap-[0.35em] truncate">
-              {summary ? <span className="truncate">{summary}</span> : null}
-              {summary && workflows ? <span>·</span> : null}
+              {detail ? <span className="truncate">{detail}</span> : null}
+              {detail && workflows ? <span>·</span> : null}
               {workflows ? (
                 <WorkflowCount count={workflows} run={started[0]?.run ?? ""} />
               ) : null}
@@ -395,11 +465,11 @@ export function RunStrip({
 
       {expanded ? (
         <div className="border-border/80 flex flex-col gap-0.5 border-t px-2 pt-2 pb-2.5">
-          {plan.beats.map((beat, index) => (
+          {beats.map((beat, index) => (
             <div key={beat.head ?? `lead-${beat.items[0] ?? index}`} className="flex flex-col">
               <BeatRow
                 beat={beat}
-                live={running && index === plan.beats.length - 1}
+                live={running && index === beats.length - 1}
                 components={components}
               />
               {/* The workflow a beat started, at the beat's own level, outside its fold. */}
@@ -677,18 +747,19 @@ export function FlatTurn({
   const timing = useTurnTiming();
   const now = useTicking(running && Boolean(timing));
   const lastKind = plan.flat.length ? kinds[plan.flat[plan.flat.length - 1]!] : undefined;
+  const prose = (kind: PartKind | undefined) => kind === "text" || kind === "output";
   const status = usage ? <TurnStatus usage={usage} /> : null;
 
   return (
     <>
       {plan.flat.map((index) =>
-        kinds[index] === "text" ? (
+        prose(kinds[index]) ? (
           <AnswerProse key={index} index={index} components={components} />
         ) : (
           <MessagePrimitive.PartByIndex key={index} index={index} components={components} />
         ),
       )}
-      {running && lastKind !== "text" ? (
+      {running && !prose(lastKind) ? (
         <div className="flex flex-col gap-2">
           <div
             data-slot="aui_assistant-message-indicator"

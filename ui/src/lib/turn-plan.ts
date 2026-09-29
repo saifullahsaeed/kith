@@ -20,6 +20,8 @@
 export type PartKind =
   /** Prose he wrote: a beat's sentence, or the answer. */
   | "text"
+  /** Prose that is an answer in its own right — see `isOutput`. Never a beat's sentence. */
+  | "output"
   /** A reasoning block. */
   | "reasoning"
   /** A tool call. */
@@ -38,17 +40,48 @@ export interface Beat {
   calls: number[];
 }
 
+/** A stretch of the turn: work, folded into a strip, or something he said at reading size. */
+export type Section =
+  | { kind: "run"; beats: Beat[] }
+  | { kind: "output"; index: number };
+
 export interface TurnPlan {
   /** Whether the turn has any work worth a strip. A turn that only thought and answered does
    *  not: a strip saying "1 step" above a reply is apparatus with nothing in it. */
   strip: boolean;
-  /** The run, beat by beat. Empty when there is no strip. */
+  /** Every beat of every run, in order. Empty when there is no strip. */
   beats: Beat[];
+  /** The turn top to bottom: runs of work, and the outputs between them, ending with the answer
+   *  when there is one. Empty when there is no strip. */
+  sections: Section[];
   /** The answer: the last text part, provided nothing but inert parts follow it. `null` when
    *  the turn ended on work (it was stopped, or is still going) or there is no strip. */
   answer: number | null;
   /** When there is no strip, every drawable part in order — reasoning, prose, steers. */
   flat: number[];
+}
+
+/** Past this many characters a text part is a reply, whatever its shape. Measured on his last 60
+ *  conversations: of 2,457 texts written mid-turn with calls after them, 93% are under 400
+ *  characters and none of those has a heading, fence or table; the ~70 that ran past 800 were
+ *  almost all headed, diagrammed replies. */
+const OUTPUT_CHARS = 600;
+
+/** A line that opens something a two-line row cannot draw: a heading, a fence, a table row, a
+ *  maths block. */
+const BLOCK = /^ {0,3}(?:#{1,6}\s|```|~~~|\|.*\||\$\$)/m;
+
+/**
+ * Whether prose he wrote mid-turn is an answer rather than narration.
+ *
+ * The strip was drawn for narration — "Let me check the API." — and clamps a beat's sentence to
+ * two lines. But he also answers mid-turn: the cost breakdown, then an `ask`; the architecture,
+ * then he starts building. Clamped, a 6,000-character reply read as two lines of 13px text, and a
+ * diagram in it was cut to a sliver with its full-screen button clipped away with it. Anything
+ * with structure, or long enough to be a reply, is drawn at reading size between runs instead.
+ */
+export function isOutput(text: string): boolean {
+  return text.length >= OUTPUT_CHARS || BLOCK.test(text);
 }
 
 /**
@@ -65,9 +98,15 @@ export interface TurnPlan {
  * of a turn, it is drawn as the answer; if a call arrives after it, it becomes that beat's
  * sentence. Beat sentences are one-liners, so the move is small — and the alternative, drawing a
  * long streaming reply at 13px inside the strip until the turn ends, is worse every time.
+ *
+ * **An output breaks the strip.** Prose that `isOutput` says is a reply is never a beat's
+ * sentence: it closes the run it follows and is drawn at full size, and the work after it opens a
+ * run of its own. So a turn reads the way it happened — work, what he found, more work, the
+ * answer — instead of one strip with his findings clamped inside it.
  */
 export function planTurn(kinds: readonly PartKind[], finished = false): TurnPlan {
   const drawable = (kind: PartKind | undefined) => kind !== undefined && kind !== "other";
+  const prose = (kind: PartKind | undefined) => kind === "text" || kind === "output";
 
   /* The answer.
    *
@@ -80,7 +119,7 @@ export function planTurn(kinds: readonly PartKind[], finished = false): TurnPlan
   let answer: number | null = null;
   for (let i = kinds.length - 1; i >= 0; i--) {
     const kind = kinds[i];
-    if (kind === "text") {
+    if (prose(kind)) {
       answer = i;
       break;
     }
@@ -93,6 +132,7 @@ export function planTurn(kinds: readonly PartKind[], finished = false): TurnPlan
     return {
       strip: false,
       beats: [],
+      sections: [],
       answer: null,
       flat: kinds.flatMap((kind, i) => (drawable(kind) ? [i] : [])),
     };
@@ -100,6 +140,9 @@ export function planTurn(kinds: readonly PartKind[], finished = false): TurnPlan
 
   const end = kinds.length;
   const beats: Beat[] = [];
+  const sections: Section[] = [];
+  /** The run beats are being added to; `null` after an output, until work starts the next. */
+  let run: Beat[] | null = null;
   let current: Beat | null = null;
   /** Reasoning waiting for the sentence it led to. */
   let pending: number[] = [];
@@ -108,6 +151,11 @@ export function planTurn(kinds: readonly PartKind[], finished = false): TurnPlan
     const beat: Beat = { head, items: pending, calls: [] };
     pending = [];
     beats.push(beat);
+    if (!run) {
+      run = [];
+      sections.push({ kind: "run", beats: run });
+    }
+    run.push(beat);
     return beat;
   };
 
@@ -124,6 +172,15 @@ export function planTurn(kinds: readonly PartKind[], finished = false): TurnPlan
         else current.items.push(...pending);
         pending = [];
       }
+      current = null;
+      continue;
+    }
+
+    // An answer given mid-turn. The thought that led to it is already in the run above — reasoning
+    // only waits for a *sentence* — and the work after it starts a new run.
+    if (kind === "output") {
+      sections.push({ kind: "output", index: i });
+      run = null;
       current = null;
       continue;
     }
@@ -154,16 +211,18 @@ export function planTurn(kinds: readonly PartKind[], finished = false): TurnPlan
     pending = [];
   }
 
-  return { strip: true, beats, answer, flat: [] };
+  if (answer !== null) sections.push({ kind: "output", index: answer });
+
+  return { strip: true, beats, sections, answer, flat: [] };
 }
 
 /** The layout's code for one message part, from the part itself. */
 export function kindOf(
-  part: { type: string; name?: string } | undefined,
+  part: { type: string; name?: string; text?: string } | undefined,
   steerName: string,
 ): PartKind {
   if (!part) return "other";
-  if (part.type === "text") return "text";
+  if (part.type === "text") return isOutput(part.text ?? "") ? "output" : "text";
   if (part.type === "reasoning") return "reasoning";
   if (part.type === "tool-call") return "tool";
   if (part.type === "data" && part.name === steerName) return "steer";
@@ -174,6 +233,7 @@ export function kindOf(
  *  which compares by value where an array would compare by identity. */
 export const KIND_CODE: Record<PartKind, string> = {
   text: "t",
+  output: "T",
   reasoning: "r",
   tool: "c",
   steer: "s",
