@@ -39,6 +39,10 @@ export type SurfaceId =
   | "board"
   | "settings"
   | "context"
+  /* The Browser tab — a real browser the desktop shell draws over the pane. Built in: it was a
+   * plugin surface, `plugin:browser/page`, until a plugin that could not supply the browser it
+   * was named for turned out to be only a switch. */
+  | "browser"
   /* Every plugin surface, under one member.
    *
    * Not `SurfaceId = string`, and not a member per plugin. Widening to `string` produces **zero**
@@ -143,7 +147,7 @@ export type Edge = "left" | "right" | "top" | "bottom" | "center";
  *
  * `board` and `settings` are deliberately absent — they are about Kith, not about a chat.
  */
-export const BOUND: ReadonlySet<SurfaceId> = new Set(["work", "context", "plugin"]);
+export const BOUND: ReadonlySet<SurfaceId> = new Set(["work", "context", "browser", "plugin"]);
 
 /**
  * The surfaces that are not panes at all, and cannot be put in this tree.
@@ -680,6 +684,37 @@ export function withoutSurfaces(root: Node, surfaces: ReadonlySet<SurfaceId>): N
     const wasActive = one.tabs[one.active];
     const active = tabs.findIndex((tab) => tab.uid === wasActive?.uid);
     return { ...one, tabs, active: active >= 0 ? active : clampActive(tabs, 0) };
+  });
+}
+
+/**
+ * A tab stored before its surface was built in, as the built-in surface.
+ *
+ * The Browser was the plugin surface `plugin:browser/page` and is the core `browser` surface
+ * now. A stored tab still naming the plugin would draw "this plugin is not installed" where the
+ * person's browser was, so it is carried across on read — its `uid` kept, so React sees the same
+ * tab. The one retired-surface rule that rewrites rather than strips (`withoutSurfaces` strips),
+ * because this surface did not go away; only its address changed.
+ */
+export function builtIn(tab: TabRef): TabRef {
+  if (tab.surface !== "plugin" || tab.plugin !== "browser" || tab.view !== "page") return tab;
+  return {
+    surface: "browser",
+    ...(tab.conversationId ? { conversationId: tab.conversationId } : {}),
+    ...(tab.uid ? { uid: tab.uid } : {}),
+  };
+}
+
+/** The same carrying-across for a stored tab *key* — pins are keyed by `tabKey`. */
+export function builtInKey(key: string): string {
+  return key.replace(/^plugin:browser\/page(?=@|$)/, "browser");
+}
+
+/** Every tab in the tree through `builtIn`. */
+export function withBuiltIns(root: Node): Node {
+  return mapPanes(root, (one) => {
+    const tabs = one.tabs.map(builtIn);
+    return tabs.every((tab, at) => tab === one.tabs[at]) ? one : { ...one, tabs };
   });
 }
 

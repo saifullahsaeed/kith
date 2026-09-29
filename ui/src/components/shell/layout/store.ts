@@ -5,6 +5,8 @@ import { SURFACES } from "./surfaces";
 import {
   activateTab,
   BOUND,
+  builtIn,
+  builtInKey,
   clearPlace,
   closePane as closePaneIn,
   closeTab,
@@ -29,6 +31,7 @@ import {
   stampPlace,
   tabKey,
   TAKEOVERS,
+  withBuiltIns,
   withoutSurfaces,
   type Edge,
   type Node,
@@ -157,7 +160,7 @@ export function readStored(): Node | null {
      * Board and Settings were tabs until they became route-driven takeovers, so every layout
      * stored before that holds one. Returning null for those would mean the default arrangement
      * — the whole thing thrown away over two tabs nothing can draw. See `TAKEOVERS`. */
-    return withoutSurfaces(held.tree, TAKEOVERS);
+    return withBuiltIns(withoutSurfaces(held.tree, TAKEOVERS));
   } catch {
     // Private mode, no storage, or something that is not JSON. All three mean the same thing.
     return null;
@@ -238,7 +241,7 @@ export function readPins(): Record<string, Pin> {
     const held = JSON.parse(raw) as Record<string, unknown>;
     const out: Record<string, Pin> = {};
     for (const [key, pin] of Object.entries(held)) {
-      if (key && isPin(pin)) out[key] = pin;
+      if (key && isPin(pin)) out[builtInKey(key)] = pin;
     }
     return out;
   } catch {
@@ -300,7 +303,7 @@ export function readCompanions(): Record<string, TabRef[]> {
     const out: Record<string, TabRef[]> = {};
     for (const [host, list] of Object.entries(held)) {
       if (!host || !Array.isArray(list)) continue;
-      const kept = list.filter(isTabRef);
+      const kept = list.filter(isTabRef).map(builtIn);
       if (kept.length) out[host] = kept;
     }
     return out;

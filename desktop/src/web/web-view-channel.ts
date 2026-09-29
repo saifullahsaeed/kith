@@ -16,28 +16,25 @@
  * What keeps this narrow:
  *
  * * **A fixed verb list.** Place, hide, and the things a person's own hand does to a browser —
- *   including `resize`, because putting the page back to the full pane is exactly that: the
+ *   its tabs among them, and `resize`, because putting the page back to the full pane is exactly that: the
  *   one-click escape hatch from a viewport the model set. There is no generic `invoke`, nothing
  *   that names a file, and nothing that runs script in the page — the model's side of that goes
  *   over loopback with a token, where the Python server has already decided the caller is
  *   allowed.
  * * **Two verbs that exist only here.** `pick` and `cookie-import` have no `/browse` case and
- *   are not in `VIEW_ACTS`, so the model cannot start either. That is not tidiness: both are
+ *   are not acts of the `browser` tool, so the model cannot start either. That is not tidiness: both are
  *   defined by a person doing something — pointing at a component, naming a site they are
  *   already signed into — and a version of them the model could call would be a different
  *   feature with a different argument behind it. See `cookie-import.ts` for the long form.
- * * **A plugin id checked against what is installed.** The renderer says which plugin's view it
- *   is placing; the main process refuses anything that is not a `web` surface the person
- *   actually installed, so a compromised renderer cannot conjure a browser out of a name.
+ * * **One browser, keyed by conversation.** The renderer names only which conversation's view it
+ *   is placing. There is nothing else to name — the browser is built in, one partition, and a
+ *   conversation id is a key rather than a permission (see below).
  * * **The sealed frames cannot reach it.** A plugin surface is a sandboxed iframe with an opaque
  *   origin, so `window.kith` in the top document is not something a plugin's page can touch.
  *   Only Kith's own trusted renderer code is on this channel.
  */
 
 import { ipcMain } from "electron";
-
-import { BACKEND_ORIGIN } from "../config";
-import { apiHeaders } from "../server/api-token";
 
 import { getMainWindow } from "../window/window";
 
@@ -49,69 +46,35 @@ export const ASK = "kith:web-view";
 /** Main → renderer. Status for the chrome to draw. */
 export const STATUS = "kith:web-view-status";
 
-/** Which browser panes are real, as `<plugin>/<view>`. Empty until asked for, which is the
- *  right default: an unknown key is a bug or an attempt, and a browser that appears because
- *  somebody typed a name is neither. */
-let allowed: Set<string> = new Set();
-
-/**
- * Ask the backend which browser panes exist, and remember the answer.
- *
- * Lazily, and only on a miss. The alternative was for the shell to refresh this at startup and
- * on every plugin change, which means a second thing to keep in step with installs — and a
- * stale list there is a browser pane that will not open with nothing on screen saying why.
- * Asking when an unknown key turns up is self-healing: install a plugin, open its tab, and the
- * first `place` teaches the shell about it.
- */
-async function refreshPermitted(): Promise<void> {
-  try {
-    const response = await fetch(`${BACKEND_ORIGIN}/api/plugins/surfaces`, {
-      headers: apiHeaders(),
-    });
-    if (!response.ok) return;
-    const body = (await response.json()) as {
-      surfaces?: { plugin?: string; view?: string; kind?: string }[];
-    };
-    allowed = new Set(
-      (body.surfaces ?? [])
-        .filter((one) => one.kind === "web")
-        .map((one) => `${one.plugin}/${one.view}`),
-    );
-  } catch {
-    /* The backend is down; the pane will say so on its own. */
-  }
-}
-
 export function installWebViewChannel(): void {
   ipcMain.handle(ASK, async (_event, raw: unknown) => {
-    const request = raw as { verb?: unknown; plugin?: unknown; view?: unknown } | null;
+    const request = raw as { verb?: unknown; owner?: unknown } | null;
     const verb = String(request?.verb ?? "");
-    const plugin = String(request?.plugin ?? "");
-    const view = String(request?.view ?? "");
-    if (!allowed.has(`${plugin}/${view}`)) await refreshPermitted();
-    if (!allowed.has(`${plugin}/${view}`)) {
-      return { error: `${plugin}/${view} is not an installed browser pane` };
-    }
     /* Which conversation's browser. Not checked against anything, and it does not need to be:
-     * it is a *key*, not a permission. Cookies live in the plugin's own partition regardless of
-     * owner, so naming somebody else's conversation reaches a page in the same profile the
-     * caller could have opened itself. What the owner buys is separation for parallel work, not
-     * a boundary. */
-    const at = { plugin, view, owner: String((raw as { owner?: unknown }).owner ?? "") };
+     * it is a *key*, not a permission. Cookies live in the one partition regardless of owner, so
+     * naming somebody else's conversation reaches a page in the same profile the caller could
+     * have opened itself. What the owner buys is separation for parallel work, not a boundary. */
+    const at = { owner: String(request?.owner ?? "") };
 
     try {
       switch (verb) {
         case "place": {
           const rect = (raw as { rect?: views.Rect }).rect;
-          const home = String((raw as { home?: unknown }).home ?? "");
           if (!rect) return { error: "place needs a rectangle" };
-          return views.place(at, rect, home);
+          return views.place(at, rect);
         }
         case "hide":
           views.hide(at);
           return { ok: true };
         case "navigate":
           return await views.navigate(at, String((raw as { url?: unknown }).url ?? ""));
+        // The strip: a person opening, switching and closing tabs with their own hand.
+        case "tab-new":
+          return await views.newTab(at, String((raw as { url?: unknown }).url ?? ""));
+        case "tab-switch":
+          return views.switchTab(at, String((raw as { tab?: unknown }).tab ?? ""));
+        case "tab-close":
+          return views.closeTab(at, String((raw as { tab?: unknown }).tab ?? ""));
         case "back":
           return await views.back(at);
         case "forward":
@@ -159,7 +122,6 @@ export function installWebViewChannel(): void {
         case "cookie-import": {
           const asked = raw as { source?: unknown; domain?: unknown; profile?: unknown };
           return await cookies.importCookies(
-            at.plugin,
             String(asked.source ?? ""),
             String(asked.domain ?? ""),
             asked.profile ? String(asked.profile) : undefined,

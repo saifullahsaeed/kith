@@ -114,3 +114,9 @@ class TestAPluginsStateIsAChangeToo:
             ("plugin__browser__look", "{}"),
         )
         assert moved == [False, False, False, False]
+
+    def test_the_built_in_browser_counts_its_acts_the_same_way(self):
+        """One tool now, so its acts are its commands: a click between two reads is a change."""
+        read = ("browser", '{"act": "read"}')
+        moved = self._run(read, ("browser", '{"act": "click", "text": "Next"}'), read, read)
+        assert moved == [False, True, True, False]

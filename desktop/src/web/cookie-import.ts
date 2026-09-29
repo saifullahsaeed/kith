@@ -1,10 +1,10 @@
 /**
- * Bringing a login you already have into the plugin's browser.
+ * Bringing a login you already have into Kith's browser tab.
  *
  * ## The rule this bends, and the one it does not
  *
  * `web-views.ts` makes an argument that the rest of the browser rests on: the pane's session is
- * the plugin's own, it starts logged out, and so *anything logged into it is something the
+ * the browser's own, it starts logged out, and so *anything logged into it is something the
  * person logged in themselves, in this view, on purpose*. That is why no permission prompt
  * appears anywhere on the navigation path — the profile holds no identity nobody chose to put
  * there. It goes on to say, in as many words, that a view onto their real Chrome profile would
@@ -19,9 +19,9 @@
  *    session on the machine into a browser the model drives, which is a different bargain
  *    entirely and nobody asked for it.
  * 2. **Started by a click on Kith's own chrome, never by a call.** It is on the fixed IPC
- *    channel beside back and reload — it is not in `VIEW_ACTS` and there is no case for it in
- *    `/browse`, so neither the model nor a plugin can reach it. `web-view-channel.ts` gives the
- *    general form of that argument; this is the entry where it matters most.
+ *    channel beside back and reload — it is not an act of the `browser` tool and there is no case
+ *    for it in `/browse`, so the model cannot reach it. `web-view-channel.ts` gives the general
+ *    form of that argument; this is the entry where it matters most.
  * 3. **The operating system asks too.** Reading a Chromium profile's cookies needs its key out
  *    of the login keychain, and macOS puts up its own dialog for that, naming Kith. A second
  *    consent, from something Kith does not control, on the one action here that deserves it.
@@ -45,6 +45,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { session } from "electron";
+
+import { BROWSER_PARTITION } from "../config";
 
 const run = promisify(execFile);
 
@@ -288,7 +290,7 @@ export interface ImportResult {
 }
 
 /**
- * Copy one domain's cookies out of another browser and into a plugin's partition.
+ * Copy one domain's cookies out of another browser and into the browser tab's partition.
  *
  * Reads every profile the chosen browser has, because a person with work and personal profiles
  * is signed in on exactly one of them and nothing here can tell which.
@@ -300,7 +302,6 @@ export interface ImportResult {
  * with the ones that were asked for.
  */
 export async function importCookies(
-  plugin: string,
   sourceId: string,
   rawDomain: string,
   /** One profile, when the person picked one. Every profile when they did not — which is what
@@ -317,6 +318,12 @@ export async function importCookies(
     return {
       ...empty,
       failure: `"${rawDomain}" is not a domain. Give one like example.com — the cookies for that site and its subdomains are what gets copied.`,
+    };
+  }
+  if (await isPublicSuffix(domain)) {
+    return {
+      ...empty,
+      failure: `${domain} is shared by many unrelated sites, so its cookies would be all of their logins at once. Name the one site — something.${domain}.`,
     };
   }
 
@@ -340,7 +347,7 @@ export async function importCookies(
     }
   }
 
-  const jar = session.fromPartition(`persist:kith-plugin-${plugin}`).cookies;
+  const jar = session.fromPartition(BROWSER_PARTITION).cookies;
   const result: ImportResult = { added: 0, skipped: 0, looked: [], failure: "" };
   const now = Date.now() / 1000;
 
@@ -384,22 +391,8 @@ export async function importCookies(
         result.skipped += 1;
         continue;
       }
-      const secure = Number(row.secure ?? 0) === 1;
-      const bare = host.replace(/^\./, "");
       try {
-        await jar.set({
-          url: `${secure ? "https" : "http"}://${bare}${String(row.path ?? "/") || "/"}`,
-          name,
-          value,
-          domain: host,
-          path: String(row.path ?? "/") || "/",
-          secure,
-          httpOnly: Number(row.httponly ?? 0) === 1,
-          // `no_restriction` is only accepted on a secure cookie, and a cross-site cookie that
-          // arrives as `unspecified` is one the destination will not send where the source did.
-          sameSite: sameSiteOf(Number(row.samesite ?? -1), secure),
-          ...(expires ? { expirationDate: expires } : {}),
-        });
+        await jar.set(cookieFor(row, name, value, expires));
         result.added += 1;
       } catch {
         result.skipped += 1;
@@ -411,6 +404,68 @@ export async function importCookies(
     result.failure = `${source.name} has no cookies for ${domain}. Check the spelling, and that it is the browser you are signed in on.`;
   }
   return result;
+}
+
+/**
+ * One source row as the details Electron's `cookies.set` takes.
+ *
+ * **`domain` only for a cookie that had one.** A leading dot in the source's host is what marks
+ * a cookie as "this site and its subdomains"; no dot means host-only. Electron makes the same
+ * distinction by whether `domain` is *present*, and this passed it for every row — which turned
+ * every host-only cookie into a domain cookie sent to subdomains it was never set for, and made
+ * every `__Host-` cookie fail outright, because that prefix is a promise the cookie has no
+ * domain. Google and GitHub keep sessions under `__Host-`, so an import could report forty
+ * cookies copied and leave you signed out.
+ */
+export function cookieFor(
+  row: Record<string, string | number | null>,
+  name: string,
+  value: string,
+  expires: number,
+): Electron.CookiesSetDetails {
+  const host = String(row.host ?? "");
+  const secure = Number(row.secure ?? 0) === 1;
+  const path = String(row.path ?? "/") || "/";
+  return {
+    url: `${secure ? "https" : "http"}://${host.replace(/^\./, "")}${path}`,
+    name,
+    value,
+    ...(host.startsWith(".") ? { domain: host } : {}),
+    path,
+    secure,
+    httpOnly: Number(row.httponly ?? 0) === 1,
+    // `no_restriction` is only accepted on a secure cookie, and a cross-site cookie that
+    // arrives as `unspecified` is one the destination will not send where the source did.
+    sameSite: sameSiteOf(Number(row.samesite ?? -1), secure),
+    ...(expires ? { expirationDate: expires } : {}),
+  };
+}
+
+/**
+ * Is this a suffix many unrelated sites sit under — `co.uk`, `github.io`, `vercel.app`?
+ *
+ * The domain match takes subdomains, which is right for `github.com` and a disaster for
+ * `vercel.app`: every app anybody deployed there is a subdomain of it, and "one domain" would
+ * copy the logins for all of them the person has ever visited. `hostnameOf` cannot tell — both
+ * are two labels with a dot between — and the list that can is the Public Suffix List.
+ *
+ * **Asked of the Chromium already in this app rather than shipped as a copy.** The desktop app has
+ * no runtime dependencies (see the module comment), and Chromium carries the list, private
+ * registries included, because it enforces the same rule on cookies: a cookie may not be set for
+ * a public suffix. So a cookie is offered for the domain in a throwaway in-memory session and
+ * Chromium's refusal is the answer. Any other refusal is not treated as one — this narrows an
+ * import, it must never be the reason a legitimate one cannot happen.
+ */
+export async function isPublicSuffix(domain: string): Promise<boolean> {
+  const jar = session.fromPartition("kith-suffix-check").cookies;
+  const url = `https://kith-check.${domain}/`;
+  try {
+    await jar.set({ url, name: "kith-check", value: "1", domain: `.${domain}` });
+    await jar.remove(url, "kith-check");
+    return false;
+  } catch (error) {
+    return /domain/i.test(String((error as Error).message ?? ""));
+  }
 }
 
 /** What the person typed, as a hostname. Accepts a pasted URL, because that is what is on the
@@ -454,10 +509,14 @@ function chromiumSql(domain: string): string {
           FROM cookies WHERE ${domainMatch("host_key", domain)}`;
 }
 
+/** Firefox's own jar only. `originAttributes` is empty for it and carries a container's
+ *  `userContextId` or a partition key otherwise — and a person with a work container and a
+ *  personal one signed into the same site has two sets of the same cookie names, of which the
+ *  import kept whichever happened to be written last. */
 function firefoxSql(domain: string): string {
   return `SELECT host, name, value, path, expiry AS raw_expires,
             isSecure AS secure, isHttpOnly AS httponly, sameSite AS samesite, '' AS enc
-          FROM moz_cookies WHERE ${domainMatch("host", domain)}`;
+          FROM moz_cookies WHERE originAttributes = '' AND ${domainMatch("host", domain)}`;
 }
 
 /**
@@ -581,7 +640,7 @@ export interface FoundDomain {
  * Read-only and no keychain. Host names are not encrypted in either format; only cookie *values*
  * are, which is what the key is for. So this costs no prompt and reveals nothing a cookie
  * import would not have revealed anyway — it stays behind the same chrome-only entry point as
- * everything else here, unreachable by the model or a plugin.
+ * everything else here, unreachable by the model.
  *
  * Grouped and summed across profiles per domain would hide the thing worth knowing, so it is
  * not: one row per domain per profile, and the caller decides how to show that.
@@ -600,7 +659,7 @@ export async function domainsIn(sourceId: string, profileId?: string): Promise<F
       rows = await query(
         profile.file,
         source.kind === "firefox"
-          ? "SELECT host AS h, COUNT(*) AS n FROM moz_cookies GROUP BY host ORDER BY n DESC LIMIT 400"
+          ? "SELECT host AS h, COUNT(*) AS n FROM moz_cookies WHERE originAttributes = '' GROUP BY host ORDER BY n DESC LIMIT 400"
           : "SELECT host_key AS h, COUNT(*) AS n FROM cookies GROUP BY host_key ORDER BY n DESC LIMIT 400",
       );
     } catch {

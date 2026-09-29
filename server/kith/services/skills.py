@@ -146,6 +146,13 @@ class Skill:
 _seeded = False
 
 
+def resync() -> None:
+    """Reconcile with the bundled skills again on the next `root()`, for something that has just
+    cleared a skill out of the way of a bundled one."""
+    global _seeded
+    _seeded = False
+
+
 def root() -> Path:
     """The skills folder, created if it is not there, reconciled with the bundled skills.
 

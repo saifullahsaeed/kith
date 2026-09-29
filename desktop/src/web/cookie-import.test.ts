@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { domainMatch, epochOf, hostnameOf, namesAt, sameSiteOf } from "./cookie-import";
+import { cookieFor, domainMatch, epochOf, hostnameOf, namesAt, sameSiteOf } from "./cookie-import";
 
 /**
  * Copying a login out of another browser, and the three ways that goes quietly wrong.
@@ -97,6 +97,41 @@ describe("same-site, which decides whether the copy is any use", () => {
 
   it("leaves an unspecified one unspecified", () => {
     expect(sameSiteOf(-1, true)).toBe("unspecified");
+  });
+});
+
+describe("what a copied cookie is scoped to", () => {
+  /* Electron decides host-only against domain by whether `domain` is *there*, and it was always
+   * there. Checked against a real session on 2026-09-29: a host-only `sid` came out as
+   * `.example.com` and was sent to `sub.example.com`, and every `__Host-` cookie was refused with
+   * "invalid __Host- or __Secure- prefix" and counted as skipped — Google's and GitHub's sessions
+   * among them. */
+  const row = (host: string, extra: Record<string, string | number> = {}) => ({
+    host,
+    path: "/",
+    secure: 1,
+    httponly: 1,
+    samesite: 1,
+    ...extra,
+  });
+
+  it("leaves a host-only cookie host-only", () => {
+    const set = cookieFor(row("github.com"), "user_session", "v", 0);
+    expect(set).not.toHaveProperty("domain");
+    expect(set.url).toBe("https://github.com/");
+  });
+
+  it("carries a __Host- cookie with no domain, which is the only way it can be set", () => {
+    const set = cookieFor(row("github.com"), "__Host-user_session_same_site", "v", 1_900_000_000);
+    expect(set).not.toHaveProperty("domain");
+    expect(set).toMatchObject({ secure: true, path: "/", expirationDate: 1_900_000_000 });
+  });
+
+  it("keeps a domain cookie a domain cookie", () => {
+    const set = cookieFor(row(".github.com"), "_octo", "v", 0);
+    expect(set.domain).toBe(".github.com");
+    expect(set.url).toBe("https://github.com/");
+    expect(set).not.toHaveProperty("expirationDate");
   });
 });
 

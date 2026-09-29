@@ -82,8 +82,8 @@ export function outcomeOf(name: string, wrapped: unknown): Outcome {
   if (value.ok === false && typeof value.error === "string") {
     return { state: "refused", reason: firstLine(value.error) };
   }
-  // A plugin answers as itself, with its own failure field.
-  if (name.startsWith("plugin__") && typeof value.failure === "string" && value.failure) {
+  // A plugin answers as itself, with its own failure field — and so does the browser.
+  if ((name === "browser" || name.startsWith("plugin__")) && typeof value.failure === "string" && value.failure) {
     return { state: "failed", reason: firstLine(value.failure) };
   }
   // A tool that answered `{error}` and nothing else did not do its job.
@@ -140,6 +140,17 @@ function browserDigest(command: string, r: Obj): string {
       return r.width ? `screenshot ${s(r.width)}×${s(r.height)}` : "looked";
     case "resize":
       return r.width ? `${s(r.width)} × ${s(r.height)}` : "";
+    case "type":
+      return short(r.into);
+    case "press":
+      return short(r.did);
+    case "scroll":
+      return typeof r.moved === "number" ? (r.moved ? `${Math.abs(r.moved)}px` : "at the end") : "";
+    case "tabs":
+    case "close":
+      return Array.isArray(r.tabs) ? plural(r.tabs.filter((one) => one !== "no tabs are open").length, "tab") : "";
+    case "switch":
+      return short(r.title);
     case "show":
       return r.opened ? "opened" : "";
     default:
@@ -155,6 +166,7 @@ export function digestOf(name: string, args: Args, wrapped: unknown): string {
   const text = typeof value === "string" ? value : "";
   const list = Array.isArray(value) ? value : null;
 
+  if (name === "browser") return browserDigest(String(args?.act ?? ""), r);
   if (name.startsWith("plugin__")) {
     const [, plugin = "", command = ""] = /^plugin__(.+?)__(.+)$/.exec(name) ?? [];
     if (plugin === "browser") return browserDigest(command, r);

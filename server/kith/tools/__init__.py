@@ -22,6 +22,7 @@ from kith.services import touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
     aliases,
     asking,
+    browser,
     code,
     computer,
     design,

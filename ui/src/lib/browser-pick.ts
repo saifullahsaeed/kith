@@ -60,13 +60,33 @@ export function nameOf(picked: Picked): string {
  */
 export function noteFor(picked: Picked): string {
   const parts: string[] = [];
-  if (picked.selector) parts.push(`\`${picked.selector}\``);
-  else if (picked.tag) parts.push(`\`<${picked.tag}>\``);
+  if (picked.selector) parts.push(code(picked.selector));
+  else if (picked.tag) parts.push(code(`<${picked.tag}>`));
   if (picked.width && picked.height) parts.push(`${picked.width}×${picked.height}`);
   const head = parts.join(" · ") || "a component";
-  const where = picked.url ? ` on ${picked.url}` : "";
-  const says = picked.label ? ` — “${picked.label.slice(0, 80)}”` : "";
+  const where = picked.url ? ` on <${picked.url.replace(/[<>\s]/g, encodeURIComponent)}>` : "";
+  const says = picked.label ? ` — ${code(picked.label.slice(0, 80))}` : "";
   return `[from the browser] ${head}${where}${says}`;
+}
+
+/**
+ * The page's own words, made inert before they go into the person's message.
+ *
+ * **Everything here came from the page**, and the caption is sent as the person's message and
+ * rendered as markdown. An element whose label was `[Open ticket](https://evil.example)` became a
+ * working link in the person's own bubble, and one with a backtick in its `data-testid` broke out
+ * of the code span around the selector. So both go in a code span — the one place markdown
+ * renders nothing, bare URLs included, which escaping punctuation does not stop GFM from linking —
+ * fenced longer than any run of backticks inside it, which is how CommonMark lets a code span
+ * hold a backtick.
+ */
+function code(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  // A space inside the fence when the text itself starts or ends with a backtick, or it would
+  // merge with the fence; CommonMark strips exactly one such space from each side.
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
 }
 
 /**

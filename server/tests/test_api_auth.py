@@ -275,3 +275,40 @@ class TestTheInjectedScriptIsAllowedToRun:
         assert inline, "the page should carry an inline script"
         digest = base64.b64encode(hashlib.sha256(inline.group(1).encode()).digest()).decode()
         assert f"'sha256-{digest}'" in policy
+
+
+class TestItAnswersOnlyToItsOwnNames:
+    """DNS rebinding, which the token does not stop.
+
+    A page at ``http://evil.example:8611`` whose name is repointed at 127.0.0.1 is fetching its
+    *own* origin: no preflight, and ``/`` hands it the token in the page. The one thing that gives
+    it away is the ``Host`` header, so a request must name this machine the way only this machine
+    can be named.
+    """
+
+    @pytest.mark.parametrize("host", ["evil.example:8611", "127.0.0.1.nip.io:8611", "localtest.me"])
+    def test_a_stranger_name_is_refused_everywhere(self, client, good, host):
+        assert client.get("/api/health", headers={"Host": host}).status_code == 403
+        # The token does not help a request addressed to someone else's name.
+        assert client.get("/api/activity", headers={"Host": host, auth.HEADER: good}).status_code == 403
+        # And the page that carries the token is behind the same check.
+        assert client.get("/", headers={"Host": host}).status_code == 403
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "127.0.0.1:8611",
+            "localhost:8611",
+            "localhost",
+            "[::1]:8611",
+            "app.localhost:8611",
+            "192.168.1.20:8611",
+        ],
+    )
+    def test_this_machines_own_names_get_in(self, client, host):
+        assert client.get("/api/health", headers={"Host": host}).status_code == 200
+
+    def test_a_name_can_be_allowed_on_purpose(self, client, monkeypatch):
+        monkeypatch.setenv(auth.ALLOWED_HOSTS_ENV, "kith.internal, other.lan")
+        assert client.get("/api/health", headers={"Host": "kith.internal:8611"}).status_code == 200
+        assert client.get("/api/health", headers={"Host": "evil.example"}).status_code == 403

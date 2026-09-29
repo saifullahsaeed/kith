@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ArrowLeft, ArrowRight, Crosshair, KeyRound, Monitor, RotateCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, Crosshair, KeyRound, Monitor, Plus, RotateCw, X } from "lucide-react";
 
 import { CookieRow, ViewportRow } from "@/components/shell/browser-tools";
 import { Absent } from "@/components/shell/plugin-surface";
 import { Button } from "@/components/ui/button";
 import { activeComposer } from "@/lib/active-composer";
 import { sendToChat, type Picked } from "@/lib/browser-pick";
-import { pluginSurface } from "@/lib/plugin-index";
 
 /**
- * A browser pane: Kith's chrome, and a hole where the shell paints the page.
+ * The Browser tab: Kith's chrome, and a hole where the shell paints the page.
  *
  * ## The hole is real
  *
- * There is no page inside this component. A `web` surface is a `WebContentsView` — actual web
+ * There is no page inside this component. The page is a `WebContentsView` — actual web
  * contents composited by the Electron main process *over* the window — so nothing in this file
  * renders the site, and nothing in CSS can position it either. What this does is measure where
  * the pane is and tell the shell, sixty times a second while a splitter is dragged if need be,
@@ -27,13 +26,13 @@ import { pluginSurface } from "@/lib/plugin-index";
  * and whenever the measured rectangle collapses — and every one of those is a bug if it is
  * missed, in the form of a browser floating over a settings dialog.
  *
- * ## Why the chrome is Kith's and not the plugin's
+ * ## Why the chrome is Kith's
  *
  * The address bar, the back button and the spinner are drawn here, in Kith's own trusted
- * renderer, from status the main process pushes. A plugin does not draw them and cannot fake
- * them. That is the same rule the sealed surfaces follow — a person's click on chrome Kith drew
- * is the authorisation for what follows — and it is why typing an address here needs no
- * permission prompt: the plugin is not asking for anything, the person is using a browser.
+ * renderer, from status the main process pushes, and no page can draw or fake them. That is the
+ * rule the sealed plugin surfaces follow too — a person's click on chrome Kith drew is the
+ * authorisation for what follows — and it is why typing an address here needs no permission
+ * prompt: nobody is asking for anything, the person is using a browser.
  */
 
 interface ViewStatus {
@@ -52,6 +51,29 @@ interface ViewStatus {
    *  at and the page it is — and the chip says it, because a silently shrunken page is the bug
    *  this replaced. */
   scale: number;
+  /** The tab in front — the one this chrome is about. Empty when none is open. */
+  tab: string;
+  /** Every tab, in strip order. */
+  tabs: TabSummary[];
+}
+
+interface TabSummary {
+  id: string;
+  title: string;
+  url: string;
+  loading: boolean;
+}
+
+/** What a tab is called in the strip: its title, else its host, else what it is. */
+function tabLabel(tab: TabSummary): string {
+  if (tab.title && tab.title !== tab.url) return tab.title;
+  try {
+    const host = new URL(tab.url).host;
+    if (host) return host;
+  } catch {
+    /* about:blank and friends */
+  }
+  return "New tab";
 }
 
 /** What the preload exposes in the desktop shell, and nothing outside it. */
@@ -71,6 +93,8 @@ const EMPTY: ViewStatus = {
   failure: "",
   viewport: null,
   scale: 1,
+  tab: "",
+  tabs: [],
 };
 
 /**
@@ -106,26 +130,19 @@ function covered(hole: HTMLElement, box: DOMRect): boolean {
   return true;
 }
 
-export function PluginWebView({
-  plugin,
-  view,
+export function BrowserPane({
   conversationId,
   visible = true,
 }: {
-  plugin: string;
-  view: string;
-  /** Which conversation this pane belongs to. Becomes the view's `owner` when the surface
-   *  declares `answers: "conversation"`, which is what gives each conversation its own browser
-   *  instead of all of them sharing one page. */
+  /** Which conversation this pane belongs to — the view's `owner`, which is what gives each
+   *  conversation its own browser instead of all of them sharing one page. The server names the
+   *  same conversation when the model calls in, so both sides address the same view. */
   conversationId: string;
   /** False while another tab is in front. The view has to be taken off the screen, not merely
    *  left where it is — it would paint over whatever replaced it. */
   visible?: boolean;
 }) {
-  const declared = pluginSurface(plugin, view);
-  /* Empty for a surface that answers for the app rather than per conversation — the same rule
-   * the server applies when the model calls in, so both sides address the same view. */
-  const owner = declared?.answers === "conversation" ? conversationId : "";
+  const owner = conversationId;
   const hole = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<ViewStatus>(EMPTY);
   const [typed, setTyped] = useState("");
@@ -151,11 +168,11 @@ export function PluginWebView({
   const ask = useCallback(
     async (verb: string, extra: Record<string, unknown> = {}) => {
       if (!bridge) return undefined;
-      const answer = await bridge.ask({ verb, plugin, view, owner, ...extra });
+      const answer = await bridge.ask({ verb, owner, ...extra });
       if (answer && typeof answer.url === "string") setStatus(answer as unknown as ViewStatus);
       return answer;
     },
-    [bridge, plugin, view, owner],
+    [bridge, owner],
   );
 
   /**
@@ -176,7 +193,7 @@ export function PluginWebView({
     setPicking(true);
     setPicked("");
     try {
-      const answer = (await bridge.ask({ verb: "pick", plugin, view, owner })) as Picked & {
+      const answer = (await bridge.ask({ verb: "pick", owner })) as Picked & {
         error?: string;
       };
       if (answer?.error) {
@@ -193,16 +210,16 @@ export function PluginWebView({
     } finally {
       setPicking(false);
     }
-  }, [bridge, picking, plugin, view, owner]);
+  }, [bridge, picking, owner]);
 
   /* An inspector outlives the pane that started it otherwise: the overlay is drawn *in the page*,
    * and the page is still there when this component goes away. */
   useEffect(() => {
     if (!bridge) return;
     return () => {
-      void bridge.ask({ verb: "unpick", plugin, view, owner });
+      void bridge.ask({ verb: "unpick", owner });
     };
-  }, [bridge, plugin, view, owner]);
+  }, [bridge, owner]);
 
   /* Status, pushed rather than polled. The main process knows when the page moved; asking it
    * on a timer would mean an address bar that is right most of the time. */
@@ -212,7 +229,7 @@ export function PluginWebView({
       // Status is broadcast to the window, so every browser pane hears every browser's — and
       // with a view per conversation there are several. Without the owner check, one
       // conversation's address bar would follow another conversation's page.
-      if (raw.plugin !== plugin || raw.view !== view || raw.owner !== owner) return;
+      if (raw.owner !== owner) return;
       const next = raw as unknown as ViewStatus;
       setStatus(next);
       if (next.url !== shown.current) {
@@ -220,7 +237,7 @@ export function PluginWebView({
         setTyped(next.url);
       }
     });
-  }, [bridge, plugin, view, owner]);
+  }, [bridge, owner]);
 
   /* Keep the view over the hole.
    *
@@ -240,17 +257,14 @@ export function PluginWebView({
       frame = requestAnimationFrame(() => {
         const box = element.getBoundingClientRect();
         if (!visible || box.width < 1 || box.height < 1 || covered(element, box)) {
-          void bridge.ask({ verb: "hide", plugin, view, owner });
+          void bridge.ask({ verb: "hide", owner });
           return;
         }
         void bridge
           .ask({
             verb: "place",
-            plugin,
-            view,
             owner,
             rect: { x: box.left, y: box.top, width: box.width, height: box.height },
-            home: declared?.home ?? "",
           })
           .then((answer) => {
             if (answer && typeof answer.url === "string") {
@@ -297,27 +311,92 @@ export function PluginWebView({
       window.removeEventListener("scroll", measure, true);
       // Off the screen on the way out. A view left behind is a browser painted over whichever
       // tab replaced this one, with nothing on screen explaining where it came from.
-      void bridge.ask({ verb: "hide", plugin, view, owner });
+      void bridge.ask({ verb: "hide", owner });
     };
-  }, [bridge, plugin, view, owner, visible, declared?.home]);
+  }, [bridge, owner, visible]);
 
-  if (!declared) return <Absent title={view || "Browser"} detail="This plugin is not installed." />;
-
-  /* No shell means no browser, said plainly. This is the one surface kind that genuinely cannot
+  /* No shell means no browser, said plainly. This is the one surface that genuinely cannot
    * work in a browser tab pointed at the server: the whole mechanism is a native view the
    * desktop app composites, so there is nothing to fall back to and pretending otherwise would
    * leave an empty rectangle and no explanation. */
   if (!bridge) {
     return (
       <Absent
-        title={declared.title}
+        title="Browser"
         detail="A browser tab needs the Kith desktop app — this is a native view the app draws, so there is nothing to show here."
       />
     );
   }
 
+  const tabs = status.tabs ?? [];
+
   return (
     <div className="flex h-full w-full flex-col">
+      {/* The strip. Always drawn, one tab or ten, so "+" is where a person looks for it — and so
+          a tab he opened from a link is visible the moment it exists rather than a page that
+          changed under them. Kith's chrome, like the address bar: no page can draw or fake it. */}
+      <div
+        role="tablist"
+        aria-label="Browser tabs"
+        className="border-border/60 bg-muted/40 flex flex-none items-end gap-0.5 overflow-x-auto border-b px-1.5 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {tabs.map((tab) => {
+          const front = tab.id === status.tab;
+          const label = tabLabel(tab);
+          return (
+            <div
+              key={tab.id}
+              className={`group/tab relative flex h-7 min-w-[72px] max-w-[180px] flex-1 items-center rounded-t-md border border-b-0 ${
+                front
+                  ? "border-border/60 bg-background text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 border-transparent"
+              }`}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={front}
+                title={tab.url || label}
+                onClick={() => {
+                  if (!front) void ask("tab-switch", { tab: tab.id });
+                }}
+                // A middle-click closes, as it does in every browser.
+                onAuxClick={(event) => {
+                  if (event.button === 1) void ask("tab-close", { tab: tab.id });
+                }}
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 truncate ps-2.5 pe-6 text-start text-[11px]"
+              >
+                {tab.loading ? (
+                  <span aria-label="loading" className="border-muted-foreground/60 size-2.5 flex-none animate-spin rounded-full border border-t-transparent" />
+                ) : null}
+                <span className="truncate">{label}</span>
+              </button>
+              <button
+                type="button"
+                aria-label={`Close ${label}`}
+                title="Close tab"
+                onClick={() => void ask("tab-close", { tab: tab.id })}
+                className={`hover:bg-foreground/10 absolute end-1 flex size-4 items-center justify-center rounded ${
+                  front ? "opacity-70" : "opacity-0 group-hover/tab:opacity-70"
+                }`}
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            </div>
+          );
+        })}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="mb-0.5 size-6 flex-none"
+          onClick={() => void ask("tab-new")}
+          title="New tab"
+          aria-label="New tab"
+        >
+          <Plus className="size-3.5" />
+        </Button>
+      </div>
+
       <header className="border-border/60 flex flex-none items-center gap-0.5 border-b px-2 py-1.5">
         <Button
           variant="ghost"
@@ -437,7 +516,16 @@ export function PluginWebView({
       {/* The hole. Nothing renders here — the shell paints the page over this rectangle. The
           background shows for the instant before the first `place` lands, and behind a page
           that has not painted. */}
-      <div ref={hole} className="bg-muted min-h-0 flex-1" />
+      <div ref={hole} className="bg-muted flex min-h-0 flex-1 items-center justify-center">
+        {/* With no tab open there is no view to paint here, so the hole says what to do instead of
+            sitting blank. Inside the hole on purpose: `covered()` counts what is in it as the
+            pane's own, so this never reads as something drawn over the browser. */}
+        {tabs.length === 0 ? (
+          <p className="text-muted-foreground px-6 text-center text-xs">
+            Nothing is open. Type an address above, or ask him to open one.
+          </p>
+        ) : null}
+      </div>
 
       {picked ? (
         <p className="border-border/60 text-muted-foreground flex-none border-t px-2.5 py-1 text-[11px]">

@@ -164,6 +164,10 @@ WITHHELD = frozenset(
         # the scout's turn to say so. The main agent has the state and the surface in front of
         # it; the scout has a search to do.
         "plugin_state",
+        # The Browser tab. It is the person's page as much as his — the one they are looking at,
+        # with their logins in it — and a scout clicking through it is a stranger's hand on their
+        # mouse. `browse_page` reads the web without touching anything anybody can see.
+        "browser",
         # The board, written. A sub-agent that files tasks is a sub-agent making plans, and
         # the plan is the one thing that must stay in the conversation a person can see.
         "add_task",

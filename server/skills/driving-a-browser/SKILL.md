@@ -7,8 +7,14 @@ description: Use when driving the Browser tab — reading a page, filling a form
 
 The **Browser** tab is a real browser in one of Kith's panes, and you are not the only one
 driving it. The person scrolls it, types in it and logs into it with their hands; you drive the
-same page with `plugin__browser__*`. Not a copy of their page and not a screenshot of it — the
+same page with the `browser` tool. Not a copy of their page and not a screenshot of it — the
 same one. That single fact is what most of this skill follows from.
+
+Every act is one call, named by `act`: `browser(act: "click", text: "Sign in")`. Below,
+`click(text: "Sign in")` is shorthand for exactly that.
+
+It is not `browse_page`. That reads a page in a browser nobody sees and forgets it; this is the
+page the person is looking at, with their logins in it, and it stays where you leave it.
 
 ## Read before you look, and crop before you read
 
@@ -30,7 +36,8 @@ answer carries the selector it used so you can click or type into the same thing
 A crop of a card is a few hundred tokens where the page it sits on is a few thousand, and the
 rest of the page was not the question. The margin is deliberate: a component cropped exactly to
 its own edges cannot show you that it is overlapping its neighbour, which is half of what
-anybody is asking.
+anybody is asking. A component below the fold is scrolled into view first, so the page they are
+looking at may move.
 
 Nothing matches? The answer lists what is on the page, the same way `click`'s does. Use the
 list rather than falling back to a picture of everything.
@@ -40,12 +47,55 @@ list rather than falling back to a picture of everything.
 `click(text: "Sign in")` survives a redesign and is how a person would describe it. A selector
 is for when text will not do — an icon with no label, two identical buttons.
 
+It scrolls to the thing first, the way a person would, so a button below the fold is fine. And
+`clicked` says what the click actually **hit**: if a cookie banner or a sticky header was on top,
+the answer says the banner took it — dismiss that and click again, rather than assuming the
+button went.
+
 When nothing matches, the answer lists **what is clickable**. Use that list rather than taking a
 screenshot to find out; it is already in front of you and costs nothing.
 
-To fill a field: `type(text: "…", into: "Work email")`, then `press(key: "Enter")` — or click
-the button by name. `type` is a paste rather than keystrokes, so it survives fields that
-reformat as you go.
+## Fill a field by naming it
+
+`type(text: "…", into: "Work email")` finds the field by what a person would call it — its
+label, its placeholder, its `aria-label` — or by a selector, and **replaces** what is in it. So a
+retry leaves it in once, not twice. `into` is the answer to "which field?" almost every time;
+without it, the text goes where the caret already is, which is only right just after you clicked
+into something.
+
+- **It refuses rather than guessing.** A name that matches nothing fails, and the failure lists
+  the fields the page has. Nothing was typed anywhere — pick one from the list and call again.
+- **A dropdown is chosen from**: `type(text: "Canada", into: "Country")`. A miss lists its
+  choices.
+- **Rich editors work** — a compose box, a comment field, a doc. The text goes in the way a
+  keyboard's does.
+- The answer's `into` names the field it landed in. If that is not the one you meant, it is
+  worth a `read` before you submit.
+
+Then `press(key: "Enter")`, or click the button by name. `press` carries out what the key would
+do — Enter submits the field's form or presses a focused button, Tab moves to the next field,
+Backspace deletes, the arrows move through a dropdown — and **`did` says which**. "The page
+handled it" means the page took the key itself; a key that reached the page and did nothing says
+that too, so check the page rather than pressing it again.
+
+## Tabs
+
+The browser has tabs, and every act is on the one **in front** — the one the person is looking at.
+They switch tabs with their own hand too, and your next `read` is then about the tab they picked;
+that is the same rule as the page.
+
+- **`open(url, new_tab: true)` to keep the page you are on.** Comparing two things, checking a
+  reference, looking something up mid-form: open the second page in a new tab rather than
+  navigating away from the first, and `switch` back when you are done.
+- **A link that opens a new tab opens one.** `click` says so — "it opened in a new tab, t2, now in
+  front" — and the answer is already about the new page. Nothing changed in the tab the link was
+  on.
+- **Tabs are named `t1`, `t2`…** and a name is never reused. `tabs` lists them, the front one
+  marked; `switch(tab: "t1")` brings one forward; `close` shuts the front one, or the one named.
+- **An answer names its tab** (`tab`) once there is more than one, so you can tell which page it
+  was about.
+- **Close what you opened.** The person sees every tab in the strip. Ten is the most one
+  conversation holds; past that a new-tab link opens in the tab it was clicked in.
 
 ## Set the viewport before you judge a layout
 
@@ -104,13 +154,11 @@ looking at:
 > "There's a login on this page — could you sign in? I'll carry on from where you leave it."
 
 They type into the tab, and your next call is on the far side of it. Nothing needs clearing,
-nothing needs passing back, and no coordinate goes anywhere. This is the one thing the old
-screenshot version of this plugin could not do at all, and it is why almost everything else in
-this skill is shorter than it used to be.
+nothing needs passing back, and no coordinate goes anywhere.
 
-The session persists, so a login holds for later turns as well. It is the plugin's own browser
-profile — not their everyday one — so it starts logged out and holds only what they have signed
-into here.
+The session persists, so a login holds for later turns and other conversations as well. It is
+Kith's own browser profile — not their everyday one — so it starts logged out and holds only what
+they have signed into here.
 
 **There is a second way through a login, and it is worth offering when signing in by hand would
 be tedious.** The key button in the tab's header copies one site's cookies out of a browser they
@@ -134,13 +182,21 @@ page and continue.
   top of this skill.
 - **`show` puts the tab on screen yourself.** Use it before a screenshot, and use it when you
   want them to *look* — "I've put it in the tab, have a scroll" beats describing a page.
-- **One page.** No tabs, so `back` is how you retrace, and a link that would open a new window
-  opens in this one instead.
+- **`back` retraces within a tab.** A new tab starts with no history; `switch` to the tab you came
+  from instead.
+- **A sign-in popup is not a tab.** "Continue with Google" and its kind open a small window
+  and wait for it, so those do open — as a window over Kith that the person uses. You cannot see
+  into it or drive it. Say it has opened, ask them to finish there, and carry on once it closes.
+- **Files are not downloaded.** An address or a link that turns out to be a file says so
+  (`failure`), and nothing is saved. If they need the file, give them the link.
+- **`scroll` scrolls what actually scrolls** — the page, or the panel inside an app that keeps its
+  page still — and `moved` says how far. `0` is the end of it.
 - **The person can see everything you do.** Every navigation, every click. That is a feature —
   you do not have to narrate what you are looking at — but it also means a page you open is a
   page they are looking at.
-- **Kith's own address is unreachable** from in here, deliberately. Other local addresses are
-  not: opening `localhost:5173` to look at something they are building is expected.
+- **Kith's own address is unreachable** from in here, deliberately, under any name —
+  `localhost:8611` as much as `127.0.0.1:8611`. Other local addresses are not: opening
+  `localhost:5173` to look at something they are building is expected.
 
 ## Costs
 

@@ -32,6 +32,7 @@ read the token file can read his memory directly.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import os
 import secrets
 from pathlib import Path
@@ -126,12 +127,54 @@ def _same_origin() -> bool:
     return True
 
 
+#: Extra names this server may be reached by, for a setup that puts it behind one — a container
+#: reached by service name, a machine on the LAN. Comma-separated; empty for the desktop app.
+ALLOWED_HOSTS_ENV = "KITH_ALLOWED_HOSTS"
+
+
+def _known_host() -> bool:
+    """Is this request addressed to this machine by a name only this machine can mean?
+
+    **The defence against DNS rebinding, and the one the token cannot provide.** The token stops
+    a cross-site page because it must travel in a custom header, and a cross-origin custom header
+    forces a preflight. A rebound page is not cross-origin: it lives at ``http://evil.example:8611``,
+    its name is repointed at 127.0.0.1, and from then on it is fetching *its own origin* — so it
+    can read ``/`` (which is served without a token, and carries the token in the page) and then
+    call the API with it, preflight-free. The only thing that differs from a real request is the
+    ``Host`` header, which names the attacker's domain.
+
+    So a request must be addressed by IP literal, ``localhost`` or a ``.localhost`` name — none of
+    which a stranger's DNS can repoint — or by a name listed in ``KITH_ALLOWED_HOSTS``. No Host at
+    all is a non-browser client, which this is not the check for.
+    """
+    header = (request.host or "").strip().lower()
+    if not header:
+        return True
+    if header.startswith("["):
+        name = header[1 : header.find("]")] if "]" in header else ""
+    else:
+        name = header.rsplit(":", 1)[0] if header.count(":") == 1 else header
+    name = name.rstrip(".")
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    extra = {one.strip().lower() for one in os.environ.get(ALLOWED_HOSTS_ENV, "").split(",") if one.strip()}
+    return name in extra
+
+
 def register(app, data_dir: Path) -> str:
     """Require the token on every API call. Returns it, for the SPA to hand to the page."""
     expected = token(data_dir)
 
     @app.before_request
     def _check():  # pyright: ignore[reportUnusedFunction]
+        # Before anything else, the page at `/` included: that page carries the token.
+        if not _known_host():
+            return jsonify({"error": "this server does not answer to that name"}), 403
         path = request.path
         if path.startswith(OPEN_PREFIXES):
             return None

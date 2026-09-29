@@ -433,12 +433,6 @@ def set_enabled(config_db: Path, plugin_id: str, on: bool) -> dict:
             )
     else:
         _withdraw_skills(config_db, plugin_id)
-        # `_reconnect` stops the plugin's *program*; nothing stopped its browser. A disabled
-        # plugin holding a live renderer process — and a tab that still paints over the app —
-        # is the one part of it that went on running after being switched off.
-        from kith.infra import renderer as shell
-
-        shell.close_plugin_browser(plugin_id)
     changes.publish("plugin")
     _reconnect(config_db)
     return record
@@ -523,14 +517,55 @@ def uninstall(config_db: Path, plugin_id: str, *, delete_state: bool = False) ->
 
     if delete_state:
         _forget_state(plugin_id)
-    else:
-        # Its program has stopped, so a renderer process still holding its pages is waste. What
-        # the browser *remembers* stays, on the same thirty-day rule as its state.
-        from kith.infra import renderer as shell
-
-        shell.close_plugin_browser(plugin_id)
     changes.publish("plugin")
     _reconnect(config_db)
+
+
+#: Plugins whose job Kith now does itself, and what gives an install of one away.
+#:
+#: The browser was a plugin — a manifest wrapped around a browser the shell drew — and is built in
+#: now. An install of it would otherwise sit there broken (a `web` surface no longer parses) while
+#: its imported copy of `driving-a-browser` stayed in the skills folder, where it blocks the
+#: bundled one: the seeder treats bytes it did not write as the person's and never overwrites
+#: them. The surface kind is checked as well as the id, so somebody else's plugin that happens to
+#: be called `browser` is left alone.
+SUPERSEDED = {"browser": "web"}
+
+
+def retire_superseded(config_db: Path) -> list[str]:
+    """Uninstall any plugin Kith has absorbed, keeping what it stored. Returns the ids retired.
+
+    Run at start. An ordinary uninstall — marked, not deleted — so its state follows the usual
+    thirty-day rule, and `_withdraw_skills` takes its skills back out. Then the skills folder is
+    reconciled again in this same process, so the bundled skill lands now rather than on the
+    launch after next.
+    """
+    import json
+
+    held = registry.rows(config_db)
+    retired: list[str] = []
+    for plugin_id, kind in SUPERSEDED.items():
+        record = held.get(plugin_id)
+        if not record or record.get("retiredAt"):
+            continue
+        try:
+            manifest = json.loads((registry.root() / plugin_id / MANIFEST).read_text())
+            surfaces = manifest.get("surfaces") or []
+        except (OSError, ValueError):
+            continue
+        if not any(isinstance(one, dict) and one.get("kind") == kind for one in surfaces):
+            continue
+        try:
+            uninstall(config_db, plugin_id)
+        except Exception as exc:  # pragma: no cover - a tidy-up must not stop the app starting
+            print(f"[kith] plugins: could not retire {plugin_id} ({exc})")
+            continue
+        retired.append(plugin_id)
+    if retired:
+        from kith.services import skills
+
+        skills.resync()
+    return retired
 
 
 def sweep(config_db: Path) -> list[dict]:
@@ -581,20 +616,9 @@ def _forget_state(plugin_id: str) -> None:
     # And the files, which are the other half of what it was holding. Nothing deleted these
     # before, because they used to live inside the code folder and went with it — which is the
     # same arrangement that destroyed them on every upgrade.
-    from kith.infra import confinement, renderer
+    from kith.infra import confinement
 
     shutil.rmtree(confinement.home_for(plugin_id), ignore_errors=True)
-
-    # And the third half: whatever its *browser* remembers. A `web` surface has a session
-    # partition in the desktop app's own storage — cookies and live logins — which this process
-    # cannot reach, so the shell is asked. Said out loud when it cannot be done, because a
-    # person who deleted a plugin's data and still has its logins on disk should hear about it
-    # rather than be told the data is gone.
-    if not renderer.forget_plugin_browser(plugin_id):
-        print(
-            f"[kith] plugins: {plugin_id}'s browser session is still on disk — the app was not "
-            f"running to clear it. It will be cleared next time this runs with Kith open."
-        )
 
 
 def _reconnect(config_db: Path) -> None:

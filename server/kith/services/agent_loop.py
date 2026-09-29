@@ -226,7 +226,8 @@ def _is_repeat(name: str, seen: int, dispatched: Dispatched = itself) -> bool:
 
 
 def _plugin_moved(name: str, bare: str, last: dict[str, str]) -> bool:
-    """Has the plugin's state changed since this call was last made? Records the call as well.
+    """Has the plugin's — or the browser's — state changed since this call was last made? Records
+    the call as well.
 
     The epoch only counted file writes, and a plugin's state is not in the files. So
     `look → resize → look` was the same `look` asked twice with "nothing changing in between",
@@ -238,9 +239,14 @@ def _plugin_moved(name: str, bare: str, last: dict[str, str]) -> bool:
     call identical to the one before it does not, so `look` forty times is still caught — the
     same reason `shell` is kept out of `_CHANGES_FILES`.
     """
-    if not name.startswith("plugin__"):
+    # The built-in browser is the same case in one tool: `read → click → read` is two identical
+    # reads with the page changed between them, and its acts are its commands.
+    if name == "browser":
+        plugin = "browser"
+    elif name.startswith("plugin__"):
+        plugin = name.split("__", 2)[1]
+    else:
         return False
-    plugin = name.split("__", 2)[1]
     previous = last.get(plugin)
     last[plugin] = bare
     return previous is not None and previous != bare

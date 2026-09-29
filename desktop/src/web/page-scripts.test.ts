@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { boxOf, dispatchClick, dispatchType, locate, picker } from "./web-views";
+import {
+  KEYS,
+  boxOf,
+  chooseOption,
+  dispatchClick,
+  focusField,
+  locate,
+  picker,
+  pressKey,
+  scrollPage,
+  typed,
+} from "./page-scripts";
 
 /**
  * The scripts that run **inside the page**, held to the one standard a compiler cannot hold them
@@ -14,7 +25,8 @@ import { boxOf, dispatchClick, dispatchType, locate, picker } from "./web-views"
  * kind of mistake the assembly here invites.
  *
  * `new Function` parses without running: there is no DOM out here and none is wanted. Whether the
- * script does the right thing to a page is not answerable in vitest and is not claimed.
+ * script does the right thing to a page is `page-scripts.dom.test.ts`'s question, asked of real
+ * Chromium.
  */
 const SCRIPTS: [string, string][] = [
   ["picker", picker()],
@@ -22,7 +34,13 @@ const SCRIPTS: [string, string][] = [
   ["boxOf by text", boxOf("", "Sign in")],
   ["locate", locate("", "Sign in")],
   ["dispatchClick", dispatchClick(12, 34)],
-  ["dispatchType", dispatchType("hello")],
+  ["focusField by name", focusField("Work email")],
+  ["focusField, the focused one", focusField("")],
+  ["typed, replacing", typed("hello", "", true)],
+  ["typed, inserting", typed("hello", "was", false)],
+  ["chooseOption", chooseOption("Canada")],
+  ["scrollPage", scrollPage(600)],
+  ...Object.entries(KEYS).map(([name, key]): [string, string] => [`pressKey ${name}`, pressKey(key)]),
 ];
 
 describe("the scripts injected into the page", () => {
@@ -42,7 +60,10 @@ describe("what a page's own text cannot do to them", () => {
     const nasty = '"); alert(1); //`${x}';
     expect(() => new Function(boxOf("", nasty))).not.toThrow();
     expect(() => new Function(boxOf(nasty, ""))).not.toThrow();
-    expect(() => new Function(dispatchType(nasty))).not.toThrow();
+    expect(() => new Function(typed(nasty, nasty, true))).not.toThrow();
+    expect(() => new Function(typed(nasty, nasty, false))).not.toThrow();
+    expect(() => new Function(focusField(nasty))).not.toThrow();
+    expect(() => new Function(chooseOption(nasty))).not.toThrow();
     expect(() => new Function(locate(nasty, nasty))).not.toThrow();
   });
 });

@@ -51,7 +51,7 @@ contextBridge.exposeInMainWorld("kith", {
    * list is fixed and every call is checked against the installed plugins on the far side; see
    * `web/web-view-channel.ts`.
    *
-   * Absent outside the desktop shell, which is how `plugin-web-view.tsx` knows to say that a
+   * Absent outside the desktop shell, which is how `browser-pane.tsx` knows to say that a
    * browser pane needs the app rather than drawing an empty rectangle.
    */
   webView: {

@@ -172,3 +172,43 @@ describe("splitting edit_files' diff by file", () => {
     expect(files[1]?.lines).toEqual(["@@ -5 +5 @@", "+y"]);
   });
 });
+
+describe("the built-in browser", () => {
+  /* One tool with the act as an argument now. Its rows read exactly as the plugin's did, so a
+     transcript that has both — old `plugin__browser__open` calls and new `browser` ones — does
+     not change voice halfway down. */
+  it("says what it did by act", () => {
+    const call = describeCall("browser", { act: "open", url: "http://localhost:5173/apps" });
+    expect(call.verb).toBe("opened");
+    expect(call.subject).toBe("http://localhost:5173/apps");
+    expect(call.group).toBe("web");
+    expect(describeCall("browser", { act: "look" }).verb).toBe("looked at the page");
+    expect(describeCall("browser", {}).verb).toBe("used the browser");
+  });
+
+  it("gives its answers words", () => {
+    expect(digestOf("browser", { act: "open" }, ok({ url: "u", title: "Sadeef — AI-native ERP" }))).toBe(
+      "Sadeef — AI-native ERP",
+    );
+    expect(digestOf("browser", { act: "look" }, ok({ width: 1056, height: 660, shot: "/x.png" }))).toBe(
+      "screenshot 1056×660",
+    );
+    expect(digestOf("browser", { act: "press" }, ok({ did: "moved focus to Password" }))).toBe(
+      "moved focus to Password",
+    );
+    expect(digestOf("browser", { act: "scroll" }, ok({ moved: 0 }))).toBe("at the end");
+  });
+
+  it("sees a page that did not load, though the call answered", () => {
+    const outcome = outcomeOf("browser", ok({ url: "http://x", failure: "net::ERR_CONNECTION_REFUSED" }));
+    expect(outcome.state).toBe("failed");
+  });
+});
+
+describe("the browser's tabs", () => {
+  it("says tab acts in words", () => {
+    expect(describeCall("browser", { act: "switch", tab: "t2" })).toMatchObject({ verb: "switched to tab", subject: "t2" });
+    expect(describeCall("browser", { act: "close" }).doing).toBe("closing a tab");
+    expect(digestOf("browser", { act: "tabs" }, ok({ tabs: ["t1: One — u", "t2 (in front): Two — v"] }))).toBe("2 tabs");
+  });
+});

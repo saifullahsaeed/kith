@@ -6,8 +6,12 @@ import { fetchPluginCalls, replyToPluginCall } from "@/lib/backend";
 import { keys } from "@/lib/query-keys";
 import type { TabRef } from "@/components/shell/layout/tree";
 
+/** Who files a `show` for the built-in Browser tab. Mirrors `HOST` in `kith/tools/browser.py`:
+ *  not a valid plugin id, so no plugin can ever answer as it. */
+const KITH = "@kith";
+
 /**
- * Things a plugin asks *Kith* to do, performed by the app.
+ * Things a plugin — or Kith's own `browser` tool — asks the app to do.
  *
  * ## Why this is a renderer concern
  *
@@ -18,7 +22,7 @@ import type { TabRef } from "@/components/shell/layout/tree";
  *
  * ## The dead end it exists to fix
  *
- * The browser plugin's `look` refuses when its tab is shut, and told him to ask the person to
+ * The browser's `look` refuses when its tab is shut, and used to tell him to ask the person to
  * open it. He had no way to open it himself. So the single most common thing he needs from a
  * surface — *be on screen* — was the one thing he could not do, and every errand involving a
  * screenshot became a conversation. `open_surface` closes that.
@@ -58,7 +62,14 @@ export function useHostEffects(
       done.current.add(call.id);
 
       const view = String(call.args?.view ?? call.view ?? "");
-      const ref = { surface: "plugin", plugin: call.plugin, view, instance: "" } as TabRef;
+      /* The conversation is named on the ref rather than left to the store's focused-chat
+       * fallback: the call came from *this* conversation's turn, and the tab it opens must be
+       * this conversation's even when another chat has the focus. */
+      const ref = (
+        call.plugin === KITH && view === "browser"
+          ? { surface: "browser", conversationId }
+          : { surface: "plugin", plugin: call.plugin, view, instance: "", conversationId }
+      ) as TabRef;
 
       if (call.command && view) {
         // Focus-or-open. `openTab` brings an existing tab forward rather than stacking a second
@@ -76,5 +87,5 @@ export function useHostEffects(
     // A bound on the set, so a long session does not grow it without limit. The ids are only
     // needed for as long as a refetch might still list them.
     if (done.current.size > 200) done.current = new Set([...done.current].slice(-50));
-  }, [waiting, openSurface, closeTab]);
+  }, [waiting, openSurface, closeTab, conversationId]);
 }

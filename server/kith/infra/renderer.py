@@ -131,10 +131,13 @@ def render(url: str) -> str | None:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200]
         raise RuntimeError(f"desktop renderer refused this page ({exc.code}): {detail}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except OSError as exc:
         # The shell has gone away (quit, crashed, restarted on a new port). Drop the
         # stale registration so later calls go straight to the sandbox instead of
-        # paying this timeout every time.
+        # paying this timeout every time — but only if it has actually gone: a page that
+        # took too long is a slow page, not a missing app. See `_shell_is_gone`.
+        if not _shell_is_gone(exc):
+            raise RuntimeError(f"desktop renderer took longer than {_TIMEOUT_SECONDS}s on this page") from exc
         unregister()
         raise RuntimeError(f"desktop renderer unreachable, forgetting it: {exc}") from exc
 
@@ -220,13 +223,13 @@ def install_cli(remove: bool = False) -> dict | None:
 _BROWSE_TIMEOUT = 40
 
 
-def browse(plugin: str, view: str, act: str, owner: str = "", args: dict | None = None) -> dict | None:
-    """Drive a plugin's browser pane. None when the desktop shell is not there.
+def browse(act: str, owner: str = "", args: dict | None = None) -> dict | None:
+    """Drive the Browser tab for one conversation. None when the desktop shell is not there.
 
-    **The one path a model has to a browser it shares with the person.** A `web` surface is web
-    contents the shell composites over a pane; the person drives it with their hands and this is
-    the other driver. It is the same page — not a copy, not a screenshot — so a login they
-    complete is a login the next call sees.
+    **The one path a model has to a browser it shares with the person.** The tab is web contents
+    the shell composites over a pane; the person drives it with their hands and this is the other
+    driver. It is the same page — not a copy, not a screenshot — so a login they complete is a
+    login the next call sees.
 
     None means "no shell", which is not an error: a scheduled turn at four in the morning has no
     window, and the caller turns that into a sentence saying the tab has to be open. An `error`
@@ -242,13 +245,10 @@ def browse(plugin: str, view: str, act: str, owner: str = "", args: dict | None 
     if endpoint is None:
         return None
 
-    # **The plugin's arguments go in first, so the four keys the shell routes on always win.**
-    # `args` is a dict rather than `**kwargs` so a manifest declaring a parameter called `view`
-    # is a wrong key in a payload instead of a `TypeError` at the call site — and spread first so
-    # it cannot become a *right* key either, silently steering the call at some other pane.
-    payload = json.dumps(
-        {**(args or {}), "plugin": plugin, "view": view, "act": act, "owner": owner}
-    ).encode()
+    # The act's arguments go in first, so the two keys the shell routes on always win: an argument
+    # can be a wrong key in a payload but never a *right* one, silently steering the call at some
+    # other conversation's browser.
+    payload = json.dumps({**(args or {}), "act": act, "owner": owner}).encode()
     request = urllib.request.Request(
         f"{endpoint.url}/browse",
         data=payload,
@@ -264,7 +264,14 @@ def browse(plugin: str, view: str, act: str, owner: str = "", args: dict | None 
         except ValueError:
             body = {"error": f"the browser pane refused this ({exc.code})"}
         return body if isinstance(body, dict) else {"error": "the browser pane said something unreadable"}
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except OSError as exc:
+        if not _shell_is_gone(exc):
+            # The page is slow; the app is fine. Said as something he can act on, and the
+            # registration is kept — see `_shell_is_gone` for what forgetting it here cost.
+            return {
+                "error": f"The browser took more than {_BROWSE_TIMEOUT}s to answer, so I stopped waiting. "
+                "The page may still be loading — `read` it to see where it got to."
+            }
         # Same reasoning as `render`: the shell has gone away, so drop the registration rather
         # than paying this timeout on every later call.
         unregister()
@@ -274,30 +281,21 @@ def browse(plugin: str, view: str, act: str, owner: str = "", args: dict | None 
     return body if isinstance(body, dict) else {"error": "the browser pane said something unreadable"}
 
 
-def close_plugin_browser(plugin_id: str) -> None:
-    """Close a plugin's browser views, keeping what the browser remembers.
+def _shell_is_gone(exc: OSError) -> bool:
+    """Did this call fail because the desktop app is not there — or only because it was slow?
 
-    For a plugin being switched off or removed: its program has stopped, so a renderer process
-    still holding its pages is waste. The logins stay — `uninstall` marks state rather than
-    deleting it, and a browser session is the same bytes.
+    **The two used to be the same answer, and one slow page switched the app off.** Every
+    failure here dropped the registration, a read timeout included, and the shell registers
+    only once, at launch. So a single page that took longer than the timeout to settle left
+    every later browser call, notification, rendered read and folder picker reporting that
+    there was no desktop app, until the app was restarted.
+
+    A timeout is the only failure that means "it is there and busy". Anything else — refused,
+    reset, unreachable, a connection dropped mid-answer — means the process went away, and
+    forgetting it is what saves every later call from waiting to find that out.
     """
-    _ask("/forget-plugin", {"plugin": plugin_id, "wipe": False}, timeout=10)
-
-
-def forget_plugin_browser(plugin_id: str) -> bool:
-    """Throw away everything a plugin's browser remembers. True if the shell did it.
-
-    Cookies, local storage, the cache — the logged-in sessions somebody signed into that
-    plugin's tab. They live in the desktop app's own userData, which this process cannot reach,
-    so this is the only way to delete them.
-
-    **False is not harmless here.** If the app is not running there is nothing to clear, and the
-    session survives the plugin being removed — so the caller records it as unfinished rather
-    than reporting the data gone. Everything else on this path is a local file this process can
-    delete itself; this one thing needs the other process to be alive.
-    """
-    answer = _ask("/forget-plugin", {"plugin": plugin_id, "wipe": True}, timeout=20)
-    return bool(answer and answer.get("forgotten") == plugin_id)
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return not isinstance(reason, TimeoutError)
 
 
 def _ask(route: str, payload: dict, timeout: float = 5) -> dict | None:

@@ -1,19 +1,18 @@
 /**
  * A real browser, in one of Kith's own panes.
  *
- * ## Why this exists at all
+ * ## Why the shell draws it
  *
  * A plugin surface is a *sealed* document: `sandbox="allow-scripts"` over a CSP of
  * `default-src 'none'`, with no network of any kind. That seal is what makes it safe to run a
- * stranger's code inside Kith's window, and it is not negotiable. It also means nothing drawn
- * in a plugin's tab can ever load a web page — so the browser plugin ran headless Chromium in
- * its own subprocess and posted PNGs into the tab. Which works, and is a picture of a browser.
- * You cannot scroll it, type into it, or log in with it.
+ * stranger's code inside Kith's window, and it is not negotiable — and it means nothing drawn in
+ * a plugin's tab can ever load a web page. So the browser is not a plugin surface. It is Kith's
+ * own tab, drawn by the shell. `render-service.ts` already made the argument: this app is a
+ * browser, so it should not be shipping a second one. The same is true of a page you can use.
  *
- * So the browser is not drawn by the plugin. It is provided by the shell, as a different *kind*
- * of surface, and the plugin declares that it wants one. `render-service.ts` already made the
- * argument: this app is a browser, so it should not be shipping a second one. The same is true
- * of a page you can use.
+ * It began as a plugin — a manifest and a skill wrapped around exactly this file — and is built
+ * in now. A plugin that could not supply the one thing it was for was only ever a switch, and
+ * the switch cost every request a thousand tokens of command schemas.
  *
  * ## What a WebContentsView is, and what it costs
  *
@@ -30,27 +29,56 @@
  *
  * ## Sessions, and the reason no permission prompt appears anywhere in here
  *
- * Each plugin's views share one partition of that plugin's own: `persist:kith-plugin-<id>`.
- * Never the person's everyday browser and never Kith's own session. That boundary is the whole
- * answer to "should the model need permission to navigate this?" — it starts logged out, and
- * anything logged into it is something the person logged in themselves, in this view, on
- * purpose. It holds no identity they did not put there, which makes navigating it an ordinary
- * act rather than a privileged one. A view onto their real Chrome profile would be a completely
- * different proposition and is not what this is.
+ * Every view shares one partition, `BROWSER_PARTITION`. Never the person's everyday browser and
+ * never Kith's own session. That boundary is the whole answer to "should the model need
+ * permission to navigate this?" — it starts logged out, and anything logged into it is something
+ * the person logged in themselves, in this view, on purpose (or copied across with the key button,
+ * one site at a time). It holds no identity they did not put there, which makes navigating it an
+ * ordinary act rather than a privileged one. A view onto their real Chrome profile would be a
+ * completely different proposition and is not what this is.
  *
- * What *is* blocked is Kith's own origin: a page that could reach the backend would be a page
+ * What *is* blocked is Kith's own server: a page that could reach the backend would be a page
  * reaching Kith's API from inside Kith. Other loopback addresses are deliberately allowed —
  * the first thing anyone does with this is open the app they are building on `localhost`.
  */
 
-import { WebContentsView, session } from "electron";
+import { BrowserWindow, WebContentsView, session } from "electron";
 
-import { BACKEND_ORIGIN } from "../config";
+import { BROWSER_PARTITION, KITH_PORTS } from "../config";
 
 import { getMainWindow } from "../window/window";
 
+import {
+  KEYS,
+  boxOf,
+  chooseOption,
+  dispatchClick,
+  focusField,
+  locate,
+  picker,
+  pressKey,
+  scrollPage,
+  typed,
+  type Focused,
+  type Located,
+} from "./page-scripts";
+
+/**
+ * How long any one act may take, end to end, before it answers with what it has.
+ *
+ * **Under the server's own patience, and by a margin.** The Python side waits forty seconds for
+ * an answer, and an act used to be able to take sixty: a thirty-second load, then up to thirty
+ * more waiting for a page that never stops loading to stop. The server gave up first — and on
+ * giving up it forgot the desktop app entirely, so one slow page switched off every browser
+ * call, every notification and every rendered read until the app was restarted. The server no
+ * longer forgets on a slow answer; this makes sure there is not a slow answer to forget on.
+ */
+const ACT_BUDGET_MS = 30_000;
 /** How long a navigation may take before we stop waiting and report what we have. */
-const LOAD_TIMEOUT_MS = 30_000;
+const LOAD_TIMEOUT_MS = 25_000;
+/** The longest `settle` waits for a page to stop loading. A page that streams for ever — a
+ *  chat, a live feed — never does, and is read as it stands once this runs out. */
+const SETTLE_WAIT_MS = 12_000;
 /** After `did-stop-loading`, a moment for late scripts to paint before a read or a shot. */
 const SETTLE_MS = 450;
 /** How long a click is given to *start* navigating before its answer is composed. Generous,
@@ -60,10 +88,14 @@ const NAVIGATION_GRACE_MS = 1_200;
  *  a predictable size, and a model reading a page does not need the eight-thousand-and-first
  *  character to know what the page says. */
 const MAX_TEXT_CHARS = 8_000;
-/** A bound on how many live browsers the app will hold. Each is a renderer process, so this is
- *  memory rather than bookkeeping — six because a view per conversation means several open at
- *  once, and four made working on three things at a time evict one of them. */
-const MAX_VIEWS = 6;
+/** A bound on how many live pages the app will hold, across every conversation's tabs. Each is a
+ *  renderer process, so this is memory rather than bookkeeping — twelve because a browser per
+ *  conversation with a few tabs each is the ordinary shape, and six made two busy conversations
+ *  evict each other. */
+const MAX_VIEWS = 12;
+/** How many tabs one conversation's browser holds. A cap rather than a limit anybody should meet:
+ *  past this a link that would open a tab opens in the one it was clicked in. */
+const MAX_TABS = 10;
 /**
  * The size a view has before its pane has ever told it one.
  *
@@ -93,23 +125,6 @@ const DEFAULT_BOUNDS = { x: 0, y: 0, width: 1280, height: 800 };
  * trick — clipped away but still composited — and `capturePage` returns an empty image for it,
  * because there is no on-screen surface to composite. Hidden but in-window still has one.
  */
-/**
- * The keys a page may be sent, and what each one actually is.
- *
- * A closed table rather than a passthrough, because CDP wants the key's real identity — a
- * `key`, a `code` and a Windows virtual key code — and a page that checks `event.key` against a
- * name Electron guessed is a form that will not submit. These are the keys that *mean*
- * something; text goes through `insertText`.
- */
-const KEYS: Record<string, { key: string; code: string; windowsVirtualKeyCode: number; text?: string }> = {
-  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
-  Tab: { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 },
-  Escape: { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
-  Backspace: { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
-  ArrowDown: { key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 },
-  ArrowUp: { key: "ArrowUp", code: "ArrowUp", windowsVirtualKeyCode: 38 },
-};
-
 /** What the renderer measured, in device-independent pixels relative to the window's content. */
 export interface Rect {
   x: number;
@@ -119,10 +134,8 @@ export interface Rect {
 }
 
 export interface ViewStatus {
-  plugin: string;
-  view: string;
-  /** Which conversation's browser this is, or empty for an app-wide one. The pane checks it:
-   *  status is broadcast to the window, and two conversations' panes both hear all of it. */
+  /** Which conversation's browser this is. The pane checks it: status is broadcast to the
+   *  window, and two conversations' panes both hear all of it. */
   owner: string;
   url: string;
   title: string;
@@ -135,6 +148,10 @@ export interface ViewStatus {
    *  it is not simply the pane. The chrome shows it, so the pane never looks broken without
    *  saying why — and the person can clear it from there in one click. */
   viewport: { width: number; height: number } | null;
+  /** Which tab is in front — the one every act without a `tab` is about. Empty with none open. */
+  tab: string;
+  /** Every tab, in the order the strip shows them. */
+  tabs: TabSummary[];
   /** How much that viewport is shrunk to fit the pane it is drawn in. 1 when it fits.
    *
    *  **The viewport used to be reported without it, and that made the answer untrue.** A
@@ -145,11 +162,19 @@ export interface ViewStatus {
   scale: number;
 }
 
+/** One tab, as the strip draws it and as the model is told about it. */
+export interface TabSummary {
+  id: string;
+  title: string;
+  url: string;
+  loading: boolean;
+}
+
 /** The named sizes `resize` accepts, and the reason they are named rather than invented: the
  *  model should not have to remember what a phone's width is, and a closed list is the
  *  difference between "check it at a phone size" and a call that guesses. Exported so the test
- *  can hold this table against the sizes the browser plugin's manifest declares — the two
- *  lists drifting apart is the failure mode where the manifest offers a size nobody knows. */
+ *  can hold this table against the sizes the `browser` tool offers — the two lists drifting
+ *  apart is the failure mode where the tool offers a size nobody knows. */
 export const VIEWPORT_PRESETS: Record<string, { width: number; height: number }> = {
   phone: { width: 390, height: 844 },
   "phone-landscape": { width: 844, height: 390 },
@@ -239,44 +264,38 @@ export function fitted(rect: Rect, viewport: { width: number; height: number } |
 }
 
 /**
- * Which browser is being spoken about.
+ * Which browser is being spoken about: the conversation's.
  *
- * **`owner` is the third of the three, and it is the whole reason this is an object.** A view
- * used to be keyed by plugin and surface alone, so there was one browser for the entire app: a
- * page opened while working on one thing was the same page as the one opened while working on
- * another, and two errands running side by side fought over it — one navigating away under the
- * other mid-read.
+ * **One per conversation, and that is the whole reason it has a key.** There used to be one
+ * browser for the entire app, so a page opened while working on one thing was the same page as
+ * the one opened while working on another, and two errands running side by side fought over it —
+ * one navigating away under the other mid-read. An empty owner is a turn that belongs to no
+ * conversation, and gets a browser of its own.
  *
- * `owner` is the conversation when the surface declares `answers: "conversation"`, and empty
- * when it declares `answers: "any"`. So a plugin chooses between a tab per conversation and one
- * browser for the app, in the manifest, where somebody reviewing it can see which.
- *
- * Cookies are *not* separated by owner — the session partition stays per plugin. Two
- * conversations are two tabs of one browser profile, which is the familiar arrangement and the
- * useful one: signing in once holds for the next conversation instead of every chat starting
- * logged out. It also means a view evicted to make room loses its place on the page and not its
- * login.
+ * Cookies are *not* separated by owner — there is one partition. Two conversations are two tabs
+ * of one browser profile, which is the familiar arrangement and the useful one: signing in once
+ * holds for the next conversation instead of every chat starting logged out. It also means a view
+ * evicted to make room loses its place on the page and not its login.
  */
 export interface Target {
-  plugin: string;
-  view: string;
   owner: string;
 }
 
+/** One tab: a page, and everything its view needs to paint it where the pane is. */
 interface Held {
-  plugin: string;
-  view: string;
+  /** `t1`, `t2`… — what the strip keys on and what the model names a tab by. */
+  id: string;
+  browser: Browser;
   owner: string;
-  /** When this view was last spoken to. Only used to decide which to evict — see `MAX_VIEWS`. */
+  /** When this tab was last spoken to. Only used to decide what to evict — see `MAX_VIEWS`. */
   touched: number;
   contents: WebContentsView;
   attached: boolean;
   failure: string;
-  /** Where the renderer last put it, so a re-show does not need a fresh measurement. */
-  rect: Rect | null;
-  /** The viewport the page is laid out at, or null for "the whole pane". Kept on the held view
-   *  rather than in the pane's renderer because it outlives the pane: a `look` with the tab
-   *  shut must come back at the viewport the model asked for, not at whatever the pane was. */
+  /** The viewport the page is laid out at, or null for "the whole pane". Per tab, because a
+   *  phone-width check of one page is not a reason to reshape the others — and kept here rather
+   *  than in the pane's renderer because it outlives the pane: a `look` with the tab shut must
+   *  come back at the viewport the model asked for, not at whatever the pane was. */
   viewport: { width: number; height: number } | null;
   /** The bounds actually set last, so `place`'s hot path can skip a no-op `setBounds` even
    *  when a viewport is in play — the letterboxed rect is not the pane rect, and comparing the
@@ -286,12 +305,72 @@ interface Held {
    *  every scroll of the column the pane lives in, and re-asserting a device override is a
    *  relayout of the page inside it. Null means none is set. */
   emulated: { width: number; height: number; scale: number } | null;
+  /** Sign-in popups this page opened and that are still open — see `watch`. Closed with it. */
+  popups: Set<BrowserWindow>;
+  /** When a navigation last turned out to be a file download, which this browser refuses. Lets
+   *  `navigate` tell "that address is a download" from a navigation something else cut short. */
+  downloaded: number;
 }
 
-const held = new Map<string, Held>();
+/**
+ * One conversation's browser: its tabs, which one is in front, and where its pane is.
+ *
+ * **Tabs, because one page was not enough to work in.** Comparing two things meant navigating
+ * away from the first; a link that opened a new tab replaced the page it was clicked on; and the
+ * person could not keep their own page open while he looked something up. So a browser holds
+ * several, and exactly one is in front: the one the pane paints, the one the address bar shows,
+ * and the one every act without a `tab` is about. The person and the model share that — a tab
+ * the person switches to is the tab his next `read` reads, which is the same rule as the page.
+ */
+interface Browser {
+  owner: string;
+  tabs: Held[];
+  active: Held | null;
+  /** Where the renderer last put the pane, or null when no pane is showing it. */
+  rect: Rect | null;
+  /** How many tabs this browser has ever made, for naming the next. Never reused, so a closed
+   *  tab's id cannot come back meaning a different page. */
+  made: number;
+  touched: number;
+  /** Told when a tab opens. A click waits on this as well as on a navigation, because a link
+   *  that opens a new tab moves nothing in the tab it was clicked in. */
+  opened: Set<(tab: Held) => void>;
+  /** The last tab opened, and when — for the click whose tab opened before it started listening,
+   *  which is the usual order: the page asks for the window before the click's own answer is
+   *  back in this process. */
+  lastOpened: { tab: Held; at: number } | null;
+}
+
+const browsers = new Map<string, Browser>();
 const listeners = new Set<(status: ViewStatus) => void>();
 
-const keyOf = (at: Target): string => `${at.plugin}/${at.view}/${at.owner}`;
+/** The conversation's browser, made empty if it has none yet. */
+function browserFor(at: Target): Browser {
+  const found = browsers.get(at.owner);
+  if (found) {
+    found.touched = Date.now();
+    return found;
+  }
+  const made: Browser = {
+    owner: at.owner,
+    tabs: [],
+    active: null,
+    rect: null,
+    made: 0,
+    touched: Date.now(),
+    opened: new Set(),
+    lastOpened: null,
+  };
+  browsers.set(at.owner, made);
+  return made;
+}
+
+/** The tab in front, opening a blank one when there is none — for the acts that make sense on
+ *  an empty browser, which are placing it and sizing it. */
+function frontOf(at: Target): Held {
+  const browser = browserFor(at);
+  return touch(browser.active) ?? (openTab(browser, { activate: true }) as Held);
+}
 
 /** Subscribe to status changes. The shell forwards these to the renderer, which draws the
  *  chrome — the address bar, the back button's enabled state, the spinner. */
@@ -301,7 +380,7 @@ export function onViewStatus(listener: (status: ViewStatus) => void): () => void
 }
 
 /**
- * Put a plugin's view at a rectangle, creating it if this is the first time.
+ * Put a conversation's view at a rectangle, creating it if this is the first time.
  *
  * Called on mount, on every pane resize and on every scroll of whatever contains the pane. It
  * is therefore the hot path and does as little as possible: an existing view whose bounds have
@@ -309,10 +388,16 @@ export function onViewStatus(listener: (status: ViewStatus) => void): () => void
  * the page inside it and doing that sixty times a second while somebody drags a splitter is
  * visible as jank in the page, not in the frame.
  */
-export function place(at: Target, rect: Rect, home = ""): ViewStatus {
-  const one = touch(held.get(keyOf(at))) ?? create(at, home);
+export function place(at: Target, rect: Rect): ViewStatus {
+  const browser = browserFor(at);
   const rounded = round(rect);
-  one.rect = rounded;
+  browser.rect = rounded;
+  /* Nothing is opened just because a pane is showing. It used to open a blank tab here, and a
+   * pane re-measures on every resize and every overlay — so closing the last tab was followed at
+   * once by a new blank one nobody had asked for, and the model was told there were no tabs a
+   * moment before there was one again. An empty browser is a pane with an address bar. */
+  const one = touch(browser.active);
+  if (!one) return statusOf(browser);
   if (!one.attached) {
     const window = getMainWindow();
     if (!window || window.isDestroyed()) return statusOf(one);
@@ -323,6 +408,7 @@ export function place(at: Target, rect: Rect, home = ""): ViewStatus {
     hide(at);
     return statusOf(one);
   }
+  for (const other of browser.tabs) if (other !== one) rest(other);
   applyBounds(one, fitted(rounded, one.viewport));
   showNow(one);
   return statusOf(one);
@@ -426,7 +512,7 @@ export async function resize(
     ratio?: string | undefined;
   },
 ): Promise<{ width: number; height: number } & ViewStatus> {
-  const one = touch(held.get(keyOf(at))) ?? create(at, "");
+  const one = frontOf(at);
   const preset = String(asked.preset ?? "");
   const ratio = parseRatio(String(asked.ratio ?? ""));
   if (asked.ratio && !ratio) {
@@ -480,9 +566,9 @@ export async function resize(
   }
 
   one.viewport = viewport;
-  const showing = one.rect && (one.rect.width >= 1 || one.rect.height >= 1);
-  const placed = showing
-    ? fitted(one.rect as Rect, viewport)
+  const pane = one.browser.active === one ? one.browser.rect : null;
+  const placed = pane
+    ? fitted(pane, viewport)
     : viewport
       ? { x: 0, y: 0, ...viewport, scale: 1 }
       : { ...DEFAULT_BOUNDS, scale: 1 };
@@ -511,14 +597,18 @@ export async function resize(
  * recreating would be a reload, and a reload is how you lose a half-filled form.
  */
 export function hide(at: Target): void {
-  const one = touch(held.get(keyOf(at)));
-  if (!one) return;
-  // Back to the resting rectangle as well as hidden, so a screenshot still works while nobody
-  // is looking — see `DEFAULT_BOUNDS`. A viewport stays set when it is one: the resting bounds
-  // carry it, so a `look` answers at the size that was asked for.
+  const browser = browsers.get(at.owner);
+  if (!browser) return;
+  for (const one of browser.tabs) rest(one);
+  browser.rect = null;
+}
+
+/** One tab off the screen and back to its resting rectangle, so a screenshot still works while
+ *  nobody is looking — see `DEFAULT_BOUNDS`. A viewport stays set when it is one: the resting
+ *  bounds carry it, so a `look` answers at the size that was asked for. */
+function rest(one: Held): void {
   applyBounds(one, restingBounds(one));
   hideNow(one);
-  one.rect = null;
 }
 
 /** The rectangle a view sits at when no pane is showing it: in the window, sized, and hidden —
@@ -530,79 +620,135 @@ function restingBounds(one: Held): Placed {
   return one.viewport ? { x: 0, y: 0, ...one.viewport, scale: 1 } : { ...DEFAULT_BOUNDS, scale: 1 };
 }
 
-/** Destroy a view and everything in it. Only for a plugin being switched off or removed. */
-export function forget(plugin: string, view = "", owner = ""): void {
-  for (const [key, one] of [...held.entries()]) {
-    if (one.plugin !== plugin) continue;
-    if (view && one.view !== view) continue;
-    if (owner && one.owner !== owner) continue;
-    forgetOne(key);
-  }
-}
-
-/**
- * Destroy a plugin's browser views **and everything its browser remembers**.
- *
- * Cookies, local storage, IndexedDB, the cache — the logged-in sessions somebody signed into
- * that plugin's tab. Kept in `persist:kith-plugin-<id>`, which lives in the *app's* own userData
- * and so is reachable from nowhere else in Kith: the Python server does the uninstalling and has
- * no way to touch an Electron session, which is why this exists as a route rather than as a line
- * in `install.py`.
- *
- * **Nothing cleared it, and that was a privacy bug rather than untidiness.** "Remove this plugin
- * and delete its data" left a browser profile holding live logins on disk indefinitely, and
- * reinstalling the plugin silently inherited them — so a plugin could come back already signed
- * in to accounts somebody thought they had removed.
- */
-export async function forgetSession(plugin: string): Promise<void> {
-  forget(plugin);
-  hardened.delete(plugin);
-  const target = session.fromPartition(partitionFor(plugin));
-  // Every storage type by name rather than the default set: the default omits cache, and a cache
-  // holding authenticated responses is the same problem in a different drawer.
-  await target.clearStorageData({
-    storages: [
-      "cookies",
-      "filesystem",
-      "indexdb",
-      "localstorage",
-      "shadercache",
-      "serviceworkers",
-      "cachestorage",
-    ],
-  });
-  await target.clearCache();
-  await target.clearAuthCache();
-}
-
-/** Every view belonging to one conversation. For a conversation being deleted — otherwise its
- *  browser outlives it, holding a renderer process for a chat that no longer exists. */
+/** Every tab belonging to one conversation. For a conversation being deleted — otherwise its
+ *  browser outlives it, holding renderer processes for a chat that no longer exists. */
 export function forgetOwner(owner: string): void {
-  for (const [key, one] of [...held.entries()]) {
-    if (one.owner === owner) forgetOne(key);
-  }
-}
-
-function forgetOne(key: string): void {
-  const one = held.get(key);
-  if (!one) return;
-  detach(one);
-  if (!one.contents.webContents.isDestroyed()) one.contents.webContents.close();
-  held.delete(key);
+  const browser = browsers.get(owner);
+  if (!browser) return;
+  for (const one of browser.tabs) close(one);
+  browsers.delete(owner);
 }
 
 /** Every live view, for the shell to tidy on quit. */
 export function forgetAll(): void {
-  for (const one of held.values()) {
-    detach(one);
-    if (!one.contents.webContents.isDestroyed()) one.contents.webContents.close();
-  }
-  held.clear();
+  for (const browser of browsers.values()) for (const one of browser.tabs) close(one);
+  browsers.clear();
+}
+
+/** Off the window and shut, with any sign-in popup it opened — a popup outliving the page that
+ *  was waiting for it is a window nothing will ever answer. */
+function close(one: Held): void {
+  detach(one);
+  for (const popup of one.popups) if (!popup.isDestroyed()) popup.close();
+  one.popups.clear();
+  if (!one.contents.webContents.isDestroyed()) one.contents.webContents.close();
 }
 
 export function status(at: Target): ViewStatus | null {
-  const one = touch(held.get(keyOf(at)));
-  return one ? statusOf(one) : null;
+  const browser = browsers.get(at.owner);
+  return browser ? statusOf(browser) : null;
+}
+
+// --------------------------------------------------------------------------- //
+// Tabs
+// --------------------------------------------------------------------------- //
+
+/**
+ * A new tab, in front unless it was asked for behind — which is what a middle-click and
+ * `target=_blank` with a modifier mean, and how Chromium tells us (`background-tab`).
+ *
+ * Returns null at `MAX_TABS`: the caller decides what that means, because it means different
+ * things — a link opens in the tab it was clicked in, a `+` says the browser is full.
+ */
+function openTab(browser: Browser, how: { url?: string; activate: boolean }): Held | null {
+  if (browser.tabs.length >= MAX_TABS) return null;
+  const one = makeTab(browser);
+  // After the tab it was opened from, the way a browser does, so a run of links opened from one
+  // page stays beside it rather than at the far end of the strip.
+  const from = browser.active ? browser.tabs.indexOf(browser.active) : -1;
+  browser.tabs.splice(from >= 0 ? from + 1 : browser.tabs.length, 0, one);
+  if (how.url) void loadInto(one, how.url);
+  if (how.activate || !browser.active) bringForward(browser, one);
+  else rest(one);
+  browser.lastOpened = { tab: one, at: Date.now() };
+  for (const told of [...browser.opened]) told(one);
+  announce(browser);
+  return one;
+}
+
+/** Put a tab in front: it paints in the pane, the others rest behind it. */
+function bringForward(browser: Browser, one: Held): void {
+  const was = browser.active;
+  browser.active = one;
+  touch(one);
+  // A picker left running on the tab being switched away from is an overlay nobody can see.
+  if (was && was !== one) void stopPicking(was);
+  for (const other of browser.tabs) if (other !== one) rest(other);
+  const pane = browser.rect;
+  if (pane && pane.width >= 1 && pane.height >= 1) {
+    applyBounds(one, fitted(pane, one.viewport));
+    showNow(one);
+  } else {
+    rest(one);
+  }
+}
+
+/** Open a tab — blank, or at an address. The `+` in the strip, and `open` with `new_tab`. */
+export async function newTab(at: Target, url = ""): Promise<ViewStatus> {
+  if (url) return navigate(at, url, { newTab: true });
+  const browser = browserFor(at);
+  if (!openTab(browser, { activate: true })) return { ...statusOf(browser), failure: tabsFull(browser) };
+  return statusOf(browser);
+}
+
+/** Bring a tab to the front by its id. */
+export function switchTab(at: Target, id: string): ViewStatus {
+  const browser = browserFor(at);
+  const one = browser.tabs.find((tab) => tab.id === id);
+  if (!one) throw new Error(`There is no tab ${id || "with no name"}. ${tabList(browser)}`);
+  bringForward(browser, one);
+  announce(browser);
+  return statusOf(browser);
+}
+
+/**
+ * Close a tab — the one named, or the one in front.
+ *
+ * The tab to its right comes forward, or failing that the one to its left, which is what every
+ * browser does and so what a person expects to be looking at next. Closing the last one leaves
+ * the browser empty rather than closing the pane: the pane is Kith's, not the page's.
+ */
+export function closeTab(at: Target, id = ""): ViewStatus {
+  const browser = browserFor(at);
+  const one = id ? browser.tabs.find((tab) => tab.id === id) : browser.active;
+  if (!one) {
+    throw new Error(id ? `There is no tab ${id}. ${tabList(browser)}` : "No tab is open, so nothing was closed.");
+  }
+  const at_ = browser.tabs.indexOf(one);
+  browser.tabs.splice(at_, 1);
+  close(one);
+  if (browser.active === one) {
+    const next = browser.tabs[at_] ?? browser.tabs[at_ - 1] ?? null;
+    browser.active = null;
+    if (next) bringForward(browser, next);
+  }
+  announce(browser);
+  return statusOf(browser);
+}
+
+/** The tabs, as a sentence — for a refusal that should say what *is* there. */
+function tabList(browser: Browser): string {
+  if (!browser.tabs.length) return "No tabs are open.";
+  return `The tabs are: ${browser.tabs.map((tab) => `${tab.id} (${titleOf(tab) || "untitled"})`).join(", ")}.`;
+}
+
+function tabsFull(browser: Browser): string {
+  return `${browser.tabs.length} tabs are open, which is as many as one conversation's browser holds. Close one first.`;
+}
+
+function titleOf(one: Held): string {
+  const contents = one.contents.webContents;
+  return contents.isDestroyed() ? "" : contents.getTitle() || contents.getURL();
 }
 
 // --------------------------------------------------------------------------- //
@@ -614,26 +760,52 @@ export function status(at: Target): ViewStatus | null {
  *
  * Waiting is the point. The person's own click on the address bar wants the chrome to show a
  * spinner and then a title; the *model's* call wants an answer it can act on, and "I have begun
- * navigating" is not one. So both go through here and both get a settled page.
+ * navigating" is not one. So both go through here and both get a settled page — inside
+ * `ACT_BUDGET_MS`, however slow the page is.
  *
  * A failed navigation resolves rather than throwing. `ERR_NAME_NOT_RESOLVED` is a fact about
  * the page, not an error in the caller — the model should be told the host does not exist, in a
  * sentence, and carry on.
+ *
+ * `ERR_ABORTED` is not a failure at all, usually: it is what a navigation reports when a
+ * redirect or a newer navigation replaced it, and the page that replaced it is the answer. The
+ * one exception is an address that turned out to be a file download, which this browser refuses
+ * — that is said, because "the page did not change" would otherwise be all anybody learned.
  */
-export async function navigate(at: Target, url: string, home = ""): Promise<ViewStatus> {
-  const one = touch(held.get(keyOf(at))) ?? create(at, home);
+export async function navigate(
+  at: Target,
+  url: string,
+  how: { newTab?: boolean } = {},
+): Promise<ViewStatus> {
+  const browser = browserFor(at);
   const target = normalise(url);
-  if (!target) return { ...statusOf(one), failure: `${url} is not an address I can open.` };
+  if (!target) return { ...statusOf(browser), failure: `${url} is not an address I can open.` };
+  let one = touch(browser.active);
+  if (!one || how.newTab) {
+    const opened = openTab(browser, { activate: true });
+    if (!opened) return { ...statusOf(browser), failure: tabsFull(browser) };
+    one = opened;
+  }
+  const started = Date.now();
+  await loadInto(one, target);
+  await settle(one, ACT_BUDGET_MS - (Date.now() - started));
+  announce(one);
+  return statusOf(one);
+}
+
+/** Load an address into one tab and record how it went. Resolves when the load has answered —
+ *  arrived, failed, or run out of time — and says nothing about settling, which is the caller's. */
+async function loadInto(one: Held, target: string): Promise<void> {
+  const started = Date.now();
   one.failure = "";
   announce(one);
   try {
     await load(one, target);
   } catch (error) {
-    one.failure = (error as Error).message;
+    if (!aborted(error)) one.failure = (error as Error).message;
+    else if (one.downloaded >= started) one.failure = downloadRefused(target);
   }
-  await settle(one);
   announce(one);
-  return statusOf(one);
 }
 
 export async function back(at: Target): Promise<ViewStatus> {
@@ -656,13 +828,17 @@ export async function reload(at: Target): Promise<ViewStatus> {
 
 /** What a person would read on the page. `innerText`, for the reason `render-service` gives:
  *  it respects layout, so it skips hidden nodes and keeps the line breaks that make the result
- *  legible instead of one run-on paragraph. */
+ *  legible instead of one run-on paragraph.
+ *
+ *  Not a user gesture. Everything that *acts* on the page is run as one, because that is what a
+ *  person's hand would be; reading is not, and a gesture handed to a page for a read is a few
+ *  seconds in which its own scripts may open popups and write to the clipboard. */
 export async function read(at: Target): Promise<{ text: string } & ViewStatus> {
   const one = required(at);
   await settle(one);
   const text = (await one.contents.webContents.executeJavaScript(
     "document.body ? document.body.innerText : ''",
-    true,
+    false,
   )) as string;
   const trimmed =
     text.length > MAX_TEXT_CHARS
@@ -674,14 +850,22 @@ export async function read(at: Target): Promise<{ text: string } & ViewStatus> {
 /**
  * Click something, by what it says.
  *
- * Two halves, and the second is the one that matters. First the page is asked where the thing
- * is — by text, by selector, or taken as given — and then the click is delivered as **real
- * input** through `sendInputEvent` rather than by calling `element.click()` in the page.
+ * Two halves. First the page is asked where the thing is — by text, by selector, or taken as
+ * given — and scrolled to it, the way a person scrolls before they click; then the click is
+ * delivered at that point and the answer says **what it actually hit**.
  *
- * The difference is trust. A synthetic `.click()` is `isTrusted: false`, and a great many sites
- * ignore those: anything gated on a user gesture, most consent walls, and every framework that
- * checks. `sendInputEvent` goes in at the same place the person's mouse does, so the page cannot
- * tell the model's click from theirs — which is the entire premise of one page with two drivers.
+ * Both halves used to be able to fail without saying so. Nothing scrolled, so a button below the
+ * fold was located at a point outside the viewport, the click went to nothing, and the answer
+ * said it had been clicked. And the answer named the element that was *found*, not the one on
+ * top of it — so a click a cookie banner took was reported as a click on "Submit".
+ *
+ * Dispatched inside the page rather than through the widget. `Input.dispatchMouseEvent` and
+ * `sendInputEvent` both go to the render widget, and a widget that is hidden accepts them and
+ * drops them — no error, no effect. And hidden is the normal state: a browser has to be
+ * driveable in a turn where nobody has the tab open. The cost is honest and worth naming: these
+ * events carry `isTrusted: false`. Links, buttons and forms do not care — React and every other
+ * framework listen for bubbling events, which these are — but something gated specifically on a
+ * user gesture may refuse.
  */
 export async function click(
   at: Target,
@@ -693,89 +877,133 @@ export async function click(
   },
 ): Promise<{ clicked: string; options: string[] } & ViewStatus> {
   const one = required(at);
-  let point: { x: number; y: number } | null = null;
-  let described = "";
-  let options: string[] = [];
+  const contents = one.contents.webContents;
+  let point: { x: number; y: number };
+  let described: string;
+  let covered = "";
 
   if (typeof where.x === "number" && typeof where.y === "number") {
     point = { x: where.x, y: where.y };
     described = `${where.x},${where.y}`;
   } else {
-    const found = (await one.contents.webContents.executeJavaScript(
+    const found = (await contents.executeJavaScript(
       locate(where.selector ?? "", where.text ?? ""),
-      true,
-    )) as { x: number; y: number; label: string } | { options: string[] };
-    if ("options" in found) {
-      options = found.options;
-      return { clicked: "", options, ...statusOf(one) };
+      false,
+    )) as Located;
+    if ("options" in found) return { clicked: "", options: found.options, ...statusOf(one) };
+    if ("invalid" in found) throw new Error(`${found.invalid} is not a CSS selector I can use.`);
+    if ("unreachable" in found) {
+      throw new Error(
+        `"${found.unreachable}" is on the page but could not be brought into view to click — it may be inside a panel that is closed or clipped.`,
+      );
     }
     point = { x: found.x, y: found.y };
     described = found.label;
+    covered = found.covered;
   }
 
-  // `buttons` as well as `button`: the first says which button this event is about and the
-  // second is the bitmask of what is currently held. Chromium routes on both, and a press with
-  // an empty mask is one a good deal of page code declines to treat as a click.
-  /* Dispatched inside the page rather than through the widget.
-   *
-   * `Input.dispatchMouseEvent` and `sendInputEvent` both go to the render widget, and a widget
-   * that is hidden accepts them and drops them — no error, no effect. The click reported the
-   * element it had found and the page never moved, which is the single most confusing way for
-   * this to fail. And hidden is the normal state: a browser has to be driveable in a turn where
-   * nobody has the tab open.
-   *
-   * The cost is honest and worth naming: these events carry `isTrusted: false`. Links, buttons
-   * and forms do not care — React and every other framework listen for bubbling events, which
-   * these are — but something gated specifically on a user gesture may refuse. That is the
-   * trade for a browser that works whether or not anybody is watching it.
-   */
-  await one.contents.webContents.executeJavaScript(dispatchClick(point.x, point.y), true);
-  await settleAfterInput(one);
+  const since = Date.now();
+  const hit = (await contents.executeJavaScript(dispatchClick(point.x, point.y), true)) as string | null;
+  if (hit === null) {
+    throw new Error(
+      `Nothing on the page is at ${point.x},${point.y}, so nothing was clicked. \`read\` the page, or click by what it says.`,
+    );
+  }
+  const opened = await settleAfterInput(one, since);
   announce(one);
-  return { clicked: described, options, ...statusOf(one) };
+  const clicked = covered
+    ? `${described} — but "${covered}" was on top of it and took the click`
+    : opened
+      ? `${described} — it opened in a new tab, ${opened.id}${opened.browser.active === opened ? ", now in front" : ", behind this one"}`
+      : described;
+  return { clicked, options: [], ...statusOf(one) };
 }
 
 /**
- * Type into whatever is focused, or into a field named first.
+ * Type into the focused field, or into one named by its label, placeholder or a selector.
  *
- * `insertText` rather than a stream of key events: it is what a paste does, so it survives
- * fields that reformat as you go (a card number, a date) and it does not depend on the layout
- * of anybody's keyboard. Keys that *mean* something — Enter, Tab — go through `press`, because
- * those are not text.
+ * Three steps, and each one can say no. `focusField` finds the field and selects what is in it
+ * when one was named, so the text *replaces* it; then the text goes in through the main process's
+ * `insertText`, the IME path — it fires `beforeinput` the way a keyboard does, so rich editors
+ * that ignore a value being set (ProseMirror, Lexical, Slate) see it, and it survives fields that
+ * reformat as you go; then `typed` checks it arrived, and tries the older ways if it did not.
+ *
+ * It used to do none of the checking. A field named by its `<label>` was not found, the miss was
+ * discarded, and the text went into whatever happened to be focused — or into nothing, for a
+ * rich-text editor — and every one of those answered as a success.
  */
 export async function type(
   at: Target,
   text: string,
   into = "",
-): Promise<ViewStatus> {
+): Promise<{ into: string } & ViewStatus> {
   const one = required(at);
-  if (into) await click(at, { text: into, selector: into.startsWith("#") ? into : "" });
-  // Set, then announced. Every form library listens for `input`; a value assigned without it is
-  // one React overwrites on its next render, and one validation never sees.
-  await one.contents.webContents.executeJavaScript(dispatchType(text), true);
+  const contents = one.contents.webContents;
+  const field = (await contents.executeJavaScript(focusField(into), true)) as Focused;
+
+  if ("fields" in field) {
+    const list = field.fields.length ? `The fields on the page are: ${field.fields.join(", ")}.` : "The page has no fields to type into.";
+    throw new Error(`Nothing on the page is a field called "${into}", so nothing was typed. ${list}`);
+  }
+  if ("problem" in field) {
+    throw new Error(
+      field.problem === "frame"
+        ? "What has focus is inside an embedded frame, which typing cannot reach. Name the field with `into` if it is on the page itself."
+        : `${field.focused ? `What has focus is ${field.focused}, which` : "Nothing has focus, and the page"} is not a field, so nothing was typed. Name one with \`into\`, or click it first.`,
+    );
+  }
+
+  if (field.kind === "select") {
+    const chosen = (await contents.executeJavaScript(chooseOption(text), true)) as {
+      chose: string;
+      choices: string[];
+    };
+    if (!chosen.chose) {
+      throw new Error(`${field.name} is a list, and none of its choices is "${text}". It offers: ${chosen.choices.join(", ")}.`);
+    }
+  } else {
+    await contents.insertText(text);
+    const result = (await contents.executeJavaScript(typed(text, field.before, !!into), true)) as {
+      landed: boolean;
+    };
+    if (!result.landed) {
+      throw new Error(`${field.name} did not take the text — the page may be rejecting input there. \`look\` at it to see why.`);
+    }
+  }
   await settle(one);
-  return statusOf(one);
+  announce(one);
+  return { into: field.name, ...statusOf(one) };
 }
 
-/** A key that is an instruction rather than a character. */
-export async function press(at: Target, key: string): Promise<ViewStatus> {
+/** A key that is an instruction rather than a character. Answers with `did`, what the key
+ *  actually did — see `pressKey` for why that has to be asked rather than assumed. */
+export async function press(at: Target, key: string): Promise<{ did: string } & ViewStatus> {
   const one = required(at);
   const named = KEYS[key];
   if (!named) throw new Error(`${key} is not a key this can press.`);
-  await one.contents.webContents.executeJavaScript(dispatchKey(named), true);
-  await settleAfterInput(one);
+  const since = Date.now();
+  const answer = (await one.contents.webContents.executeJavaScript(pressKey(named), true)) as {
+    did: string;
+    on: string;
+  };
+  await settleAfterInput(one, since);
   announce(one);
-  return statusOf(one);
+  const on = answer.on ? ` on ${answer.on}` : "";
+  const did = answer.did
+    ? `${answer.did}`
+    : `${key} reached the page${on}, and nothing further happens for it by default there`;
+  return { did, ...statusOf(one) };
 }
 
-export async function scroll(at: Target, by: number): Promise<ViewStatus> {
+/** Scroll the page, or the panel inside it that actually scrolls. Answers with how far it really
+ *  moved, so the bottom of a page is a `0` rather than a scroll that claims to have happened. */
+export async function scroll(at: Target, by: number): Promise<{ moved: number } & ViewStatus> {
   const one = required(at);
-  await one.contents.webContents.executeJavaScript(
-    `window.scrollBy({ top: ${Number(by) || 0}, behavior: "instant" }); 0`,
-    true,
-  );
+  const answer = (await one.contents.webContents.executeJavaScript(scrollPage(by), true)) as {
+    moved: number;
+  };
   await settle(one);
-  return statusOf(one);
+  return { moved: answer.moved, ...statusOf(one) };
 }
 
 /**
@@ -792,6 +1020,16 @@ export async function shot(
 ): Promise<{ png: string; width: number; height: number } & ViewStatus> {
   const one = required(at);
   await settle(one);
+  return capture(one, crop);
+}
+
+/** The capture itself, for callers that have already settled the page. `snap` settled, then
+ *  found its element, and settling a second time inside the same call was another twelve
+ *  seconds on the clock of an act that has to answer inside `ACT_BUDGET_MS`. */
+async function capture(
+  one: Held,
+  crop: (Rect & { label?: string }) | null,
+): Promise<{ png: string; width: number; height: number } & ViewStatus> {
   const contents = one.contents.webContents;
 
   /* A `look` exists so a turn can see a page nobody is watching, which is what makes the view's
@@ -896,13 +1134,13 @@ export async function snap(
   const one = required(at);
   await settle(one);
   const pad = clampPad(where.pad);
-  const found = (await one.contents.webContents.executeJavaScript(
-    boxOf(where.selector ?? "", where.text ?? ""),
-    true,
-  )) as
+  const contents = one.contents.webContents;
+  const found = (await contents.executeJavaScript(boxOf(where.selector ?? "", where.text ?? ""), false)) as
     | { x: number; y: number; width: number; height: number; selector: string; label: string }
-    | { options: string[] };
+    | { options: string[] }
+    | { invalid: string };
 
+  if ("invalid" in found) throw new Error(`${found.invalid} is not a CSS selector I can use.`);
   if ("options" in found) {
     return {
       png: "",
@@ -915,7 +1153,12 @@ export async function snap(
     };
   }
 
-  const shrunk = await shot(at, padded(found, pad));
+  /* A frame first. Finding the element may have scrolled it into view, and the compositor's
+   * current surface is the one from *before* the scroll until the page paints again — so a crop
+   * taken at once is the right rectangle of the wrong picture. Bounded, because a view nobody is
+   * looking at may never paint at all, and that case is `capture`'s to report. */
+  await contents.executeJavaScript(NEXT_FRAME, false);
+  const shrunk = await capture(one, padded(found, pad));
   return {
     png: shrunk.png,
     width: shrunk.width,
@@ -938,17 +1181,17 @@ export async function snap(
  * expensive part of asking about a page at all. Pointing at it is one gesture and settles it.
  *
  * So this is on the fixed IPC channel the pane's own chrome uses, next to back and reload, and
- * it is not in `VIEW_ACTS`: the model cannot start it, and a plugin cannot either. A page being
- * picked over is a page somebody is looking at, with their hand on the mouse.
+ * it is not an act the `browser` tool has: the model cannot start it. A page being picked over is a
+ * page somebody is looking at, with their hand on the mouse.
  *
  * ## What it injects, and why that is allowed
  *
  * An overlay drawn *inside the page* — an outline that follows the pointer and a label naming
  * what is under it. This is Kith's own script, the same door `read`, `click` and `type` already
- * go through; the plugin still cannot script the page, which is the property that matters. It
- * is inert: `pointer-events: none` on everything drawn, one capture-phase listener that takes
- * the click and stops it reaching the page, and it removes itself on the way out however it
- * ends.
+ * go through — there is still no act that runs arbitrary script in the page. It
+ * is inert: `pointer-events: none` on everything drawn, capture-phase listeners that take every
+ * part of the click and stop it reaching the page, and it removes itself on the way out however
+ * it ends.
  *
  * Resolves with `cancelled` on Escape, on a click outside the document, and on a minute passing
  * — a picker left running is an overlay on a page somebody has walked away from.
@@ -991,7 +1234,7 @@ export async function pick(
   }
   if (!chosen) return { ...empty, ...statusOf(one) };
 
-  const shrunk = await shot(at, padded(chosen, padding));
+  const shrunk = await capture(one, padded(chosen, padding));
   return {
     cancelled: false,
     png: shrunk.png,
@@ -1017,8 +1260,12 @@ interface Picked extends Rect {
  *  away from. Without this an overlay outlives the thing that started it, and the page is left
  *  with an outline following a pointer nobody is pointing. */
 export async function unpick(at: Target): Promise<void> {
-  const one = touch(held.get(keyOf(at)));
-  if (!one || one.contents.webContents.isDestroyed()) return;
+  const browser = browsers.get(at.owner);
+  if (browser) await Promise.all(browser.tabs.map(stopPicking));
+}
+
+async function stopPicking(one: Held): Promise<void> {
+  if (one.contents.webContents.isDestroyed()) return;
   try {
     await one.contents.webContents.executeJavaScript(
       "(() => { if (window.__kithPick) window.__kithPick.stop(null); return true; })()",
@@ -1056,31 +1303,15 @@ function padded(box: Rect, pad: number): Rect {
 // The plumbing
 // --------------------------------------------------------------------------- //
 
-function create(at: Target, home: string): Held {
-  if (held.size >= MAX_VIEWS) {
-    /* Least recently spoken to, not oldest opened.
-     *
-     * It was insertion order, which is exactly wrong once there is a view per conversation: the
-     * browser you have had open all afternoon and are still using is the oldest one, so the
-     * cheapest thing to close was the thing most in use. Whatever nobody has touched for
-     * longest is the honest choice.
-     *
-     * Evicting loses the page's position, not its login — cookies live in the plugin's
-     * partition and outlive any one view. See `Target`.
-     */
-    let stale: [string, Held] | null = null;
-    for (const entry of held.entries()) {
-      if (!stale || entry[1].touched < stale[1].touched) stale = entry;
-    }
-    if (stale) forgetOne(stale[0]);
-  }
-  harden(at.plugin);
+function makeTab(browser: Browser): Held {
+  makeRoom(browser);
+  harden();
   const contents = new WebContentsView({
     webPreferences: {
-      // The plugin's own session, never the person's and never Kith's. See the module comment.
-      // The plugin's, not the conversation's. Two conversations are two tabs of one profile —
-      // see `Target` for why cookies deliberately do not follow the owner.
-      partition: partitionFor(at.plugin),
+      // The browser's own session, never the person's and never Kith's. See the module comment.
+      // One for every conversation: two conversations are two tabs of one profile — see
+      // `Target` for why cookies deliberately do not follow the owner.
+      partition: BROWSER_PARTITION,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -1095,18 +1326,20 @@ function create(at: Target, home: string): Held {
       spellcheck: true,
     },
   });
+  browser.made += 1;
   const one: Held = {
-    plugin: at.plugin,
-    view: at.view,
-    owner: at.owner,
+    id: `t${browser.made}`,
+    browser,
+    owner: browser.owner,
     touched: Date.now(),
     contents,
     attached: false,
     failure: "",
-    rect: null,
     viewport: null,
     bounds: null,
     emulated: null,
+    popups: new Set(),
+    downloaded: 0,
   };
   /* In the window from the start, sized, and hidden.
    *
@@ -1126,56 +1359,144 @@ function create(at: Target, home: string): Held {
   }
   applyBounds(one, { ...DEFAULT_BOUNDS, scale: 1 });
   hideNow(one);
-  held.set(keyOf(at), one);
   watch(one);
-  if (home) void navigate(at, home);
   return one;
 }
 
 /**
- * Everything a page in here may not do, set once per plugin partition.
+ * Close something to make room for one more live page, when the app is holding `MAX_VIEWS`.
+ *
+ * Least recently spoken to, not oldest opened: insertion order made the browser you had had open
+ * all afternoon the cheapest thing to close. And never what is on screen while there is any other
+ * choice — a pane somebody is reading does not get touched, because nothing is said to it while
+ * they scroll with their own hand, so by age alone the page in front of them was the stalest
+ * thing here.
+ *
+ * So, in order: a whole browser nobody is showing, then a tab behind the front one. Evicting
+ * loses the page's place, not its login — cookies live in the partition and outlive any view.
+ */
+function makeRoom(making: Browser): void {
+  const live = [...browsers.values()].reduce((sum, one) => sum + one.tabs.length, 0);
+  if (live < MAX_VIEWS) return;
+  let quiet: Browser | null = null;
+  for (const one of browsers.values()) {
+    if (one === making || one.rect !== null || !one.tabs.length) continue;
+    if (!quiet || one.touched < quiet.touched) quiet = one;
+  }
+  if (quiet) {
+    forgetOwner(quiet.owner);
+    return;
+  }
+  let stale: Held | null = null;
+  for (const one of browsers.values()) {
+    for (const tab of one.tabs) {
+      if (tab === one.active) continue;
+      if (!stale || tab.touched < stale.touched) stale = tab;
+    }
+  }
+  if (stale) closeTab({ owner: stale.owner }, stale.id);
+}
+
+/**
+ * Everything a page in here may not do, set once on the partition.
  *
  * The permission handlers are the interesting ones. A page in a pane the person is looking at
- * could plausibly ask for a camera, and the answer is still no: the plugin declared a browser,
- * not a device. Saying no in the handler rather than by prompting means there is no dialog for
- * a page to badger somebody into accepting.
+ * could plausibly ask for a camera, and the answer is still no: this is a browser for reading and
+ * using pages, not a device. Saying no in the handler rather than by prompting means there is no
+ * dialog for a page to badger somebody into accepting.
  */
-function harden(plugin: string): void {
-  const target = session.fromPartition(partitionFor(plugin));
-  if (hardened.has(plugin)) return;
-  hardened.add(plugin);
+function harden(): void {
+  if (hardened) return;
+  hardened = true;
+  const target = session.fromPartition(BROWSER_PARTITION);
 
-  const backend = originOf(BACKEND_ORIGIN);
   target.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
-    // **Kith's own origin only.** A page that can reach the backend is a page reaching Kith's
-    // API from inside Kith, which is the one address that must be unreachable from here.
+    // **Kith's own server, under any name.** A page that can reach the backend is a page reaching
+    // Kith's API from inside Kith, which is the one address that must be unreachable from here —
+    // see `reachesKith` for why that has to be judged by port and not by origin.
     //
     // Other loopback addresses are allowed on purpose, and this is a deliberate departure from
     // `render-service`'s blanket refusal. That one renders a URL a *model* chose, where the
     // whole risk is being talked into fetching something local; this is a browser a *person*
     // is driving, and the first thing anybody does with it is open the app they are building
     // on `localhost:5173`. Refusing that would be refusing the use case.
-    callback({ cancel: backend !== "" && originOf(details.url) === backend });
+    callback({ cancel: reachesKith(details.url, KITH_PORTS) });
   });
 
   target.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   target.setPermissionCheckHandler(() => false);
-  // Downloads go nowhere. Nothing in Kith serves files out of a plugin's storage, and a save
-  // dialog opening over the app from a page in a tab is not something anybody asked for.
-  target.on("will-download", (event) => event.preventDefault());
+  // Downloads go nowhere. Nothing in Kith serves files a page saved, and a save dialog opening
+  // over the app from a page in a tab is not something anybody asked for.
+  //
+  // Said, though, rather than swallowed. A link that turns out to be a file used to do nothing
+  // at all — to the person clicking it and to the model opening it — which reads as a broken
+  // link rather than as a browser that declines to save files.
+  target.on("will-download", (event, item, source) => {
+    event.preventDefault();
+    const one = [...browsers.values()]
+      .flatMap((browser) => browser.tabs)
+      .find((view) => view.contents.webContents === source);
+    if (!one) return;
+    one.downloaded = Date.now();
+    one.failure = downloadRefused(item.getFilename() || item.getURL());
+    announce(one);
+  });
 }
 
-const hardened = new Set<string>();
-
-const partitionFor = (plugin: string): string => `persist:kith-plugin-${plugin}`;
-
-function originOf(raw: string): string {
+/**
+ * Would this address reach Kith's own server?
+ *
+ * **By port, on every loopback name — not by origin.** It compared origins, and origins are
+ * spellings: the block was `http://127.0.0.1:8611`, and `http://localhost:8611` is a different
+ * origin for the same server. That one serves Kith's whole interface with the API token written
+ * into the page, so opening it loaded Kith, signed in, inside a pane the model drives — settings,
+ * permission mode and all, a click away from a page that talked him into it.
+ *
+ * So any loopback host counts: `localhost` and its subdomains, all of `127.0.0.0/8`, `0.0.0.0`,
+ * `::1` and the IPv4-mapped forms. The URL parser has already turned `2130706433` and `0x7f.1`
+ * into `127.0.0.1` by the time this sees them. A *name* that resolves to loopback cannot be
+ * judged here — nothing is resolved yet — and is the server's to refuse: it answers only to the
+ * hosts it expects (`kith/api/auth.py`).
+ */
+export function reachesKith(raw: string, ports: ReadonlySet<string>): boolean {
+  let url: URL;
   try {
-    return new URL(raw).origin.toLowerCase();
+    url = new URL(raw);
   } catch {
-    return "";
+    return false;
   }
+  if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "ws:" && url.protocol !== "wss:") {
+    return false;
+  }
+  const secure = url.protocol === "https:" || url.protocol === "wss:";
+  const port = url.port || (secure ? "443" : "80");
+  return ports.has(port) && isLoopback(url.hostname);
 }
+
+function isLoopback(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "0.0.0.0" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  // IPv6 arrives bracketed: `[::1]`, `[::]`, and 127/8 mapped into IPv6 as `[::ffff:7fxx:xxxx]`.
+  return host === "[::1]" || host === "[::]" || /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(host);
+}
+
+/** What the person and the model are told when an address is a file. */
+function downloadRefused(name: string): string {
+  return `${name} is a file download, and this browser does not save files.`;
+}
+
+/** A navigation something else cut short — a redirect, a newer navigation, a download. */
+function aborted(error: unknown): boolean {
+  const failed = error as { errno?: number; code?: string; message?: string };
+  return failed?.errno === -3 || failed?.code === "ERR_ABORTED" || /ERR_ABORTED/.test(String(failed?.message ?? ""));
+}
+
+let hardened = false;
+
+/** At most this many sign-in popups per page. Enough for a login that opens a second window for
+ *  two-factor; few enough that a page cannot bury the app in windows. */
+const MAX_POPUPS = 2;
 
 /** Report a status change whenever the page does something the chrome draws. */
 function watch(one: Held): void {
@@ -1183,6 +1504,11 @@ function watch(one: Held): void {
   // Written out rather than looped: to TypeScript each event name is a separate overload, so a
   // loop over them is a call whose argument is a union no single overload accepts.
   const changed = () => announce(one);
+  // Cleared before it is announced, so the status that says "arrived" does not still carry the
+  // failure of the page before it.
+  contents.on("did-navigate", () => {
+    one.failure = "";
+  });
   contents.on("did-start-loading", changed);
   contents.on("did-stop-loading", changed);
   contents.on("did-navigate", changed);
@@ -1191,46 +1517,120 @@ function watch(one: Held): void {
   contents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     // A subframe failing is the web being the web. Only the main frame is worth saying.
     if (!isMainFrame) return;
+    // -3 is ERR_ABORTED: a redirect, a navigation that replaced this one, or a download. None of
+    // them is the page failing, and saying so put a failure under a page that loaded fine.
+    if (code === -3) return;
     one.failure = `${description || `error ${code}`}${url ? ` (${url})` : ""}`;
     announce(one);
   });
-  contents.on("did-navigate", () => {
-    one.failure = "";
-  });
-  // Every new window becomes a navigation in this one. There is a single pane and no tab strip,
-  // so a popup would otherwise be a window with no chrome that the person cannot get back from.
-  contents.setWindowOpenHandler(({ url }) => {
-    void navigate(ownerOf(one), url);
+  /* A link that would open a new tab opens a new tab — in front for an ordinary click, behind for
+   * a middle-click (`background-tab`). It used to become a navigation in this one, because there
+   * was one page and no strip; that replaced the page the link was on, which is the page anybody
+   * opening a link in a new tab meant to keep. Past `MAX_TABS` it still does, in this tab.
+   *
+   * **A scripted popup is the exception, because it is almost always a sign-in.** "Continue with
+   * Google" opens a small window and waits for it to post the result back to `window.opener`.
+   * Turned into a navigation, the page that was waiting is gone and the login can never finish —
+   * so every sign-in built that way was impossible here. Chromium tells the two apart for us:
+   * `new-window` is `window.open` with features, a link with `target=_blank` is `foreground-tab`.
+   *
+   * The popup is a real window over Kith, in the same partition (so what it signs into holds for
+   * the page), under the same `harden` as everything else in it. The model cannot drive it; it
+   * is the person's, like the login it exists for.
+   */
+  contents.setWindowOpenHandler(({ url, disposition }) => {
+    if (disposition === "new-window" && one.popups.size < MAX_POPUPS && normalise(url)) {
+      const parent = getMainWindow();
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          ...(parent && !parent.isDestroyed() ? { parent } : {}),
+          width: 520,
+          height: 700,
+          autoHideMenuBar: true,
+          webPreferences: {
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            nodeIntegrationInSubFrames: false,
+            webviewTag: false,
+            webSecurity: true,
+            allowRunningInsecureContent: false,
+          },
+        },
+      };
+    }
+    const address = normalise(url);
+    if (address && !openTab(one.browser, { url: address, activate: disposition !== "background-tab" })) {
+      void loadInto(one, address);
+    }
     return { action: "deny" };
+  });
+  /* The keys a person expects a browser to answer, taken before the page sees them — the page
+   * has focus, so Kith's own window never hears these. New tab, close tab, next and previous. */
+  contents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const key = input.key.toLowerCase();
+    const at = ownerOf(one);
+    if (input.meta && !input.shift && key === "t") {
+      event.preventDefault();
+      void newTab(at);
+    } else if (input.meta && !input.shift && key === "w") {
+      event.preventDefault();
+      closeTab(at, one.id);
+    } else if (input.control && key === "tab") {
+      event.preventDefault();
+      const tabs = one.browser.tabs;
+      const next = tabs[(tabs.indexOf(one) + (input.shift ? tabs.length - 1 : 1)) % tabs.length];
+      if (next && next !== one) switchTab(at, next.id);
+    }
+  });
+  contents.on("did-create-window", (popup) => {
+    one.popups.add(popup);
+    popup.on("closed", () => one.popups.delete(popup));
+    // A popup opening more popups is not a sign-in any more.
+    popup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   });
 }
 
-function announce(one: Held): void {
-  const snapshot = statusOf(one);
+/** Tell the chrome. Always the conversation's whole browser — its front tab and its strip — because
+ *  a background tab's title changing is a change to the strip even though the page in front did
+ *  not move. */
+function announce(from: Held | Browser): void {
+  const snapshot = statusOf(from);
   for (const listener of listeners) listener(snapshot);
 }
 
-function statusOf(one: Held): ViewStatus {
+/** The browser as the chrome and the model see it: the tab in front, and the list of them. */
+function statusOf(from: Held | Browser): ViewStatus {
+  const browser = "tabs" in from ? from : from.browser;
+  const one = browser.active;
+  const tabs = browser.tabs.map(
+    (tab): TabSummary => {
+      const contents = tab.contents.webContents;
+      return contents.isDestroyed()
+        ? { id: tab.id, title: "", url: "", loading: false }
+        : { id: tab.id, title: contents.getTitle(), url: contents.getURL(), loading: contents.isLoading() };
+    },
+  );
+  const blank = {
+    owner: browser.owner,
+    url: "",
+    title: "",
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    failure: "",
+    viewport: null,
+    scale: 1,
+    tab: one?.id ?? "",
+    tabs,
+  };
+  if (!one) return blank;
   const contents = one.contents.webContents;
-  if (contents.isDestroyed()) {
-    return {
-      plugin: one.plugin,
-      view: one.view,
-      owner: one.owner,
-      url: "",
-      title: "",
-      loading: false,
-      canGoBack: false,
-      canGoForward: false,
-      failure: "this view is gone",
-      viewport: one.viewport,
-      scale: one.emulated?.scale ?? 1,
-    };
-  }
+  if (contents.isDestroyed()) return { ...blank, failure: "this view is gone", viewport: one.viewport };
   return {
-    plugin: one.plugin,
-    view: one.view,
-    owner: one.owner,
+    ...blank,
     url: contents.getURL(),
     title: contents.getTitle(),
     loading: contents.isLoading(),
@@ -1242,36 +1642,41 @@ function statusOf(one: Held): ViewStatus {
   };
 }
 
+/** The tab in front, for an act that needs a page. */
 function required(at: Target): Held {
-  const one = touch(held.get(keyOf(at)));
+  const one = touch(browsers.get(at.owner)?.active ?? undefined);
   if (!one || one.contents.webContents.isDestroyed()) {
     throw new Error(
-      `${at.plugin}'s ${at.view} browser is not open here. Call \`show\` to open its tab, then try again.`,
+      "Nothing is open in this conversation's browser yet. `open` a page first.",
     );
   }
+  one.browser.touched = Date.now();
   return one;
 }
 
 /** Mark a view as spoken to, so eviction can tell it from one nobody is using. Returns what it
  *  was given, so it can wrap a lookup rather than needing a line of its own at each one. */
-function touch(one: Held | undefined): Held | undefined {
+function touch(one: Held | null | undefined): Held | undefined {
   if (one) one.touched = Date.now();
-  return one;
+  return one ?? undefined;
 }
 
 /** The target a held view answers to. For the places that have the view and need its address —
  *  a popup being turned into a navigation, for one. */
 function ownerOf(one: Held): Target {
-  return { plugin: one.plugin, view: one.view, owner: one.owner };
+  return { owner: one.owner };
 }
 
+/** Back, forward, reload — something that starts a navigation, so it waits for one to start the
+ *  way a click does. `settle` straight after `goBack` saw a page that had not begun loading yet,
+ *  waited its moment, and answered with the URL being left. */
 async function step(
   at: Target,
   act: (contents: Electron.WebContents) => void,
 ): Promise<ViewStatus> {
   const one = required(at);
   act(one.contents.webContents);
-  await settle(one);
+  await settleAfterInput(one);
   announce(one);
   return statusOf(one);
 }
@@ -1299,76 +1704,6 @@ function detach(one: Held): void {
 }
 
 /**
- * A click, delivered where the page will see it.
- *
- * `elementFromPoint` rather than the element the finder located, because what is *on top* at
- * that coordinate is what a person's click would hit — an overlay, a consent banner, a label
- * wrapping the input. Clicking the thing underneath would be a click no person could have made.
- *
- * The full sequence, in order, with `bubbles` throughout: pointer events first for anything
- * listening to those, then mouse, then `click`. A bare `click` event is enough for a link and
- * not enough for a good deal else.
- */
-export function dispatchClick(x: number, y: number): string {
-  return `(() => {
-    const el = document.elementFromPoint(${x}, ${y});
-    if (!el) return false;
-    const shared = { bubbles: true, cancelable: true, clientX: ${x}, clientY: ${y}, button: 0, view: window };
-    for (const type of ["pointerdown", "mousedown"]) {
-      el.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, shared));
-    }
-    // Focus before the release, the way a real click does — a field clicked and not focused is a
-    // field the next \`type\` will miss.
-    if (typeof el.focus === "function") el.focus();
-    for (const type of ["pointerup", "mouseup", "click"]) {
-      el.dispatchEvent(new (type.startsWith("pointer") ? PointerEvent : MouseEvent)(type, shared));
-    }
-    return true;
-  })()`;
-}
-
-/** Text into whatever is focused. Assigned and then announced, because a value set without an
- *  `input` event is one React overwrites and one validation never sees. */
-export function dispatchType(text: string): string {
-  const value = JSON.stringify(text);
-  return `(() => {
-    const el = document.activeElement;
-    if (!el || !("value" in el)) return false;
-    const setter = Object.getOwnPropertyDescriptor(
-      el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
-      "value",
-    );
-    // Through the prototype's setter, which is what React's own value tracking hooks into. A
-    // plain \`el.value =\` is invisible to it and gets reverted on the next render.
-    if (setter && setter.set) setter.set.call(el, ${value});
-    else el.value = ${value};
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    return true;
-  })()`;
-}
-
-/** A key that means something. Enter on a field inside a form submits it, which a dispatched
- *  keydown alone does not do — so that case is handled explicitly. */
-function dispatchKey(named: { key: string; code: string; windowsVirtualKeyCode: number }): string {
-  const key = JSON.stringify(named.key);
-  const code = JSON.stringify(named.code);
-  return `(() => {
-    const el = document.activeElement || document.body;
-    const shape = { key: ${key}, code: ${code}, keyCode: ${named.windowsVirtualKeyCode}, which: ${named.windowsVirtualKeyCode}, bubbles: true, cancelable: true };
-    const down = new KeyboardEvent("keydown", shape);
-    const wanted = el.dispatchEvent(down);
-    el.dispatchEvent(new KeyboardEvent("keyup", shape));
-    // Only if nothing called preventDefault: a page that handles Enter itself has already done
-    // whatever it meant to, and submitting on top of that would send the form twice.
-    if (wanted && ${key} === "Enter" && el.form && typeof el.form.requestSubmit === "function") {
-      el.form.requestSubmit();
-    }
-    return true;
-  })()`;
-}
-
-/**
  * Settle after something that *might* navigate.
  *
  * A click on a link returns before Chromium has begun loading anything, so `settle` sees a page
@@ -1376,30 +1711,43 @@ function dispatchKey(named: { key: string; code: string; windowsVirtualKeyCode: 
  * landed on a page that has not moved, which reads as the click having missed. This gives a
  * navigation a short window to start, and then waits for it properly.
  */
-async function settleAfterInput(one: Held): Promise<void> {
+async function settleAfterInput(one: Held, since = Date.now()): Promise<Held | null> {
   const contents = one.contents.webContents;
-  const started = await new Promise<boolean>((resolve) => {
-    if (contents.isDestroyed()) return resolve(false);
-    const timer = setTimeout(() => {
-      contents.off("did-start-navigation", began);
-      resolve(false);
-    }, NAVIGATION_GRACE_MS);
-    const began = () => {
+  /* A navigation in this tab, or a new tab — a `target=_blank` link moves nothing where it was
+   * clicked, so waiting on this tab alone read "opened in a new tab" as "nothing happened". A tab
+   * that opened before this started listening counts: that is the ordinary order. */
+  const early = one.browser.lastOpened;
+  const started = await new Promise<"here" | Held | null>((resolve) => {
+    if (early && early.at >= since) return resolve(early.tab);
+    if (contents.isDestroyed()) return resolve(null);
+    const done = (answer: "here" | Held | null) => {
       clearTimeout(timer);
       contents.off("did-start-navigation", began);
-      resolve(true);
+      one.browser.opened.delete(opened);
+      resolve(answer);
     };
+    const timer = setTimeout(() => done(null), NAVIGATION_GRACE_MS);
+    const began = () => done("here");
+    const opened = (tab: Held) => done(tab);
     contents.on("did-start-navigation", began);
+    one.browser.opened.add(opened);
   });
-  if (started) await settle(one);
-  else await delay(SETTLE_MS);
+  if (started === "here") await settle(one);
+  else if (started) {
+    // Its load was begun before the tab was announced, so it is either loading now or done.
+    await delay(100);
+    await settle(started);
+  } else await delay(SETTLE_MS);
+  return started && started !== "here" ? started : null;
 }
 
 /** Wait for the page to stop loading, then a moment more. Bounded, because a page that streams
- *  for ever — a chat, a live feed — never stops loading and must not hold a call open. */
-function settle(one: Held): Promise<void> {
+ *  for ever — a chat, a live feed — never stops loading and must not hold a call open. `most`
+ *  is what is left of the act's budget, for a caller that has already spent some of it. */
+function settle(one: Held, most = SETTLE_WAIT_MS): Promise<void> {
   const contents = one.contents.webContents;
-  if (contents.isDestroyed() || !contents.isLoading()) return delay(SETTLE_MS);
+  const wait = Math.max(0, Math.min(SETTLE_WAIT_MS, most - SETTLE_MS));
+  if (contents.isDestroyed() || !contents.isLoading() || wait === 0) return delay(SETTLE_MS);
   return new Promise((resolve) => {
     const done = () => {
       clearTimeout(timer);
@@ -1409,7 +1757,7 @@ function settle(one: Held): Promise<void> {
     const timer = setTimeout(() => {
       contents.off("did-stop-loading", done);
       resolve();
-    }, LOAD_TIMEOUT_MS);
+    }, wait);
     contents.on("did-stop-loading", done);
   });
 }
@@ -1417,7 +1765,10 @@ function settle(one: Held): Promise<void> {
 function load(one: Held, url: string): Promise<void> {
   const contents = one.contents.webContents;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${url} did not load in 30s`)), LOAD_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => reject(new Error(`${url} did not finish loading in ${LOAD_TIMEOUT_MS / 1000}s — what follows is the page as it stands`)),
+      LOAD_TIMEOUT_MS,
+    );
     contents
       .loadURL(url)
       .then(() => resolve())
@@ -1440,267 +1791,11 @@ function normalise(raw: string): string {
   }
 }
 
-/** The script that finds what to click, and says what else was on offer if it cannot.
- *
- * The failure path is the useful half: a model that cannot find "Sign in" gets the list of what
- * *is* clickable and can pick, rather than taking a screenshot to find out and spending a few
- * thousand tokens to read it. */
-export function locate(selector: string, text: string): string {
-  const wanted = JSON.stringify(text.toLowerCase());
-  const css = JSON.stringify(selector);
-  return `(() => {
-    const box = (el) => {
-      const r = el.getBoundingClientRect();
-      if (!r.width || !r.height) return null;
-      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-    };
-    const label = (el) =>
-      (el.innerText || el.value || el.getAttribute("aria-label") || el.name || el.placeholder || "")
-        .trim()
-        .slice(0, 60);
-    if (${css}) {
-      const el = document.querySelector(${css});
-      const at = el && box(el);
-      if (at) return { ...at, label: label(el) || ${css} };
-    }
-    const clickable = [
-      ...document.querySelectorAll(
-        'a, button, input, select, textarea, [role=button], [role=link], [onclick], [tabindex]',
-      ),
-    ].filter((el) => box(el));
-    if (${wanted}) {
-      const exact = clickable.find((el) => label(el).toLowerCase() === ${wanted});
-      const loose = clickable.find((el) => label(el).toLowerCase().includes(${wanted}));
-      const el = exact || loose;
-      const at = el && box(el);
-      if (at) return { ...at, label: label(el) };
-    }
-    return { options: clickable.map(label).filter(Boolean).slice(0, 25) };
-  })()`;
-}
-
-/**
- * The part of a page script both `snap` and `pick` need: a selector you can hand back.
- *
- * Built by walking up from the element and stopping the moment the chain is **unique in the
- * document**, rather than by climbing a fixed number of levels. A chain that is not unique is
- * worse than no selector at all: it looks specific, `document.querySelector` answers with the
- * first thing that matches it, and the next call acts on some other card on the same page.
- *
- * An `id` or a `data-testid` short-circuits it, because those are what a person would have
- * written themselves, and they survive the page being re-rendered — which `:nth-of-type` does
- * not always.
- */
-const SELECTOR_FOR = `
-    const selectorFor = (el) => {
-      if (!el || !el.tagName) return "";
-      const parts = [];
-      let node = el;
-      let climbed = 0;
-      while (node && node.nodeType === 1 && node !== document.documentElement && climbed < 8) {
-        if (node.id && /^[A-Za-z][\\w-]*$/.test(node.id) && document.querySelectorAll("#" + node.id).length === 1) {
-          parts.unshift("#" + node.id);
-          break;
-        }
-        const testid = node.getAttribute("data-testid") || node.getAttribute("data-test-id");
-        if (testid) {
-          parts.unshift(node.tagName.toLowerCase() + '[data-testid="' + testid.replace(/"/g, '\\\\"') + '"]');
-          break;
-        }
-        let part = node.tagName.toLowerCase();
-        const parent = node.parentElement;
-        if (parent) {
-          const alike = [...parent.children].filter((c) => c.tagName === node.tagName);
-          if (alike.length > 1) part += ":nth-of-type(" + (alike.indexOf(node) + 1) + ")";
-        }
-        parts.unshift(part);
-        // Stop as soon as it identifies one thing. Climbing further only makes it longer and
-        // more brittle, and a shorter selector is one a person can read.
-        try {
-          if (document.querySelectorAll(parts.join(" > ")).length === 1) break;
-        } catch (_) { break; }
-        node = parent;
-        climbed += 1;
-      }
-      return parts.join(" > ");
-    };
-    const labelFor = (el) =>
-      ((el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("alt") || el.title || "")
-        .replace(/\\s+/g, " ")
-        .trim()
-        .slice(0, 120));
-`;
-
-/** Where a named thing *is*, as a rectangle. `locate` answers with a point to click; a picture
- *  needs the whole box, and the two disagreeing about which element they found would be the
- *  worst kind of bug here — a crop of one component and a click on another. Same finder, same
- *  order of preference, different answer. */
-export function boxOf(selector: string, text: string): string {
-  const wanted = JSON.stringify(text.toLowerCase());
-  const css = JSON.stringify(selector);
-  return `(() => {
-    ${SELECTOR_FOR}
-    const box = (el) => {
-      const r = el.getBoundingClientRect();
-      if (!r.width || !r.height) return null;
-      return {
-        x: Math.round(r.left),
-        y: Math.round(r.top),
-        width: Math.round(r.width),
-        height: Math.round(r.height),
-      };
-    };
-    if (${css}) {
-      const el = document.querySelector(${css});
-      const at = el && box(el);
-      if (at) return { ...at, selector: ${css}, label: labelFor(el) };
-    }
-    const named = [
-      ...document.querySelectorAll(
-        'a, button, input, select, textarea, [role=button], [role=link], [onclick], [tabindex], [data-testid], section, article, header, footer, nav, main, form, table, figure',
-      ),
-    ].filter((el) => box(el));
-    if (${wanted}) {
-      const exact = named.find((el) => labelFor(el).toLowerCase() === ${wanted});
-      const loose = named.find((el) => labelFor(el).toLowerCase().includes(${wanted}));
-      const el = exact || loose;
-      const at = el && box(el);
-      if (at) return { ...at, selector: selectorFor(el), label: labelFor(el) };
-    }
-    return { options: named.map(labelFor).filter(Boolean).slice(0, 25) };
-  })()`;
-}
-
-/**
- * The inspector, as a script the page runs.
- *
- * Everything drawn is `pointer-events: none` and `position: fixed`, so it never changes what is
- * under the pointer and never contributes to the page's own layout — an overlay that reflows the
- * thing you are trying to measure would be the one unforgivable version of this.
- *
- * The click is taken in the **capture** phase and stopped three ways (`preventDefault`,
- * `stopPropagation`, `stopImmediatePropagation`). Picking the "Delete account" button must
- * never also press it, and a link would otherwise navigate out from under the capture that was
- * about to be taken.
- *
- * `window.__kithPick` is the handle the outside world has on it: starting a second pick stops
- * the first, and `unpick` uses it when the pane goes away. A picker with no way to be stopped
- * from outside is an outline following the pointer on a page nobody is picking from.
- */
-export function picker(): string {
-  return `(() => {
-    ${SELECTOR_FOR}
-    if (window.__kithPick) window.__kithPick.stop(null);
-    return new Promise((resolve) => {
-      const chrome = [];
-      const make = (css) => {
-        const el = document.createElement("div");
-        el.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;" + css;
-        document.documentElement.appendChild(el);
-        chrome.push(el);
-        return el;
-      };
-      const outline = make(
-        "border:2px solid #4c8dff;background:rgba(76,141,255,0.13);border-radius:3px;box-shadow:0 0 0 1px rgba(0,0,0,0.28);left:0;top:0;width:0;height:0",
-      );
-      const tip = make(
-        "font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;background:#11161f;color:#e9eef7;padding:2px 7px;border-radius:5px;white-space:nowrap;max-width:70vw;overflow:hidden;text-overflow:ellipsis;left:0;top:0;opacity:0",
-      );
-      const hint = make(
-        "left:50%;bottom:18px;transform:translateX(-50%);font:12px/1.6 system-ui,-apple-system,sans-serif;background:#11161f;color:#e9eef7;padding:6px 13px;border-radius:999px;opacity:.95",
-      );
-      hint.textContent = "Click a component to send it to the chat  ·  Esc to cancel";
-
-      let at = null;
-      const draw = (el) => {
-        at = el;
-        if (!el || !el.getBoundingClientRect) { outline.style.width = "0"; tip.style.opacity = "0"; return; }
-        const r = el.getBoundingClientRect();
-        outline.style.left = r.left + "px";
-        outline.style.top = r.top + "px";
-        outline.style.width = Math.max(0, r.width - 4) + "px";
-        outline.style.height = Math.max(0, r.height - 4) + "px";
-        tip.textContent = (selectorFor(el) || el.tagName.toLowerCase()) +
-          "  " + Math.round(r.width) + "×" + Math.round(r.height);
-        tip.style.opacity = "1";
-        // Above the element, or below it when it is against the top of the window.
-        tip.style.left = Math.max(4, Math.min(r.left, window.innerWidth - 240)) + "px";
-        tip.style.top = (r.top > 24 ? r.top - 22 : Math.min(r.bottom + 6, window.innerHeight - 24)) + "px";
-      };
-
-      let last = { x: -1, y: -1 };
-      const onMove = (event) => {
-        last = { x: event.clientX, y: event.clientY };
-        draw(document.elementFromPoint(event.clientX, event.clientY));
-      };
-      const onScroll = () => {
-        if (last.x >= 0) draw(document.elementFromPoint(last.x, last.y));
-      };
-      const onKey = (event) => {
-        if (event.key === "Escape") { event.preventDefault(); stop(null); }
-      };
-      const onClick = (event) => {
-        // Three ways, in the capture phase. Picking a button must not also press it, and a link
-        // would navigate out from under the capture that is about to be taken.
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        const el = at || document.elementFromPoint(event.clientX, event.clientY);
-        if (!el || !el.getBoundingClientRect) return stop(null);
-        const r = el.getBoundingClientRect();
-        stop({
-          x: Math.round(r.left),
-          y: Math.round(r.top),
-          width: Math.round(r.width),
-          height: Math.round(r.height),
-          selector: selectorFor(el),
-          label: labelFor(el),
-          tag: el.tagName.toLowerCase(),
-        });
-      };
-
-      let done = false;
-      function stop(answer) {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        window.removeEventListener("mousemove", onMove, true);
-        window.removeEventListener("scroll", onScroll, true);
-        window.removeEventListener("keydown", onKey, true);
-        window.removeEventListener("click", onClick, true);
-        for (const el of chrome) el.remove();
-        if (window.__kithPick && window.__kithPick.stop === stop) delete window.__kithPick;
-        /* The outline has to be off the page before the capture is taken, and removing an
-         * element does not repaint before this promise's continuation runs in the main process.
-         * One frame is the difference between a picture of a component and a picture of a blue
-         * rectangle.
-         *
-         * The timer beside it is not belt and braces. A hidden view produces no frames at all,
-         * so if the tab is switched away from mid-pick the callbacks never run — and the promise
-         * this resolves is one the main process is awaiting, which would hang the call for ever
-         * rather than answering "cancelled". */
-        let settled = false;
-        const answered = () => {
-          if (settled) return;
-          settled = true;
-          resolve(answer);
-        };
-        requestAnimationFrame(() => requestAnimationFrame(answered));
-        setTimeout(answered, 120);
-      }
-
-      // A picker nobody finishes is an overlay on a page somebody walked away from.
-      const timer = setTimeout(() => stop(null), 60000);
-      window.__kithPick = { stop };
-      window.addEventListener("mousemove", onMove, true);
-      window.addEventListener("scroll", onScroll, true);
-      window.addEventListener("keydown", onKey, true);
-      window.addEventListener("click", onClick, true);
-    });
-  })()`;
-}
-
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Two frames, or 150ms, whichever comes first — a hidden page may paint no frames at all. */
+const NEXT_FRAME =
+  "new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))); setTimeout(() => resolve(false), 150); })";
 
 const round = (rect: Rect): Rect => ({
   x: Math.round(rect.x),

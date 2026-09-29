@@ -145,6 +145,9 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   web_search: { verb: "searched the web for", of: "query", group: "search" },
   fetch_url: { verb: "read", of: "url", group: "web" },
   browse_page: { verb: "opened", of: "url", group: "web" },
+  // The Browser tab. One tool with the act as an argument, so the row's words come from
+  // `BROWSER_VERB` by act — this is only the fallback for a call with none.
+  browser: { verb: "used the browser", group: "web" },
   // the machine
   shell: { verb: "ran", of: "command", group: "shell" },
   read_design_system: { verb: "read the design system", group: "files" },
@@ -222,28 +225,34 @@ function shortenShellCommand(command: string): string {
 /** One tool call, in English: what he did, the thing he did it to, and an icon for the kind
  *  of work it was. */
 /**
- * The Browser plugin's commands, in the same voice as the table above.
+ * The browser's acts, in the same voice as the table above.
  *
- * Plugin tools are named `plugin__<id>__<command>` and are not in `TOOL` — they come and go with
- * what is installed, and the server test holds that table to the registry. Without this, 560
+ * The built-in `browser` tool names its act as an argument, and the Browser *plugin* it replaced
+ * named each one as a tool of its own — `plugin__browser__look`. Both read from this: the first
+ * is every call from now on, the second is every one already in a transcript. Without it, 560
  * browser calls in his recent transcripts each read "plugin  browser  look", which is the
  * function's name with its underscores taken out, not a sentence about what he did.
  */
+const BROWSER_VERB: Record<string, { verb: string; of?: string }> = {
+  open: { verb: "opened", of: "url" },
+  read: { verb: "read the page" },
+  click: { verb: "clicked", of: "text" },
+  type: { verb: "typed into", of: "into" },
+  press: { verb: "pressed", of: "key" },
+  scroll: { verb: "scrolled", of: "by" },
+  look: { verb: "looked at the page" },
+  resize: { verb: "resized the page to", of: "preset" },
+  show: { verb: "opened the Browser tab" },
+  back: { verb: "went back" },
+  forward: { verb: "went forward" },
+  reload: { verb: "reloaded the page" },
+  tabs: { verb: "looked at the tabs" },
+  switch: { verb: "switched to tab", of: "tab" },
+  close: { verb: "closed a tab" },
+};
+
 const PLUGIN_VERB: Record<string, Record<string, { verb: string; of?: string }>> = {
-  browser: {
-    open: { verb: "opened", of: "url" },
-    read: { verb: "read the page" },
-    click: { verb: "clicked", of: "text" },
-    type: { verb: "typed into", of: "into" },
-    press: { verb: "pressed", of: "key" },
-    scroll: { verb: "scrolled", of: "by" },
-    look: { verb: "looked at the page" },
-    resize: { verb: "resized the page to", of: "preset" },
-    show: { verb: "opened the Browser tab" },
-    back: { verb: "went back" },
-    forward: { verb: "went forward" },
-    reload: { verb: "reloaded the page" },
-  },
+  browser: BROWSER_VERB,
 };
 
 /** Past tense to present, by first word, for a row that is still running. English does not
@@ -259,7 +268,7 @@ const PRESENT: Record<string, string> = {
   added: "adding", ticked: "ticking", linked: "linking", unlinked: "unlinking", clicked: "clicking",
   typed: "typing", pressed: "pressing", scrolled: "scrolling", resized: "resizing",
   "re-read": "re-reading", "re-shelved": "re-shelving", went: "going", reloaded: "reloading",
-  is: "", "set up": "setting up",
+  switched: "switching", closed: "closing", is: "", "set up": "setting up",
 };
 
 function presentOf(verb: string): string {
@@ -304,6 +313,19 @@ export function describeCall(
   /** The project's folder, so paths inside it read as relative. */
   root?: string | null,
 ): DescribedCall {
+  // The Browser tab: its words come from the act it was asked for.
+  if (name === "browser") {
+    const known = BROWSER_VERB[String(args?.act ?? "")];
+    const verb = known?.verb ?? "used the browser";
+    return {
+      verb,
+      doing: presentOf(verb),
+      subject: subjectOf(known?.of ? args?.[known.of] : undefined),
+      icon: GROUP.web.icon,
+      tone: GROUP.web.tone,
+      group: "web",
+    };
+  }
   // Someone else's tool: a plugin command or an MCP server's.
   const plugin = /^plugin__(.+?)__(.+)$/.exec(name);
   if (plugin) {

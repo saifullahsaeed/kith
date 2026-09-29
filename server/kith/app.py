@@ -107,6 +107,23 @@ def _recover_interrupted_questions() -> None:
         print(f"[kith] recovered {recovered} unanswered question(s) from an interrupted turn")
 
 
+def _retire_superseded_plugins() -> None:
+    """Uninstall a plugin whose job Kith now does itself — the browser, today.
+
+    Before serving, so no request sees its broken row or its stale skill. See
+    `install.retire_superseded`.
+    """
+    from kith.services.plugins import install
+
+    try:
+        retired = install.retire_superseded(CONFIG_DB_PATH)
+    except Exception as exc:  # pragma: no cover - a tidy-up must not stop the app starting
+        print(f"[kith] plugins: could not check for superseded plugins ({exc})")
+        return
+    for plugin_id in retired:
+        print(f"[kith] plugins: {plugin_id} is built into Kith now — uninstalled the plugin copy")
+
+
 def create_app() -> APIFlask:
     app = _build_app()
 
@@ -136,6 +153,7 @@ def create_app() -> APIFlask:
 
     if _owns_background():
         _recover_interrupted_questions()
+        _retire_superseded_plugins()
         _start_background()
 
     _log_startup(served)

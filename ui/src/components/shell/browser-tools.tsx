@@ -11,7 +11,7 @@ import { Loader2 } from "lucide-react";
  * ## Why rows and not popovers
  *
  * Every instinct says these should be dropdowns. They cannot be, and the reason is the same one
- * `plugin-web-view.tsx` opens with: the page is a `WebContentsView` the main process composites
+ * `browser-pane.tsx` opens with: the page is a `WebContentsView` the main process composites
  * **over** the window, so anything Kith draws above the pane appears *underneath* the browser.
  * The pane has a defence against that — `covered()` samples five points of the hole and hides
  * the view when something is on top — but a small popover hanging off a header button covers one

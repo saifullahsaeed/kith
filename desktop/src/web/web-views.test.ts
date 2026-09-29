@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { fitted, parseRatio, VIEWPORT_PRESETS } from "./web-views";
+import { fitted, parseRatio, reachesKith, VIEWPORT_PRESETS } from "./web-views";
 
 /**
  * The letterbox, which is the whole of `resize`'s geometry.
@@ -100,18 +100,18 @@ describe("aspect ratios", () => {
 });
 
 describe("the named sizes", () => {
-  const manifest = JSON.parse(
-    readFileSync(join(__dirname, "../../../examples/plugins/browser/kith.plugin.json"), "utf8"),
-  ) as {
-    commands: { name: string; params: Record<string, { enum?: string[] }> }[];
-  };
+  /* The `browser` tool offers the names and this file holds the pixels behind them. Read out of
+   * the Python source rather than imported, because it is a different language in a different
+   * process — and the two lists drifting apart is a tool offering a size nobody knows. */
+  const tool = readFileSync(join(__dirname, "../../../server/kith/tools/browser.py"), "utf8");
+  const declared = new Set(
+    [...(/^PRESETS = \(([^)]*)\)/m.exec(tool)?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map((match) => match[1]),
+  );
 
-  it("are exactly the ones the browser plugin declares, besides reset", () => {
-    const resize = manifest.commands.find((command) => command.name === "resize");
-    expect(resize).toBeDefined();
-    const declared = new Set(resize?.params.preset?.enum ?? []);
-    // `reset` is a verb dressed as a size; it is declared in the manifest and handled before
-    // the table is consulted, so it is the one name the table need not carry.
+  it("are exactly the ones the browser tool offers, besides reset", () => {
+    expect(declared.size).toBeGreaterThan(0);
+    // `reset` is a verb dressed as a size; it is offered by the tool and handled before the
+    // table is consulted, so it is the one name the table need not carry.
     declared.delete("reset");
     expect(new Set(Object.keys(VIEWPORT_PRESETS))).toEqual(declared);
   });
@@ -121,5 +121,49 @@ describe("the named sizes", () => {
     expect(VIEWPORT_PRESETS["phone-landscape"]).toEqual({ width: 844, height: 390 });
     expect(VIEWPORT_PRESETS.tablet).toEqual({ width: 820, height: 1180 });
     expect(VIEWPORT_PRESETS.desktop).toEqual({ width: 1920, height: 1080 });
+  });
+});
+
+describe("Kith's own server, from inside the pane", () => {
+  /* The block compared origins, and `http://localhost:8611` is not the origin
+   * `http://127.0.0.1:8611` — so Kith's own interface, which carries the API token in the page it
+   * serves, loaded signed in inside a pane the model drives. Every spelling of loopback on
+   * Kith's ports has to be refused, and nothing else may be: the pane exists partly so that
+   * somebody can open the app they are building on localhost. */
+  const ports = new Set(["8611", "8610"]);
+
+  it("is refused under every name loopback goes by", () => {
+    for (const address of [
+      "http://127.0.0.1:8611/",
+      "http://localhost:8611/",
+      "http://LOCALHOST:8611/settings",
+      "http://localhost.:8611/",
+      "http://app.localhost:8611/",
+      "http://127.0.0.2:8611/",
+      "http://0.0.0.0:8611/",
+      "http://[::1]:8611/",
+      "http://[::ffff:127.0.0.1]:8611/",
+      "http://2130706433:8611/",
+      "http://0x7f.1:8611/",
+      "ws://localhost:8611/",
+      "http://localhost:8610/api/chat",
+    ]) {
+      expect(reachesKith(address, ports), address).toBe(true);
+    }
+  });
+
+  it("leaves every other local address alone", () => {
+    for (const address of [
+      "http://localhost:5173/",
+      "http://127.0.0.1:3000/",
+      "http://localhost/",
+      "https://localhost/",
+      "http://192.168.1.20:8611/",
+      "https://example.com:8611/",
+      "https://example.com/",
+      "not a url",
+    ]) {
+      expect(reachesKith(address, ports), address).toBe(false);
+    }
   });
 });

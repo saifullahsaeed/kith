@@ -132,3 +132,25 @@ describe("the companion column", () => {
     expect(mounts).toBe(1);
   });
 });
+
+describe("the Browser tab", () => {
+  /* Kith's own now, so it sits in the row the way Activity does — always there, never closed with
+     the × a plugin's surface gets. It used to be a plugin surface and looked like one. */
+  it("is a fixed tab, open or not, with nothing to close", () => {
+    render(withCompanions({ surface: "chat" }, <p>chat</p>, [], () => {}));
+    expect(screen.queryByRole("tab", { name: "Browser" })).toBeNull(); // no column yet
+
+    cleanup();
+    render(
+      withCompanions(
+        { surface: "chat" },
+        <p>chat</p>,
+        [{ key: "browser@c1", title: "Browser", icon: FileText, body: <p>page</p> }],
+        () => {},
+      ),
+    );
+    const tabs = screen.getAllByRole("tab").map((one) => one.textContent);
+    expect(tabs).toEqual(["Activity", "Browser", "Canvas", "Files"]);
+    expect(screen.queryByRole("button", { name: "Close Browser" })).toBeNull();
+  });
+});

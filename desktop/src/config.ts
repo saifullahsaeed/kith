@@ -10,6 +10,39 @@ import * as path from "node:path";
 /** Where the Kith server listens. It serves BOTH the API and the built UI. */
 export const BACKEND_ORIGIN = process.env.KITH_ORIGIN ?? "http://127.0.0.1:8611";
 
+/**
+ * Every port Kith itself answers on, for the browser pane to refuse.
+ *
+ * Not just `BACKEND_ORIGIN`'s. The server and the Vite dev server both hand out a live API token
+ * — the server in the document it serves at `/`, the dev server by adding it to every `/api`
+ * request it proxies — so a page that can load either one is Kith's own interface, signed in,
+ * inside a pane the model drives. Under `dev:hot`, `KITH_ORIGIN` names the dev server and the
+ * real one is still on 8611, so both are listed whichever this is. `PORT` is the server's own
+ * setting (see `server/app.py`), inherited by the server process this app starts.
+ */
+export const KITH_PORTS: ReadonlySet<string> = new Set(
+  [portOf(BACKEND_ORIGIN), process.env.PORT ?? "8611", "8610"].filter(Boolean),
+);
+
+function portOf(origin: string): string {
+  try {
+    const url = new URL(origin);
+    return url.port || (url.protocol === "https:" ? "443" : "80");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The browser tab's session: its cookies, storage and cache.
+ *
+ * **Named for what it used to be, on purpose.** The browser was a plugin, and a plugin's views
+ * lived in `persist:kith-plugin-<id>`. Renaming the partition now that it is built in would be a
+ * tidier string and would sign everybody out of everything they had logged into — the name is the
+ * address of that data on disk. So it keeps the name it had.
+ */
+export const BROWSER_PARTITION = "persist:kith-plugin-browser";
+
 /** Cheap liveness endpoint — answers without touching the model or the database. */
 export const HEALTH_URL = `${BACKEND_ORIGIN}/api/health`;
 

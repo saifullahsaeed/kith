@@ -16,7 +16,7 @@ import {
 } from "@/components/shell/chat-states";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
 import { PluginSurface } from "@/components/shell/plugin-surface";
-import { PluginWebView } from "@/components/shell/plugin-web-view";
+import { BrowserPane } from "@/components/shell/browser-pane";
 import { Sidebar, useSidebar } from "@/components/shell/sidebar";
 import { withCompanions } from "@/components/shell/companions";
 import { useHostEffects } from "@/components/shell/use-host-effects";
@@ -43,7 +43,7 @@ import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
 import { usePermissions } from "@/hooks/use-permissions";
-import { pluginSurface, setPluginSurfaces } from "@/lib/plugin-index";
+import { setPluginSurfaces } from "@/lib/plugin-index";
 import { keys } from "@/lib/query-keys";
 import {
   parseLocation,
@@ -502,29 +502,25 @@ export function Workspace({
         case "plugin":
           /* One arm, so the ErrorBoundary is structural rather than a per-case convention —
            * which matters, because two of the seven existing arms lack one despite the comment
-           * above claiming otherwise. A plugin surface that throws costs its own pane.
-           *
-           * Two kinds inside it. A `document` surface is the sealed frame; a `web` surface is a
-           * browser the Electron shell composites over the pane, which shares no code with the
-           * frame at all — no ticket, no bridge, no store, because there is no plugin page in it
-           * to talk to. Chosen here rather than inside `PluginSurface` so neither component
-           * carries a branch for the other's whole mechanism. */
+           * above claiming otherwise. A plugin surface that throws costs its own pane. */
           return (
             <ErrorBoundary where={`${ref.plugin}/${ref.view}`} compact>
-              {pluginSurface(ref.plugin, ref.view)?.kind === "web" ? (
-                <PluginWebView
-                  plugin={ref.plugin}
-                  view={ref.view}
-                  conversationId={ref.conversationId ?? conversationId}
-                />
-              ) : (
-                <PluginSurface
-                  plugin={ref.plugin}
-                  view={ref.view}
-                  instance={ref.instance}
-                  conversationId={ref.conversationId ?? conversationId}
-                />
-              )}
+              <PluginSurface
+                plugin={ref.plugin}
+                view={ref.view}
+                instance={ref.instance}
+                conversationId={ref.conversationId ?? conversationId}
+              />
+            </ErrorBoundary>
+          );
+
+        case "browser":
+          /* A browser the Electron shell composites over the pane. It shares no code with a
+           * plugin's frame — no ticket, no bridge, no store — because there is no page of anybody
+           * else's in it to talk to. */
+          return (
+            <ErrorBoundary where="The browser" compact>
+              <BrowserPane conversationId={ref.conversationId ?? conversationId} />
             </ErrorBoundary>
           );
 

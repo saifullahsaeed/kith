@@ -91,7 +91,6 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
     "/open-pane",
     "/pick-folder",
     "/browse",
-    "/forget-plugin",
     "/cli-status",
     "/install-cli",
   ];
@@ -107,7 +106,6 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
   }
 
   if (route === "/browse") return browse(request, reply);
-  if (route === "/forget-plugin") return forgetPlugin(request, reply);
   if (route === "/notify") return notify(request, reply);
   if (route === "/open-pane") return openPane(request, reply);
   if (route === "/pick-folder") return pickFolder(request, reply);
@@ -135,7 +133,7 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
 }
 
 /**
- * Drive a plugin's browser pane, for the model.
+ * Drive the browser tab, for the model.
  *
  * The person's own clicks on the chrome go over IPC — see `web/web-view-channel.ts` — because
  * the renderer is right there. The model's calls arrive here instead: they start in a Python
@@ -143,33 +141,40 @@ async function handle(request: http.IncomingMessage, response: http.ServerRespon
  * exists between the two processes. One browser, two drivers, two paths in because the drivers
  * are in different processes.
  *
- * Nothing is granted here that was not granted at install. What arrives has already been
- * through `permissions.require_plugin` on the Python side, so this checks the shape of the
- * request and not the right to make it.
+ * This checks the shape of the request and not the right to make it: the `browser` tool is one
+ * of Kith's own, and the token is what says the caller is the Python server.
  */
 async function browse(
   request: http.IncomingMessage,
   reply: (status: number, body: unknown) => void,
 ): Promise<void> {
-  let asked: { act?: string; plugin?: string; view?: string; [key: string]: unknown };
+  let asked: { act?: string; owner?: string; [key: string]: unknown };
   try {
     asked = JSON.parse(await readBody(request, 64_000)) as typeof asked;
   } catch (error) {
     return reply(400, { error: `bad request: ${(error as Error).message}` });
   }
 
-  const plugin = String(asked.plugin ?? "");
-  const view = String(asked.view ?? "");
   const act = String(asked.act ?? "");
-  if (!plugin || !view) return reply(400, { error: "plugin and view are required" });
-  // Which conversation's browser. The Python side decides it from the surface's declared
-  // `answers` — per conversation, or one for the app — so this only carries it.
-  const at = { plugin, view, owner: String(asked.owner ?? "") };
+  // Which conversation's browser. The Python side names the conversation the turn belongs to,
+  // so this only carries it.
+  const at = { owner: String(asked.owner ?? "") };
 
   try {
     switch (act) {
       case "open":
-        return reply(200, await views.navigate(at, String(asked.url ?? ""), String(asked.home ?? "")));
+        return reply(
+          200,
+          await views.navigate(at, String(asked.url ?? ""), { newTab: asked.new_tab === true }),
+        );
+      case "tabs": {
+        const now = views.status(at);
+        return reply(200, now ?? { tab: "", tabs: [] });
+      }
+      case "switch":
+        return reply(200, views.switchTab(at, String(asked.tab ?? "")));
+      case "close":
+        return reply(200, views.closeTab(at, String(asked.tab ?? "")));
       case "read":
         return reply(200, await views.read(at));
       case "click":
@@ -242,39 +247,6 @@ async function browse(
     // 409 rather than 500: "its tab is not open" is a state the caller can act on, and the
     // model is told to ask the person to open it rather than to retry.
     reply(409, { error: (error as Error).message });
-  }
-}
-
-/**
- * Throw away everything a plugin's browser remembers.
- *
- * Called by the Python server when a plugin's data is deleted. It has to be a route: the session
- * lives in this process's userData and the uninstall happens in the other one.
- */
-async function forgetPlugin(
-  request: http.IncomingMessage,
-  reply: (status: number, body: unknown) => void,
-): Promise<void> {
-  let plugin = "";
-  let wipe = false;
-  try {
-    const asked = JSON.parse(await readBody(request)) as { plugin?: unknown; wipe?: unknown };
-    plugin = String(asked.plugin ?? "");
-    wipe = asked.wipe === true;
-  } catch (error) {
-    return reply(400, { error: `bad request: ${(error as Error).message}` });
-  }
-  if (!/^[a-z0-9][a-z0-9-]{0,23}$/.test(plugin)) return reply(400, { error: "not a plugin id" });
-  try {
-    // Two different acts, and the difference is the person's data. Switching a plugin off or
-    // removing it closes its browser — a renderer process for a plugin that is not running is
-    // waste. *Deleting its data* additionally throws away what the browser remembers, which
-    // follows the same thirty-day rule as everything else it stored.
-    if (wipe) await views.forgetSession(plugin);
-    else views.forget(plugin);
-    reply(200, { forgotten: plugin });
-  } catch (error) {
-    reply(500, { error: (error as Error).message });
   }
 }
 
@@ -377,15 +349,28 @@ function hardenRenderSession(): void {
   target.setPermissionCheckHandler(() => false);
 }
 
-function isLocalAddress(rawUrl: string): boolean {
+export function isLocalAddress(rawUrl: string): boolean {
   let host: string;
   try {
-    host = new URL(rawUrl).hostname.toLowerCase();
+    host = new URL(rawUrl).hostname.toLowerCase().replace(/\.$/, "");
   } catch {
     return true; // unparseable: refuse rather than guess
   }
   if (host === "localhost" || host.endsWith(".localhost") || host === "::1" || host === "[::1]") {
     return true;
+  }
+  // IPv6 arrives bracketed. `[::]` is every interface, fc00::/7 and fe80::/10 are the private and
+  // link-local ranges, and `[::ffff:7f00:1]` is 127.0.0.1 written as IPv6 — which the IPv4 check
+  // below never saw, so it reached Kith's own server. Mapped addresses are unwrapped and checked
+  // as the IPv4 they are.
+  if (host.startsWith("[")) {
+    const v6 = host.slice(1, -1);
+    if (v6 === "::") return true;
+    const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
+    if (!mapped) return /^(fc|fd|fe[89ab])/.test(v6);
+    const high = parseInt(mapped[1] as string, 16);
+    const low = parseInt(mapped[2] as string, 16);
+    host = `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
   }
   // IPv4 private and loopback ranges.
   const octets = host.split(".");

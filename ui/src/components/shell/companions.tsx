@@ -120,10 +120,15 @@ type Slot = string;
 function slotOf(key: string): Slot | null {
   if (key === "work" || key.startsWith("work@")) return "activity";
   if (key === "context" || key.startsWith("context@")) return "context";
+  if (key === "browser" || key.startsWith("browser@")) return "browser";
   const plugin = /^plugin:([^/@#]+)\/([^/@#]+)/.exec(key);
   if (plugin) return `plugin:${plugin[1]}/${plugin[2]}`;
   return null;
 }
+
+/** The Browser's entry in the set of what a turn is using. Not a plugin id — those have no `@` —
+ *  so it can never be confused with one. */
+const BROWSING = "@browser";
 
 /** What is live in a tab: a workflow (teal, its colour everywhere), or him working (green). */
 type Live = "workflow" | "working" | null;
@@ -291,13 +296,21 @@ export function Companions({
       panel: bySlot("activity"),
       attach: bound ? { surface: "work", conversationId } : undefined,
     },
+    /* Kith's own, so it is always here the way Activity is — not a tab that appears when opened
+     * and closes with an ×, which is what a plugin's surface is and what the Browser used to be. */
+    {
+      id: "browser",
+      label: "Browser",
+      panel: bySlot("browser"),
+      attach: bound ? { surface: "browser", conversationId } : undefined,
+    },
     /* A plugin's surface is a tab only while it is open in this chat — he opened it (`show`), or
      * you did from "+" below. Nothing about a plugin is permanent here: switch one off and it
      * leaves the "+" list, and its open tab closes (see `gone` below). */
     ...panels
       .filter((one) => {
         const slot = slotOf(one.key);
-        return slot !== "activity" && slot !== "context";
+        return slot !== "activity" && slot !== "context" && slot !== "browser";
       })
       .map((one): Tab => {
         const slot = slotOf(one.key) ?? "";
@@ -436,7 +449,7 @@ export function Companions({
               className="min-h-0 flex-1 overflow-hidden"
             >
               {/* Only the tab on screen is mounted. A hidden Browser is then not merely covered but
-                  gone — `PluginWebView` hides the native view on unmount, which is the one thing a
+                  gone — `BrowserPane` hides the native view on unmount, which is the one thing a
                   page painted over the whole window must never miss — and a hidden Context detail
                   is not left listening for Escape while you type in the chat. */}
               {shown ? (
@@ -525,9 +538,14 @@ function LiveRow({
         if (item.kind === "workflow" || (item.kind === "errand" && item.errand?.state !== "step")) {
           void cache.invalidateQueries({ queryKey: keys.workflows(conversationId) });
         }
-        // Which plugins the turn in flight is using: a call to `plugin__<id>__…` lights that
-        // plugin's tab until the turn ends. Any plugin, not just the browser.
-        const plugin = item.kind === "tool" ? /^plugin__(.+?)__/.exec(item.tool ?? "")?.[1] : undefined;
+        // Which tabs the turn in flight is using: a call to `plugin__<id>__…` lights that plugin's
+        // tab until the turn ends, and a `browser` call lights the Browser's.
+        const plugin =
+          item.kind !== "tool"
+            ? undefined
+            : item.tool === "browser"
+              ? BROWSING
+              : /^plugin__(.+?)__/.exec(item.tool ?? "")?.[1];
         if (plugin) setUsing((was) => (was.has(plugin) ? was : new Set([...was, plugin])));
         if (item.kind === "done") setUsing((was) => (was.size ? new Set() : was));
       }),
@@ -549,6 +567,8 @@ function LiveRow({
     switch (tab.id) {
       case "activity":
         return { ...tab, live: activity };
+      case "browser":
+        return { ...tab, live: using.has(BROWSING) && turnLive ? "working" : null };
       case "canvas":
         return canvas
           ? {

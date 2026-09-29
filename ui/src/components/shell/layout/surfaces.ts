@@ -2,6 +2,7 @@ import {
   Check,
   Circle,
   Gauge,
+  Globe,
   Inbox,
   LayoutGrid,
   ListChecks,
@@ -60,6 +61,9 @@ export const SURFACES: Record<SurfaceId, Surface> = {
   board: { title: "Board", icon: LayoutGrid, minWidth: 380 },
   settings: { title: "Settings", icon: Settings, minWidth: 420 },
   context: { title: "Context", icon: Gauge, minWidth: 420 },
+  /* 480 is what the plugin declared, and the reason stands: below it most sites switch to their
+   * phone layout, and a browser that only ever shows the phone layout answers the wrong question. */
+  browser: { title: "Browser", icon: Globe, minWidth: 480 },
   /* The placeholder every plugin surface resolves through when its own declaration is not
    * (yet) known. A real static key, which is what keeps the four `SURFACES[...]` derefs safe by
    * construction rather than by a guard someone could forget — see `SurfaceId` in `tree.ts`. */
