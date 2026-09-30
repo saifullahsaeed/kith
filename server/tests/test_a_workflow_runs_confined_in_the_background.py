@@ -49,9 +49,16 @@ class _Report:
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch) -> Iterator[Path]:
+    from kith.infra.workspace import worktrees
+
     here = tmp_path / "project"
     here.mkdir()
     monkeypatch.setattr(paths, "base_dir", lambda: here)
+    # `worktrees` bound `base_dir` at import, so the patch above does not reach it. The real one
+    # asks the database which project "conv-1" is bound to, and an earlier test in the session
+    # can have bound it to a folder that is no repository — every builder then failed with "no
+    # repository here", or not, depending on the order the tests ran in.
+    monkeypatch.setattr(worktrees, "base_dir", lambda: here)
     monkeypatch.setattr(settings, "DATA_DIR", tmp_path / "data")
     workflows.forget_all()
     yield here
@@ -826,8 +833,7 @@ def builders(project: Path, monkeypatch):
     from kith.infra.workspace import worktrees
 
     _git_project(project)
-    # `worktrees` bound `base_dir` at import, so the project fixture's patch does not reach it;
-    # `root` is read fresh on every call.
+    # `worktrees` bound `base_dir` at import; the project fixture patches it there too.
     monkeypatch.setattr(paths, "root", lambda: project)
     seen: list[dict] = []
 
