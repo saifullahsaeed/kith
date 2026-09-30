@@ -309,6 +309,7 @@ def add_agents(path: Path, args: dict):
 
     run: workflows.Run | None = None
     ledger: dict = {}
+    unheard = ""
     if run_id:
         run, problem = _continuable(run_id, conversation)
         if problem:
@@ -370,8 +371,15 @@ def add_agents(path: Path, args: dict):
             return {"error": f"Could not set up the run folder: {exc}"}
         run.folder = str(folder)
         ledger.update(run=run.id, started=run.started)
-    elif not workflows.reopen(run, phase):
-        return {"error": _busy(conversation)}
+    else:
+        if workflows.running(conversation) is not None:
+            return {"error": _busy(conversation)}
+        # The last step's note, if the timer has not delivered it yet — reopening clears it, and a
+        # step that ended seconds ago would otherwise never be heard. Taken here and handed back
+        # with this call's answer instead, exactly once.
+        unheard = workflows.claim(run)
+        if not workflows.reopen(run, phase):
+            return {"error": _busy(conversation), **({"last_step": unheard} if unheard else {})}
 
     folder = Path(run.folder)
     ledger["steps"] = step
@@ -408,6 +416,8 @@ def add_agents(path: Path, args: dict):
     }
     if agents.live:
         answer["spent_so_far"] = f"${agents.live:.2f}"
+    if unheard:
+        answer["last_step"] = unheard
     if args.get("wait") is True:
         finished = workflow._wait_for(run, conversation)
         if finished is not None:

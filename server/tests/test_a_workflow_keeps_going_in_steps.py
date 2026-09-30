@@ -309,6 +309,16 @@ class TestAStep:
         assert ledger["spent"] == pytest.approx(0.02)
         assert ledger["labels"]["check"] == {"kind": "verifier", "step": 2, "ok": True}
 
+    def test_a_step_that_ended_unheard_is_handed_to_the_next_call(self, db: Path, project: Path, agents):
+        run = _wait(_add(db, agents=[{"label": "survey", "prompt": "find it"}])["run"])
+        answer = _add(db, run=run.id, agents=[{"label": "next", "prompt": "go on", "after": ["survey"]}])
+        assert "report: find it" in answer["last_step"], "the timer had not woken the chat with it yet"
+        _wait(run.id)
+        assert list(workflows.finished_since_last_look()) == ["conv-1"]
+        heard = _add(db, run=run.id, agents=[{"label": "third", "prompt": "more"}])
+        assert "last_step" not in heard, "a note already heard is not handed back again"
+        _wait(run.id)
+
     def test_a_label_is_not_used_twice_across_steps(self, db: Path, project: Path, agents):
         run = _wait(_add(db, agents=[{"label": "survey", "prompt": "look"}])["run"])
         answer = _add(db, run=run.id, agents=[{"label": "survey", "prompt": "look again"}])

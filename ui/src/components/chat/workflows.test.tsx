@@ -280,4 +280,35 @@ describe("the board and the feed together", () => {
     expect(merged.agents.map((one) => one.id)).toEqual(["a", "b"]);
     expect(merged.agents[0].steps.map((one) => one.tool)).toEqual(["grep", "read_file"]);
   });
+
+  it("draws a run reopened for another step as running, before the board is read again", () => {
+    const board = runsFromBoard([
+      { run: "wf-1", name: "loop", state: "finished", started: 1, ended: 5, phases: ["Step 1"], phase: "Step 1" },
+    ]);
+    const live = foldRuns(
+      [
+        run("wf-1", "started", "loop", { phases: ["Step 1"] }),
+        run("wf-1", "finished", "Step 1 of `loop` (wf-1) finished"),
+        run("wf-1", "step", "Step 2", { phases: ["Step 1", "Step 2"] }),
+      ],
+      "conv-1",
+    );
+    const [merged] = mergeRuns(board, live);
+    expect(merged.state).toBe("running");
+    expect(merged.endedAt).toBe(0);
+    expect(merged.phases).toEqual(["Step 1", "Step 2"]);
+    expect(merged.phase).toBe("Step 2");
+    expect(merged.name).toBe("loop");
+  });
+
+  it("keeps the board's plan when the feed has lost a run's first lines", () => {
+    const board = runsFromBoard([
+      { run: "wf-1", name: "port", state: "running", started: 1, phases: ["Survey", "Port"], phase: "Port" },
+    ]);
+    const live = foldRuns([run("wf-1", "log", "2 of 3 ported")], "conv-1");
+    const [merged] = mergeRuns(board, live);
+    expect(merged.phases).toEqual(["Survey", "Port"]);
+    expect(merged.phase).toBe("Port");
+    expect(merged.said).toBe("2 of 3 ported");
+  });
 });
