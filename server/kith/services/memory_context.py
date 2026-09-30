@@ -244,16 +244,22 @@ def _workflow_lines() -> list[str]:
     lines: list[str] = []
     why = session_context.workflow_permission()
     if why == "mode":
+        # It used to say "you may", then argued against it: "do small or tightly coupled work
+        # yourself; a fan-out on a one-turn task is wasted money". Over 19 turns in this mode not
+        # one workflow started, and the one time he weighed it he quoted that back. They turn the
+        # mode on because they want agents on the work, so that is what it says; which work is
+        # small is still his call.
         lines.append(
-            "Workflow mode is ON in this chat: you may start a workflow (run_workflow) without being "
-            "asked. Use one when the work splits into independent parts big enough to be worth "
-            "their own agents — several packages, a survey then builders then a review. Do small or "
-            "tightly coupled work yourself; a fan-out on a one-turn task is wasted money."
+            "Workflow mode is ON in this chat — they turned it on because they want the work done by "
+            "agents. For anything past a quick answer or a small edit, lead: send agents with "
+            "add_agents — a builder for a change, a scout for wide reading, a verifier before you "
+            "call it done; one agent is a fine first step — and add the next step to the same run "
+            "when they report. Doing all of it yourself is for small things."
         )
     elif why == "asked":
         lines.append(
-            "They asked for a workflow (/workflow). Use one if the work really splits; if it is small "
-            "enough to do in this turn, do it directly and say in a sentence why you did not fan out."
+            "They asked for agents on this (/workflow): use add_agents — a builder, then a verifier "
+            "after it — or run_workflow for a fan-out planned in full."
         )
     try:
         running = workflows.running(session_context.current())

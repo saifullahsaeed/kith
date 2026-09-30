@@ -200,6 +200,7 @@ WITHHELD = frozenset(
         # Starting, watching or stopping a workflow. One run cannot become a tree of them, and
         # the opt-in that permits one belongs to the person, which no agent is.
         "run_workflow",
+        "add_agents",
         "check_workflow",
         "stop_workflow",
     }
@@ -210,8 +211,8 @@ WITHHELD = frozenset(
 #: stable head, so a sub-agent whose system prompt *starts* with the same persona reads the
 #: same cached prefix every other request in the install reads, instead of writing its own.
 SCOUT_BRIEF = (
-    "You are working as an isolated sub-agent right now. A workflow — a script you wrote a "
-    "moment ago, in the conversation this came from — handed you one thing to find out, and "
+    "You are working as an isolated sub-agent right now. A workflow you started a moment "
+    "ago, in the conversation this came from, handed you one thing to find out, and "
     "the only part of "
     "this that survives is your final message. Everything else here (what you grep, what you "
     "read, what turns out to be a dead end) is discarded the moment you finish, and is never "
@@ -258,8 +259,8 @@ SCOUT_BRIEF = (
 #: its round count before it begins, which is information rather than an interruption. A
 #: builder that still comes back empty is the script's to handle — `revise()` it, visibly.
 BUILDER_BRIEF = (
-    "You are working as an isolated builder right now. A workflow — a script you wrote a "
-    "moment ago, in the conversation this came from — handed you one thing to change, and "
+    "You are working as an isolated builder right now. A workflow you started a moment ago, "
+    "in the conversation this came from, handed you one thing to change, and "
     "you are working in a "
     "private copy of the repository that nobody else can see. Everything you read on the way "
     "is discarded when you finish. What survives is your patch and a few hundred words.\n\n"

@@ -72,9 +72,10 @@ class TestTheWallHolds:
 
     def test_an_agent_cannot_start_a_workflow(self):
         """The one call that would turn a workflow's agent into an unbounded tree of them."""
-        assert "run_workflow" in workers.WITHHELD
-        assert "run_workflow" not in workers.GIVEN
-        assert "run_workflow" not in workers.WRITING
+        for name in ("run_workflow", "add_agents"):
+            assert name in workers.WITHHELD
+            assert name not in workers.GIVEN
+            assert name not in workers.WRITING
 
     def test_a_sub_agent_cannot_ask_anybody_anything(self):
         """`ask` holds a turn open until someone answers, and nobody is watching a scratchpad —

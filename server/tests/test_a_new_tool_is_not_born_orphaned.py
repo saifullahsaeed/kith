@@ -27,6 +27,9 @@ from kith import tools
 #: so it is reached for by being named in that message, never by being suggested.
 MUST_BE_SUGGESTED = {
     "plan_work": "the board tools it replaces a dozen calls of",
+    # In workflow mode he decides when to send agents, so something has to put them in front of
+    # him: `run_workflow` points here for step-by-step work.
+    "add_agents": "run_workflow, for work steered as it goes",
 }
 
 

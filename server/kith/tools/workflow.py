@@ -211,8 +211,8 @@ def _listing() -> str:
 DESCRIPTION = (
     f"Run a workflow: agents fanned out by a short Python script, in the background. Allowed when "
     f"their message starts with {PREFIX} or workflow mode is on in this chat (your context says "
-    "which) — otherwise this refuses. Only worth it when the work really splits; do small work "
-    "yourself.\n\n"
+    "which) — otherwise this refuses. For work you will steer as it goes — a builder, then a "
+    "verifier after it — add_agents is simpler; a script is for a fan-out planned in full.\n\n"
     "Prefer a saved workflow — tested scripts, run by name with args: run_workflow(name=..., "
     "args={...}). A project may keep its own in .kith/workflows/. Shipped:\n"
     "{listing}\n\n"
@@ -669,7 +669,9 @@ def check_workflow(path: Path, args: dict):
         answer["log"] = log
     if run.state != workflows.RUNNING:
         answer["note"] = run.note
-        if run.state in (workflows.FAILED, workflows.STOPPED):
+        if run.kind == "steps":
+            answer["next"] = f'Add the next step with add_agents(run="{run.id}", agents=[...]).'
+        elif run.state in (workflows.FAILED, workflows.STOPPED):
             answer["next"] = (
                 "Fix the script (it is in the folder as script.py) and call "
                 f'run_workflow(script=..., resume="{run.id}"): agents asked the same thing are '

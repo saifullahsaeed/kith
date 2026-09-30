@@ -510,3 +510,25 @@ class TestAScriptRunGoesOnInSteps:
         with session_context.working_in("conv-1"), session_context.may_run_workflows(True):
             answer = workflow.run_workflow(db, {"resume": run.id})
         assert "add_agents" in answer["error"]
+
+
+class TestTheWordsSayWhatTheModeIsFor:
+    """The mode's own words argued against using it, and he did as they said."""
+
+    def test_the_mode_line_asks_for_agents_and_does_not_warn_them_off(self):
+        from kith.services import memory_context
+
+        with session_context.may_run_workflows("mode"):
+            said = "\n".join(memory_context._workflow_lines())
+        assert "add_agents" in said and "one agent is a fine first step" in said
+        assert "wasted money" not in said and "you may" not in said
+
+    def test_the_script_tool_points_at_steps(self):
+        from kith import tools
+
+        described = {
+            schema.get("function", schema)["name"]: schema.get("function", schema).get("description", "")
+            for schema in tools.tool_schemas()
+        }
+        assert "add_agents" in described["run_workflow"]
+        assert "Only worth it when the work really splits" not in described["run_workflow"]

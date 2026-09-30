@@ -115,6 +115,7 @@ class TestItStillStopsGathering:
     def test_it_cannot_start_a_workflow(self, offered_while_landing):
         """New work at its largest: a fan-out of agents, each with a budget of its own."""
         assert "run_workflow" not in offered_while_landing
+        assert "add_agents" not in offered_while_landing
 
     def test_and_it_cannot_start_new_work(self, offered_while_landing):
         """The reserve's second job, and the one easiest to lose when inverting the list.

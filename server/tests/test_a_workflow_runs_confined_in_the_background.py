@@ -650,7 +650,7 @@ class TestWorkflowMode:
             assert "Workflow mode is ON" in "\n".join(memory_context._workflow_lines())
         with session_context.may_run_workflows("asked"):
             said = "\n".join(memory_context._workflow_lines())
-            assert "/workflow" in said and "do it directly" in said
+            assert "/workflow" in said and "add_agents" in said
         assert memory_context._workflow_lines() == []
 
     def test_he_is_told_a_run_is_going(self, project: Path):
