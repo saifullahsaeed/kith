@@ -1771,6 +1771,11 @@ def _closing_note(
             f"To fix it: check_workflow shows the failed agents and the log; correct the script and "
             f'call run_workflow(script=..., resume="{run.id}") — agents asked the same thing are reused.'
         )
+    else:
+        parts.append(
+            f'To keep going, add_agents(run="{run.id}", agents=[...]) adds a step to this run; '
+            "its agents can be named by their labels in after."
+        )
     parts.append(f"Everything the run wrote is in {run.folder}.")
     return "\n\n".join(parts)
 
