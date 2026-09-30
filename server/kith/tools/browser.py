@@ -41,6 +41,9 @@ ACTS = (
     "look",
     "resize",
     "back",
+    "wait",
+    "errors",
+    "save_test",
     "tabs",
     "switch",
     "close",
@@ -72,6 +75,8 @@ KEEP = {
     "look": ("shot", "selector", "options", "width", "height"),
     "resize": ("width", "height", "scale"),
     "back": (),
+    "wait": ("found", "waited"),
+    "errors": (),
     "tabs": ("tabs",),
     "switch": ("tabs",),
     "close": ("tabs",),
@@ -81,15 +86,25 @@ KEEP = {
 @tool(
     "browser",
     "The Browser tab: a real browser the person also uses — you drive the same pages, their "
-    "logins included. `act`: open (url; new_tab keeps this page), read (its text; cheap, prefer "
-    "it), click (text or selector), type (text, into), press (key), scroll (by), look (a "
+    "logins included. `act`: open (url; new_tab keeps this page; private for an empty cookie "
+    "jar), read (its text; cheap, prefer it), click (text or selector), type (text, into), press "
+    "(key), scroll (by), wait (text, selector or url to appear; gone to vanish), look (a "
     "screenshot path; text or selector crops), resize (preset, or width/height/ratio), back, "
-    "tabs, switch (tab), close (tab, else the front one), show (put it on screen). Acts are on "
-    "the tab in front. The driving-a-browser skill has the rest.",
+    "errors, save_test (name, path), tabs, switch (tab), close (tab), show. Acts are on the tab "
+    "in front; answers carry new console and network `errors`. The driving-a-browser skill has "
+    "the rest.",
     {
         "act": {"type": "string", "enum": list(ACTS)},
         "url": {**STR, "maxLength": 1000, "description": "open: the address."},
         "new_tab": {"type": "boolean", "description": "open: in a new tab, in front."},
+        "private": {"type": "boolean", "description": "open: a new tab with its own empty cookies."},
+        "gone": {"type": "boolean", "description": "wait: until it is no longer there."},
+        "name": {**STR, "maxLength": 120, "description": "save_test: what the test checks."},
+        "path": {
+            **STR,
+            "maxLength": 300,
+            "description": "save_test: where it goes, e.g. tests/e2e/x.spec.ts.",
+        },
         "tab": {**STR, "maxLength": 8, "description": 'switch, close: its id, "t2".'},
         "text": {
             **STR,
@@ -120,6 +135,8 @@ def browser(path: Path, args: dict):
         return {"error": wanted}
     if act == "show":
         return _show()
+    if act == "save_test":
+        return _save_test(args)
 
     from kith.infra import renderer
 
@@ -141,12 +158,17 @@ def _arguments(act: str, args: dict) -> dict | str:
         url = str(args.get("url") or "").strip()
         if not url:
             return "open needs a url."
-        return {"url": url, "new_tab": args.get("new_tab") is True}
+        return {"url": url, "new_tab": args.get("new_tab") is True, "private": args.get("private") is True}
     if act == "switch":
         tab = str(args.get("tab") or "").strip()
         return {"tab": tab} if tab else 'switch needs the tab, by its id — "t2". `tabs` lists them.'
     if act == "close":
         return {"tab": str(args.get("tab") or "").strip()}
+    if act == "wait":
+        url = str(args.get("url") or "").strip()
+        if not text and not selector and not url:
+            return "wait needs what to wait for: text, a selector or a url."
+        return {"text": text, "selector": selector, "url": url, "gone": args.get("gone") is True}
     if act == "click":
         if not text and not selector:
             return "click needs the text on it, or a selector."
@@ -170,6 +192,44 @@ def _arguments(act: str, args: dict) -> dict | str:
             if args.get(key) not in (None, "")
         }
     return {}
+
+
+def _save_test(args: dict) -> dict:
+    """Write what the tab in front has done since its last `open` as a Playwright test.
+
+    The file goes through the same permission-checked write as `write_file`, so it lands where any
+    other file he writes would and asks where any other would ask.
+    """
+    target = str(args.get("path") or "").strip()
+    if not target:
+        return {
+            "error": "save_test needs a path — where the test goes in the project, e.g. tests/e2e/checkout.spec.ts."
+        }
+    if not target.endswith((".ts", ".js", ".mjs")):
+        return {"error": f"{target} is not a test file name. Playwright tests end in .spec.ts (or .js)."}
+
+    from kith.domain import playwright_spec
+    from kith.infra import renderer
+    from kith.infra import workspace as sandbox
+
+    answer = renderer.browse("steps", session_context.current())
+    if answer is None:
+        return {"error": "No window is open, so there is no browser to save a test from."}
+    if answer.get("error"):
+        return {"error": str(answer["error"])}
+    steps = [one for one in (answer.get("steps") or []) if isinstance(one, dict)]
+    if len(steps) < 2:
+        return {
+            "error": "Nothing to save yet — `open` the page, use it, and `wait` for what should happen first."
+        }
+
+    name = str(args.get("name") or "").strip() or "a flow Kith checked"
+    source, notes = playwright_spec.write(name, steps, signed_in=not answer.get("private"))
+    try:
+        sandbox.write_file(target, source)
+    except Exception as refused:
+        return {"error": f"The test was written but not saved: {refused}"}
+    return {"saved": target, "steps": len(steps), **({"notes": notes} if notes else {})}
 
 
 def _show() -> dict:
@@ -222,13 +282,15 @@ def _trimmed(act: str, answer: dict) -> dict:
         # A list, flattened, because return fields are primitives — and the list is the useful
         # half of a miss, the thing that saves a screenshot to find out what *is* there.
         answer = {**answer, "options": ", ".join(str(one) for one in answer["options"] if one)}
-    for key in ("url", "title", *KEEP.get(act, ()), "failure"):
+    for key in ("url", "title", *KEEP.get(act, ()), "failure", "errors"):
         value = answer.get(key)
         if value in (None, "", []):
             continue
         if key == "scale" and value == 1:
             continue
         out[key] = value
+    if act == "errors" and "errors" not in out:
+        out["errors"] = "none — no console errors or failed requests in this tab"
     return out
 
 

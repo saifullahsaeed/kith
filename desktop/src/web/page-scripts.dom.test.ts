@@ -216,6 +216,34 @@ const CASES: Record<string, { html: string; run: string }> = {
       const picked = await run("window.__picking", false);
       return { picked, opened: await run("window.menuOpened || 0", false) };`,
   },
+  howEachFieldIsFound: {
+    html: FORM,
+    run: `
+      const out = {};
+      for (const name of ["Work email", "Password", "Search", "email_address", "#plain", "Country"]) {
+        const field = await run(scripts.focusField(name));
+        out[name] = [field.by, field.key];
+      }
+      return out;`,
+  },
+  rolesOfWhatIsClicked: {
+    html: FORM,
+    run: `
+      const out = {};
+      for (const name of ["Sign in", "Toggle", "Menu"]) out[name] = (await run(scripts.locate("", name), false)).role;
+      return out;`,
+  },
+  seeingText: {
+    html: FORM,
+    run: `
+      return [
+        await run(scripts.seen("place ORDER", ""), false),
+        await run(scripts.seen("not on the page", ""), false),
+        await run(scripts.seen("", "#toggle"), false),
+        await run(scripts.seen("", "#nothing"), false),
+        await run(scripts.seen("", "[[bad"), false),
+      ];`,
+  },
   scrollAnAppShell: {
     html: SHELL,
     run: `return await run(scripts.scrollPage(600));`,
@@ -391,6 +419,27 @@ describe.skipIf(!electron || !existsSync(electron))("the page scripts, in real C
       const got = result<{ picked: { selector: string } | null; opened: number }>("pickSwallowsThePress");
       expect(got.picked?.selector).toBe("#menu");
       expect(got.opened).toBe(0);
+    });
+  });
+
+  describe("what a saved test needs to find things again", () => {
+    it("says how each field was found, so a test finds it the same way", () => {
+      expect(result("howEachFieldIsFound")).toEqual({
+        "Work email": ["label", "Work email"],
+        Password: ["label", "Password"],
+        Search: ["placeholder", "Search"],
+        email_address: ["selector", '[name="email_address"]'],
+        "#plain": ["selector", "#plain"],
+        Country: ["label", "Country"],
+      });
+    });
+
+    it("names the role of what is clicked", () => {
+      expect(result("rolesOfWhatIsClicked")).toEqual({ "Sign in": "button", Toggle: "button", Menu: "button" });
+    });
+
+    it("sees text anywhere on the page, and a selector only when it is drawn", () => {
+      expect(result("seeingText")).toEqual([true, false, true, false, "bad"]);
     });
   });
 

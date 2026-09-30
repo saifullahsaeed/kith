@@ -10,6 +10,7 @@ import {
   picker,
   pressKey,
   scrollPage,
+  seen,
   typed,
 } from "./page-scripts";
 
@@ -40,6 +41,8 @@ const SCRIPTS: [string, string][] = [
   ["typed, inserting", typed("hello", "was", false)],
   ["chooseOption", chooseOption("Canada")],
   ["scrollPage", scrollPage(600)],
+  ["seen by text", seen("Order placed", "")],
+  ["seen by selector", seen("", "#done")],
   ...Object.entries(KEYS).map(([name, key]): [string, string] => [`pressKey ${name}`, pressKey(key)]),
 ];
 
@@ -64,6 +67,7 @@ describe("what a page's own text cannot do to them", () => {
     expect(() => new Function(typed(nasty, nasty, false))).not.toThrow();
     expect(() => new Function(focusField(nasty))).not.toThrow();
     expect(() => new Function(chooseOption(nasty))).not.toThrow();
+    expect(() => new Function(seen(nasty, nasty))).not.toThrow();
     expect(() => new Function(locate(nasty, nasty))).not.toThrow();
   });
 });

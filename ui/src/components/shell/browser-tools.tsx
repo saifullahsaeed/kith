@@ -5,6 +5,8 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { Loader2 } from "lucide-react";
 
+import { openSettingsPane } from "@/lib/backend/permissions";
+
 /**
  * The two rows of chrome that fold out of a browser pane's header.
  *
@@ -165,6 +167,8 @@ interface Source {
   id: string;
   name: string;
   profiles: Profile[];
+  /** macOS refused to let Kith read this browser's folder. */
+  blocked?: boolean;
 }
 
 interface FoundDomain {
@@ -193,6 +197,8 @@ export function CookieRow({ ask, url }: { ask: Ask; url: string }) {
   const [said, setSaid] = useState("");
   /** What that browser is actually holding a login for. Null until asked. */
   const [known, setKnown] = useState<FoundDomain[] | null>(null);
+  /** macOS would not let Kith read that browser's data — the profiles, the list, the cookies. */
+  const [blocked, setBlocked] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -220,6 +226,7 @@ export function CookieRow({ ask, url }: { ask: Ask; url: string }) {
     void ask("cookie-domains", { source: from, profile: profile || undefined }).then((answer) => {
       if (!alive) return;
       setKnown(Array.isArray(answer?.domains) ? (answer.domains as FoundDomain[]) : []);
+      setBlocked(answer?.blocked === true);
     });
     return () => {
       alive = false;
@@ -245,6 +252,7 @@ export function CookieRow({ ask, url }: { ask: Ask; url: string }) {
   }, [url]);
 
   const chosen = sources?.find((one) => one.id === from);
+  const refused = blocked || chosen?.blocked === true;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -341,7 +349,17 @@ export function CookieRow({ ask, url }: { ask: Ask; url: string }) {
       {/* macOS puts up its own dialog for the browser's key, and somebody who was not expecting
           it reads it as Kith having gone wrong. Saying so first is cheaper than explaining it
           afterwards. */}
-      <span className="text-muted-foreground/60 flex-1 text-right text-[11px]">
+      {/* The one failure that is not the browser's or the domain's: macOS saying no. It looked like a
+          browser with one profile and nothing signed in, so it is said, with the way out. */}
+      {refused && !said ? (
+        <span className="flex flex-1 flex-wrap items-center justify-end gap-1.5 text-right text-[11px] text-amber-600 dark:text-amber-400">
+          macOS isn't letting Kith read {chosen?.name ?? "that browser"}'s data.
+          <button type="button" className={CHIP} onClick={() => void openSettingsPane("fullDisk")}>
+            Allow in Full Disk Access
+          </button>
+        </span>
+      ) : null}
+      <span className={`text-muted-foreground/60 flex-1 text-right text-[11px] ${refused && !said ? "hidden" : ""}`}>
         {said ||
           (known === null
             ? "macOS will ask for that browser's key. Only this domain is copied."

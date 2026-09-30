@@ -63,7 +63,7 @@ def test_it_asks_the_shell_for_this_conversations_browser(shell, db: Path):
     with session_context.working_in("chat-one"):
         answer = call(db, act="open", url="example.com")
 
-    assert shell == [("open", "chat-one", {"url": "example.com", "new_tab": False})]
+    assert shell == [("open", "chat-one", {"url": "example.com", "new_tab": False, "private": False})]
     assert answer == {"url": "https://example.com/", "title": "Example"}
 
 
@@ -106,6 +106,7 @@ def test_the_shells_own_refusal_reaches_him_word_for_word(monkeypatch, db: Path)
         ({"act": "press"}, "key"),
         ({"act": "press", "key": "Delete"}, "key"),
         ({"act": "switch"}, "tab"),
+        ({"act": "wait"}, "wait needs"),
     ],
 )
 def test_an_act_missing_what_it_needs_is_refused_before_the_shell(shell, db: Path, args, missing):
@@ -202,10 +203,52 @@ def test_opening_in_a_new_tab_is_asked_for_by_name(shell, db: Path):
     call(db, act="close")
 
     assert [(act, args) for act, _, args in shell] == [
-        ("open", {"url": "example.com", "new_tab": True}),
+        ("open", {"url": "example.com", "new_tab": True, "private": False}),
         ("switch", {"tab": "t1"}),
         ("close", {"tab": ""}),
     ]
+
+
+def test_new_errors_ride_along_on_any_answer(monkeypatch, db: Path):
+    """A 500 behind a page that looks fine is found on the call that caused it, unasked."""
+    monkeypatch.setattr(
+        renderer, "browse", lambda *a, **k: {"url": "u", "title": "t", "errors": ["POST /api/orders → 500"]}
+    )
+
+    assert call(db, act="click", text="Pay")["errors"] == ["POST /api/orders → 500"]
+
+
+def test_asking_for_errors_when_there_are_none_says_none(monkeypatch, db: Path):
+    monkeypatch.setattr(renderer, "browse", lambda *a, **k: {"url": "u", "title": "t", "errors": []})
+
+    assert call(db, act="errors")["errors"].startswith("none")
+
+
+def test_wait_passes_what_to_wait_for_and_its_answer_comes_back(shell, db: Path, monkeypatch):
+    call(db, act="wait", text="Order placed")
+    call(db, act="wait", url="/paid", gone=True)
+    assert [args for _, _, args in shell] == [
+        {"text": "Order placed", "selector": "", "url": "", "gone": False},
+        {"text": "", "selector": "", "url": "/paid", "gone": True},
+    ]
+
+    monkeypatch.setattr(
+        renderer,
+        "browse",
+        lambda *a, **k: {"url": "u", "title": "t", "found": False, "waited": "did not appear"},
+    )
+    assert call(db, act="wait", text="x") == {
+        "url": "u",
+        "title": "t",
+        "found": False,
+        "waited": "did not appear",
+    }
+
+
+def test_a_private_tab_is_asked_for_by_name(shell, db: Path):
+    call(db, act="open", url="example.com", private=True)
+
+    assert shell[0][2] == {"url": "example.com", "new_tab": False, "private": True}
 
 
 def test_show_waits_for_the_window_and_says_it_opened(db: Path):
@@ -252,8 +295,9 @@ def test_it_is_one_of_kiths_own_tools(shell, db: Path):
 
 def test_one_tool_costs_less_than_the_nine_it_replaced():
     """The plugin's nine command schemas were ~3,900 characters on every request. The number is
-    held here so that adding to this tool is a decision with a size attached."""
-    assert len(json.dumps(require("browser").schema())) < 2_000
+    held here so that adding to this tool is a decision with a size attached — it was raised from
+    2,000 to 2,600 for tabs, `wait`, `errors`, private tabs and `save_test`."""
+    assert len(json.dumps(require("browser").schema())) < 2_600
 
 
 # --------------------------------------------------------------------------- #

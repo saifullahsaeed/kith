@@ -151,6 +151,12 @@ function browserDigest(command: string, r: Obj): string {
       return Array.isArray(r.tabs) ? plural(r.tabs.filter((one) => one !== "no tabs are open").length, "tab") : "";
     case "switch":
       return short(r.title);
+    case "wait":
+      return short(r.waited);
+    case "errors":
+      return Array.isArray(r.errors) ? plural(r.errors.length, "error") : "none";
+    case "save_test":
+      return short(r.saved);
     case "show":
       return r.opened ? "opened" : "";
     default:

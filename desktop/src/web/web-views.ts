@@ -25,7 +25,8 @@
  *    measures where the pane is and tells us, and we set the bounds to match — see `place`.
  * 2. **It paints on top of everything.** A menu, a dialog, a drag preview drawn by the page
  *    would appear *under* it. So the renderer also tells us to get out of the way, and
- *    `hide` is as load-bearing as `place`.
+ *    `hide` is as load-bearing as `place` — and so that getting out of the way does not look
+ *    like the page vanishing, the pane keeps a recent picture of it underneath. See `frame`.
  *
  * ## Sessions, and the reason no permission prompt appears anywhere in here
  *
@@ -41,6 +42,8 @@
  * reaching Kith's API from inside Kith. Other loopback addresses are deliberately allowed —
  * the first thing anyone does with this is open the app they are building on `localhost`.
  */
+
+import { randomUUID } from "node:crypto";
 
 import { BrowserWindow, WebContentsView, session } from "electron";
 
@@ -58,7 +61,9 @@ import {
   picker,
   pressKey,
   scrollPage,
+  seen,
   typed,
+  type FieldBy,
   type Focused,
   type Located,
 } from "./page-scripts";
@@ -160,6 +165,18 @@ export interface ViewStatus {
    *  the page out at 700 pixels and reported 1920×1080. The page is now laid out at the full
    *  size and *drawn* smaller, and this is the number that says by how much. */
   scale: number;
+  /** Which picture of the front tab is the latest, 0 for none. The pane fetches it with `frame`
+   *  when this moves — a number here rather than the picture, because status goes out on every
+   *  title change and the picture is tens of kilobytes. */
+  frame: number;
+}
+
+/** A picture of a tab as the pane last painted it, and where in the pane it goes — the page's own
+ *  rectangle, which is not the whole pane when a viewport letterboxes it. */
+export interface Frame extends Rect {
+  seq: number;
+  /** A JPEG, as a data URL the pane can put straight into an `<img>`. */
+  snapshot: string;
 }
 
 /** One tab, as the strip draws it and as the model is told about it. */
@@ -168,7 +185,36 @@ export interface TabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** A tab with a cookie jar of its own — see `openTab`. */
+  private: boolean;
 }
+
+/**
+ * Something that went wrong where the page does not show it: a console error, an uncaught
+ * exception, a request that failed. Most real bugs appear here first — a form that looks
+ * submitted over a `POST` that came back 500 — and a model reading only the page's text cannot
+ * see any of them.
+ */
+interface Problem {
+  seq: number;
+  kind: "console" | "network";
+  text: string;
+  /** The same message again, counted rather than repeated. */
+  count: number;
+}
+
+/**
+ * One thing the model did in a tab, kept in the shape a Playwright test needs to do it again —
+ * which is why a click keeps the element's role and a field keeps how it was found, not just the
+ * words the model typed. `save_test` turns these into a spec. See `recordStep`.
+ */
+export type Step =
+  | { kind: "goto"; url: string }
+  | { kind: "click"; role: string; name: string; selector: string; point: string; openedTab: boolean }
+  | { kind: "fill"; by: FieldBy; key: string; text: string }
+  | { kind: "select"; by: FieldBy; key: string; option: string }
+  | { kind: "press"; key: string }
+  | { kind: "wait"; text: string; selector: string; url: string; gone: boolean };
 
 /** The named sizes `resize` accepts, and the reason they are named rather than invented: the
  *  model should not have to remember what a phone's width is, and a closed list is the
@@ -287,6 +333,15 @@ interface Held {
   id: string;
   browser: Browser;
   owner: string;
+  /** Which cookie jar: the browser's own, or a private tab's throwaway one. */
+  partition: string;
+  private: boolean;
+  /** What went wrong out of sight, newest last, bounded. */
+  problems: Problem[];
+  /** The last problem the model has been told about, so each one is said once. */
+  reported: number;
+  /** What the model has done here since its last `open` — the flow `save_test` writes out. */
+  steps: Step[];
   /** When this tab was last spoken to. Only used to decide what to evict — see `MAX_VIEWS`. */
   touched: number;
   contents: WebContentsView;
@@ -310,6 +365,12 @@ interface Held {
   /** When a navigation last turned out to be a file download, which this browser refuses. Lets
    *  `navigate` tell "that address is a download" from a navigation something else cut short. */
   downloaded: number;
+  /** The latest picture of this tab on screen — what its pane shows while the view is out of the
+   *  way. Kept after the tab leaves the screen: it is the picture to show when it comes back. */
+  frame: Frame | null;
+  /** The raw pixels behind `frame`, only while the tab is on screen, so an unchanged page is not
+   *  encoded and sent again every second. Dropped when it rests: megabytes nobody will compare. */
+  pixels: Buffer | null;
 }
 
 /**
@@ -411,6 +472,7 @@ export function place(at: Target, rect: Rect): ViewStatus {
   for (const other of browser.tabs) if (other !== one) rest(other);
   applyBounds(one, fitted(rounded, one.viewport));
   showNow(one);
+  keepWarm(one);
   return statusOf(one);
 }
 
@@ -603,12 +665,107 @@ export function hide(at: Target): void {
   browser.rect = null;
 }
 
+/**
+ * The latest picture of the page in front, for the pane to keep **underneath** the live view.
+ *
+ * ## Why there is always a picture, not one taken when it is needed
+ *
+ * The view has to get out of the way of anything Kith draws over the pane — a menu, the alerts
+ * panel, a dialog — because it is composited above the whole window. Getting out of the way used
+ * to leave a gray rectangle, so opening any menu anywhere looked like the browser breaking. The
+ * next attempt took a picture at that moment and hid the view once the picture was back, and that
+ * put the hide *behind* a capture: for as long as the capture took, the panel was under the page,
+ * and when the shell was one that could not take it — an older shell asked by a newer interface —
+ * the panel stayed under the page for as long as it was open.
+ *
+ * So the order is the other way round, which is how Claude's desktop app does its preview pane: a
+ * picture is kept warm while the page is on screen (`keepWarm`), the pane paints it in the hole
+ * *under* the view, and hiding is then only ever `hide` — immediate, owing nothing to a capture,
+ * and revealing a page that looks like the one that was there a moment ago.
+ */
+export function frame(at: Target): Frame | null {
+  return browsers.get(at.owner)?.active?.frame ?? null;
+}
+
+/** How often a page on screen is looked at for a new picture. Measured at 3–7ms a capture and
+ *  under a millisecond to see that nothing changed, which is the usual answer; a second old is
+ *  recent enough for a page seen under a menu. */
+const FRAME_EVERY_MS = 1_000;
+/** Before the first picture of a page just put on screen, a moment for it to paint. */
+const FIRST_FRAME_MS = 250;
+
+let framing: ReturnType<typeof setInterval> | null = null;
+let frameSeq = 0;
+const warming = new WeakSet<Held>();
+const firstFrame = new WeakSet<Held>();
+
+/** Keep pictures coming while this tab is on screen. One timer for every browser; it stops itself
+ *  when nothing is on screen, so a closed Browser tab costs nothing. */
+function keepWarm(one: Held): void {
+  if (!one.frame && !firstFrame.has(one)) {
+    firstFrame.add(one);
+    setTimeout(() => {
+      firstFrame.delete(one);
+      void warm(one);
+    }, FIRST_FRAME_MS);
+  }
+  if (framing) return;
+  framing = setInterval(() => {
+    let showing = false;
+    for (const browser of browsers.values()) {
+      const front = browser.active;
+      if (!front || !onScreen(front)) continue;
+      showing = true;
+      void warm(front);
+    }
+    if (!showing && framing) {
+      clearInterval(framing);
+      framing = null;
+    }
+  }, FRAME_EVERY_MS);
+}
+
+/** A new picture of a tab on screen, when the page has changed since the last one. */
+async function warm(one: Held): Promise<void> {
+  const contents = one.contents.webContents;
+  const pane = one.browser.rect;
+  const drawn = one.bounds;
+  if (warming.has(one) || contents.isDestroyed() || !pane || !drawn || !onScreen(one)) return;
+  const window = getMainWindow();
+  if (!window || window.isDestroyed() || !window.isVisible() || window.isMinimized()) return;
+  warming.add(one);
+  try {
+    const image = await contents.capturePage();
+    // Off the screen while it was being taken: whatever came back is not what the pane showed.
+    if (!onScreen(one) || image.isEmpty()) return;
+    const pixels = image.toBitmap();
+    if (one.frame && one.pixels?.equals(pixels)) return;
+    one.pixels = pixels;
+    // Two pixels per point is sharp on a retina screen; more is bytes nobody sees.
+    const sized = image.getSize().width > drawn.width * 2 ? image.resize({ width: drawn.width * 2 }) : image;
+    one.frame = {
+      seq: (frameSeq += 1),
+      snapshot: `data:image/jpeg;base64,${sized.toJPEG(80).toString("base64")}`,
+      x: drawn.x - pane.x,
+      y: drawn.y - pane.y,
+      width: drawn.width,
+      height: drawn.height,
+    };
+    announce(one);
+  } catch {
+    /* A picture missed is the previous picture kept, which is nothing anybody can see. */
+  } finally {
+    warming.delete(one);
+  }
+}
+
 /** One tab off the screen and back to its resting rectangle, so a screenshot still works while
  *  nobody is looking — see `DEFAULT_BOUNDS`. A viewport stays set when it is one: the resting
  *  bounds carry it, so a `look` answers at the size that was asked for. */
 function rest(one: Held): void {
   applyBounds(one, restingBounds(one));
   hideNow(one);
+  one.pixels = null;
 }
 
 /** The rectangle a view sits at when no pane is showing it: in the window, sized, and hidden —
@@ -633,6 +790,10 @@ export function forgetOwner(owner: string): void {
 export function forgetAll(): void {
   for (const browser of browsers.values()) for (const one of browser.tabs) close(one);
   browsers.clear();
+  if (framing) clearInterval(framing);
+  framing = null;
+  if (stage_ && !stage_.isDestroyed()) stage_.destroy();
+  stage_ = null;
 }
 
 /** Off the window and shut, with any sign-in popup it opened — a popup outliving the page that
@@ -642,6 +803,14 @@ function close(one: Held): void {
   for (const popup of one.popups) if (!popup.isDestroyed()) popup.close();
   one.popups.clear();
   if (!one.contents.webContents.isDestroyed()) one.contents.webContents.close();
+  // A private tab's jar goes with the last tab using it — that is what private means here.
+  const shared = [...browsers.values()].some((browser) =>
+    browser.tabs.some((tab) => tab !== one && tab.partition === one.partition),
+  );
+  if (one.private && !shared) {
+    hardened.delete(one.partition);
+    void session.fromPartition(one.partition).clearStorageData().catch(() => undefined);
+  }
 }
 
 export function status(at: Target): ViewStatus | null {
@@ -660,14 +829,24 @@ export function status(at: Target): ViewStatus | null {
  * Returns null at `MAX_TABS`: the caller decides what that means, because it means different
  * things — a link opens in the tab it was clicked in, a `+` says the browser is full.
  */
-function openTab(browser: Browser, how: { url?: string; activate: boolean }): Held | null {
+function openTab(
+  browser: Browser,
+  how: { url?: string; activate: boolean; private?: boolean; partition?: string },
+): Held | null {
   if (browser.tabs.length >= MAX_TABS) return null;
-  const one = makeTab(browser);
+  /* A private tab gets a jar of its own, in memory only, gone when the tab closes: logged out when
+   * the other tabs are logged in, or signed in as a second person beside the first. A tab a link
+   * opens from a private tab shares that tab's jar, because the link was clicked in that session. */
+  const partition = how.private ? `kith-private-${randomUUID()}` : (how.partition ?? BROWSER_PARTITION);
+  const one = makeTab(browser, partition);
   // After the tab it was opened from, the way a browser does, so a run of links opened from one
   // page stays beside it rather than at the far end of the strip.
   const from = browser.active ? browser.tabs.indexOf(browser.active) : -1;
   browser.tabs.splice(from >= 0 ? from + 1 : browser.tabs.length, 0, one);
-  if (how.url) void loadInto(one, how.url);
+  if (how.url) {
+    one.steps = [{ kind: "goto", url: how.url }];
+    void loadInto(one, how.url);
+  }
   if (how.activate || !browser.active) bringForward(browser, one);
   else rest(one);
   browser.lastOpened = { tab: one, at: Date.now() };
@@ -694,10 +873,12 @@ function bringForward(browser: Browser, one: Held): void {
 }
 
 /** Open a tab — blank, or at an address. The `+` in the strip, and `open` with `new_tab`. */
-export async function newTab(at: Target, url = ""): Promise<ViewStatus> {
-  if (url) return navigate(at, url, { newTab: true });
+export async function newTab(at: Target, url = "", how: { private?: boolean } = {}): Promise<ViewStatus> {
+  if (url) return navigate(at, url, { newTab: true, private: how.private === true });
   const browser = browserFor(at);
-  if (!openTab(browser, { activate: true })) return { ...statusOf(browser), failure: tabsFull(browser) };
+  if (!openTab(browser, { activate: true, private: how.private === true })) {
+    return { ...statusOf(browser), failure: tabsFull(browser) };
+  }
   return statusOf(browser);
 }
 
@@ -775,17 +956,19 @@ function titleOf(one: Held): string {
 export async function navigate(
   at: Target,
   url: string,
-  how: { newTab?: boolean } = {},
+  how: { newTab?: boolean; private?: boolean } = {},
 ): Promise<ViewStatus> {
   const browser = browserFor(at);
   const target = normalise(url);
   if (!target) return { ...statusOf(browser), failure: `${url} is not an address I can open.` };
   let one = touch(browser.active);
-  if (!one || how.newTab) {
-    const opened = openTab(browser, { activate: true });
+  if (!one || how.newTab || how.private) {
+    const opened = openTab(browser, { activate: true, private: how.private === true });
     if (!opened) return { ...statusOf(browser), failure: tabsFull(browser) };
     one = opened;
   }
+  // An `open` starts a flow: what `save_test` writes out is everything from here.
+  one.steps = [{ kind: "goto", url: target }];
   const started = Date.now();
   await loadInto(one, target);
   await settle(one, ACT_BUDGET_MS - (Date.now() - started));
@@ -881,6 +1064,7 @@ export async function click(
   let point: { x: number; y: number };
   let described: string;
   let covered = "";
+  let role = "";
 
   if (typeof where.x === "number" && typeof where.y === "number") {
     point = { x: where.x, y: where.y };
@@ -900,6 +1084,7 @@ export async function click(
     point = { x: found.x, y: found.y };
     described = found.label;
     covered = found.covered;
+    role = found.role;
   }
 
   const since = Date.now();
@@ -910,6 +1095,14 @@ export async function click(
     );
   }
   const opened = await settleAfterInput(one, since);
+  recordStep(one, {
+    kind: "click",
+    role,
+    name: covered ? "" : described,
+    selector: where.selector ?? "",
+    point: typeof where.x === "number" ? `${where.x},${where.y}` : "",
+    openedTab: opened !== null,
+  });
   announce(one);
   const clicked = covered
     ? `${described} — but "${covered}" was on top of it and took the click`
@@ -961,6 +1154,7 @@ export async function type(
     if (!chosen.chose) {
       throw new Error(`${field.name} is a list, and none of its choices is "${text}". It offers: ${chosen.choices.join(", ")}.`);
     }
+    recordStep(one, { kind: "select", by: field.by, key: field.key, option: chosen.chose });
   } else {
     await contents.insertText(text);
     const result = (await contents.executeJavaScript(typed(text, field.before, !!into), true)) as {
@@ -969,6 +1163,7 @@ export async function type(
     if (!result.landed) {
       throw new Error(`${field.name} did not take the text — the page may be rejecting input there. \`look\` at it to see why.`);
     }
+    recordStep(one, { kind: "fill", by: field.by, key: field.key, text });
   }
   await settle(one);
   announce(one);
@@ -987,6 +1182,7 @@ export async function press(at: Target, key: string): Promise<{ did: string } & 
     on: string;
   };
   await settleAfterInput(one, since);
+  recordStep(one, { kind: "press", key });
   announce(one);
   const on = answer.on ? ` on ${answer.on}` : "";
   const did = answer.did
@@ -1004,6 +1200,97 @@ export async function scroll(at: Target, by: number): Promise<{ moved: number } 
   };
   await settle(one);
   return { moved: answer.moved, ...statusOf(one) };
+}
+
+/** How long `wait` waits before saying it did not happen. Inside `ACT_BUDGET_MS`, with room for
+ *  the settle around it. */
+const WAIT_MS = 15_000;
+const WAIT_POLL_MS = 150;
+
+/**
+ * Wait until something is true of the page: some text is on it, an element is drawn, or the
+ * address has changed to what was expected — or, with `gone`, until it is not.
+ *
+ * Every other act waits for the page to *settle*, which is a guess about when the page is done.
+ * A page that renders its answer after a fetch settles before the answer is there, and "the order
+ * went through" was then a guess too. This is the check: say what should appear, and the answer
+ * is whether it did. Which also makes it the assertion `save_test` writes out.
+ *
+ * A miss is an answer, not an error — `found: false` with what the page said instead — because
+ * "the success message never appeared" is the finding.
+ */
+export async function waitFor(
+  at: Target,
+  what: { text?: string | undefined; selector?: string | undefined; url?: string | undefined; gone?: boolean | undefined },
+): Promise<{ found: boolean; waited: string } & ViewStatus> {
+  const one = required(at);
+  const contents = one.contents.webContents;
+  const text = String(what.text ?? "").trim();
+  const selector = String(what.selector ?? "").trim();
+  const url = String(what.url ?? "").trim();
+  const gone = what.gone === true;
+  if (!text && !selector && !url) throw new Error("wait needs something to wait for: text, a selector or a url.");
+  const naming = url ? `the address containing "${url}"` : selector ? `\`${selector}\`` : `"${text}"`;
+
+  const started = Date.now();
+  const check = async (): Promise<boolean> => {
+    if (url) return contents.getURL().includes(url);
+    try {
+      const answer = (await contents.executeJavaScript(seen(text, selector), false)) as boolean | "bad";
+      if (answer === "bad") throw new SelectorError();
+      return answer;
+    } catch (error) {
+      if (error instanceof SelectorError) throw new Error(`${selector} is not a CSS selector I can use.`);
+      return false; // mid-navigation: the page it asked went away; the next poll asks the new one
+    }
+  };
+  let found = false;
+  while (Date.now() - started < WAIT_MS) {
+    if ((await check()) !== gone) {
+      found = true;
+      break;
+    }
+    await delay(WAIT_POLL_MS);
+  }
+  const took = ((Date.now() - started) / 1000).toFixed(1);
+  recordStep(one, { kind: "wait", text, selector, url, gone });
+  announce(one);
+  if (found) {
+    const said = url ? `${naming} came up` : gone ? `${naming} went away` : `${naming} appeared`;
+    return { found, waited: `${said} after ${took}s`, ...statusOf(one) };
+  }
+  const didnt = url ? `${naming} did not come up` : gone ? `${naming} was still there` : `${naming} did not appear`;
+  const now = url ? ` — it is ${contents.getURL()}` : "";
+  return { found, waited: `${didnt} within ${WAIT_MS / 1000}s${now}`, ...statusOf(one) };
+}
+
+class SelectorError extends Error {}
+
+/**
+ * What has gone wrong out of sight in the tab in front: every problem it is holding with `all`,
+ * or only the ones the model has not been told about yet. Either way they count as told.
+ */
+export function problems(at: Target, all = false): string[] {
+  const one = browsers.get(at.owner)?.active;
+  if (!one) return [];
+  const fresh = all ? one.problems : one.problems.filter((problem) => problem.seq > one.reported);
+  const newest = one.problems[one.problems.length - 1];
+  if (newest) one.reported = Math.max(one.reported, newest.seq);
+  return fresh.map((problem) => (problem.count > 1 ? `${problem.text} (×${problem.count})` : problem.text));
+}
+
+/** The flow the tab in front has recorded since its last `open`, for `save_test`. */
+export function steps(at: Target): { steps: Step[]; tab: string; private: boolean } {
+  const one = required(at);
+  return { steps: [...one.steps], tab: one.id, private: one.private };
+}
+
+/** At most this many steps in one recording — a flow longer than this is several tests. */
+const MAX_STEPS = 200;
+
+function recordStep(one: Held, step: Step): void {
+  if (one.steps.length >= MAX_STEPS) return;
+  one.steps.push(step);
 }
 
 /**
@@ -1072,7 +1359,9 @@ async function capture(
   let width = 0;
   let height = 0;
   try {
-    const image = region ? await contents.capturePage(region) : await contents.capturePage();
+    const take = () => (region ? contents.capturePage(region) : contents.capturePage());
+    // On screen, the pane's own surface is copied. Off it, the tab is lent to the stage first.
+    const image = onScreen(one) ? await take() : await onStage(one, take);
     /* Resized to the **page's** own pixels, not the widget's.
      *
      * It used to target the widget's width, which was the same number until a viewport could be
@@ -1090,23 +1379,100 @@ async function capture(
     height = out.height;
     png = sized.toPNG().toString("base64");
   } catch (error) {
-    /* **A screenshot is the one act here that genuinely needs the tab open.**
-     *
-     * Everything else works on a view nobody is looking at: pages load, text reads, and input
-     * dispatched inside the page lands. A capture cannot, and Chromium is blunt about it —
-     * `UnknownVizError` from the compositor, because there is no on-screen surface to copy.
-     *
-     * So it is said, in a sentence carrying the alternative. A blank PNG written to a file is
-     * far worse than a refusal: the model reads it, spends thousands of tokens on nothing, and
-     * concludes the page is empty.
-     */
+    /* Said, in a sentence carrying the alternative. A blank PNG written to a file is far worse
+     * than a refusal: the model reads it, spends thousands of tokens on nothing, and concludes the
+     * page is empty. */
     throw new Error(
-      "A screenshot needs the Browser tab open. Call `show` to open it, then look again — or " +
-        `use \`read\` for the page's text, which works either way. (${(error as Error).message})`,
+      "The screenshot could not be taken — `read` gives the page's text, which works either way. " +
+        `(${(error as Error).message})`,
     );
   }
 
   return { png, width, height, ...statusOf(one) };
+}
+
+/** Is this tab painted in a pane right now — the front tab of a browser a pane is showing? */
+function onScreen(one: Held): boolean {
+  const pane = one.browser.rect;
+  return one.browser.active === one && !!pane && pane.width >= 1 && pane.height >= 1;
+}
+
+/**
+ * Take a picture of a tab nobody is looking at.
+ *
+ * **A hidden view has no surface to copy**, and Chromium says so — "Current display surface not
+ * available", or `UnknownVizError` once it has navigated while hidden. That made `look` the one
+ * act that needed the Browser tab on screen, so checking a layout meant putting a page in front of
+ * the person, or not checking it.
+ *
+ * So the tab is lent to a stage for the few frames a capture takes: a window of its own, shown but
+ * fully transparent, ignoring the mouse, never focused. Measured at 11–50ms, with the page's state
+ * untouched, whether Kith's own window is showing or not. Parking the view off the edge of Kith's
+ * window does not work — nothing is composited there — and showing it *under* Kith's page is not
+ * possible, because a child view always paints above the window's own contents.
+ *
+ * One at a time, so two captures never fight over one stage.
+ */
+function onStage<T>(one: Held, work: () => Promise<T>): Promise<T> {
+  const run = stageQueue.then(async () => {
+    const stage = stageWindow();
+    const main = getMainWindow();
+    const bounds = one.bounds ?? { ...DEFAULT_BOUNDS };
+    stage.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height });
+    if (!stage.isVisible()) stage.showInactive();
+    if (one.attached && main && !main.isDestroyed()) main.contentView.removeChildView(one.contents);
+    stage.contentView.addChildView(one.contents);
+    one.contents.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height });
+    showNow(one);
+    try {
+      await one.contents.webContents.executeJavaScript(NEXT_FRAME, false);
+      return await work();
+    } finally {
+      hideNow(one);
+      stage.contentView.removeChildView(one.contents);
+      if (main && !main.isDestroyed()) {
+        main.contentView.addChildView(one.contents);
+        one.attached = true;
+      } else {
+        one.attached = false;
+      }
+      one.contents.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+      // A pane may have started showing this tab while it was away; put it where the pane wants it.
+      if (onScreen(one) && one.browser.rect) {
+        one.bounds = null;
+        applyBounds(one, fitted(one.browser.rect, one.viewport));
+        showNow(one);
+      }
+      if (!stage.contentView.children.length) stage.hide();
+    }
+  });
+  stageQueue = run.catch(() => undefined);
+  return run;
+}
+
+let stageQueue: Promise<unknown> = Promise.resolve();
+let stage_: BrowserWindow | null = null;
+
+function stageWindow(): BrowserWindow {
+  if (stage_ && !stage_.isDestroyed()) return stage_;
+  stage_ = new BrowserWindow({
+    show: false,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    focusable: false,
+    skipTaskbar: true,
+    resizable: false,
+    // A page laid out at a desktop viewport is wider than a laptop's screen, and macOS would
+    // otherwise shrink the stage to fit — and the page with it.
+    enableLargerThanScreen: true,
+    width: DEFAULT_BOUNDS.width,
+    height: DEFAULT_BOUNDS.height,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  stage_.setIgnoreMouseEvents(true);
+  stage_.setOpacity(0);
+  return stage_;
 }
 
 /**
@@ -1303,15 +1669,15 @@ function padded(box: Rect, pad: number): Rect {
 // The plumbing
 // --------------------------------------------------------------------------- //
 
-function makeTab(browser: Browser): Held {
+function makeTab(browser: Browser, partition: string): Held {
   makeRoom(browser);
-  harden();
+  harden(partition);
   const contents = new WebContentsView({
     webPreferences: {
       // The browser's own session, never the person's and never Kith's. See the module comment.
       // One for every conversation: two conversations are two tabs of one profile — see
       // `Target` for why cookies deliberately do not follow the owner.
-      partition: BROWSER_PARTITION,
+      partition,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -1331,6 +1697,11 @@ function makeTab(browser: Browser): Held {
     id: `t${browser.made}`,
     browser,
     owner: browser.owner,
+    partition,
+    private: partition !== BROWSER_PARTITION,
+    problems: [],
+    reported: 0,
+    steps: [],
     touched: Date.now(),
     contents,
     attached: false,
@@ -1340,6 +1711,8 @@ function makeTab(browser: Browser): Held {
     emulated: null,
     popups: new Set(),
     downloaded: 0,
+    frame: null,
+    pixels: null,
   };
   /* In the window from the start, sized, and hidden.
    *
@@ -1405,10 +1778,10 @@ function makeRoom(making: Browser): void {
  * using pages, not a device. Saying no in the handler rather than by prompting means there is no
  * dialog for a page to badger somebody into accepting.
  */
-function harden(): void {
-  if (hardened) return;
-  hardened = true;
-  const target = session.fromPartition(BROWSER_PARTITION);
+function harden(partition: string): void {
+  if (hardened.has(partition)) return;
+  hardened.add(partition);
+  const target = session.fromPartition(partition);
 
   target.webRequest.onBeforeRequest({ urls: ["*://*/*"] }, (details, callback) => {
     // **Kith's own server, under any name.** A page that can reach the backend is a page reaching
@@ -1441,6 +1814,55 @@ function harden(): void {
     one.failure = downloadRefused(item.getFilename() || item.getURL());
     announce(one);
   });
+
+  /* Requests that failed, attributed to the tab that made them. A 4xx or 5xx, or a request that
+   * never got an answer at all. Not the favicon — every dev server 404s it and it is nobody's
+   * bug — and not an abort, which is a navigation replacing a request, not a failure. */
+  target.webRequest.onCompleted((details) => {
+    if (details.statusCode < 400 || /\/favicon\.ico(\?|$)/.test(details.url)) return;
+    noteProblem(details.webContentsId, "network", `${details.method} ${shortUrl(details.url)} → ${details.statusCode}`);
+  });
+  target.webRequest.onErrorOccurred((details) => {
+    if (details.error === "net::ERR_ABORTED") return;
+    const why = details.error === "net::ERR_BLOCKED_BY_CLIENT" ? "blocked — that is Kith's own server" : details.error;
+    noteProblem(details.webContentsId, "network", `${details.method} ${shortUrl(details.url)} → ${why}`);
+  });
+}
+
+/** Every problem any tab has had, numbered in order across the app so "since" means one thing. */
+let problemSeq = 0;
+const MAX_PROBLEMS = 60;
+
+function noteProblem(contentsId: number | undefined, kind: Problem["kind"], text: string): void {
+  if (contentsId === undefined) return;
+  const one = [...browsers.values()]
+    .flatMap((browser) => browser.tabs)
+    .find((tab) => !tab.contents.webContents.isDestroyed() && tab.contents.webContents.id === contentsId);
+  if (one) recordProblem(one, kind, text);
+}
+
+function recordProblem(one: Held, kind: Problem["kind"], text: string): void {
+  const clipped = text.length > 300 ? `${text.slice(0, 300)}…` : text;
+  problemSeq += 1;
+  const last = one.problems[one.problems.length - 1];
+  if (last && last.text === clipped) {
+    last.count += 1;
+    last.seq = problemSeq;
+    return;
+  }
+  one.problems.push({ seq: problemSeq, kind, text: clipped, count: 1 });
+  if (one.problems.length > MAX_PROBLEMS) one.problems.splice(0, one.problems.length - MAX_PROBLEMS);
+}
+
+/** An address short enough to read in a list: no query string, the host kept. */
+function shortUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.length > 80 ? `${url.pathname.slice(0, 80)}…` : url.pathname;
+    return `${url.host}${path}`;
+  } catch {
+    return raw.slice(0, 100);
+  }
 }
 
 /**
@@ -1492,7 +1914,7 @@ function aborted(error: unknown): boolean {
   return failed?.errno === -3 || failed?.code === "ERR_ABORTED" || /ERR_ABORTED/.test(String(failed?.message ?? ""));
 }
 
-let hardened = false;
+const hardened = new Set<string>();
 
 /** At most this many sign-in popups per page. Enough for a login that opens a second window for
  *  two-factor; few enough that a page cannot bury the app in windows. */
@@ -1514,6 +1936,18 @@ function watch(one: Held): void {
   contents.on("did-navigate", changed);
   contents.on("did-navigate-in-page", changed);
   contents.on("page-title-updated", changed);
+  /* Console errors, uncaught exceptions included — Chromium logs those as errors, and an unhandled
+   * promise rejection as "Uncaught (in promise)". Errors only: warnings are what every framework
+   * prints in development, and a model told about each one stops reading the list. */
+  contents.on("console-message", (event, ...legacy: unknown[]) => {
+    const said = event as unknown as { level?: string | number; message?: string; sourceId?: string; lineNumber?: number };
+    const level = said.level ?? legacy[0];
+    if (level !== "error" && level !== 3) return;
+    const message = String(said.message ?? legacy[1] ?? "");
+    const source = String(said.sourceId ?? legacy[3] ?? "");
+    const where = source && !source.startsWith("data:") ? ` (${shortUrl(source)}:${said.lineNumber ?? legacy[2] ?? "?"})` : "";
+    recordProblem(one, "console", `${message}${where}`);
+  });
   contents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     // A subframe failing is the web being the web. Only the main frame is worth saying.
     if (!isMainFrame) return;
@@ -1561,7 +1995,14 @@ function watch(one: Held): void {
       };
     }
     const address = normalise(url);
-    if (address && !openTab(one.browser, { url: address, activate: disposition !== "background-tab" })) {
+    if (
+      address &&
+      !openTab(one.browser, {
+        url: address,
+        activate: disposition !== "background-tab",
+        partition: one.partition,
+      })
+    ) {
       void loadInto(one, address);
     }
     return { action: "deny" };
@@ -1609,8 +2050,14 @@ function statusOf(from: Held | Browser): ViewStatus {
     (tab): TabSummary => {
       const contents = tab.contents.webContents;
       return contents.isDestroyed()
-        ? { id: tab.id, title: "", url: "", loading: false }
-        : { id: tab.id, title: contents.getTitle(), url: contents.getURL(), loading: contents.isLoading() };
+        ? { id: tab.id, title: "", url: "", loading: false, private: tab.private }
+        : {
+            id: tab.id,
+            title: contents.getTitle(),
+            url: contents.getURL(),
+            loading: contents.isLoading(),
+            private: tab.private,
+          };
     },
   );
   const blank = {
@@ -1625,6 +2072,7 @@ function statusOf(from: Held | Browser): ViewStatus {
     scale: 1,
     tab: one?.id ?? "",
     tabs,
+    frame: one?.frame?.seq ?? 0,
   };
   if (!one) return blank;
   const contents = one.contents.webContents;

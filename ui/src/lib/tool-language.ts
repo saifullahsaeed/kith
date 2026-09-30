@@ -246,6 +246,9 @@ const BROWSER_VERB: Record<string, { verb: string; of?: string }> = {
   back: { verb: "went back" },
   forward: { verb: "went forward" },
   reload: { verb: "reloaded the page" },
+  wait: { verb: "waited for", of: "text" },
+  errors: { verb: "checked the page for errors" },
+  save_test: { verb: "saved a test to", of: "path" },
   tabs: { verb: "looked at the tabs" },
   switch: { verb: "switched to tab", of: "tab" },
   close: { verb: "closed a tab" },
@@ -268,7 +271,7 @@ const PRESENT: Record<string, string> = {
   added: "adding", ticked: "ticking", linked: "linking", unlinked: "unlinking", clicked: "clicking",
   typed: "typing", pressed: "pressing", scrolled: "scrolling", resized: "resizing",
   "re-read": "re-reading", "re-shelved": "re-shelving", went: "going", reloaded: "reloading",
-  switched: "switching", closed: "closing", is: "", "set up": "setting up",
+  switched: "switching", closed: "closing", waited: "waiting", is: "", "set up": "setting up",
 };
 
 function presentOf(verb: string): string {

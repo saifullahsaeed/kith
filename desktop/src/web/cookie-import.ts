@@ -155,6 +155,9 @@ export interface FoundSource {
    *  which one you are signed in on, which is the only part that matters when you have a work
    *  profile and a personal one. */
   profiles: FoundProfile[];
+  /** macOS would not let Kith read this browser's folder. Said, because otherwise it looks like a
+   *  browser with one profile and nothing signed in — which is exactly how it looked. */
+  blocked: boolean;
 }
 
 /** Which of them are actually on this machine. Asked at the moment the person opens the panel
@@ -163,16 +166,31 @@ export interface FoundSource {
 export function sources(): FoundSource[] {
   const found: FoundSource[] = [];
   for (const source of CATALOGUE) {
-    const profiles = profilesIn(source);
-    if (profiles.length) {
+    const { profiles, blocked } = scan(source);
+    if (profiles.length || blocked) {
       found.push({
         id: source.id,
         name: source.name,
         profiles: profiles.map((one) => ({ id: one.id, name: one.name })),
+        blocked,
       });
     }
   }
   return found;
+}
+
+/** What to tell somebody whose browser's folder macOS will not open. */
+export function blockedSaying(name: string): string {
+  return (
+    `macOS is not letting Kith read ${name}'s data, so its profiles and logins cannot be listed or ` +
+    "copied. Allow Kith under System Settings → Privacy & Security → Full Disk Access, then open this again."
+  );
+}
+
+/** Did this fail because the operating system refused, rather than because nothing was there? */
+function refused(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "EPERM" || code === "EACCES";
 }
 
 /**
@@ -240,24 +258,38 @@ interface Profile {
   file: string;
 }
 
-function profilesIn(source: Source): Profile[] {
-  const root = join(homedir(), source.folder);
-  if (!existsSync(root)) return [];
-  const names = namesFor(source);
+function scan(source: Source): { profiles: Profile[]; blocked: boolean } {
+  return profilesAt(source.kind, join(homedir(), source.folder));
+}
+
+/**
+ * The profiles in one browser's folder, and whether macOS refused to let us look.
+ *
+ * **The refusal used to be swallowed**, and it looked like something else entirely. macOS
+ * protects other apps' data, and when it says no, a single `stat` can still succeed while listing
+ * the folder and copying the database both fail — so Chrome appeared with one profile, no names
+ * and nothing signed in, and typing a domain found no cookies. The browser was fine; Kith had
+ * lost permission to read it, which happens when the app's signature changes under a rebuild.
+ */
+export function profilesAt(kind: Source["kind"], root: string): { profiles: Profile[]; blocked: boolean } {
+  if (!existsSync(root)) return { profiles: [], blocked: false };
+  const listing = list(root);
+  if (listing === "refused") return { profiles: [], blocked: true };
+  const names = namesAt(kind, root);
   const found: Profile[] = [];
 
-  if (source.kind === "firefox") {
-    for (const entry of safeList(root)) {
+  if (kind === "firefox") {
+    for (const entry of listing) {
       const file = join(root, entry, "cookies.sqlite");
       if (existsSync(file)) found.push({ id: entry, name: names[entry] || entry, file });
     }
-    return found;
+    return { profiles: found, blocked: false };
   }
 
   // Chromium: `Default`, `Profile 1`, `Profile 2`… and, since the network service moved, the
   // database is a level deeper in `Network/`. Both locations are checked because which one a
   // given browser uses depends on its version rather than on its name.
-  for (const entry of ["Default", ...safeList(root).filter((one) => one.startsWith("Profile "))]) {
+  for (const entry of ["Default", ...listing.filter((one) => one.startsWith("Profile "))]) {
     for (const where of [join(root, entry, "Network", "Cookies"), join(root, entry, "Cookies")]) {
       if (existsSync(where)) {
         found.push({ id: entry, name: names[entry] || entry, file: where });
@@ -265,16 +297,16 @@ function profilesIn(source: Source): Profile[] {
       }
     }
   }
-  return found;
+  return { profiles: found, blocked: false };
 }
 
-function safeList(root: string): string[] {
+function list(root: string): string[] | "refused" {
   try {
     return readdirSync(root, { withFileTypes: true })
       .filter((one) => one.isDirectory())
       .map((one) => one.name);
-  } catch {
-    return [];
+  } catch (error) {
+    return refused(error) ? "refused" : [];
   }
 }
 
@@ -327,7 +359,8 @@ export async function importCookies(
     };
   }
 
-  const all = profilesIn(source);
+  const { profiles: all, blocked } = scan(source);
+  if (blocked) return { ...empty, failure: blockedSaying(source.name) };
   if (!all.length) return { ...empty, failure: `${source.name} is not installed here.` };
   const chosen = profileId ? all.filter((one) => one.id === profileId) : all;
   if (!chosen.length) {
@@ -349,6 +382,7 @@ export async function importCookies(
 
   const jar = session.fromPartition(BROWSER_PARTITION).cookies;
   const result: ImportResult = { added: 0, skipped: 0, looked: [], failure: "" };
+  let denied = 0;
   const now = Date.now() / 1000;
 
   for (const file of files) {
@@ -357,8 +391,9 @@ export async function importCookies(
       rows = await query(file, source.kind === "firefox" ? firefoxSql(domain) : chromiumSql(domain));
     } catch (error) {
       // One unreadable profile is not the whole import. A browser that is running holds a lock
-      // the copy already works around; anything else here is a profile shape this does not know.
-      void error;
+      // the copy already works around; anything else here is a profile shape this does not know
+      // — except the operating system saying no, which is said.
+      if (refused(error)) denied += 1;
       continue;
     }
     if (!rows.length) continue;
@@ -401,7 +436,10 @@ export async function importCookies(
   }
 
   if (!result.added && !result.skipped) {
-    result.failure = `${source.name} has no cookies for ${domain}. Check the spelling, and that it is the browser you are signed in on.`;
+    result.failure =
+      denied === files.length
+        ? blockedSaying(source.name)
+        : `${source.name} has no cookies for ${domain}. Check the spelling, and that it is the browser you are signed in on.`;
   }
   return result;
 }
@@ -645,13 +683,18 @@ export interface FoundDomain {
  * Grouped and summed across profiles per domain would hide the thing worth knowing, so it is
  * not: one row per domain per profile, and the caller decides how to show that.
  */
-export async function domainsIn(sourceId: string, profileId?: string): Promise<FoundDomain[]> {
+export async function domainsIn(
+  sourceId: string,
+  profileId?: string,
+): Promise<{ domains: FoundDomain[]; blocked: boolean }> {
   const source = CATALOGUE.find((one) => one.id === sourceId);
-  if (!source) return [];
+  if (!source) return { domains: [], blocked: false };
 
-  const all = profilesIn(source);
+  const { profiles: all, blocked } = scan(source);
+  if (blocked) return { domains: [], blocked: true };
   const chosen = profileId ? all.filter((one) => one.id === profileId) : all;
   const found: FoundDomain[] = [];
+  let denied = 0;
 
   for (const profile of chosen) {
     let rows: Record<string, string | number | null>[];
@@ -662,8 +705,9 @@ export async function domainsIn(sourceId: string, profileId?: string): Promise<F
           ? "SELECT host AS h, COUNT(*) AS n FROM moz_cookies WHERE originAttributes = '' GROUP BY host ORDER BY n DESC LIMIT 400"
           : "SELECT host_key AS h, COUNT(*) AS n FROM cookies GROUP BY host_key ORDER BY n DESC LIMIT 400",
       );
-    } catch {
+    } catch (error) {
       // A locked or missing database is one profile that cannot answer, not a failed listing.
+      if (refused(error)) denied += 1;
       continue;
     }
 
@@ -679,6 +723,9 @@ export async function domainsIn(sourceId: string, profileId?: string): Promise<F
 
   // Most-cookied first, which puts a real login above a tracking pixel, then alphabetical so the
   // tail is somewhere rather than in insertion order.
-  return found.sort((a, b) => b.cookies - a.cookies || a.domain.localeCompare(b.domain));
+  return {
+    domains: found.sort((a, b) => b.cookies - a.cookies || a.domain.localeCompare(b.domain)),
+    blocked: chosen.length > 0 && denied === chosen.length,
+  };
 }
 

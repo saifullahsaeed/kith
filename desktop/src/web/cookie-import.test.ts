@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { cookieFor, domainMatch, epochOf, hostnameOf, namesAt, sameSiteOf } from "./cookie-import";
+import { cookieFor, domainMatch, epochOf, hostnameOf, namesAt, profilesAt, sameSiteOf } from "./cookie-import";
 
 /**
  * Copying a login out of another browser, and the three ways that goes quietly wrong.
@@ -199,5 +199,24 @@ describe("naming the profiles", () => {
     const named = namesAt("firefox", root);
     expect(named["abc.default-release"]).toBe("default-release");
     expect(named["xyz.work"]).toBe("Work");
+  });
+});
+
+describe("when macOS will not let Kith look", () => {
+  /* macOS protects other apps' data, and its refusal used to be swallowed: a single `stat` still
+     succeeded while listing the folder failed, so Chrome showed one unnamed profile and no logins.
+     A folder that cannot be listed is reported as refused, not as empty. */
+  it("says the folder was refused rather than that it was empty", () => {
+    const root = mkdtempSync(join(tmpdir(), "kith-refused-"));
+    mkdirSync(join(root, "Default", "Network"), { recursive: true });
+    writeFileSync(join(root, "Default", "Network", "Cookies"), "");
+    chmodSync(root, 0o000);
+    try {
+      expect(profilesAt("chromium", root)).toEqual({ profiles: [], blocked: true });
+    } finally {
+      chmodSync(root, 0o755);
+    }
+    expect(profilesAt("chromium", root).blocked).toBe(false);
+    expect(profilesAt("chromium", root).profiles.map((one) => one.id)).toEqual(["Default"]);
   });
 });

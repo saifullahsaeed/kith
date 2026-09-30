@@ -69,6 +69,69 @@ const CASES: Record<string, string> = {
     await views.navigate({ owner: "b" }, page("/two"));
     await views.navigate({ owner: "b" }, page("/three"), { newTab: true });
     return { a: views.status({ owner: "a" }).tabs.length, b: views.status({ owner: "b" }).tabs.length };`,
+  problemsOutOfSight: `
+    await views.navigate({ owner: "c" }, page("/broken"));
+    await wait(800);
+    const first = views.problems({ owner: "c" });
+    const again = views.problems({ owner: "c" });
+    const all = views.problems({ owner: "c" }, true);
+    return { first, again, all: all.length };`,
+  waitingForAnAnswer: `
+    await views.navigate({ owner: "c" }, page("/slow"));
+    const early = await views.read({ owner: "c" });
+    const came = await views.waitFor({ owner: "c" }, { text: "order placed" });
+    const gone = await views.waitFor({ owner: "c" }, { text: "working…", gone: true });
+    return { early: early.text.trim(), came: [came.found, came.waited], gone: gone.found };`,
+  waitingForSomethingThatNeverComes: `
+    await views.navigate({ owner: "c" }, page("/three"));
+    const started = Date.now();
+    const miss = await views.waitFor({ owner: "c" }, { url: "/paid" });
+    return { found: miss.found, waited: miss.waited, took: Date.now() - started };`,
+  aPrivateTabHasItsOwnCookies: `
+    await views.navigate({ owner: "c" }, page("/login"));
+    await views.navigate({ owner: "c" }, page("/whoami"));
+    const mine = await views.read({ owner: "c" });
+    const opened = await views.navigate({ owner: "c" }, page("/whoami"), { private: true });
+    const theirs = await views.read({ owner: "c" });
+    return {
+      mine: mine.text.trim(),
+      theirs: theirs.text.trim(),
+      privateFlag: opened.tabs.map((t) => t.private),
+    };`,
+  aFlowIsRecorded: `
+    await views.navigate({ owner: "c" }, page("/form"));
+    await views.type({ owner: "c" }, "saif@example.com", "Work email");
+    await views.click({ owner: "c" }, { text: "Send" });
+    await views.waitFor({ owner: "c" }, { text: "Thanks, we got it" });
+    return views.steps({ owner: "c" });`,
+  aHiddenTabCanBePictured: `
+    await views.navigate({ owner: "c" }, page("/red"));
+    const shot = await views.shot({ owner: "c" });
+    return { width: shot.width, height: shot.height, png: shot.png.length };`,
+  aPaneKeepsAPictureOfItsPage: `
+    // On screen for real — shown, but invisible — so the pane's surface has something to copy.
+    window.setOpacity(0);
+    window.showInactive();
+    await views.navigate({ owner: "c" }, page("/red"));
+    views.place({ owner: "c" }, { x: 20, y: 30, width: 400, height: 300 });
+    await wait(1500);
+    const seq = views.status({ owner: "c" }).frame;
+    const frame = views.frame({ owner: "c" });
+    await wait(1200);
+    const unchanged = views.status({ owner: "c" }).frame;
+    views.hide({ owner: "c" });
+    const kept = views.frame({ owner: "c" });
+    window.hide();
+    const pixel = frame ? nativeImage.createFromDataURL(frame.snapshot).toBitmap() : null;
+    return {
+      seq,
+      same: !!frame && frame.seq === seq,
+      at: frame ? [frame.x, frame.y, frame.width, frame.height] : null,
+      // BGRA: a red page is a picture whose first pixel is red.
+      red: pixel ? [pixel[2] > 200, pixel[1] < 60, pixel[0] < 60] : null,
+      unchanged: unchanged === seq,
+      kept: !!kept && kept.seq === seq,
+    };`,
   aBlankTabFromThePlus: `
     await views.navigate({ owner: "c" }, page("/"));
     const plus = await views.newTab({ owner: "c" });
@@ -165,6 +228,76 @@ describe.skipIf(!electron || !existsSync(electron))("the browser's tabs, in real
 
   it("gives each conversation its own tabs", () => {
     expect(result("conversationsKeepTheirOwnTabs")).toEqual({ a: 1, b: 2 });
+  });
+
+  it("reports console errors, uncaught exceptions and failed requests once each", () => {
+    const got = result<{ first: string[]; again: string[]; all: number }>("problemsOutOfSight");
+    const said = got.first.join("\n");
+    expect(said).toContain("the cart did not load");
+    expect(said).toContain("Cannot read properties of null");
+    expect(said).toMatch(/POST .*\/api\/orders → 500/);
+    expect(said).toMatch(/GET .*\/missing\.json → 404/);
+    expect(said).not.toContain("favicon");
+    expect(got.again).toEqual([]);
+    expect(got.all).toBe(got.first.length);
+  });
+
+  it("waits for what should appear, and for what should go", () => {
+    const got = result<{ early: string; came: [boolean, string]; gone: boolean }>("waitingForAnAnswer");
+    expect(got.early).toBe("working…");
+    expect(got.came[0]).toBe(true);
+    expect(got.came[1]).toMatch(/appeared after \d+\.\ds/);
+    expect(got.gone).toBe(true);
+  });
+
+  it("says so when it never comes, as an answer and not an error", () => {
+    const got = result<{ found: boolean; waited: string; took: number }>("waitingForSomethingThatNeverComes");
+    expect(got.found).toBe(false);
+    expect(got.waited).toContain("did not come up within 15s");
+    expect(got.took).toBeGreaterThanOrEqual(15_000);
+  });
+
+  it("gives a private tab its own empty cookie jar", () => {
+    const got = result<{ mine: string; theirs: string; privateFlag: boolean[] }>("aPrivateTabHasItsOwnCookies");
+    expect(got.mine).toBe("session=abc");
+    expect(got.theirs).toBe("nobody");
+    expect(got.privateFlag).toEqual([false, true]);
+  });
+
+  it("records a flow the way a test would find its way through it", () => {
+    const got = result<{ steps: Record<string, unknown>[] }>("aFlowIsRecorded");
+    expect(got.steps.map((one) => one.kind)).toEqual(["goto", "fill", "click", "wait"]);
+    expect(got.steps[1]).toMatchObject({ by: "label", key: "Work email", text: "saif@example.com" });
+    expect(got.steps[2]).toMatchObject({ role: "button", name: "Send" });
+    expect(got.steps[3]).toMatchObject({ text: "Thanks, we got it", gone: false });
+  });
+
+  it("takes a real picture of a tab no pane is showing", () => {
+    /* A hidden view has no surface to copy, which made `look` the one act that needed the tab on
+       screen. It is lent to an invisible stage for the capture instead. */
+    const got = result<{ width: number; height: number; png: number }>("aHiddenTabCanBePictured");
+    expect(got.width).toBeGreaterThan(0);
+    expect(got.png).toBeGreaterThan(100);
+  });
+
+  it("keeps a picture of the page on screen, for the pane to show while the view steps aside", () => {
+    /* Taken before it is needed, not when: a hide that waited on a capture left the alerts panel
+       under the page for as long as the capture took. An unchanged page is not sent again, and the
+       picture outlives the hide — that is when it is shown. */
+    const got = result<{
+      seq: number;
+      same: boolean;
+      at: number[] | null;
+      red: boolean[] | null;
+      unchanged: boolean;
+      kept: boolean;
+    }>("aPaneKeepsAPictureOfItsPage");
+    expect(got.seq).toBeGreaterThan(0);
+    expect(got.same).toBe(true);
+    expect(got.at).toEqual([0, 0, 400, 300]);
+    expect(got.red).toEqual([true, true, true]);
+    expect(got.unchanged).toBe(true);
+    expect(got.kept).toBe(true);
   });
 
   it("opens a blank tab in front from the +", () => {

@@ -160,26 +160,49 @@ async function browse(
   // so this only carries it.
   const at = { owner: String(asked.owner ?? "") };
 
+  /* Every answer carries what went wrong out of sight since the last one — console errors,
+   * failed requests — so he learns about a 500 behind a page that looks fine on the call that
+   * caused it, without having to think to ask. Each one is said once. */
+  const answer = (body: unknown) => {
+    if (!body || typeof body !== "object") return reply(200, body);
+    const fresh = views.problems(at);
+    return reply(200, fresh.length ? { ...body, errors: fresh } : body);
+  };
+
   try {
     switch (act) {
       case "open":
-        return reply(
-          200,
-          await views.navigate(at, String(asked.url ?? ""), { newTab: asked.new_tab === true }),
+        return answer(
+          await views.navigate(at, String(asked.url ?? ""), {
+            newTab: asked.new_tab === true,
+            private: asked.private === true,
+          }),
         );
+      case "wait":
+        return answer(
+          await views.waitFor(at, {
+            text: typeof asked.text === "string" ? asked.text : undefined,
+            selector: typeof asked.selector === "string" ? asked.selector : undefined,
+            url: typeof asked.url === "string" ? asked.url : undefined,
+            gone: asked.gone === true,
+          }),
+        );
+      case "errors":
+        return reply(200, { ...(views.status(at) ?? {}), errors: views.problems(at, true) });
+      case "steps":
+        return reply(200, { ...(views.status(at) ?? {}), ...views.steps(at) });
       case "tabs": {
         const now = views.status(at);
         return reply(200, now ?? { tab: "", tabs: [] });
       }
       case "switch":
-        return reply(200, views.switchTab(at, String(asked.tab ?? "")));
+        return answer(views.switchTab(at, String(asked.tab ?? "")));
       case "close":
-        return reply(200, views.closeTab(at, String(asked.tab ?? "")));
+        return answer(views.closeTab(at, String(asked.tab ?? "")));
       case "read":
-        return reply(200, await views.read(at));
+        return answer(await views.read(at));
       case "click":
-        return reply(
-          200,
+        return answer(
           await views.click(at, {
             text: typeof asked.text === "string" ? asked.text : undefined,
             selector: typeof asked.selector === "string" ? asked.selector : undefined,
@@ -188,20 +211,19 @@ async function browse(
           }),
         );
       case "type":
-        return reply(200, await views.type(at, String(asked.text ?? ""), String(asked.into ?? "")));
+        return answer(await views.type(at, String(asked.text ?? ""), String(asked.into ?? "")));
       case "press":
-        return reply(200, await views.press(at, String(asked.key ?? "Enter")));
+        return answer(await views.press(at, String(asked.key ?? "Enter")));
       case "scroll":
-        return reply(200, await views.scroll(at, Number(asked.by ?? 600)));
+        return answer(await views.scroll(at, Number(asked.by ?? 600)));
       case "back":
-        return reply(200, await views.back(at));
+        return answer(await views.back(at));
       case "forward":
-        return reply(200, await views.forward(at));
+        return answer(await views.forward(at));
       case "reload":
-        return reply(200, await views.reload(at));
+        return answer(await views.reload(at));
       case "resize":
-        return reply(
-          200,
+        return answer(
           await views.resize(at, {
             preset: typeof asked.preset === "string" ? asked.preset : undefined,
             width: typeof asked.width === "number" ? asked.width : undefined,
@@ -226,9 +248,8 @@ async function browse(
         const named =
           (typeof asked.selector === "string" && asked.selector) ||
           (typeof asked.text === "string" && asked.text);
-        if (!named) return reply(200, await views.shot(at));
-        return reply(
-          200,
+        if (!named) return answer(await views.shot(at));
+        return answer(
           await views.snap(at, {
             selector: typeof asked.selector === "string" ? asked.selector : undefined,
             text: typeof asked.text === "string" ? asked.text : undefined,

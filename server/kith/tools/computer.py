@@ -412,8 +412,8 @@ def delete_file(path: Path, args: dict):
     "folder (or nothing) and it runs whatever the project is actually checked with: "
     "TypeScript, ruff, its build. It works out what to run from what is in the folder, so you "
     "do not have to know. The project check is the one to run before you say a job is done. "
-    'If you changed something visual, look at a screenshot too — "the build passed" is not the '
-    'same as "it looks right".',
+    "If you changed something a person uses, use it too: `browser` open it, do the thing, `wait` "
+    'for the result and read the `errors` — "the build passed" is not "it works".',
     {
         "path": {
             **STR,

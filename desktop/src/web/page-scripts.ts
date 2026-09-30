@@ -119,7 +119,7 @@ const SELECTOR_FOR = `
 
 /** What `locate` answers with. */
 export type Located =
-  | { x: number; y: number; label: string; covered: string }
+  | { x: number; y: number; label: string; covered: string; role: string }
   | { options: string[] }
   | { unreachable: string }
   | { invalid: string };
@@ -144,6 +144,18 @@ export function locate(selector: string, text: string): string {
     ${FIND}
     const label = (el) =>
       squash(el.innerText || el.value || el.getAttribute("aria-label") || el.name || el.placeholder || el.title).slice(0, 60);
+    /* The role a test would find it by — \`getByRole("button", { name })\` survives a restyle that a
+     * CSS path does not. Only the roles worth naming; anything else is found by its text. */
+    const roleOf = (el) => {
+      const said = el.getAttribute("role");
+      if (said) return said;
+      if (el.tagName === "A" && el.hasAttribute("href")) return "link";
+      if (el.tagName === "BUTTON" || el.tagName === "SUMMARY") return "button";
+      if (el.tagName === "INPUT") {
+        return { button: "button", submit: "button", reset: "button", checkbox: "checkbox", radio: "radio" }[el.type] || "";
+      }
+      return "";
+    };
     const point = (el) => {
       intoView(el);
       const r = el.getBoundingClientRect();
@@ -174,7 +186,7 @@ export function locate(selector: string, text: string): string {
     }
     if (el) {
       const at = point(el);
-      return at ? { ...at, label: label(el) || ${css} } : { unreachable: label(el) || ${css} };
+      return at ? { ...at, label: label(el) || ${css}, role: roleOf(el) } : { unreachable: label(el) || ${css} };
     }
     return { options: clickable.map(label).filter(Boolean).slice(0, 25) };
   })()`;
@@ -263,8 +275,11 @@ export function dispatchClick(x: number, y: number): string {
 
 /** What `focusField` answers with. `before` is the field's content before anything is typed, so
  *  the caller can tell a keystroke that landed from one that did not. */
+/** How a test would find the same field again — see `focusField`. */
+export type FieldBy = "label" | "placeholder" | "title" | "selector" | "focused";
+
 export type Focused =
-  | { name: string; kind: "text" | "select" | "rich"; before: string }
+  | { name: string; kind: "text" | "select" | "rich"; before: string; by: FieldBy; key: string }
   | { fields: string[] }
   | { problem: "frame" | "unfocused"; focused: string };
 
@@ -302,26 +317,35 @@ export function focusField(into: string): string {
         (el instanceof HTMLInputElement && !TEXTLESS.includes(el.type))) &&
       !el.disabled &&
       !el.readOnly;
-    const namesOf = (el) => {
-      const names = [];
-      if (el.labels) for (const one of el.labels) names.push(one.innerText);
-      names.push(el.getAttribute("aria-label"));
+    /* Every name a field goes by, and how a Playwright test would find it by that name — so a
+     * field Kith typed into by its label is one a saved test finds by its label, not by a CSS path
+     * that the next restyle breaks. */
+    const attr = (name, value) => "[" + name + '="' + CSS.escape(value) + '"]';
+    const sourcesOf = (el) => {
+      const out = [];
+      const add = (name, by, key) => {
+        // "Email *" and "Email:" are what a form says; "Email" is what anybody asking means.
+        const clean = squash(name).replace(/[\\s:*]+$/, "");
+        if (clean) out.push({ name: clean, by, key: key === undefined ? clean : key });
+      };
+      if (el.labels) for (const one of el.labels) add(one.innerText, "label");
+      add(el.getAttribute("aria-label"), "label");
       const by = el.getAttribute("aria-labelledby");
-      if (by) for (const id of by.split(/\\s+/)) names.push(document.getElementById(id)?.innerText);
-      names.push(
-        el.getAttribute("placeholder"),
-        el.getAttribute("aria-placeholder"),
-        el.getAttribute("data-placeholder"),
-        el.getAttribute("name"),
-        el.title,
-        el.id,
-      );
-      // "Email *" and "Email:" are what a form says; "Email" is what anybody asking means.
-      return names.map((one) => squash(one).replace(/[\\s:*]+$/, "")).filter(Boolean);
+      if (by) for (const id of by.split(/\\s+/)) add(document.getElementById(id)?.innerText, "label");
+      add(el.getAttribute("placeholder"), "placeholder");
+      for (const name of ["aria-placeholder", "data-placeholder", "name"]) {
+        const value = el.getAttribute(name);
+        if (value) add(value, "selector", attr(name, value));
+      }
+      add(el.title, "title");
+      if (el.id) add(el.id, "selector", "#" + CSS.escape(el.id));
+      return out;
     };
+    const namesOf = (el) => sourcesOf(el).map((one) => one.name);
     const describe = (el) => namesOf(el)[0] || el.tagName.toLowerCase();
 
     let el = null;
+    let how = { by: "focused", key: "" };
     if (${css}) {
       const asked = query(${css});
       const hit = asked.el;
@@ -331,17 +355,29 @@ export function focusField(into: string): string {
           : editable(hit.control)
             ? hit.control
             : [...hit.querySelectorAll("input, textarea, select, [contenteditable]")].find(editable) || null;
+        if (el) how = { by: "selector", key: ${css} };
       }
       if (!el) {
         const fields = [...document.querySelectorAll("input, textarea, select, [contenteditable]")].filter(
           (one) => editable(one) && visible(one) && !(one.parentElement && one.parentElement.isContentEditable),
         );
-        const named = fields.map((one) => ({ one, names: namesOf(one).map((name) => name.toLowerCase()) }));
-        const found =
-          named.find((field) => field.names.includes(${wanted})) ||
-          named.find((field) => field.names.some((name) => name.includes(${wanted})));
-        if (!found) return { fields: fields.map(describe).slice(0, 25) };
+        const named = fields.map((one) => ({ one, sources: sourcesOf(one) }));
+        const lower = (source) => source.name.toLowerCase();
+        let source = null;
+        let found = null;
+        for (const exact of [true, false]) {
+          for (const field of named) {
+            source = field.sources.find((one) => (exact ? lower(one) === ${wanted} : lower(one).includes(${wanted})));
+            if (source) {
+              found = field;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (!found || !source) return { fields: fields.map(describe).slice(0, 25) };
         el = found.one;
+        how = { by: source.by, key: source.key };
       }
     } else {
       el = document.activeElement;
@@ -372,7 +408,7 @@ export function focusField(into: string): string {
       selection.addRange(range);
     }
     const kind = el instanceof HTMLSelectElement ? "select" : el.isContentEditable ? "rich" : "text";
-    return { name: describe(el), kind, before: el.isContentEditable ? el.innerText : el.value };
+    return { name: describe(el), kind, before: el.isContentEditable ? el.innerText : el.value, ...how };
   })()`;
 }
 
@@ -449,6 +485,31 @@ export function chooseOption(text: string): string {
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     return { chose: pick.text.trim(), choices: [] };
+  })()`;
+}
+
+/**
+ * Is it on the page yet? For `wait`: text anywhere a person would read it, or an element a
+ * selector finds that is actually drawn. Answers `"bad"` for a selector that does not parse, so
+ * the caller can say so once rather than waiting out its whole timeout on a typo.
+ */
+export function seen(text: string, selector: string): string {
+  const wanted = JSON.stringify(text.replace(/\s+/g, " ").trim().toLowerCase());
+  const css = JSON.stringify(selector);
+  return `(() => {
+    if (${css}) {
+      let el;
+      try {
+        el = document.querySelector(${css});
+      } catch (_) {
+        return "bad";
+      }
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+    }
+    const page = (document.body ? document.body.innerText : "").replace(/\\s+/g, " ").toLowerCase();
+    return page.includes(${wanted});
   })()`;
 }
 

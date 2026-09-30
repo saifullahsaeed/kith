@@ -178,6 +178,19 @@ and stop — no verification entries, no hand-back, no "done with a known issue"
 ordering, not a reminder: everything below assumes a green suite, and the most expensive close is
 the one that was carefully evidenced on top of a broken build.
 
+**If the work changed something a person uses, use it before closing.** A green suite says the
+code agrees with its tests, not that the screen works. `browser` it:
+
+1. `open` the running app — `private: true` when the check needs a clean login.
+2. Do what the requirement says a person does: click by what things say, `type` into fields by
+   their labels.
+3. `wait` for what should appear once it worked. `found: false` is a failed check.
+4. Read the `errors` the answers carry. A console error or a failed request is a failed check,
+   however right the page looks.
+5. `save_test` into the project's tests, so the check runs on every commit without you.
+
+The flow you ran — and the test file it became — is the verification entry for that requirement.
+
 Then, before closing, re-read the brief and record one verification entry per requirement: met or
 not, and the file, command, test or decision that proves it. A passing build does not prove
 behaviour, and a comment saying "done" is not evidence.

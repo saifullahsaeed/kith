@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ArrowLeft, ArrowRight, Crosshair, KeyRound, Monitor, Plus, RotateCw, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Crosshair, KeyRound, Monitor, Plus, RotateCw, VenetianMask, X } from "lucide-react";
 
 import { CookieRow, ViewportRow } from "@/components/shell/browser-tools";
 import { Absent } from "@/components/shell/plugin-surface";
@@ -23,8 +23,16 @@ import { sendToChat, type Picked } from "@/lib/browser-pick";
  * That arrangement has one consequence worth knowing before reading the rest: **the view paints
  * on top of everything.** A dropdown, a dialog, a drag preview drawn by Kith over this pane
  * would be underneath it. So `hide` is called on unmount, when the tab is not the visible one,
- * and whenever the measured rectangle collapses — and every one of those is a bug if it is
- * missed, in the form of a browser floating over a settings dialog.
+ * whenever the measured rectangle collapses, and whenever something is drawn over the pane — and
+ * every one of those is a bug if it is missed, in the form of a browser floating over a settings
+ * dialog.
+ *
+ * Hiding is cheap to do and invisible to look at, because the hole is never empty: it holds a
+ * recent picture of the page, kept fresh by the shell, **under** the live view. While the view is
+ * up nobody can see the picture; the moment it steps aside the picture is what is there. This is
+ * how Claude's desktop app keeps its preview pane under its own menus, and it replaced two worse
+ * answers — a gray rectangle, and a picture taken at the moment of hiding, which made the hide
+ * wait for a capture and left the alerts panel under the page for as long as the capture took.
  *
  * ## Why the chrome is Kith's
  *
@@ -55,6 +63,19 @@ interface ViewStatus {
   tab: string;
   /** Every tab, in strip order. */
   tabs: TabSummary[];
+  /** Which picture of the front tab is the latest; 0 for none. Absent from an older shell. */
+  frame?: number;
+}
+
+/** A picture of the page, and where in the hole it was painted — not the whole hole when a
+ *  viewport letterboxes the page. */
+interface Frame {
+  seq: number;
+  snapshot: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface TabSummary {
@@ -62,6 +83,8 @@ interface TabSummary {
   title: string;
   url: string;
   loading: boolean;
+  /** Its own empty cookie jar, gone when it closes — signed out beside tabs that are signed in. */
+  private?: boolean;
 }
 
 /** What a tab is called in the strip: its title, else its host, else what it is. */
@@ -107,27 +130,78 @@ const EMPTY: ViewStatus = {
  * future overlay has to remember to tell the browser about itself, and the first one that forgets
  * is a bug that looks exactly like the app having come apart.
  *
- * `elementFromPoint` asks who is actually on top. Five points rather than one, because a panel
- * that covers most of the pane still hides most of the page, and a single centre sample would
- * call that uncovered.
+ * Two questions, because Kith draws over the room in two ways, and a false "covered" costs nothing
+ * anybody can see — the pane shows its picture of the page — while a missed one is the page drawn
+ * over the thing that was opened. So each errs towards covered.
+ *
+ * **What was portalled to `<body>`** — every menu, dialog, popover and tooltip Radix draws — is
+ * answered exactly, by rectangle, from the portal itself (`portalOver`). It used to be answered by
+ * the hit test below and could not be: a modal menu sets `pointer-events: none` on `<body>`, so
+ * hit-testing sees through everything but the menu, and a menu that fell between the test's points
+ * was a menu under the page.
+ *
+ * **What is drawn inside the app** — the alerts panel's click-away, the control panel, a dropdown
+ * that is not portalled — is found by `elementFromPoint` over a grid across the pane. An ancestor
+ * of the hole covers nothing: with `<body>` click-through, hit-testing answers `<html>`.
  */
 function covered(hole: HTMLElement, box: DOMRect): boolean {
-  const inset = 4;
-  const points: [number, number][] = [
-    [box.left + box.width / 2, box.top + box.height / 2],
-    [box.left + inset, box.top + inset],
-    [box.right - inset, box.top + inset],
-    [box.left + inset, box.bottom - inset],
-    [box.right - inset, box.bottom - inset],
-  ];
-  for (const [x, y] of points) {
-    const top = document.elementFromPoint(x, y);
-    // Outside the viewport answers null — that is the pane being scrolled off, which `place`
-    // already handles by its rectangle, so it does not count as buried.
-    if (!top) continue;
-    if (top === hole || hole.contains(top)) return false;
+  return portalOver(hole, box) || drawnOver(hole, box);
+}
+
+/**
+ * Is anything portalled to the body open over the pane — or open modally anywhere?
+ *
+ * **Modal counts wherever it is.** A modal menu makes the whole window "click to dismiss", and a
+ * click on a live page does not reach Kith's document at all: the page would take the click and the
+ * menu would stay open. Over the picture, the click lands on Kith and dismisses it like anywhere
+ * else in the app.
+ */
+function portalOver(hole: HTMLElement, box: DOMRect): boolean {
+  if (getComputedStyle(document.body).pointerEvents === "none") return true;
+  for (const child of Array.from(document.body.children)) {
+    if (child.contains(hole) || NOT_DRAWN.has(child.tagName)) continue;
+    if (paintsOver(child, box)) return true;
   }
-  return true;
+  return false;
+}
+
+const NOT_DRAWN = new Set(["SCRIPT", "STYLE", "TEMPLATE", "LINK", "META", "NOSCRIPT"]);
+
+/** Does this subtree paint anywhere over the box? A portal's own wrapper is usually zero-sized
+ *  with its content positioned inside it, so zero-sized elements are looked through, not at. */
+function paintsOver(root: Element, box: DOMRect): boolean {
+  const pending: Element[] = [root];
+  // Bounded: a menu is found in its first few levels, and this runs on every mutation.
+  for (let looked = 0; pending.length && looked < 64; looked += 1) {
+    const element = pending.pop() as Element;
+    const rect = element.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      if (rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top) return true;
+      continue;
+    }
+    pending.push(...Array.from(element.children));
+  }
+  return false;
+}
+
+/** Is something drawn over the pane from inside the app? A grid of hit tests, and any point
+ *  covered counts: a dropdown over one corner is still a dropdown the page would hide. */
+function drawnOver(hole: HTMLElement, box: DOMRect): boolean {
+  const across = 5;
+  const down = 5;
+  for (let i = 0; i < across; i += 1) {
+    for (let j = 0; j < down; j += 1) {
+      const x = box.left + (box.width * (i + 0.5)) / across;
+      const y = box.top + (box.height * (j + 0.5)) / down;
+      const top = document.elementFromPoint(x, y);
+      // Outside the viewport answers null — that is the pane being scrolled off, which `place`
+      // already handles by its rectangle, so it does not count as buried.
+      if (!top) continue;
+      if (top === hole || hole.contains(top) || top.contains(hole)) continue;
+      return true;
+    }
+  }
+  return false;
 }
 
 export function BrowserPane({
@@ -158,6 +232,13 @@ export function BrowserPane({
   /** The last URL the shell reported, so typing is not overwritten mid-word by a status push
    *  and the bar still follows the page when it genuinely moves. */
   const shown = useRef("");
+  /** The latest picture of the page, always in the hole under the live view — so when the view
+   *  steps aside for a menu or a panel, the page is still what is there. */
+  const [underlay, setUnderlay] = useState<Frame | null>(null);
+  const underlaySeq = useRef(0);
+  /** Hidden for something drawn over the pane, so the hide is sent once per covering rather than
+   *  on every mutation while it lasts. */
+  const coveredNow = useRef(false);
 
   const shell = (window as unknown as { kith?: Shell }).kith;
   const bridge = shell?.webView;
@@ -239,6 +320,33 @@ export function BrowserPane({
     });
   }, [bridge, owner]);
 
+  /* Keep the picture under the view current. The status says which picture is the latest; the
+   * picture itself is fetched only when that moves, because status goes out on every title
+   * change and the picture is tens of kilobytes. None — an empty browser, a tab not yet painted,
+   * or a shell too old to take them — leaves the hole its plain background. */
+  const latest = status.frame ?? 0;
+  useEffect(() => {
+    if (!bridge || !latest) {
+      underlaySeq.current = 0;
+      setUnderlay(null);
+      return;
+    }
+    if (underlaySeq.current === latest) return;
+    let current = true;
+    void bridge
+      .ask({ verb: "frame", owner })
+      .then((answer) => {
+        const got = answer as Partial<Frame> | undefined;
+        if (!current || typeof got?.snapshot !== "string" || !got.snapshot) return;
+        underlaySeq.current = Number(got.seq ?? latest);
+        setUnderlay(got as Frame);
+      })
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [bridge, owner, latest]);
+
   /* Keep the view over the hole.
    *
    * A `ResizeObserver` on the spacer catches the pane being resized, and a scroll listener in
@@ -256,10 +364,22 @@ export function BrowserPane({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         const box = element.getBoundingClientRect();
-        if (!visible || box.width < 1 || box.height < 1 || covered(element, box)) {
+        if (!visible || box.width < 1 || box.height < 1) {
+          coveredNow.current = false;
           void bridge.ask({ verb: "hide", owner });
           return;
         }
+        if (covered(element, box)) {
+          // Only ever `hide`: immediate, and a verb every shell has, so nothing drawn over the
+          // pane waits on a capture or on the shell being as new as this code. The picture that
+          // shows instead is already in the hole.
+          if (!coveredNow.current) {
+            coveredNow.current = true;
+            void bridge.ask({ verb: "hide", owner });
+          }
+          return;
+        }
+        coveredNow.current = false;
         void bridge
           .ask({
             verb: "place",
@@ -368,6 +488,8 @@ export function BrowserPane({
               >
                 {tab.loading ? (
                   <span aria-label="loading" className="border-muted-foreground/60 size-2.5 flex-none animate-spin rounded-full border border-t-transparent" />
+                ) : tab.private ? (
+                  <VenetianMask aria-label="private" className="text-kith size-3 flex-none" />
                 ) : null}
                 <span className="truncate">{label}</span>
               </button>
@@ -394,6 +516,16 @@ export function BrowserPane({
           aria-label="New tab"
         >
           <Plus className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="mb-0.5 size-6 flex-none"
+          onClick={() => void ask("tab-new", { private: true })}
+          title="New private tab — its own empty cookies, gone when you close it"
+          aria-label="New private tab"
+        >
+          <VenetianMask className="size-3.5" />
         </Button>
       </div>
 
@@ -516,7 +648,17 @@ export function BrowserPane({
       {/* The hole. Nothing renders here — the shell paints the page over this rectangle. The
           background shows for the instant before the first `place` lands, and behind a page
           that has not painted. */}
-      <div ref={hole} className="bg-muted flex min-h-0 flex-1 items-center justify-center">
+      <div ref={hole} className="bg-muted relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+        {underlay && tabs.length > 0 ? (
+          <img
+            src={underlay.snapshot}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="pointer-events-none absolute max-w-none select-none"
+            style={{ left: underlay.x, top: underlay.y, width: underlay.width, height: underlay.height }}
+          />
+        ) : null}
         {/* With no tab open there is no view to paint here, so the hole says what to do instead of
             sitting blank. Inside the hole on purpose: `covered()` counts what is in it as the
             pane's own, so this never reads as something drawn over the browser. */}

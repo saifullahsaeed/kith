@@ -1,6 +1,6 @@
 ---
 name: driving-a-browser
-description: Use when driving the Browser tab — reading a page, filling a form, getting past a login, or checking how something looks. Covers spending the fewest rounds, when a screenshot is worth its tokens, and how to hand the wheel back when you are stuck.
+description: Use when driving the Browser tab — reading a page, filling a form, getting past a login, checking how something looks, or checking that a change works and keeping that check as a test. Covers spending the fewest rounds, when a screenshot is worth its tokens, and how to hand the wheel back when you are stuck.
 ---
 
 # Driving the browser
@@ -77,6 +77,41 @@ do — Enter submits the field's form or presses a focused button, Tab moves to 
 Backspace deletes, the arrows move through a dropdown — and **`did` says which**. "The page
 handled it" means the page took the key itself; a key that reached the page and did nothing says
 that too, so check the page rather than pressing it again.
+
+## Check that it worked, not just that you clicked
+
+Most acts wait for the page to *settle*, which is a guess about when it is done. A page that
+fetches its answer settles before the answer is there. So when an outcome matters, say what it is:
+
+- **`wait(text: "Order placed")`** until it appears; `selector` for an element, `url` for "the
+  address changed to…", `gone: true` for a spinner or a dialog to go away. `found: false` means
+  it did not happen within 15 seconds — that is the finding, not a reason to retry the click.
+- **Read the `errors`.** Every answer carries new console errors, uncaught exceptions and failed
+  requests since the last one — `POST /api/orders → 500` behind a page that says "Thanks". A
+  page that looks right with errors under it is not working. `errors` on its own lists every one
+  the tab is holding.
+
+## Keep a check as a test
+
+When you have walked through a flow and `wait`ed for its outcome, **`save_test(name, path)`**
+writes what you did since the last `open` as a Playwright test in the project —
+`tests/e2e/checkout.spec.ts`, wherever the project keeps them. It finds each thing the way you
+did: a button by its role and name, a field by its label. Then the check runs on every commit
+without you.
+
+- **It only asserts what you waited for.** A flow with no `wait` is a test that passes as long as
+  nothing throws, and `save_test` will say so. Wait for the outcome before saving.
+- **It starts from your last `open`.** Open the page the flow begins on, then do the flow.
+- **Anything done by hand is not in it** — a login they typed, a click they made. A test starts
+  signed out, so record flows that need a login in a **private tab** and sign in as part of them.
+- Read the file before telling them it is a test they can rely on.
+
+## A private tab for a clean session
+
+`open(url, private: true)` opens a tab with its own empty cookie jar, gone when it closes. Use it
+to check what somebody who is not signed in sees, to be a second user beside the first, or to
+record a test that has to start from nothing. Their logins in the other tabs are untouched, and a
+link opened from a private tab stays in its session.
 
 ## Tabs
 
@@ -177,11 +212,9 @@ page and continue.
   with no app has none. The call tells you in a sentence; do not retry it.
 - **Opening, reading, clicking and typing all work with the tab shut.** The page is live whether
   or not anybody is looking at it, so you can do a whole errand and only then ask them to look.
-- **`look` is the exception** — a screenshot needs the tab open, because there is no picture of a
-  page that is not on screen. Call `show` first and it will be. Prefer `read` regardless; see the
-  top of this skill.
-- **`show` puts the tab on screen yourself.** Use it before a screenshot, and use it when you
-  want them to *look* — "I've put it in the tab, have a scroll" beats describing a page.
+- **`look` works with the tab shut too.** Prefer `read` regardless; see the top of this skill.
+- **`show` puts the tab on screen yourself.** Use it when you want them to *look* — "I've put it
+  in the tab, have a scroll" beats describing a page.
 - **`back` retraces within a tab.** A new tab starts with no history; `switch` to the tab you came
   from instead.
 - **A sign-in popup is not a tab.** "Continue with Google" and its kind open a small window

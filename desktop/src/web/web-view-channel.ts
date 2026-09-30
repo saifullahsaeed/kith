@@ -66,11 +66,17 @@ export function installWebViewChannel(): void {
         case "hide":
           views.hide(at);
           return { ok: true };
+        // The picture the pane keeps under the view, so hiding it never looks like the page
+        // going away. Asked for when the status says there is a newer one — see `views.frame`.
+        case "frame":
+          return views.frame(at) ?? { seq: 0 };
         case "navigate":
           return await views.navigate(at, String((raw as { url?: unknown }).url ?? ""));
         // The strip: a person opening, switching and closing tabs with their own hand.
         case "tab-new":
-          return await views.newTab(at, String((raw as { url?: unknown }).url ?? ""));
+          return await views.newTab(at, String((raw as { url?: unknown }).url ?? ""), {
+            private: (raw as { private?: unknown }).private === true,
+          });
         case "tab-switch":
           return views.switchTab(at, String((raw as { tab?: unknown }).tab ?? ""));
         case "tab-close":
@@ -112,12 +118,10 @@ export function installWebViewChannel(): void {
         // precedes, so neither the model nor a plugin can ask it what you are signed into.
         case "cookie-domains": {
           const asked = raw as { source?: unknown; profile?: unknown };
-          return {
-            domains: await cookies.domainsIn(
-              String(asked.source ?? ""),
-              asked.profile ? String(asked.profile) : undefined,
-            ),
-          };
+          return await cookies.domainsIn(
+            String(asked.source ?? ""),
+            asked.profile ? String(asked.profile) : undefined,
+          );
         }
         case "cookie-import": {
           const asked = raw as { source?: unknown; domain?: unknown; profile?: unknown };
