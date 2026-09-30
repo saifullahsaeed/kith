@@ -24,6 +24,7 @@ import { ArrowLeft, Hand, Maximize2, MousePointer2, Plus, StickyNote } from "luc
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -37,7 +38,7 @@ import {
   type BoardFrame,
   type BoardNote,
   extent,
-  FRAME_H,
+  frameHeight,
   layout,
   ZOOM_RANGE,
 } from "@/lib/design/board";
@@ -107,7 +108,14 @@ export function DesignBoard({ designs, board, onChange, onOpen, projectId, onBac
   const [picked, setPicked] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<string | null>(null);
 
-  const frames = layout(designs.map((one) => one.file), board);
+  /* Each design's declared size, so the grid steps by the height a frame is actually drawn at.
+   * Read with the same `readFrame(frameAttribute(...))` the frame itself uses, so the two cannot
+   * disagree about how tall a box is. */
+  const sizes = useMemo(
+    () => Object.fromEntries(designs.map((one) => [one.file, readFrame(frameAttribute(one.html))])),
+    [designs],
+  );
+  const frames = layout(designs.map((one) => one.file), board, sizes);
 
   /* The viewport is held locally and written back on settle.
    *
@@ -276,7 +284,7 @@ export function DesignBoard({ designs, board, onChange, onOpen, projectId, onBac
   const fit = () => {
     const box = surface.current?.getBoundingClientRect();
     if (!box) return;
-    const bounds = extent(frames, board.notes);
+    const bounds = extent(frames, board.notes, sizes);
     const zoom = Math.min(
       ZOOM_RANGE[1],
       Math.max(ZOOM_RANGE[0], Math.min((box.width - 96) / bounds.w, (box.height - 96) / bounds.h)),
@@ -551,8 +559,8 @@ function Frame({
   };
   const scale = frame.w / authored.width;
   // The frame's own proportions, so a phone is tall and narrow on the board and a wide screen
-  // is wide. Clamped so one very long page cannot make every other frame unreadably small.
-  const boxHeight = Math.min(FRAME_H * 3, Math.round(frame.w * (authored.height / authored.width)));
+  // is wide. `layout()` spaces the grid by this same number.
+  const boxHeight = frameHeight(frame, authored);
 
   /* The counter-scale that keeps a name readable at 26%.
    *

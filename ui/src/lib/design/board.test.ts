@@ -9,7 +9,18 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { EMPTY, extent, FRAME_H, FRAME_W, layout, readBoard, writeBoard, ZOOM_RANGE } from "@/lib/design/board";
+import {
+  EMPTY,
+  extent,
+  FRAME_H,
+  FRAME_W,
+  frameHeight,
+  layout,
+  readBoard,
+  writeBoard,
+  ZOOM_RANGE,
+} from "@/lib/design/board";
+import { PRESETS } from "@/lib/design/frame";
 
 describe("reading a board someone else wrote", () => {
   it("round-trips what it wrote", () => {
@@ -75,6 +86,38 @@ describe("layout — where a frame goes when nobody has said", () => {
     expect(placed["new.html"].y).toBeGreaterThanOrEqual(FRAME_H);
   });
 
+  it("spaces rows by the height the frames are actually drawn at", () => {
+    // A phone is drawn at its own proportions — 440 wide is ~950 tall — and the grid used to
+    // step by a fixed 560-tall box, so every row of phones covered the bottom third of the row
+    // above it. 54 mobile screens came up as a stack of cards with their lower halves hidden.
+    const phones = ["a.html", "b.html", "c.html", "d.html"];
+    const sizes = Object.fromEntries(phones.map((file) => [file, PRESETS.mobile]));
+    const placed = layout(phones, EMPTY, sizes);
+    const tall = frameHeight(placed["a.html"], PRESETS.mobile);
+    expect(tall).toBeGreaterThan(FRAME_H);
+    expect(placed["d.html"].y).toBeGreaterThanOrEqual(placed["a.html"].y + tall);
+  });
+
+  it("steps each row by its own tallest frame, not by the tallest on the board", () => {
+    const files = ["p1.html", "p2.html", "p3.html", "w1.html", "w2.html", "w3.html", "last.html"];
+    const sizes = {
+      ...Object.fromEntries(files.slice(0, 3).map((file) => [file, PRESETS.mobile])),
+      ...Object.fromEntries(files.slice(3).map((file) => [file, PRESETS.desktop])),
+    };
+    const placed = layout(files, EMPTY, sizes);
+    const phone = frameHeight(placed["p1.html"], PRESETS.mobile);
+    // The phones' row is as tall as a phone; the desktops' row below it is not.
+    expect(placed["w1.html"].y).toBeGreaterThanOrEqual(phone);
+    expect(placed["last.html"].y - placed["w1.html"].y).toBeLessThan(phone);
+  });
+
+  it("places a new design below a tall arrangement, not inside it", () => {
+    const board = { frames: { "home.html": { x: 0, y: 0, w: FRAME_W } }, notes: [] };
+    const sizes = { "home.html": PRESETS.mobile, "new.html": PRESETS.mobile };
+    const placed = layout(["home.html", "new.html"], board, sizes);
+    expect(placed["new.html"].y).toBeGreaterThanOrEqual(frameHeight(board.frames["home.html"], PRESETS.mobile));
+  });
+
   it("ignores a stored position for a design that is no longer attached", () => {
     const board = { frames: { "gone.html": { x: 10, y: 10, w: 400 } }, notes: [] };
     expect(Object.keys(layout(["a.html"], board))).toEqual(["a.html"]);
@@ -89,6 +132,11 @@ describe("extent — what fit-to-screen fits to", () => {
     );
     expect(box.x).toBe(-200);
     expect(box.w).toBe(1200);
+  });
+
+  it("reaches the bottom of a frame taller than the default box", () => {
+    const box = extent({ "a.html": { x: 0, y: 0, w: FRAME_W } }, [], { "a.html": PRESETS.mobile });
+    expect(box.h).toBe(frameHeight({ w: FRAME_W }, PRESETS.mobile));
   });
 
   it("gives an empty board something to look at rather than a zero-sized box", () => {

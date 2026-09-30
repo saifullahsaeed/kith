@@ -58,8 +58,29 @@ export interface Board {
 /** A frame's default width in board units, and the gutter between them. */
 export const FRAME_W = 440;
 const GAP = 64;
-/** Enough room for a screen; frames are clipped to it and scroll inside on the board. */
+/** The box a design is given before its size is known, and the unit its height is capped in. */
 export const FRAME_H = 560;
+
+/** A design's authored size — what its `data-k-frame` declares. See `frame.ts`. */
+export interface Size {
+  width: number;
+  height: number;
+}
+
+/**
+ * How tall a frame is drawn: the design's own proportions at the frame's width.
+ *
+ * One function because two places need the same answer — the frame that draws the box, and the
+ * layout that decides where the next box goes. They used to disagree: frames took their height
+ * from the design while the grid still stepped by a fixed `FRAME_H`, so a row of phones (440
+ * wide is ~950 tall) covered the bottom third of the row above it.
+ *
+ * Clamped so one very long page cannot make every other frame unreadably small.
+ */
+export function frameHeight(frame: Pick<BoardFrame, "w">, size?: Size): number {
+  if (!size) return FRAME_H;
+  return Math.min(FRAME_H * 3, Math.round(frame.w * (size.height / size.width)));
+}
 
 /** How far the board can be zoomed.
  *
@@ -151,7 +172,12 @@ export function writeBoard(board: Board): string {
  * been placed, in the order the deliverables came, so attaching a design puts it somewhere
  * visible without anyone arranging anything.
  */
-export function layout(files: string[], board: Board, columns = 3): Record<string, BoardFrame> {
+export function layout(
+  files: string[],
+  board: Board,
+  sizes: Record<string, Size> = {},
+  columns = 3,
+): Record<string, BoardFrame> {
   const placed: Record<string, BoardFrame> = {};
   const loose: string[] = [];
 
@@ -163,24 +189,32 @@ export function layout(files: string[], board: Board, columns = 3): Record<strin
 
   // Start below whatever has been arranged, so an auto-placed frame never lands on a deliberate
   // one — the arrangement is the part a person made by hand and the part worth protecting.
-  const bottom = Object.values(placed).reduce((low, frame) => Math.max(low, frame.y + FRAME_H), 0);
-  const top = Object.keys(placed).length ? bottom + GAP : 0;
+  const bottom = Object.entries(placed).reduce(
+    (low, [file, frame]) => Math.max(low, frame.y + frameHeight(frame, sizes[file])),
+    0,
+  );
+  let top = Object.keys(placed).length ? bottom + GAP : 0;
 
-  loose.forEach((file, at) => {
-    placed[file] = {
-      x: (at % columns) * (FRAME_W + GAP),
-      y: top + Math.floor(at / columns) * (FRAME_H + GAP),
-      w: FRAME_W,
-    };
-  });
+  // Each row is as tall as its tallest frame, so a row of desktops is not spaced like phones.
+  for (let at = 0; at < loose.length; at += columns) {
+    const row = loose.slice(at, at + columns);
+    row.forEach((file, column) => {
+      placed[file] = { x: column * (FRAME_W + GAP), y: top, w: FRAME_W };
+    });
+    top += Math.max(...row.map((file) => frameHeight(placed[file], sizes[file]))) + GAP;
+  }
 
   return placed;
 }
 
 /** The smallest rectangle holding everything, so "fit to screen" has something to fit to. */
-export function extent(frames: Record<string, BoardFrame>, notes: BoardNote[]) {
+export function extent(
+  frames: Record<string, BoardFrame>,
+  notes: BoardNote[],
+  sizes: Record<string, Size> = {},
+) {
   const boxes = [
-    ...Object.values(frames).map((f) => ({ x: f.x, y: f.y, w: f.w, h: FRAME_H })),
+    ...Object.entries(frames).map(([file, f]) => ({ x: f.x, y: f.y, w: f.w, h: frameHeight(f, sizes[file]) })),
     ...notes.map((n) => ({ x: n.x, y: n.y, w: n.w, h: 140 })),
   ];
   if (!boxes.length) return { x: 0, y: 0, w: FRAME_W, h: FRAME_H };
