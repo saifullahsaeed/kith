@@ -164,6 +164,12 @@ export function foldRuns(lines: ActivityItem[], conversationId: string): Run[] {
       found.startedAt = at;
       found.description = mark.description ?? "";
       found.phases = mark.phases ?? [];
+    } else if (mark.state === "step") {
+      // The same run going on: running again, one more column, and the agents it already had.
+      found.state = "running";
+      found.endedAt = 0;
+      found.phases = mark.phases ?? found.phases;
+      found.phase = line.text;
     } else if (mark.state === "phase") {
       found.phase = line.text;
     } else if (mark.state === "log") {

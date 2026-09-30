@@ -183,6 +183,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   plan_work: { verb: "laid out the next tasks", group: "tasks" },
   // a fan-out of agents, in the background
   run_workflow: { verb: "started a workflow", group: "workflow" },
+  add_agents: { verb: "sent agents", group: "workflow" },
   check_workflow: { verb: "checked on the workflow", of: "run", group: "workflow" },
   stop_workflow: { verb: "stopped the workflow", of: "run", group: "workflow" },
 };

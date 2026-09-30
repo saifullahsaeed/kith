@@ -4,7 +4,8 @@
  * The workflow a turn started, as a card in the run strip — outside the fold, the same colour and
  * the same name as its live copy in the Activity panel.
  *
- * A `run_workflow` call is the one step in a turn whose result is not in the turn: the run happens
+ * A `run_workflow` call — or an `add_agents` step — is the one step in a turn whose result is not
+ * in the turn: the run happens
  * after the turn ends, in the background, and comes back as a new turn when it finishes. So its
  * row in the rail ("Started a workflow") says almost nothing, and it was the most consequential
  * thing the turn did. The card says what was started, how far it has got, and where to watch it —
@@ -35,6 +36,9 @@ interface Started {
   name: string;
   phases: string[];
   script: string;
+  /** Which step of the run an `add_agents` call sent, and the labels of its agents. */
+  step: number;
+  agents: string[];
 }
 
 /** The workflows these calls started, read off the calls themselves. */
@@ -44,7 +48,8 @@ export function useStartedWorkflows(calls: readonly number[]): Started[] {
     const out: Started[] = [];
     for (const index of key ? key.split(",").map(Number) : []) {
       const part = s.message.parts[index];
-      if (part?.type !== "tool-call" || part.toolName !== "run_workflow" || part.result === undefined) continue;
+      if (part?.type !== "tool-call" || part.result === undefined) continue;
+      if (part.toolName !== "run_workflow" && part.toolName !== "add_agents") continue;
       const wrapped = part.result as { ok?: boolean; result?: Record<string, unknown> } | null;
       const value = (wrapped && typeof wrapped === "object" && "result" in wrapped ? wrapped.result : wrapped) as
         | Record<string, unknown>
@@ -56,6 +61,8 @@ export function useStartedWorkflows(calls: readonly number[]): Started[] {
         name: typeof value.name === "string" ? value.name : "workflow",
         phases: Array.isArray(value.phases) ? value.phases.map(String) : [],
         script: typeof script === "string" ? script : "",
+        step: typeof value.step === "number" ? value.step : 0,
+        agents: Array.isArray(value.agents) ? value.agents.map(String) : [],
       });
     }
     return out.length ? JSON.stringify(out) : "";
@@ -77,7 +84,7 @@ export function WorkflowCards({ calls }: { calls: readonly number[] }) {
   return (
     <>
       {started.map((one) => (
-        <WorkflowCard key={one.run} started={one} />
+        <WorkflowCard key={`${one.run}-${one.step}`} started={one} />
       ))}
     </>
   );
@@ -98,7 +105,9 @@ function WorkflowCard({ started }: { started: Started }) {
   const clock = running && run?.startedAt ? formatClock(now - run.startedAt) : "";
   const took =
     run && !running && run.endedAt && run.startedAt ? formatWorked(run.endedAt - run.startedAt) : "";
-  const description = run?.description || (phases.length ? phases.join(" → ") : "");
+  const description = started.agents.length
+    ? started.agents.join(", ")
+    : run?.description || (phases.length ? phases.join(" → ") : "");
   const footnote = running
     ? "Patches come back to this chat when it finishes"
     : run?.state === "finished"
@@ -131,7 +140,8 @@ function WorkflowCard({ started }: { started: Started }) {
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-px">
           <span className="text-foreground text-[13px] font-semibold">
-            Started workflow <span className="font-mono text-teal-700 dark:text-teal-400">{started.name}</span>
+            {started.step > 1 ? `Step ${started.step} of ` : "Started workflow "}
+            <span className="font-mono text-teal-700 dark:text-teal-400">{started.name}</span>
           </span>
           {description ? (
             <span className="text-muted-foreground truncate text-xs">{description}</span>

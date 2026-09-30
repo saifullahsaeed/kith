@@ -65,10 +65,11 @@ export interface ActivityItem {
     failed?: boolean;
   };
   /** Present on `workflow` lines: a run's own state. `started` carries the plan, `phase` and
-   *  `log` are the script's progress, and `finished` / `failed` / `stopped` end it. */
+   *  `log` are the script's progress, and `finished` / `failed` / `stopped` end it. `step`
+   *  reopens an ended run for one more step (`add_agents`), with the whole plan so far. */
   workflow?: {
     run: string;
-    state: "started" | "phase" | "log" | "finished" | "failed" | "stopped";
+    state: "started" | "step" | "phase" | "log" | "finished" | "failed" | "stopped";
     name?: string;
     description?: string;
     phases?: string[];

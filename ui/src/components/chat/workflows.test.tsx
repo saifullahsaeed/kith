@@ -74,6 +74,24 @@ describe("folding the feed into agents", () => {
 });
 
 describe("folding the feed into runs", () => {
+  it("goes back to running when a step is added to a finished run, and keeps its agents", () => {
+    const [one] = foldRuns(
+      [
+        run("wf-1", "started", "loop", { phases: ["Step 1"] }),
+        agent("a", "running", "a"),
+        agent("a", "done", "reported"),
+        run("wf-1", "finished", "Step 1 of `loop` (wf-1) finished"),
+        run("wf-1", "step", "Step 2", { phases: ["Step 1", "Step 2"] }),
+      ],
+      "conv-1",
+    );
+    expect(one.state).toBe("running");
+    expect(one.endedAt).toBe(0);
+    expect(one.phases).toEqual(["Step 1", "Step 2"]);
+    expect(one.phase).toBe("Step 2");
+    expect(one.agents.map((agent) => agent.id)).toEqual(["a"]);
+  });
+
   it("carries the plan, the phase it is in, and how it ended", () => {
     const [one] = foldRuns(
       [
