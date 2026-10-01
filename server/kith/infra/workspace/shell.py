@@ -36,6 +36,9 @@ def _capture(command: str, timeout: int) -> tuple[int, str]:
     web page is HTML that gets converted to prose first, and clipping the HTML instead is what
     broke `fetch_url` for every real page — see there.
     """
+    confined = _in_copy(command, timeout)
+    if confined is not None:
+        return confined
     permissions.require_command(command, root())
     backgrounding = _looks_backgrounded(command)
     if backgrounding:
@@ -72,6 +75,59 @@ def _capture(command: str, timeout: int) -> tuple[int, str]:
             "genuinely slower than that."
         ) from None
     return proc.returncode, proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
+
+
+def _in_copy(command: str, timeout: int) -> tuple[int, str] | None:
+    """A command from a workflow agent's own copy, run inside the copy's boundary; None elsewhere.
+
+    The boundary is `confinement.copy_profile`: writes only in the copy and the scratch folder
+    beside it, no network but localhost, no read of Kith's data or the usual credentials. That
+    is what makes a shell safe to hand an agent at all, and it is also why there is no
+    permission prompt here — nobody is watching an agent to answer one, and nothing this
+    command can reach is anybody's but the copy's. No checkpoint either: the copy is the undo.
+
+    Run from where the work is in the copy (the project's folder), with its own process group so
+    a timeout ends the whole tree rather than the shell and none of what it started.
+    """
+    import signal
+
+    from kith.infra import confinement
+
+    try:
+        boxed = confinement.in_copy(["bash", "-lc", command])
+    except confinement.ConfinementError as exc:
+        raise WorkspaceError(str(exc)) from None
+    if boxed is None:
+        return None
+    backgrounding = _looks_backgrounded(command)
+    if backgrounding:
+        raise WorkspaceError(backgrounding)
+    argv, env = boxed
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(base_dir()),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise WorkspaceError(f"Could not run that in this copy: {exc}") from None
+    try:
+        raw, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
+        raise WorkspaceError(
+            f"That took longer than {timeout}s and was stopped. A server or a watcher cannot run "
+            "from an agent's copy; a command meant to finish is stuck or slower than that."
+        ) from None
+    return proc.returncode, (raw or b"").decode(errors="replace")
 
 
 #: Told to every command, so nothing stops to ask a question nobody is there to answer.

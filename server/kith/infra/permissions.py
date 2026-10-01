@@ -1157,11 +1157,16 @@ def _inside_pinned_worktree(resolved: Path) -> bool:
     is applied before this is consulted — so a worktree that somehow contains a credential
     file is still gated on that file.
     """
-    pinned = session_context.isolated_base()
+    pinned = session_context.isolated_copy()
     if not pinned:
         return False
     try:
-        return _inside(resolved, _resolve(Path(pinned)))
+        from kith.infra import confinement
+
+        # The copy, and the scratch folder beside it that its commands are given as a home —
+        # where a check script it ran leaves the screenshots it is meant to open.
+        copy = _resolve(Path(pinned))
+        return _inside(resolved, copy) or _inside(resolved, _resolve(confinement.scratch_for(copy)))
     except OSError:
         # Same posture as `linked_project_roots`: a permission check must not fail because a
         # path lookup did, and "not in the worktree" is the answer that gates rather than grants.

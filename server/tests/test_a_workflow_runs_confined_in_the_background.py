@@ -92,7 +92,7 @@ def agents(monkeypatch):
         return {"findings": f"report: {objective.splitlines()[0]}", "looked_at": "grep x2"}, _Report()
 
     monkeypatch.setattr(workers, "run_agent", fake)
-    monkeypatch.setattr(workers, "open_copy", lambda ident: "")
+    monkeypatch.setattr(workers, "open_copy", lambda ident, folder=None: "")
     return seen
 
 

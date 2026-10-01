@@ -508,8 +508,9 @@ def copy_profile(copy: Path, scratch: Path) -> str:
     ]
     lines += [
         "",
-        ";; Kith's own storage: databases, keys, every other copy.",
-        _deny("file-read-data", data, writable),
+        ";; Kith's own storage: databases, keys, every other copy — but not the skills, whose",
+        ";; scripts are what a skill tells the agent to run (a design check, a migration helper).",
+        _deny("file-read-data", data, [*writable, _real(settings.skills_dir())]),
     ]
     lines += ["", ";; Credentials, by convention."]
     for name in _SECRET_DIRS:
@@ -538,7 +539,7 @@ def in_copy(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
     """
     from kith.kernel import session_context
 
-    pinned = session_context.isolated_base()
+    pinned = session_context.isolated_copy()
     if not pinned:
         return None
     if not available():
@@ -549,6 +550,7 @@ def in_copy(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
     scratch = scratch_for(copy)
     for folder in (scratch, scratch / "tmp", scratch / "cache"):
         folder.mkdir(parents=True, exist_ok=True)
+    _lend_user_packages(scratch)
     place = Path(settings.DATA_DIR) / PROFILES
     place.mkdir(parents=True, exist_ok=True)
     path = place / f"copy-{copy.name}.sb"
@@ -561,7 +563,12 @@ def in_copy(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
         "npm_config_cache": str(scratch / "cache" / "npm"),
         "XDG_CACHE_HOME": str(scratch / "cache"),
         "CI": "1",
-        "KITH_WORKSPACE": str(copy),
+        "KITH_WORKSPACE": session_context.isolated_base() or str(copy),
+        # What a skill's own scripts look for. `HOME` is the scratch folder, so without these a
+        # design check finds no skills and no browser, and leaves its screenshots nowhere the
+        # agent is told about.
+        "KITH_SKILLS_DIR": str(settings.skills_dir()),
+        "KITH_SCRATCH": str(scratch / "shots"),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
         "PAGER": "cat",
@@ -570,7 +577,30 @@ def in_copy(argv: list[str]) -> tuple[list[str], dict[str, str]] | None:
         "TERM": "dumb",
         "NO_COLOR": "1",
     }
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(
+        Path.home() / "Library" / "Caches" / "ms-playwright"
+    )
+    if Path(browsers).is_dir():
+        env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
     return [SANDBOX_EXEC, "-f", str(path), *argv], env
+
+
+def _lend_user_packages(scratch: Path) -> None:
+    """Make the Python packages installed for this user importable from a copy's home.
+
+    `HOME` is the scratch folder, and Python finds `pip install --user` packages through `HOME`
+    (`~/Library/Python/X.Y`) — so with it moved, a skill's check script that imports playwright
+    reported "playwright is not installed here" in a copy and ran fine everywhere else. A link,
+    not a copy: read through, and the boundary still refuses a write behind it. Never raises.
+    """
+    real = _real(Path.home()) / "Library" / "Python"
+    link = scratch / "Library" / "Python"
+    try:
+        if real.is_dir() and not link.exists():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pass
 
 
 def forget(plugin_id: str) -> None:

@@ -23,9 +23,9 @@ an option for a program that often runs with nobody there.
 **A verifier checks a change against what the person asked.** :data:`GIVEN` plus
 :data:`CHECKING`, in a copy with the change applied, on the stronger model by default.
 
-Builders and verifiers may run the project's tests and checks (:data:`CHECKING`) because they
-run them inside their copy's boundary (`confinement.copy_profile`): writes only in the copy, no
-network but localhost.
+Builders and verifiers may run commands — the project's tests, its checks, a shell
+(:data:`CHECKING`) — because they run them inside their copy's boundary
+(`confinement.copy_profile`): writes only in the copy, no network but localhost.
 
 **None of them can start a workflow**, so one run cannot become a tree of them, and none can ask
 anyone anything — nobody is watching an agent's scratchpad.
@@ -97,12 +97,8 @@ GIVEN = frozenset(
 #: A handful of tools, and the smallness is the design. A builder is a worker that can change
 #: files in its own copy of the repository and hand back a patch; it is not a second agent with
 #: a life of its own. Everything in :data:`WITHHELD` is withheld from it too — it cannot commit,
-#: publish, run a shell, file a task, remember anything, ask anyone, or send a worker of its
-#: own. The new verbs are "edit" and, from :data:`CHECKING`, "run the tests on what I edited".
-#:
-#: **Still no `shell`.** A shell reaches anything the boundary allows, for as long as it likes,
-#: and a builder has no reason to want more than the project's own check and test commands —
-#: which `check_code` and `run_tests` already are.
+#: publish, file a task, remember anything, ask anyone, or send a worker of its own. The new
+#: verbs are "edit" and, from :data:`CHECKING`, "run what I edited".
 WRITING = frozenset(
     {
         "write_file",
@@ -116,7 +112,8 @@ WRITING = frozenset(
     }
 )
 
-#: What a **builder** and a **verifier** may run: the project's own tests, inside their copy.
+#: What a **builder** and a **verifier** may run, inside their copy: the project's own tests, and
+#: a shell.
 #:
 #: Withheld from every agent until the copy could hold a command. Two things made it safe to
 #: give: `confinement.copy_profile` — writes only inside the copy, no network but localhost —
@@ -128,7 +125,16 @@ WRITING = frozenset(
 #:
 #: Why it matters more than any brief: an agent that can run the code stops when the code works.
 #: One that cannot hands back a patch whose first `ImportError` is found by someone else.
-CHECKING = frozenset({"run_tests"})
+#:
+#: **`shell` joined it on 2026-10-01, because `run_tests` was not enough.** In the linear session
+#: the shell is his most-used tool — 48% of every call on 2026-09-30 — and what agents could not
+#: do without it is in the record: a design builder could not run the generator it wrote or the
+#: skill's own `check_design.py`, and five audit agents told to "run it and paste the output"
+#: all reported "I could not run anything" (they were scouts, which still cannot: an audit that
+#: has to demonstrate is a verifier's job now). Withholding it had been about what a shell could
+#: reach; the copy's boundary decides that now, for `shell` exactly as for `run_tests` —
+#: `infra/workspace/shell` runs it under `confinement.in_copy`.
+CHECKING = frozenset({"run_tests", "shell"})
 
 #: What an agent is deliberately not given, and why. Kept as a real list rather than "the
 #: rest of the registry" so that adding a tool forces the question — the test pairs this with
@@ -182,10 +188,9 @@ WITHHELD = frozenset(
         "schedule",
         "cancel_schedule",
         "list_schedules",
-        # Runs things with effects outside the copy: a process that outlives the agent, a shell
-        # that can reach anything, an installer. `run_tests` is the exception and lives in
-        # :data:`CHECKING`, because it runs inside the copy's boundary and ends before it returns.
-        "shell",
+        # Runs things with effects outside the copy: a process that outlives the agent, an
+        # installer. `run_tests` and `shell` are the exceptions and live in :data:`CHECKING`,
+        # because they run inside the copy's boundary and end before they return.
         "start_process",
         "stop_process",
         "check_process",
@@ -220,7 +225,7 @@ SCOUT_BRIEF = (
     "answer, and do not summarise as you go.\n\n"
     "You can read, search and look things up. You cannot change a file, run a command, file "
     "anything, or ask anyone a question — if the objective needs one of those, say so in your "
-    "report instead of trying.\n\n"
+    "report instead of trying: running things is a verifier's job, in a copy of its own.\n\n"
     "You are describing what is THERE, not what anybody has done. You cannot change a single "
     "byte, so every sentence you write is a statement about the code as you found it. Never "
     "write that something has been implemented, added, upgraded, fixed or delivered — write "
@@ -266,11 +271,12 @@ BUILDER_BRIEF = (
     "You have {rounds} rounds. Reading spends them, and the project notes below already tell "
     "you where things are: read what the change touches, then start editing — do not map the "
     "whole repository first. Aim to be making edits within the first third of your rounds.\n\n"
-    "You can read, search, look things up, edit files in your copy, and check your work: "
-    "`check_code` on a file you changed, and `run_tests` (filtered to the tests nearest "
-    "your change). Your copy has the project's dependencies, and these commands run confined to "
+    "You can read, search, look things up, edit files in your copy, and run things there: "
+    "`check_code` on a file you changed, `run_tests` (filtered to the tests nearest your "
+    "change), and `shell` for anything else — a generator you wrote, a skill's check script, "
+    "a migration. Your copy has the project's dependencies, and these commands run confined to "
     "it — they can write only in the copy and cannot reach the network. You cannot commit, "
-    "push, run a shell, file anything, remember anything, or ask anyone a question. If the "
+    "push, start a server, file anything, remember anything, or ask anyone a question. If the "
     "change needs one of those, make the edits you can and say plainly in your report what "
     "still needs running or deciding.\n\n"
     "Done means the check is clean on the files you touched and the nearest tests pass — or, if "
@@ -307,13 +313,13 @@ VERIFIER_BRIEF = (
     "asked, and you are hard to convince.\n\n"
     "- Their words outrank any brief. The workflow's own description of the task may have "
     "narrowed it; you are checking against what they said.\n"
-    "- Check for yourself. Read the changed code, run `check_code` and `run_tests` in this copy "
-    "(they run confined to it). A claim in a report is not evidence; a line of code, a passing "
-    "test or a failing one is.\n"
+    "- Check for yourself. Read the changed code, run `check_code`, `run_tests` and `shell` in "
+    "this copy (they run confined to it). A claim in a report is not evidence; a line of code, a "
+    "passing test, a command's output or a failing one is.\n"
     "- When you are not sure something is met, it is not met — say what would settle it.\n"
     "- Look for what is missing as hard as for what is wrong: a requested piece that nobody "
     "built fails the change as surely as a bug does.\n\n"
-    "You cannot change files, commit, run a shell, file anything or ask anyone anything.\n\n"
+    "You cannot change files, commit, file anything or ask anyone anything.\n\n"
     "Report, in this order: a verdict in one line (met, not met, or partly met); then each "
     "thing they asked for with met or not met and the evidence — `path:line` or the test "
     "name and its result; then what you could not check. No preamble, no offers to do more."
@@ -436,7 +442,7 @@ class WorkerError(RuntimeError):
     """An agent could not be started at all, with a reason worth reading."""
 
 
-def open_copy(agent_id: str) -> str:
+def open_copy(agent_id: str, folder: str | Path | None = None) -> str:
     """A private checkout for one builder, or :class:`WorkerError` saying why there is none.
 
     Refused rather than run without isolation. A builder that cannot be given its own copy would
@@ -452,7 +458,7 @@ def open_copy(agent_id: str) -> str:
 
     worktrees.prune()
     try:
-        made = worktrees.open_for(agent_id)
+        made = worktrees.open_for(agent_id, folder)
     except WorkspaceError as exc:
         raise WorkerError(str(exc)) from None
     if made is None:
@@ -479,6 +485,7 @@ def run_agent(
     effort: str = "",
     context: str | None = None,
     schema=None,
+    folder: str | Path | None = None,
 ) -> tuple[dict, _Report]:
     """One agent, start to finish. Returns its answer and the report it was assembled from.
 
@@ -496,6 +503,9 @@ def run_agent(
     `tools/submission`), and the agent ends on a valid call to it. The value comes back as
     ``answer["submitted"]``. An agent that never calls it ends the ordinary way, and the caller
     falls back to reading JSON out of its report.
+
+    ``folder`` is where the work is — the project's folder by default — and decides where in the
+    copy the agent's relative paths land (`worktrees.base_in`).
 
     ``carried``, ``tools`` and ``rounds`` exist for the repair round a workflow runs when an agent
     was asked for JSON and gave none, and for `revise`, which continues a builder in its copy.
@@ -550,7 +560,12 @@ def run_agent(
     # this is a no-op. `mirror_of` is not optional: without it an absolute path into the real
     # project is honoured as written, and a builder edits your files while its copy sits empty.
     # See `paths._bent_into_the_copy`.
-    with session_context.working_from(worktree, mirror_of=str(_source_of(worktree)) if worktree else ""):
+    from kith.infra.workspace import paths
+
+    base = str(worktrees.base_in(Path(worktree), folder or paths.base_dir())) if worktree else ""
+    with session_context.working_from(
+        worktree, mirror_of=str(_source_of(worktree)) if worktree else "", base=base
+    ):
         for event in stream_agent(
             started,
             config,
@@ -645,31 +660,17 @@ def _record_cost(path: Path, role: str, objective: str, report: _Report, began: 
 
 
 def _source_of(worktree: str) -> Path | str:
-    """The repository a copy was made from, asked of git rather than remembered.
+    """The repository a copy was made from, or "" when it cannot be established.
 
-    Read back from the worktree itself (``rev-parse --path-format=absolute --git-common-dir``
-    names the original's ``.git``) instead of being threaded down from `_send`. A resumed
-    worker is the reason: it is handed only the path its copy sits at, out of a database row
-    written in a previous turn, and it needs the same answer as the turn that made it.
-
-    Returns "" when it cannot be established, which turns the rewrite off rather than guessing —
-    a wrong original would bend paths into a copy of the wrong repository, which is worse than
-    not bending them at all.
+    "" turns the path rewrite off rather than guessing — a wrong original would bend paths into a
+    copy of the wrong repository, which is worse than not bending them at all. See
+    `worktrees.source_of`, which asks git.
     """
-    from kith.infra.workspace.git import _git
+    from kith.infra.workspace import worktrees
 
     if not worktree:
         return ""
-    try:
-        found = _git(
-            "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=Path(worktree), timeout=20
-        )
-    except Exception:
-        return ""
-    if found.exit_code != 0:
-        return ""
-    common = Path(found.output.strip().splitlines()[0].strip() or "")
-    return common.parent if common.name == ".git" else ""
+    return worktrees.source_of(Path(worktree)) or ""
 
 
 def _patch(diff: str, answer: dict) -> str:

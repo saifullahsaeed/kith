@@ -73,6 +73,9 @@ class Run:
     unwatched: bool = False
     #: The most this run may spend, in dollars. A hard ceiling — see `tools/workflow`.
     budget: float = 0.0
+    #: The folder its agents work in — what a builder's copy is a copy of. "" when there is no
+    #: honest answer: a chat outside any project, whose working base is the whole workspace.
+    workdir: str = ""
 
     def public(self) -> dict:
         return {

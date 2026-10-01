@@ -44,6 +44,7 @@ detached head belongs to nobody.
 
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 import time
@@ -102,8 +103,13 @@ def _home() -> Path:
     return internal() / WORKTREE_DIR
 
 
-def open_for(worker_id: str) -> Path | None:
+def open_for(worker_id: str, folder: Path | str | None = None) -> Path | None:
     """A private checkout for ``worker_id``, or None when there cannot be one.
+
+    ``folder`` is where the work is — the project's folder, by default the working base. The
+    copy is of the repository *that folder* is in, which is not always a repository of its own:
+    every project made under the workspace is a folder of the one repository the workspace is.
+    See :func:`base_in` for where in the copy that folder then is.
 
     None rather than an exception for the two ordinary reasons — git is not installed, or the
     work is not happening in a repository at all — because both are conditions a caller has to
@@ -112,7 +118,8 @@ def open_for(worker_id: str) -> Path | None:
     """
     if not has_git():
         return None
-    source = _repo_root(base_dir())
+    work = _settled(Path(folder) if folder else base_dir())
+    source = _repo_root(work)
     if source is None:
         return None
 
@@ -136,7 +143,7 @@ def open_for(worker_id: str) -> Path | None:
 
         made = _git("worktree", "add", "--detach", str(where), start, cwd=source, timeout=_TIMEOUT)
         if made.exit_code == 0:
-            _carry_notes(source, where)
+            _carry_notes(source, where, work)
             _carry_untracked(source, where)
             _baseline(where)
             # After the baseline, and it would not matter if it were before: these are ignored
@@ -173,8 +180,59 @@ _NOT_NOTES = (
 )
 
 
-def _carry_notes(source: Path, copy: Path) -> None:
-    """Copy `.kith` into the copy, because git will not.
+def _settled(folder: Path) -> Path:
+    """``folder`` absolute and with its symlinks resolved, so it and the repository found by
+    walking up from it are spelled the same way and one is a prefix of the other."""
+    try:
+        return folder.expanduser().resolve()
+    except OSError:
+        return folder.expanduser().absolute()
+
+
+def _within(source: Path, work: Path) -> Path | None:
+    """Where ``work`` sits inside ``source``, as a relative path; None when it is not inside it."""
+    try:
+        return work.relative_to(source)
+    except ValueError:
+        return None
+
+
+def base_in(copy: Path, folder: Path | str) -> Path:
+    """Where ``folder`` is inside ``copy``: the folder a worker's relative paths should land in.
+
+    The copy's root when the project is its own repository. A project that is a folder of a
+    larger one — ``~/Kith/ai-personal-finance`` inside ``~/Kith`` — is that folder of the copy,
+    which is what makes a builder told to read ``.kith/design/brief.md`` read the project's
+    brief and not the workspace's. Falls back to the root when the folder is not in the copy.
+    """
+    work = _settled(Path(folder))
+    source = _repo_root(work)
+    inside = _within(source, work) if source is not None else None
+    if not inside or inside == Path("."):
+        return copy
+    there = copy / inside
+    return there if there.is_dir() else copy
+
+
+def source_of(copy: Path) -> Path | None:
+    """The repository a copy was made from, asked of git rather than remembered.
+
+    Read back from the copy itself (``--git-common-dir`` names the original's ``.git``), so a
+    copy made of a repository other than the working base's — a folder named for the run — is
+    tidied up in the repository that actually holds it.
+    """
+    try:
+        found = _git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=copy, timeout=20)
+    except Exception:
+        return None
+    if found.exit_code != 0 or not found.output.strip():
+        return None
+    common = Path(found.output.strip().splitlines()[0].strip())
+    return common.parent if common.name == ".git" else None
+
+
+def _carry_notes(source: Path, copy: Path, work: Path | None = None) -> None:
+    """Copy `.kith` into the copy, because git will not — the repository's, and the project's.
 
     The one directory a worker always needs and never gets. See the module docstring for the
     round budget this cost before it existed.
@@ -192,16 +250,26 @@ def _carry_notes(source: Path, copy: Path) -> None:
     looking for a file someone clicked on, for the same reason: these are things a tool produced,
     not things anyone wrote.
 
+    **And the project's own, when the project is a folder of the repository.** Every project
+    made under the workspace is one, and the workspace ignores `.kith/` at every depth — so the
+    root's `.kith` was carried and the project's was not. A design workflow's builders were
+    pointed at `.kith/design/brief.md` and found nothing to build from (2026-09-30).
+
     Never raises. A worker without its notes is a worker that reports it could not find them,
     which is recoverable; a worker that could not start at all is not.
     """
-    notes = source / ".kith"
-    if not notes.is_dir():
-        return
-    try:
-        shutil.copytree(notes, copy / ".kith", dirs_exist_ok=True, ignore=_not_a_note)
-    except Exception:
-        pass
+    places = [Path(".")]
+    inside = _within(source, work) if work is not None else None
+    if inside and inside != Path("."):
+        places.append(inside)
+    for place in places:
+        notes = source / place / ".kith"
+        if not notes.is_dir():
+            continue
+        try:
+            shutil.copytree(notes, copy / place / ".kith", dirs_exist_ok=True, ignore=_not_a_note)
+        except Exception:
+            pass
 
 
 #: The largest single file carried from `.kith`. A note, a brief or a check script is a few
@@ -304,7 +372,7 @@ def _carry_dependencies(source: Path, copy: Path) -> None:
             return
         for name in listed.output.split("\0"):
             name = name.strip().rstrip("/")
-            if not name or name.startswith(".kith") or Path(name).name not in DEPENDENCY_DIRS:
+            if not name or ".kith" in Path(name).parts or Path(name).name not in DEPENDENCY_DIRS:
                 continue
             origin = source / name
             target = copy / name
@@ -331,16 +399,75 @@ def clone(origin: Path, target: Path) -> bool:
 
 
 def _stage_everything(worktree: Path) -> None:
-    """Stage the copy as it stands, `.kith` included even where the project ignores it.
+    """Stage the copy as it stands, every `.kith` included even where the project ignores it.
 
     Bare ``add -A`` first — no pathspec, so an ignored path is skipped silently instead of
-    failing the whole add (see :func:`diff_in` for the builders that cost). Then ``.kith`` again
-    with ``-f``, because a note the worker writes into an ignored `.kith/scratch/` is still the
-    worker's work, and a check script it was told to write there came back as nothing.
+    failing the whole add (see :func:`diff_in` for the builders that cost). Then each `.kith`
+    again with ``-f``, because a note the worker writes into an ignored `.kith/scratch/` is
+    still the worker's work, and a check script it was told to write there came back as nothing.
+
+    **Each one, not the root's.** Only `<root>/.kith` used to be forced, and a project that is a
+    folder of the repository keeps its `.kith` one level down. Four builders wrote 54 screens
+    into `ai-personal-finance/.kith/screens/` and every patch came back empty; the run's merge
+    failed and the copies holding the screens were deleted with it (2026-09-30). Build output
+    under a `.kith` stays out, as it does when the notes are carried in (:data:`_NOT_NOTES`).
     """
     _git("add", "-A", cwd=worktree, timeout=_TIMEOUT)
-    if (worktree / ".kith").is_dir():
-        _git("add", "-A", "-f", "--", ".kith", cwd=worktree, timeout=_TIMEOUT)
+    folders = _notes_in(worktree)
+    if not folders:
+        return
+    _git("add", "-A", "-f", "--", *folders, cwd=worktree, timeout=_TIMEOUT)
+    # Then the build output taken back out. Not with `:(exclude,glob)` pathspecs on the add:
+    # measured on git 2.50, `**/dist/**` or `**/venv/**` beside a forced add of an ignored folder
+    # makes the whole add stage nothing, exit 0 — the empty patch this function exists to end.
+    output = [
+        str(one.relative_to(worktree)) for folder in folders for one in _build_output(worktree / folder)
+    ]
+    if output:
+        _git("reset", "-q", "--", *output, cwd=worktree, timeout=_TIMEOUT)
+
+
+def _build_output(notes: Path) -> list[Path]:
+    """The folders under one `.kith` that are not notes — build output and a workflow's own runs —
+    found without walking into any of them."""
+    found: list[Path] = []
+    for here, folders, _ in os.walk(notes):
+        keep = []
+        for name in folders:
+            if name in _NOT_NOTES or (name == "workflows" and Path(here).name == "scratch"):
+                found.append(Path(here) / name)
+            else:
+                keep.append(name)
+        folders[:] = keep
+    return found
+
+
+def _notes_in(worktree: Path) -> list[str]:
+    """Every `.kith` folder in the copy that git is ignoring, relative to the copy's root.
+
+    Asked of git (``--others --ignored --directory``), which names an ignored folder without
+    walking into it, rather than found by walking the tree — a copy carries `node_modules`.
+    """
+    found = {".kith"} if (worktree / ".kith").is_dir() else set()
+    try:
+        listed = _git(
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            cwd=worktree,
+            timeout=_TIMEOUT,
+        )
+    except Exception:
+        return sorted(found)
+    if listed.exit_code == 0:
+        for name in listed.output.split("\0"):
+            parts = Path(name.strip().rstrip("/")).parts
+            if ".kith" in parts:
+                found.add(str(Path(*parts[: parts.index(".kith") + 1])))
+    return sorted(found)
 
 
 def _baseline(worktree: Path) -> None:
@@ -484,7 +611,7 @@ def close(worktree: Path) -> None:
     """
     if not _is_a_copy(worktree):
         return
-    source = _repo_root(base_dir())
+    source = source_of(worktree) or _repo_root(base_dir())
     try:
         if source is not None:
             _git("worktree", "remove", "--force", str(worktree), cwd=source, timeout=_TIMEOUT)

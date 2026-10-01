@@ -226,10 +226,12 @@ DESCRIPTION = (
     '"Verify"], "budget_usd": 5}  — required; budget_usd is a hard ceiling (default '
     f"{DEFAULT_BUDGET_USD:g}).\n"
     'agent(prompt, kind="scout"|"builder"|"verifier", label=None, schema=None, after=None, '
-    "model=None, effort=None) — scout: reads and reports (str). builder: edits a private copy of "
-    "the repo and can run check_code and run_tests there; returns {report, diff, patch_file, "
-    "label, agent}. verifier: checks a change against what the person asked — it is given their "
-    "words automatically — and runs the tests; send it after=[the change]. schema (e.g. "
+    "model=None, effort=None) — scout: reads and reports (str); it cannot run anything. builder: "
+    "edits a private copy of the repo and can run check_code, run_tests and shell there (confined "
+    "to the copy, no network); returns {report, diff, patch_file, label, agent}. verifier: checks "
+    "a change against what the person asked — it is given their words automatically — and runs "
+    "the tests and commands in its own copy; send it after=[the change], or with no after to run "
+    "things against the code as it is (an audit that must demonstrate, not infer). schema (e.g. "
     '{"files": ["str"]}) makes the agent hand back that value through a checked submit call. '
     'model: "strong", "fast" or "main" (defaults: scout fast, builder main, verifier strong). '
     "Every agent knows the project (its notes are given to all of them) but nothing of this "
@@ -253,6 +255,8 @@ DESCRIPTION = (
     "they cannot disagree on an interface; merge(); a verifier after=[merged]; revise() what it "
     "finds. Size a builder to a few files — one screen, one endpoint — and name them. Never "
     "wrap agent() around something that already returns an agent's report.\n\n"
+    "Copies are of the project's folder. Outside a project, pass folder= (the repository to work "
+    "in) or builders and verifiers have nothing to copy.\n\n"
     f"Limits: {AT_ONCE} agents at once, {MAX_AGENTS} per run, {MAX_SECONDS // 60} minutes. The "
     "script has no network and no files beyond its folder. Builders never touch the real tree: "
     "you apply the merged patch with `git apply` and run the tests."
@@ -274,6 +278,14 @@ def _description() -> str:
             "additionalProperties": True,
         },
         "script": {**STR, "description": "The whole workflow script, starting with META."},
+        "folder": {
+            **STR,
+            "description": (
+                "The folder the agents work in, when it is not this chat's project — a repository "
+                "under your workspace, say. Builders' and verifiers' copies are of it. Defaults to "
+                "the project's folder; a resumed run keeps the folder it had."
+            ),
+        },
         "resume": {
             **STR,
             "description": (
@@ -374,6 +386,10 @@ def run_workflow(path: Path, args: dict):
             )
         }
 
+    workdir, refused = _workdir(args, earlier)
+    if refused:
+        return {"error": refused}
+
     inputs = {"args": handed, "asked": _their_words(conversation), "budget": meta["budget_usd"]}
     warnings: list[str] = []
     if args.get("rehearse") is not False:
@@ -395,6 +411,7 @@ def run_workflow(path: Path, args: dict):
     if earlier is not None:
         run.resumed_from = resume
         run.reuse = earlier["reuse"]
+    run.workdir = workdir
 
     folder = paths.base_dir() / ".kith" / "scratch" / "workflows" / run.id
     try:
@@ -411,6 +428,7 @@ def run_workflow(path: Path, args: dict):
                     "args": handed,
                     "started": run.started,
                     "resumed_from": run.resumed_from,
+                    "workdir": run.workdir,
                     "depth": (earlier["depth"] + 1) if earlier is not None else 0,
                 },
                 default=str,
@@ -463,6 +481,68 @@ def run_workflow(path: Path, args: dict):
         "phase does. You will get a new turn with the result when it finishes."
     )
     return answer
+
+
+def _workdir(args: dict, earlier: dict | None) -> tuple[str, str]:
+    """The folder this run's agents work in, and "" or why it cannot start.
+
+    Named outright with ``folder``; else the folder a resumed run had; else the working base. A
+    chat outside any project works from the workspace, and when the workspace holds projects of
+    its own that is no answer: it is one repository holding every project made there, so a copy
+    of it is a copy of all of them and of no repository nested inside it. A verifier sent to check
+    `~/Kith/pr-review-action` from such a chat got a copy of `~/Kith`, found no `pr-review-action`
+    in it, and could check nothing (2026-09-30). That is "" here, and `_open_copy` refuses it with
+    the fix; scouts, which read the real tree, are unaffected.
+    """
+    named = str(args.get("folder") or "").strip()
+    if named:
+        place = Path(paths.resolve(named))
+        if not place.is_dir():
+            return "", f"There is no folder {named!r} to work in."
+        return str(place), ""
+    if earlier is not None and earlier.get("workdir"):
+        return str(earlier["workdir"]), ""
+    base = paths.base_dir()
+    try:
+        outside = base.resolve() == paths.root().resolve()
+    except OSError:
+        outside = base == paths.root()
+    return ("" if outside and _holds_projects(base) else str(base)), ""
+
+
+def _holds_projects(folder: Path) -> bool:
+    """Whether ``folder`` has projects in it: a child with notes of its own, or a repository."""
+    try:
+        return any(
+            child.is_dir() and ((child / ".kith").is_dir() or (child / ".git").exists())
+            for child in folder.iterdir()
+            if not child.name.startswith(".")
+        )
+    except OSError:
+        return False
+
+
+def _open_copy(run: workflows.Run, agent_id: str) -> str:
+    """A copy for one of this run's agents, of the folder the run works in."""
+    if not run.workdir:
+        raise _Failed(
+            "this chat is not in a project, so there is no folder to copy — the workspace is one "
+            "repository holding every project. Resume the run with folder= set to the repository "
+            "to work in."
+        )
+    try:
+        return workers.open_copy(f"{run.id}-{agent_id}", run.workdir)
+    except workers.WorkerError as exc:
+        raise _Failed(str(exc)) from None
+
+
+#: The calls that change files in a copy. A builder that made any of them and came back with
+#: an empty patch did something the diff did not catch, and its copy is the only place it is.
+_EDITS = frozenset(workers.WRITING) | {"shell"}
+
+
+def _kept_because(calls: list[str]) -> bool:
+    return any(name in _EDITS for name in calls)
 
 
 def _names() -> str:
@@ -717,6 +797,7 @@ def _earlier_run(run_id: str, conversation: str) -> dict | None:
         "args": header.get("args"),
         "reuse": reuse,
         "folder": str(folder),
+        "workdir": str(header.get("workdir") or ""),
         "depth": int(header.get("depth") or 0),
     }
 
@@ -882,7 +963,7 @@ class _Agents:
         from kith.infra.workspace import worktrees
 
         with self.lock:
-            held = list(self.copies.values())
+            held = [one for one in self.copies.values() if not one.get("hold")]
             self.copies.clear()
         for one in held:
             with contextlib.suppress(Exception):
@@ -1193,10 +1274,10 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
     kept = False
     if workers.ROLES[kind]["copy"] or earlier:
         try:
-            worktree = workers.open_copy(f"{run.id}-{agent_id}")
-        except workers.WorkerError as exc:
+            worktree = _open_copy(run, agent_id)
+        except _Failed as exc:
             agents.record(f'- {kind} "{label}" — could not start: {exc}', 0.0)
-            raise _Failed(str(exc)) from None
+            raise
         if earlier:
             from kith.infra.workspace import worktrees
 
@@ -1222,6 +1303,7 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
             effort=effort,
             context=context,
             schema=schema,
+            folder=run.workdir or None,
         )
         said = str(answer.get("findings") or "")
         cost = report.cost
@@ -1232,6 +1314,10 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
             why = "stopped" if report.cut_short else report.error
             if report.cut_short and agents.over_budget():
                 why = f"the run's ${agents.budget:.2f} budget ran out"
+            if kind == "builder" and _real_copy(worktree) and _kept_because(report.calls):
+                # Cut short part-way through editing. Its edits are real and nowhere else.
+                kept = True
+                why += f" — it had started editing; its copy is kept at {worktree} for a day"
             mark("done", f"failed: {why}"[:120], failed=True, cost=round(cost, 4), calls=len(report.calls))
             agents.record(f'- {kind} "{label}" — failed: {why}', cost)
             raise _Failed(f"the agent did not finish: {why}")
@@ -1267,6 +1353,11 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
         diff = str(answer.get("patch") or "")
         patch_file = _save_patch(run, label, agent_id, diff)
         outcome = _outcome(patch_file, diff, on_top_of)
+        # Edited and came back empty: whatever it wrote, the diff did not see. Not deleted with the
+        # run, which is how four builders' 54 screens were lost on 2026-09-30.
+        hold = not diff.strip() and _kept_because(report.calls)
+        if hold:
+            outcome += f" — but it edited files; its copy is kept at {worktree} for a day"
         mark(
             "done",
             tally or outcome,
@@ -1280,7 +1371,9 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
         built = {"report": shaped, "diff": diff, "patch_file": patch_file, "label": label, "agent": agent_id}
         # Kept open for `revise`, closed with the run. The brief and report ride along, so a
         # revision is handed back exactly what this builder was told and said.
-        kept = agents.keep_copy(agent_id, worktree=worktree, objective=objective, report=said, label=label)
+        kept = agents.keep_copy(
+            agent_id, worktree=worktree, objective=objective, report=said, label=label, hold=hold
+        )
         _keep(
             run,
             key,
@@ -1368,10 +1461,10 @@ def _merge(run: workflows.Run, message: dict, agents: _Agents) -> dict:
     mark = _marker(run, agent_id, label, "merge", run.phase)
     mark("running", label, prompt=f"merge {len(patches)} patches", phase=run.phase)
     try:
-        worktree = workers.open_copy(f"{run.id}-{agent_id}")
-    except workers.WorkerError as exc:
+        worktree = _open_copy(run, agent_id)
+    except _Failed as exc:
         mark("done", f"failed: {exc}"[:120], failed=True)
-        raise _Failed(str(exc)) from None
+        raise
     if not _real_copy(worktree):
         mark("done", "failed: no copy to merge in", failed=True)
         raise _Failed("there is no copy to merge the patches in")
@@ -1390,6 +1483,8 @@ def _merge(run: workflows.Run, message: dict, agents: _Agents) -> dict:
         checks: list[dict] = []
         tested: list[dict] = []
         tests = message.get("tests")
+        # Pinned at the copy's root, not the project's folder in it: `_touched_roots` names the
+        # projects relative to the root.
         with session_context.working_from(worktree, mirror_of=str(workers._source_of(worktree))):
             for root in _touched_roots(copy, diff):
                 if message.get("check", True):
@@ -1480,10 +1575,7 @@ def _revise(run: workflows.Run, path: Path, message: dict, agents: _Agents, cont
     else:
         # Its copy is gone — reused from an earlier run, or never kept. Rebuilt from its patch,
         # which is all a builder's real state ever was.
-        try:
-            worktree = workers.open_copy(f"{run.id}-{agent_id}")
-        except workers.WorkerError as exc:
-            raise _Failed(str(exc)) from None
+        worktree = _open_copy(run, agent_id)
         if not _real_copy(worktree):
             raise _Failed("there is no copy to revise in")
         rebuilt = True
@@ -1520,10 +1612,14 @@ def _revise(run: workflows.Run, path: Path, message: dict, agents: _Agents, cont
             carried=workers.follow_on("builder", objective, said, ask, context, rounds),
             rounds=rounds,
             context=context,
+            folder=run.workdir or None,
         )
         said_now = str(answer.get("findings") or "")
         if report.cut_short or (report.error and not (report.text.strip() or report.said_before.strip())):
             why = "stopped" if report.cut_short else report.error
+            if rebuilt and _kept_because(report.calls):
+                kept = True
+                why += f" — it had started editing; its copy is kept at {worktree} for a day"
             mark(
                 "done",
                 f"failed: {why}"[:120],

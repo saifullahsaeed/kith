@@ -178,15 +178,32 @@ def working_on(project_id: int | None) -> Iterator[None]:
 #: `paths.resolve` honours an absolute path as given without ever consulting `base_dir`. The
 #: pin was set, correct, and never consulted. Knowing what the copy is a copy *of* is what lets
 #: `resolve` recognise such a path and bend it into the copy.
-_isolated: ContextVar[tuple[str, str]] = ContextVar("kith_isolated_base", default=("", ""))
+#:
+#: **And a third: where in the copy the work is.** A copy is always of a whole repository, and
+#: the project is not always the whole repository — every project made under the workspace is a
+#: folder of the one repository the workspace is. Pinning relative paths to the copy's root sent
+#: a builder told to read `.kith/design/brief.md` to the workspace's `.kith`, not the project's,
+#: and the workflow had to tell it to go and find its own project first.
+_isolated: ContextVar[tuple[str, str, str]] = ContextVar("kith_isolated_base", default=("", "", ""))
 
 
 def isolated_base() -> str:
-    """The folder this context has been pinned to, or "" when nothing has pinned it.
+    """Where relative paths land in the pinned copy, or "" when nothing has pinned it.
 
-    A string rather than a ``Path`` because a ``ContextVar`` default should be a cheap
-    immutable, and because "" is already this module's spelling for "nobody claims this" —
-    see :func:`current`. The one caller that wants a path builds one.
+    The project's folder inside the copy — the copy's root when the project is the whole
+    repository. A string rather than a ``Path`` because a ``ContextVar`` default should be a
+    cheap immutable, and because "" is already this module's spelling for "nobody claims this"
+    — see :func:`current`. The one caller that wants a path builds one.
+    """
+    _, copy, base = _isolated.get()
+    return base or copy
+
+
+def isolated_copy() -> str:
+    """The root of the pinned copy, or "". What a worker may write in and its commands run inside.
+
+    Separate from :func:`isolated_base` because the boundary is the whole copy, not the project's
+    folder within it: a patch may touch a file beside the project, and the copy is all its own.
     """
     return _isolated.get()[1]
 
@@ -199,7 +216,8 @@ def isolated_mirror() -> tuple[str, str]:
     which is about the copy alone; `paths.resolve` asks "is this path really about the copy",
     which cannot be answered without the original.
     """
-    return _isolated.get()
+    source, copy, _ = _isolated.get()
+    return source, copy
 
 
 #: Where the request came from, when it came from a terminal. Informational only.
@@ -247,7 +265,9 @@ def arriving_from(directory: str | None) -> Iterator[None]:
 
 
 @contextmanager
-def working_from(directory: str | None, mirror_of: str | None = None) -> Iterator[None]:
+def working_from(
+    directory: str | None, mirror_of: str | None = None, base: str | None = None
+) -> Iterator[None]:
     """Run a block with every relative path anchored in ``directory``.
 
     The third of the three, and the only one that names a folder outright. ``working_in``
@@ -274,6 +294,9 @@ def working_from(directory: str | None, mirror_of: str | None = None) -> Iterato
     pin a plain folder; a real worktree must always pass it, because without it an absolute
     path into the original is honoured as written and the isolation is silently not there.
 
+    ``base`` is where relative paths land, when that is a folder inside ``directory`` rather than
+    ``directory`` itself — the project's folder in a copy of the repository it is part of.
+
     Passing ``None`` or "" is a no-op rather than an error: the caller that would need to
     branch is the one that has no worktree, and "no isolation" is what it already wants.
     """
@@ -281,7 +304,7 @@ def working_from(directory: str | None, mirror_of: str | None = None) -> Iterato
     if not text:
         yield
         return
-    token = _isolated.set((str(mirror_of or "").strip(), text))
+    token = _isolated.set((str(mirror_of or "").strip(), text, str(base or "").strip()))
     try:
         yield
     finally:

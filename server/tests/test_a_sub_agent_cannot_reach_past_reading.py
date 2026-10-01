@@ -141,14 +141,22 @@ class TestABuilderIsAScoutPlusFourTools:
         assert not (scout & workers.WRITING)
 
     def test_no_role_reaches_past_its_worktree(self):
-        """Nothing with an effect outside the private copy, for either role.
+        """Nothing with an effect outside the private copy, for any role.
 
         Named individually rather than derived from WITHHELD, so this cannot drift with the
         code it is checking. A builder that could `commit` would be committing in a worktree
-        nobody will ever look at; one that could `shell` would have side effects, which is
-        what stops two of them sharing a round.
+        nobody will ever look at; one that could `start_process` would leave a process running
+        after it, in a copy that is about to be deleted.
         """
         for role in workers.ROLES:
             given = workers.ROLES[role]["given"]()
-            for name in ("commit", "publish", "shell", "start_process", "ask", "remember"):
+            for name in ("commit", "publish", "start_process", "ask", "remember"):
                 assert name not in given, f"a {role} must not be able to {name}"
+
+    def test_only_a_role_with_a_copy_gets_a_shell(self):
+        """`shell` runs inside the copy's boundary, so a role without a copy would run it open,
+        in the real tree. A scout reads the real tree; it must not be able to run anything there."""
+        assert "shell" not in workers.ROLES["scout"]["given"]()
+        for role, shape in workers.ROLES.items():
+            if "shell" in shape["given"]():
+                assert shape["copy"], f"a {role} has a shell but no copy to run it in"
