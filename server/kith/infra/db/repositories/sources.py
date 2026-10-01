@@ -40,6 +40,14 @@ def list_sources(path: Path, limit: int = 200) -> list[dict]:
     Selects `length(content)` instead of the content itself on purpose: an ingested
     document can be hundreds of KB, and the panel only needs to show how big it is.
     """
+    # How many passages he keeps it as for recall — the unit the panel's reader numbers by. A
+    # correlated count rather than a join, so a source with no passages yet still lists as 0.
+    passages = (
+        select(func.count(SourceChunk.id))
+        .where(SourceChunk.source_id == Source.id)
+        .correlate(Source)
+        .scalar_subquery()
+    )
     query = (
         select(
             Source.id,
@@ -47,6 +55,7 @@ def list_sources(path: Path, limit: int = 200) -> list[dict]:
             Source.origin,
             Source.created_at,
             func.length(Source.content).label("chars"),
+            passages.label("passages"),
         )
         .order_by(Source.id.desc())
         .limit(limit)
