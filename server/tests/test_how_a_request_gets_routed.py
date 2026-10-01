@@ -19,23 +19,6 @@ def _config(model: str = PRIMARY) -> Config:
     return Config(model=model, num_ctx=0, num_predict=0, system="", think=False)
 
 
-class TestModelFallback:
-    def test_a_fallback_model_becomes_a_models_array(self):
-        # If the primary errors or is down, OpenRouter tries the next — and bills by
-        # whichever actually served. The primary stays first.
-        tuning.apply({"fallback_model": "moonshotai/kimi-k2"})
-        assert _routing_options(_config(), tuning.routing())["models"] == [PRIMARY, "moonshotai/kimi-k2"]
-
-    def test_no_fallback_leaves_the_request_single_model(self):
-        # The default is blank, so nothing changes for anyone who hasn't set one.
-        assert "models" not in _routing_options(_config(), tuning.routing())
-
-    def test_a_fallback_equal_to_the_primary_is_not_sent(self):
-        # A models array of [x, x] is just x with extra words and a wasted validation.
-        tuning.apply({"fallback_model": PRIMARY})
-        assert "models" not in _routing_options(_config(), tuning.routing())
-
-
 def _provider(config: Config | None = None) -> dict:
     """The provider block, or an empty dict.
 
@@ -78,10 +61,10 @@ class TestZeroDataRetention:
 class TestTheOptionsReachTheWire:
     """A pure function nobody calls routes nothing. This proves stream_once sends it."""
 
-    def test_a_configured_fallback_is_in_the_request_body(self, monkeypatch):
+    def test_a_configured_pin_is_in_the_request_body(self, monkeypatch):
         from kith.llm import openai_compat
 
-        tuning.apply({"fallback_model": "moonshotai/kimi-k2"})
+        tuning.apply({"openrouter_provider": "DeepInfra"})
         captured: dict = {}
 
         class FakeResp:
@@ -115,12 +98,14 @@ class TestTheOptionsReachTheWire:
         # itself, which is what made `llm` import `services`. This is the caller's half.
         list(openai_compat.stream_once([{"role": "user", "content": "hi"}], cfg, routing=tuning.routing()))
 
-        assert captured["json"]["models"] == [PRIMARY, "moonshotai/kimi-k2"]
+        assert captured["json"]["provider"]["order"] == ["DeepInfra"]
+        assert "models" not in captured["json"], "no second model: a model switch drops the whole cache"
 
 
 class TestPinningStillWorks:
-    def test_a_pinned_provider_is_a_preference_not_a_lock(self):
-        # Unchanged behaviour: order the host first, but keep fallbacks so availability holds.
+    def test_a_released_pin_is_a_preference_not_a_lock(self):
+        # The last attempt of a round: order the host first, but let fallbacks in so availability
+        # holds. Every earlier attempt is sent `strict` — see test_a_pinned_host_is_held_before_it_is_left.
         tuning.apply({"openrouter_provider": "DeepInfra"})
         provider = _routing_options(_config(), tuning.routing())["provider"]
         assert provider["order"] == ["DeepInfra"]

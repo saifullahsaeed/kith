@@ -474,8 +474,8 @@ def _let_go_of_old_results(
     confident copy of what it used to say.
 
     **Why here and not in the loop.** A turn boundary is fixed, so this is deterministic: a result
-    stubbed on the last turn is stubbed byte-identically on this one, and the cached prefix still
-    matches. Trimming under pressure inside the loop rewrites the middle of the array and moves the
+    stubbed on the last turn is stubbed byte-identically on this one. What is *newly* stubbed still
+    breaks the cache from that turn on, which is why the line moves in batches (`_aged_through`). Trimming under pressure inside the loop rewrites the middle of the array and moves the
     eviction point every round — the mistake `_compact_tool_history` made, which cost 93% of a
     turn's prompt re-billed uncached.
 
@@ -484,14 +484,10 @@ def _let_go_of_old_results(
     conversation ends up reading the same file twice.
     """
     from kith.services import tuning
-
-    keep = int(tuning.value("keep_tool_turns") or 0)
-    if keep <= 0:
-        return
     from kith.services.turn.history import stub_arguments
 
     stub_chars = int(tuning.value("tool_stub_chars") or 1_200)
-    oldest_kept = newest - keep + 1
+    oldest_kept = _aged_through(out, turn_of, calls_of or {}, newest, stub_chars) + 1
     # The calls, by the same rule as their results. Nothing trimmed them: a result aged into a
     # 1,200-character stub while the `write_file` body and the `edit_files` diff that produced it
     # rode every later round in full. Measured in the four largest conversations on 2026-09-27,
@@ -532,6 +528,53 @@ def _let_go_of_old_results(
             + " on an earlier turn. Run it again if you still need it.]"
         )
         message["_trimmed"] = True
+
+
+#: Turns whose tool output always stays whole. Two, from measuring: one real conversation held
+#: 4.42M characters of tool output across 124 turns, and the last two turns of it were 3%.
+_KEEP_TOOL_TURNS = 2
+
+#: How much old output builds up before it is let go of, all at once. Each letting-go re-bills the
+#: conversation from that point, so it is paid once per this many characters, not once per message.
+_TRIM_BATCH_CHARS = 200_000
+
+
+def _aged_through(
+    out: list[dict],
+    turn_of: dict[int, int],
+    calls_of: dict[int, int],
+    newest: int,
+    stub_chars: int,
+) -> int:
+    """The last turn whose tool output is stubbed: a line that moves in steps, not every turn.
+
+    Moving it one turn per message is what cost the cache. A stub changes the prompt at the turn
+    it lands in, and the host's cache only hits at the length of a request it has already seen —
+    no earlier request ever carried this turn stubbed, so the next turn reads nothing cached past
+    the persona and pays for the whole conversation again. Measured on 2026-10-01: every turn
+    after the third opened on the ~16k-token head alone, 86k of a 102k prompt billed fresh.
+
+    So the line stays put until ``batch`` characters of output have aged past it, then jumps to
+    ``newest - keep`` in one go. Replayed from the transcript turn by turn, so it is a function of
+    the conversation and lands in the same place on every rebuild — the stability the stubs need.
+    """
+    keep, batch = _KEEP_TOOL_TURNS, _TRIM_BATCH_CHARS
+    if batch <= 0:
+        return newest - keep
+    sizes: dict[int, int] = {}
+    for index, turn in turn_of.items():
+        length = len(str(out[index].get("content") or ""))
+        if length > stub_chars:
+            sizes[turn] = sizes.get(turn, 0) + length
+    for index, turn in calls_of.items():
+        for call in out[index].get("tool_calls") or []:
+            sizes[turn] = sizes.get(turn, 0) + len(json.dumps((call.get("function") or {}).get("arguments") or {}))
+    line = 0
+    for turn in range(1, newest + 1):
+        due = turn - keep
+        if due > line and sum(sizes.get(t, 0) for t in range(line + 1, due + 1)) >= batch:
+            line = due
+    return line
 
 
 #: How much of a call's subject a trimmed result names.

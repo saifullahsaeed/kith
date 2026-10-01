@@ -48,6 +48,13 @@ def transcripts(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def every_turn(monkeypatch):
+    """These tests are about *which* results are stubbed, so the line moves every turn here.
+    Batching it — the default — is `TestTheLineMovesInBatches` below."""
+    monkeypatch.setattr(conversations, "_TRIM_BATCH_CHARS", 0)
+
+
 def _a_conversation(db: Path, turns: int) -> str:
     """`turns` user messages, each followed by one big tool result."""
     conversation_id = conversations.start(db, "testing")["id"]
@@ -114,25 +121,12 @@ class TestOlderTurnsAreStubbed:
         assert all("exit 0" in content for content in _tool_contents(conversation_id))
 
 
-class TestTheSettingDecidesHowMany:
+class TestHowManyStayWhole:
     def test_raising_it_keeps_more(self, db: Path, transcripts, monkeypatch):
-        from kith.services import tuning
-
-        real = tuning.value
-        monkeypatch.setattr(tuning, "value", lambda key: 5 if key == "keep_tool_turns" else real(key))
+        monkeypatch.setattr(conversations, "_KEEP_TOOL_TURNS", 5)
         conversation_id = _a_conversation(db, 8)
         whole = [content for content in _tool_contents(conversation_id) if BIG in content]
         assert len(whole) == 5
-
-    def test_zero_means_keep_everything(self, db: Path, transcripts, monkeypatch):
-        """An escape hatch that has to work: somebody with a 2M-token window and a big bill for
-        re-reads should be able to turn this off without editing code."""
-        from kith.services import tuning
-
-        real = tuning.value
-        monkeypatch.setattr(tuning, "value", lambda key: 0 if key == "keep_tool_turns" else real(key))
-        conversation_id = _a_conversation(db, 6)
-        assert all(BIG in content for content in _tool_contents(conversation_id))
 
 
 class TestThePairingStillHolds:
@@ -166,3 +160,37 @@ class TestItIsStableBetweenTurns:
         conversations.record(db, conversation_id, "user", "one more")
         after = _tool_contents(conversation_id)[:3]
         assert before == after
+
+
+class TestTheLineMovesInBatches:
+    """Stubbing one more turn per message re-billed the whole conversation on every message.
+
+    A newly stubbed turn changes the prompt at that turn, and the host's cache only hits at the
+    length of a request it has already been sent. No earlier request carried that turn stubbed, so
+    every turn after the third of one real conversation opened with only the ~16k-token head cached:
+    86k of a 102k prompt billed fresh for a one-line answer (2026-10-01). The line now moves only
+    when enough has built up behind it, and then all the way at once.
+    """
+
+    @pytest.fixture(autouse=True)
+    def batched(self, monkeypatch):
+        monkeypatch.setattr(conversations, "_TRIM_BATCH_CHARS", 50_000)  # 2.5 of BIG's turns
+
+    def _whole(self, conversation_id: str) -> int:
+        return sum(BIG in content for content in _tool_contents(conversation_id))
+
+    def test_nothing_is_stubbed_until_enough_has_aged(self, db: Path, transcripts):
+        # Four turns: two kept by count, two aged — 40k, under the batch.
+        assert self._whole(_a_conversation(db, 4)) == 4
+
+    def test_crossing_the_batch_stubs_everything_aged_at_once(self, db: Path, transcripts):
+        # Five turns: three aged, 60k, over it — all three go together, the newest two stay.
+        assert self._whole(_a_conversation(db, 5)) == 2
+
+    def test_the_turns_after_a_batch_leave_the_prompt_alone(self, db: Path, transcripts):
+        """The cache's half: from one message to the next, the history already sent is unchanged
+        until the next batch is due — not rewritten a turn at a time."""
+        conversation_id = _a_conversation(db, 5)
+        before = _tool_contents(conversation_id)
+        conversations.record(db, conversation_id, "user", "one more")
+        assert _tool_contents(conversation_id) == before

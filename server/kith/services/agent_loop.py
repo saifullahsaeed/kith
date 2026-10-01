@@ -572,8 +572,11 @@ def _send_round(
         failure = None
         spoke = False
         content, tool_calls, stats, spoken = "", [], None, ""
+        # The pin is held as a lock until the last attempt, then released — see `Routing.strict`.
+        locked = attempt < _ROUND_ATTEMPTS and routing is not None and bool(routing.pinned)
+        sent = replace(routing, strict=True) if locked else routing
         for event in _stream_once(
-            convo, config, host, tools=schemas, tool_choice=tool_choice, routing=routing
+            convo, config, host, tools=schemas, tool_choice=tool_choice, routing=sent
         ):
             kind = event["type"]
             if kind == "delta":
@@ -599,7 +602,11 @@ def _send_round(
         if failure is None:
             break
         retries.lost()
-        if spoke or not _worth_retrying(failure) or attempt == _ROUND_ATTEMPTS:
+        # A locked attempt that failed for a reason not worth repeating may only be the lock —
+        # OpenRouter answers "no endpoints" for a pinned host that is down — so it still earns
+        # the unlocked last attempt rather than ending the round.
+        released = locked and failure.get("kind") != "context_overflow" and not _unreachable(failure)
+        if spoke or attempt == _ROUND_ATTEMPTS or not (_worth_retrying(failure) or released):
             break
         yield {
             "type": "retrying",

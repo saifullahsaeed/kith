@@ -120,10 +120,12 @@ def _routing_options(config: Config, routing: Routing) -> dict[str, Any]:
 
     pinned = routing.pinned
     if pinned:
-        # A strong preference, not a lock: fallbacks stay on so availability never breaks,
-        # while every round of a turn is steered at the same warm host.
+        # A lock while `strict`, which the loop sets for every attempt but a round's last: the
+        # pinned host is where the cache and the price are, and falling through to anyone else
+        # on its first refusal is what billed a warm conversation cold. The last attempt lets
+        # fallbacks back in, so availability still never breaks.
         provider["order"] = [pinned]
-        provider["allow_fallbacks"] = True
+        provider["allow_fallbacks"] = not routing.strict
 
     # Which host to prefer when nothing is pinned, and this is the gap that cost real money.
     #
@@ -173,13 +175,6 @@ def _routing_options(config: Config, routing: Routing) -> dict[str, Any]:
         provider["zdr"] = True
     if provider:
         out["provider"] = provider
-
-    fallback = routing.fallback_model.strip()
-    if fallback and fallback != config.model:
-        # If the primary errors, rate-limits or is down, OpenRouter tries the next model;
-        # billing is by whichever actually served. This is what keeps a long turn
-        # alive through an outage instead of stalling it mid-task.
-        out["models"] = [config.model, fallback]
 
     return out
 

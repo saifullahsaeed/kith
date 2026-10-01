@@ -411,5 +411,4 @@ def routing() -> Routing:
         max_prompt_price=float(value("max_prompt_price")),
         require_parameters=bool(value("require_provider_parameters")),
         zero_data_retention=bool(value("zero_data_retention")),
-        fallback_model=str(value("fallback_model")),
     )

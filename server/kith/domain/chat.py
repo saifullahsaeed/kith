@@ -59,8 +59,15 @@ class Routing:
     is allowed — resolves the live one once per turn and hands it down.
     """
 
-    #: An upstream to pin to. A strong preference, not a lock: fallbacks stay on.
+    #: An upstream to pin to. Held as a lock while the round's retries last, then released
+    #: for its final attempt — see `strict` and `agent_loop._send_round`.
     pinned: str = ""
+    #: Whether the pin is a lock (`allow_fallbacks` off). A soft pin let OpenRouter move a turn
+    #: off `openai/flex` the moment flex was busy, onto a host with none of the cached prompt
+    #: and no flex rate: an 83k-token "ok" billed 81% uncached on Azure (2026-10-01). Off by
+    #: default; the loop turns it on for every attempt but the last, so a busy pin costs a
+    #: retry and only a pin that stays down costs the cache.
+    strict: bool = False
     #: How to order the pool when nothing is pinned. "price" is what keeps a session landing
     #: somewhere cheap rather than merely somewhere consistent.
     prefer_by: str = "price"
@@ -78,5 +85,3 @@ class Routing:
     require_parameters: bool = True
     #: Exclude any provider that may log or train on the request.
     zero_data_retention: bool = False
-    #: A second model to try if the primary errors or is down. Blank means no fallback.
-    fallback_model: str = ""
