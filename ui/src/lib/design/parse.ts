@@ -27,6 +27,16 @@
  * in an attack.
  */
 
+import {
+  MAX_DEPTH,
+  openAndClose,
+  type Parts,
+  propsOf,
+  SLOT_TAG,
+  splitNote,
+  fillHoles,
+  USE_TAG,
+} from "@/lib/design/compose";
 import { type Frame, readFrame } from "@/lib/design/frame";
 
 /** A node the editor can select, measure and patch. */
@@ -62,6 +72,32 @@ export interface DesignNode {
    * doing it.
    */
   component: string;
+  /**
+   * Set on the node a `<k-use>` became: which part this is an instance of, and with what.
+   *
+   * The node *is* the part's outermost element, carrying the use's id, so it sits in the layout
+   * exactly where the part's own root would — no wrapper box between a flex row and its
+   * children — and an edit to it lands on the `<k-use>` tag. That is "this screen only" for the
+   * outside of an instance, and it falls out of the ids rather than needing a mode.
+   */
+  instance?: Instance;
+  /**
+   * Set on every node that came out of a part's file rather than this one: which part, and the
+   * node's id *in that file*. An edit addressed to one of these cannot be spliced into the
+   * screen — the bytes are not there — so the editor offers the part's own file instead.
+   */
+  part?: { component: string; local: string; path?: string };
+  /** Text a screen put into a part's slot. It has no tag in either file, so nothing can patch it. */
+  synthetic?: boolean;
+}
+
+export interface Instance {
+  name: string;
+  props: Record<string, string>;
+  /** The part's file, when it is one. Inline parts from an older system have none. */
+  path?: string;
+  /** True when the system has no part of that name. Drawn, labelled, and reported. */
+  missing?: boolean;
 }
 
 export interface ParsedDesign {
@@ -72,6 +108,8 @@ export interface ParsedDesign {
   sheet: string;
   /** What did not survive, in words, for the layout report and the editor's warning strip. */
   dropped: string[];
+  /** Which parts the screen uses, by name, including ones the system does not have. */
+  uses: string[];
 }
 
 /**
@@ -548,7 +586,145 @@ function ownText(element: Element): string {
   return text.replace(COLLAPSIBLE, " ").replace(EDGES, "");
 }
 
-function convert(element: Element, mint: () => string, taken: Set<string>, dropped: string[]): DesignNode | DesignNode[] {
+/**
+ * The state one walk over one file carries.
+ *
+ * A screen is one walk; every part it uses is another, with its own id space, so the ids a part
+ * hands out are the ids its own file would get if it were opened alone — which is what lets an
+ * edit chosen inside an instance be written into the part's file. `prefix` is what keeps the two
+ * spaces from colliding in the one tree the renderer draws.
+ */
+interface Walk {
+  mint: () => string;
+  taken: Set<string>;
+  dropped: string[];
+  prefix: string;
+  /** Absent, a `<k-use>` is a plain holder for its slot — the shape `edit.ts` counts in. */
+  parts?: Parts;
+  /** The part this walk is reading, when it is one. */
+  within?: { component: string; path?: string };
+  /** What the screen put inside the `<k-use>`, for wherever the part says `<k-slot>`. */
+  slot?: DesignNode[];
+  stack: string[];
+  sheets: Map<string, string>;
+  uses: Set<string>;
+}
+
+/** A text run a screen put into a part's slot, as a node the renderer can place. */
+function slotText(id: string, text: string): DesignNode {
+  return { id, tag: "span", attrs: {}, style: {}, classes: [], text, children: [], absolute: false, component: "", synthetic: true };
+}
+
+/** What the screen put inside a `<k-use>`, in order, converted in the screen's own walk. */
+function slotOf(element: Element, id: string, walk: Walk): DesignNode[] {
+  const nodes: DesignNode[] = [];
+  let runs = 0;
+  for (const child of Array.from(element.childNodes)) {
+    if (child.nodeType === 3) {
+      const text = (child.nodeValue ?? "").replace(COLLAPSIBLE, " ").replace(EDGES, "");
+      if (text) nodes.push(slotText(`${id}~text${++runs}`, text));
+    } else if (child.nodeType === 1) {
+      nodes.push(...[convert(child as Element, walk)].flat());
+    }
+  }
+  return nodes;
+}
+
+/**
+ * A `<k-use>`, as the part it names.
+ *
+ * Read after the use has its own id and after its slot content has been converted, because both
+ * belong to the screen's walk and the screen's ids are numbered in source order — the order
+ * `edit.ts` scans tags in. The part's own nodes are numbered in the part's walk, so they cost the
+ * screen nothing.
+ */
+function expandUse(element: Element, id: string, local: string, walk: Walk): DesignNode {
+  const props = propsOf(Array.from(element.attributes));
+  const name = element.getAttribute("name") ?? "";
+  if (name) walk.uses.add(name);
+  const slot = slotOf(element, id, walk);
+  const useStyle = inlineStyle(element.getAttribute("style") ?? "", walk.dropped);
+  const useClasses = (element.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
+  const outer = walk.within ? { part: { component: walk.within.component, local, path: walk.within.path } } : {};
+
+  const holder = (instance: Instance, style: Record<string, string>, children: DesignNode[], text?: string): DesignNode => ({
+    id,
+    tag: "div",
+    attrs: {},
+    style,
+    classes: useClasses,
+    ...(text ? { text } : {}),
+    children,
+    absolute: false,
+    component: name,
+    instance,
+    ...outer,
+  });
+
+  // No inventory in hand: the shape `edit.ts` counts ids in, where a use is one node and its slot.
+  if (!walk.parts) return holder({ name, props }, { display: "contents" }, slot);
+
+  const part = walk.parts[name];
+  if (!part || walk.stack.includes(name) || walk.stack.length >= MAX_DEPTH) {
+    walk.dropped.push(
+      !part ? `component ${name || "(no name)"} is not in the system` : `component ${name} uses itself`,
+    );
+    return holder(
+      { name, props, missing: true },
+      { border: "1px dashed #b42318", padding: "8px", color: "#b42318", "font-size": "12px", ...useStyle },
+      slot,
+      `Missing component: ${name || "(no name)"}`,
+    );
+  }
+
+  const document = new DOMParser().parseFromString(
+    openAndClose(fillHoles(splitNote(part.html).markup, props)),
+    "text/html",
+  );
+  const sheets = Array.from(document.querySelectorAll("style"));
+  if (!walk.sheets.has(name)) {
+    walk.sheets.set(name, sheets.map((one) => sanitiseStyleSheet(one.textContent ?? "", walk.dropped)).filter(Boolean).join("\n"));
+  }
+  for (const one of sheets) one.remove();
+
+  const taken = new Set<string>();
+  let next = 0;
+  const inner: Walk = {
+    ...walk,
+    mint: () => {
+      let minted = `k${++next}`;
+      while (taken.has(minted)) minted = `k${++next}`;
+      return minted;
+    },
+    taken,
+    prefix: `${id}~`,
+    within: { component: name, path: part.path },
+    slot,
+    stack: [...walk.stack, name],
+  };
+  const nodes = Array.from(document.body.children).flatMap((child) => convert(child, inner));
+
+  const instance: Instance = { name, props, ...(part.path ? { path: part.path } : {}) };
+  if (nodes.length === 1) {
+    const [root] = nodes;
+    const { part: _own, ...rest } = root;
+    return {
+      ...rest,
+      id,
+      style: { ...root.style, ...useStyle },
+      classes: [...root.classes, ...useClasses],
+      component: name,
+      instance,
+      ...outer,
+    };
+  }
+  // A part with several top-level elements has no one box to stand in for it, so it gets one
+  // that takes no space of its own.
+  return holder(instance, { display: "contents", ...useStyle }, nodes);
+}
+
+function convert(element: Element, walk: Walk): DesignNode | DesignNode[] {
+  const { mint, taken, dropped } = walk;
   const tag = element.tagName.toLowerCase();
 
   if (DROP_SUBTREE.has(tag)) {
@@ -570,7 +746,8 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
    * inert. That is better than adding `form` to the list, because a real `<form>` in the app's
    * own document submits on Enter; a div looks identical and cannot.
    */
-  const unknown = !ALLOWED_TAGS.has(tag);
+  const composing = tag === USE_TAG || tag === SLOT_TAG;
+  const unknown = !ALLOWED_TAGS.has(tag) && !composing;
   if (unknown) dropped.push(`${tag} tag`);
 
   const attrs: Record<string, string> = {};
@@ -588,6 +765,10 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
       authored = ID.test(value) ? value : "";
       continue;
     }
+    // A use's attributes are its props and a slot's are nothing; `expandUse` reads them itself.
+    // Run through the whitelist they would all be reported as dropped, which on a screen made
+    // properly of parts would cover the warning strip in noise about doing it right.
+    if (composing) continue;
     if (name === "data-k-absolute") {
       absolute = true;
       continue;
@@ -647,6 +828,28 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     }
   }
   taken.add(id);
+  const local = id;
+  id = walk.prefix + id;
+  const marks = walk.within ? { part: { component: walk.within.component, local, path: walk.within.path } } : {};
+
+  if (tag === USE_TAG) return expandUse(element, id, local, walk);
+  if (tag === SLOT_TAG) {
+    // Inside an instance, the slot *is* what the screen put there. Opened alone, a part shows
+    // where that will go, so the person editing it can see there is a hole and not a bug.
+    if (walk.slot) return walk.slot;
+    return {
+      id,
+      tag: "div",
+      attrs: {},
+      style: { border: "1px dashed currentColor", padding: "8px", opacity: "0.5", "font-size": "12px", ...style },
+      classes,
+      text: "Slot — a screen's content goes here",
+      children: [],
+      absolute: false,
+      component: "",
+      ...marks,
+    };
+  }
 
   /* Children after the id, not before.
    *
@@ -663,7 +866,7 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     if (child.nodeType === 3) {
       order.push((child.nodeValue ?? "").replace(COLLAPSIBLE, " "));
     } else if (child.nodeType === 1) {
-      for (const one of [convert(child as Element, mint, taken, dropped)].flat()) {
+      for (const one of [convert(child as Element, walk)].flat()) {
         order.push(children.length);
         children.push(one);
       }
@@ -693,6 +896,7 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
     children,
     absolute,
     component,
+    ...marks,
   };
 }
 
@@ -703,12 +907,12 @@ function convert(element: Element, mint: () => string, taken: Set<string>, dropp
  * still addresses the same node in the next one — an editor whose ids changed on every reload
  * could not save anything.
  */
-export function parseDesign(html: string): ParsedDesign {
+export function parseDesign(html: string, parts?: Parts): ParsedDesign {
   const dropped: string[] = [];
-  const document = new DOMParser().parseFromString(html || "", "text/html");
+  const document = new DOMParser().parseFromString(openAndClose(html || ""), "text/html");
 
   const sheets = Array.from(document.querySelectorAll("style"));
-  const sheet = sheets.map((one) => sanitiseStyleSheet(one.textContent ?? "", dropped)).filter(Boolean).join("\n");
+  const own = sheets.map((one) => sanitiseStyleSheet(one.textContent ?? "", dropped)).filter(Boolean).join("\n");
   for (const one of sheets) one.remove();
 
   const taken = new Set<string>();
@@ -719,8 +923,11 @@ export function parseDesign(html: string): ParsedDesign {
     return id;
   };
 
+  const walk: Walk = { mint, taken, dropped, prefix: "", parts, stack: [], sheets: new Map(), uses: new Set() };
   const body = document.body ?? document.createElement("body");
-  const children = Array.from(body.children).flatMap((child) => convert(child, mint, taken, dropped));
+  const children = Array.from(body.children).flatMap((child) => convert(child, walk));
+  // The parts' sheets first, so a rule the screen writes wins a tie with one the part shipped.
+  const sheet = [...walk.sheets.values(), own].filter(Boolean).join("\n");
 
   /*
    * `<body style="...">` is the design root's style, and it was being thrown away.
@@ -748,5 +955,6 @@ export function parseDesign(html: string): ParsedDesign {
     root: { id: ROOT_ID, tag: "root", attrs: {}, style: rootStyle, classes: [], children, absolute: false, component: "" },
     sheet,
     dropped,
+    uses: [...walk.uses],
   };
 }

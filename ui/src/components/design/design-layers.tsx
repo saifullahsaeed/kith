@@ -9,6 +9,8 @@
  * Named by `data-k`, which is the same name the inspector shows and the same one written into
  * the file, so there is one vocabulary for a node rather than three.
  */
+import { Component } from "lucide-react";
+
 import type { DesignNode } from "@/lib/design/parse";
 import { cn } from "@/lib/utils";
 
@@ -40,9 +42,12 @@ function Branch({
   onSelect: (id: string) => void;
 }) {
   // A minted id says nothing, so a node he did not name is shown by what it is and what it says.
-  const minted = /^k\d+$/.test(node.id);
-  const label = minted ? node.tag : node.id;
-  const hint = minted ? (node.text ?? node.classes.join(".")) : node.tag;
+  // A node from a part is named by its id in the part's file, not the prefixed one in this tree.
+  const own = node.part?.local ?? node.id;
+  // `k3.k1` is minted too: a detached part's own minted id, under the instance it came from.
+  const minted = /(^|\.)k\d+$/.test(own);
+  const label = node.instance ? node.instance.name : minted ? node.tag : own;
+  const hint = node.instance ? "component" : minted ? (node.text ?? node.classes.join(".")) : node.tag;
 
   return (
     <li>
@@ -52,10 +57,13 @@ function Branch({
         style={{ paddingInlineStart: `${depth * 12 + 12}px` }}
         className={cn(
           "flex w-full items-baseline gap-2 py-1 pe-3 text-start transition-colors hover:bg-accent/60",
+          // Inside a part: there to be found, not to be edited here — so quieter.
+          node.part && !node.instance && "text-muted-foreground",
           selected === node.id && "bg-kith-soft text-kith",
         )}
       >
-        <span className="truncate font-medium">{label}</span>
+        {node.instance ? <Component className="size-3 shrink-0 self-center text-kith" /> : null}
+        <span className={cn("truncate font-medium", node.instance?.missing && "text-destructive")}>{label}</span>
         {hint ? <span className="truncate text-[10px] text-muted-foreground">{hint}</span> : null}
       </button>
       {node.children.length ? (

@@ -43,6 +43,14 @@ def writes_are_allowed(monkeypatch):
     monkeypatch.setattr(permissions, "mode", lambda: permissions.Mode.BYPASS)
 
 
+@pytest.fixture(autouse=True)
+def removals_stay_out_of_the_real_trash(monkeypatch):
+    """Removing a part removes its file, through the Trash. Not his Trash, from a test."""
+    from kith.infra.workspace import files
+
+    monkeypatch.setattr(files, "trash_path", lambda target: (target.unlink(), "gone")[1])
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> int:
     from kith.infra.db import repositories as repo

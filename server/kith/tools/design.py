@@ -93,12 +93,24 @@ def read_design_system(path: Path, args: dict):
     }.get(system.scope, "")
     # Listed rather than counted. A count is something he reads past; the names and what each is
     # for are something he composes from.
-    out["components"] = [part.as_dict() for part in system.components.values()]
+    #
+    # A part that is a file is listed by what a screen needs to *use* it — its props, whether it
+    # takes content, the tag to write — and not by its markup. He composes with the tag; he reads
+    # the file only when he is changing the part, and leaving the markup out keeps this answer
+    # the same size however big the inventory grows.
+    out["components"] = [_listed(part) for part in system.components.values()]
     if not system.components:
         out["components_note"] = (
             "This system has no components yet. When a part shows up on a second screen — a "
             "button, a card, a field, a table row — add it here with `update_design_system` "
-            "rather than drawing it again."
+            'rather than drawing it again. Screens then write `<k-use name="…">` instead of '
+            "a copy, so changing the part changes every screen."
+        )
+    elif any(not part.path for part in system.components.values()):
+        out["components_note"] = (
+            "Some parts are still inline snippets (they have `html` and no `path`). Those can only "
+            "be copied, and copies drift. Re-save each one with `update_design_system` and it "
+            "becomes a file that screens reference with `<k-use>`."
         )
     if not system.conventions:
         out["conventions_note"] = (
@@ -113,6 +125,22 @@ def read_design_system(path: Path, args: dict):
             "project its own copy, seeded from this one."
         )
     return out
+
+
+def _listed(part: systems.Component) -> dict:
+    """One part, as somebody composing a screen needs it."""
+    if not part.path:
+        return part.as_dict()
+    props = " ".join(f'{name}="…"' for name in part.props)
+    tag = f'<k-use name="{part.name}"{" " + props if props else ""}>'
+    return {
+        "name": part.name,
+        "use": part.use,
+        "props": part.props,
+        "slot": part.slot,
+        "write": tag + ("…content…</k-use>" if part.slot else "</k-use>"),
+        "path": str(part.path),
+    }
 
 
 @tool(
@@ -148,8 +176,12 @@ def read_design_system(path: Path, args: dict):
             "type": "object",
             "description": 'The inventory. Each entry is {"html": "<the markup>", "use": '
             '"one line on when to reach for it"}, keyed by a name like "button.primary" or '
-            '"card.metric". The markup is dialect HTML — flex, tokens, data-k names. Pass null '
-            "as a value to remove one.",
+            '"card.metric". Each is saved as its own file, components/<name>.html, and screens '
+            'use it with <k-use name="card.metric" label="Revenue" value="$12k"></k-use>. In the '
+            "markup, {{label}} is a hole the use fills from its attribute of that name, and "
+            "<k-slot></k-slot> is where content written inside the <k-use> goes. One root "
+            "element; a <style> block is allowed and travels with the part. Dialect HTML — flex, "
+            "tokens, data-k names. Pass null as a value to remove one.",
         },
         "conventions": {
             **STR,
@@ -186,7 +218,12 @@ def update_design_system(path: Path, args: dict):
         "wrote": str(system.path),
         "name": system.name,
         "colors": sorted(system.colors),
-        "components": sorted(system.components),
+        "components": [
+            _listed(system.components[name])
+            for name in sorted(args.get("components") or {})
+            if name in system.components
+        ]
+        or sorted(system.components),
         "conventions": bool(system.conventions),
         "note": "Screens in this project resolve this now. Re-run the design checker on anything "
         "already drawn — a screen written against the old palette may now be off the scale.",

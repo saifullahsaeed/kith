@@ -15,7 +15,7 @@
  * direction, a gap, a padding and two alignments. Offering `top`/`left` here would invite a
  * design he cannot edit afterwards — see `design-page.tsx` for the same argument about dragging.
  */
-import { AlignCenterHorizontal, Baseline, Box, Palette, Square } from "lucide-react";
+import { AlignCenterHorizontal, Baseline, Box, Component, Palette, Square, Unlink } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Dropdown } from "@/components/ui/dropdown";
@@ -31,6 +31,12 @@ export interface DesignInspectorProps {
   onChange: StyleChange;
   /** The palette and type scale this design is drawn in — his, not Kith's. */
   system: System;
+  /** The instance whose part the node came from, or the node itself when it is an instance. */
+  owner?: DesignNode | null;
+  /** Open a part's own file, showing its holes with these props. */
+  onEditPart?: (name: string, props: Record<string, string>) => void;
+  /** Turn an instance on this screen back into plain markup, so it can differ from the rest. */
+  onDetach?: (id: string) => void;
 }
 
 const DIRECTIONS = [
@@ -65,7 +71,7 @@ const ALIGN_TEXT = [
   { value: "right", label: "Right" },
 ];
 
-export function DesignInspector({ node, onChange, system }: DesignInspectorProps) {
+export function DesignInspector({ node, onChange, system, owner, onEditPart, onDetach }: DesignInspectorProps) {
   const palette = swatches(system);
 
   if (!node) {
@@ -76,8 +82,48 @@ export function DesignInspector({ node, onChange, system }: DesignInspectorProps
     );
   }
 
+  /* A node from a part's file has no bytes in this one, so there is nothing here to edit — and
+   * pretending otherwise is the failure Pace's generator had: an edit that looks applied and
+   * is gone by the next build. The two honest choices are the part's own file, which changes
+   * every screen, and detaching this one instance, which changes only this screen. A part used
+   * inside another part can only be changed through the outer one, so detach is not offered. */
+  if (node.part || node.synthetic) {
+    const name = owner?.instance?.name ?? node.part?.component ?? "";
+    const screenLevel = Boolean(owner && !owner.part);
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <div>
+          <div className="truncate text-sm font-medium">{node.part?.local ?? node.id}</div>
+          <div className="text-xs text-muted-foreground">{node.tag}</div>
+        </div>
+        <PartNotice
+          title={`Inside ${name}`}
+          body={
+            node.synthetic
+              ? "This text is written inside the component's tag on this screen. Change it in the source."
+              : `This comes from the ${name} component. Change it there and every screen that uses it changes; detach this one to change it here only.`
+          }
+        >
+          {owner?.instance && onEditPart ? (
+            <button type="button" className={PART_BUTTON} onClick={() => onEditPart(owner.instance!.name, owner.instance!.props)}>
+              <Component className="size-3.5" />
+              Edit {name}
+            </button>
+          ) : null}
+          {screenLevel && onDetach && !node.synthetic ? (
+            <button type="button" className={PART_BUTTON} onClick={() => onDetach(owner!.id)}>
+              <Unlink className="size-3.5" />
+              Detach this one
+            </button>
+          ) : null}
+        </PartNotice>
+      </div>
+    );
+  }
+
   const style = node.style;
   const isFlex = style.display === "flex" || style.display === "inline-flex";
+  const instance = node.instance;
 
   return (
     <div className="flex flex-col gap-5 p-4">
@@ -88,6 +134,30 @@ export function DesignInspector({ node, onChange, system }: DesignInspectorProps
           {node.classes.length ? ` · .${node.classes.join(".")}` : ""}
         </div>
       </div>
+
+      {instance ? (
+        <PartNotice
+          title={instance.missing ? `${instance.name} is not in the design system` : `Component · ${instance.name}`}
+          body={
+            instance.missing
+              ? "Add it with update_design_system, or this screen keeps drawing a placeholder."
+              : "Spacing and size you set here apply to this screen only. To change the component itself, edit it."
+          }
+        >
+          {!instance.missing && onEditPart ? (
+            <button type="button" className={PART_BUTTON} onClick={() => onEditPart(instance.name, instance.props)}>
+              <Component className="size-3.5" />
+              Edit {instance.name}
+            </button>
+          ) : null}
+          {!instance.missing && onDetach ? (
+            <button type="button" className={PART_BUTTON} onClick={() => onDetach(node.id)}>
+              <Unlink className="size-3.5" />
+              Detach
+            </button>
+          ) : null}
+        </PartNotice>
+      ) : null}
 
       <Group icon={<Box className="size-3.5" />} title="Layout">
         <Row label="Display">
@@ -350,6 +420,23 @@ function Tokens({
         placeholder="custom — will not follow the system"
         commit={onChange}
       />
+    </div>
+  );
+}
+
+const PART_BUTTON =
+  "flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent";
+
+/** Where a node's edits go, said before anybody makes one. */
+function PartNotice({ title, body, children }: { title: string; body: string; children?: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-kith/30 bg-kith-soft/40 p-3">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-kith">
+        <Component className="size-3.5" />
+        {title}
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">{body}</p>
+      {children ? <div className="flex flex-wrap gap-1.5">{children}</div> : null}
     </div>
   );
 }

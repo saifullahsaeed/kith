@@ -1,0 +1,56 @@
+{
+  "parts": {
+    "row.detail": "<!-- use: One label and its value on a line. -->\n<div data-k=\"row\" style=\"display: flex; justify-content: space-between; gap: 12px; padding: 12px 0\"><strong>{{label}}</strong><span>{{value}}</span></div>",
+    "button.primary": "<button class=\"primary\" style=\"padding: 12px 16px; background: var(--ds-forest)\">{{label}}</button>",
+    "panel": "<style>.panel { border-radius: 12px }</style><section class=\"panel\" style=\"display: flex; flex-direction: column; gap: 8px\"><h2>{{title}}</h2><k-slot></k-slot></section>",
+    "card.account": "<div style=\"display: flex; flex-direction: column\"><k-use name=\"row.detail\" label=\"{{title}}\" value=\"{{balance}}\" /></div>",
+    "loop": "<div><k-use name=\"loop\"></k-use></div>"
+  },
+  "cases": [
+    {
+      "why": "a hole is filled from the attribute of that name, and the root learns which part it is",
+      "input": "<main><k-use name=\"row.detail\" label=\"Checking\" value=\"$3,240\"></k-use></main>",
+      "output": "<main><div data-k=\"row\" style=\"display: flex; justify-content: space-between; gap: 12px; padding: 12px 0\" data-k-component=\"row.detail\"><strong>Checking</strong><span>$3,240</span></div></main>"
+    },
+    {
+      "why": "self-closed uses are siblings, not nested, and a missing prop is a blank",
+      "input": "<k-use name=\"button.primary\" label=\"Save\" /><k-use name=\"button.primary\" />",
+      "output": "<button class=\"primary\" style=\"padding: 12px 16px; background: var(--ds-forest)\" data-k-component=\"button.primary\">Save</button><button class=\"primary\" style=\"padding: 12px 16px; background: var(--ds-forest)\" data-k-component=\"button.primary\"></button>"
+    },
+    {
+      "why": "a prop is text: markup in it is escaped, never parsed",
+      "input": "<k-use name=\"button.primary\" label=\"&lt;img src=x onerror=alert(1)&gt;\"></k-use>",
+      "output": "<button class=\"primary\" style=\"padding: 12px 16px; background: var(--ds-forest)\" data-k-component=\"button.primary\">&lt;img src=x onerror=alert(1)&gt;</button>"
+    },
+    {
+      "why": "the use's own style is laid over the part's, and its class is added",
+      "input": "<k-use name=\"button.primary\" label=\"Go\" style=\"padding: 8px\" class=\"wide\"></k-use>",
+      "output": "<button class=\"primary wide\" style=\"padding: 8px; background: var(--ds-forest)\" data-k-component=\"button.primary\">Go</button>"
+    },
+    {
+      "why": "content inside a use goes where the part says k-slot, uses inside it included; the part's sheet travels",
+      "input": "<k-use name=\"panel\" title=\"Coming up\"><p>Rent</p><k-use name=\"row.detail\" label=\"Internet\" value=\"$60\"></k-use></k-use>",
+      "output": "<style>.panel { border-radius: 12px }</style><section class=\"panel\" style=\"display: flex; flex-direction: column; gap: 8px\" data-k-component=\"panel\"><h2>Coming up</h2><p>Rent</p><div data-k=\"row\" style=\"display: flex; justify-content: space-between; gap: 12px; padding: 12px 0\" data-k-component=\"row.detail\"><strong>Internet</strong><span>$60</span></div></section>"
+    },
+    {
+      "why": "a part used inside a part is expanded too, with the outer part's props passed down",
+      "input": "<k-use name=\"card.account\" title=\"Savings\" balance=\"$8,500\"></k-use>",
+      "output": "<div style=\"display: flex; flex-direction: column\" data-k-component=\"card.account\"><div data-k=\"row\" style=\"display: flex; justify-content: space-between; gap: 12px; padding: 12px 0\" data-k-component=\"row.detail\"><strong>Savings</strong><span>$8,500</span></div></div>"
+    },
+    {
+      "why": "name, style and class are the use's own and never reach a hole",
+      "input": "<k-use name=\"button.primary\" label=\"{{name}}\"></k-use>",
+      "output": "<button class=\"primary\" style=\"padding: 12px 16px; background: var(--ds-forest)\" data-k-component=\"button.primary\">{{name}}</button>"
+    },
+    {
+      "why": "a name the system does not have is drawn, labelled, and keeps what was put in it",
+      "input": "<k-use name=\"nope\"><b>kept</b></k-use>",
+      "output": "<div data-k-missing=\"nope\" style=\"border: 1px dashed #b42318; padding: 8px; color: #b42318; font: 12px system-ui, sans-serif\">Missing component: nope<b>kept</b></div>"
+    },
+    {
+      "why": "a part that uses itself stops instead of recursing forever",
+      "input": "<k-use name=\"loop\"></k-use>",
+      "output": "<div data-k-component=\"loop\"><div data-k-missing=\"loop\" style=\"border: 1px dashed #b42318; padding: 8px; color: #b42318; font: 12px system-ui, sans-serif\">Missing component: loop</div></div>"
+    }
+  ]
+}

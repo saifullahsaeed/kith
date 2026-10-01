@@ -24,6 +24,7 @@
  * because the failure mode of proceeding is an id on the wrong node, and an edit that silently
  * lands somewhere else is worse than an edit that does not happen.
  */
+import { expandText, type Parts, SLOT_TAG, USE_TAG } from "@/lib/design/compose";
 import {
   ALLOWED_TAGS,
   DROP_SUBTREE,
@@ -76,7 +77,9 @@ function scanTags(html: string): TagHit[] {
       if (SKIP_UNTIL_CLOSED.has(name)) skipping = name;
       continue;
     }
-    if (!ALLOWED_TAGS.has(name)) continue;
+    // A use and a slot are nodes in the tree the parser mints for, so they are tags here too —
+    // left out, every id after the first `<k-use>` would be written one node early.
+    if (!ALLOWED_TAGS.has(name) && name !== USE_TAG && name !== SLOT_TAG) continue;
 
     hits.push({
       name,
@@ -307,4 +310,47 @@ export function moveNode(html: string, id: string, parentId: string, index: numb
   }
 
   return without.slice(0, at) + moving + without.slice(at);
+}
+
+/**
+ * One instance turned back into the markup of its part, so this screen can differ from the rest.
+ *
+ * "This screen only" for the *inside* of an instance. The outside — its padding, its margin —
+ * is already per-screen through the `<k-use>`'s own style. A change to a node inside the part
+ * cannot be written anywhere but the part's file, which would change every screen; when he
+ * means only this one, the honest move is to stop it being an instance here, which is what
+ * Figma calls detaching and for the same reason.
+ *
+ * One level only. A part used *inside* the detached one stays a `<k-use>`, so a detached card
+ * still picks up the next change to the button inside it.
+ *
+ * The part's own `data-k` names are prefixed with the instance's id on the way in, so a part
+ * detached twice into one screen does not hand two nodes the same name — two nodes answering to
+ * one patch is the failure `materialiseIds` exists to prevent.
+ */
+export function detachInstance(html: string, id: string, parts: Parts): string {
+  const source = materialiseIds(html);
+  const extent = extentOf(source, id);
+  if (!extent) return html;
+  const use = source.slice(extent[0], extent[1]);
+  if (!/^<k-use\b/i.test(use)) return html;
+
+  let root = true;
+  const flat = expandText(use, parts, {
+    deep: false,
+    rename: (markup) =>
+      markup.replace(/<([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g, (tag, name: string, attrs: string) => {
+        if (name.toLowerCase() === "style") return tag;
+        const own = /\s*\bdata-k\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(attrs);
+        // The part's first element takes the use's id, so the node he had selected is still
+        // the node selected after the screen reloads.
+        const next = root ? id : own ? `${id}.${own[1] ?? own[2]}` : null;
+        root = false;
+        if (next === null) return tag;
+        const rest = own ? attrs.replace(own[0], "") : attrs;
+        const close = rest.trimEnd().endsWith("/") ? rest.replace(/\s*\/\s*$/, "") : rest;
+        return `<${name} data-k="${next}"${close}${close === rest ? "" : " /"}>`;
+      }),
+  });
+  return source.slice(0, extent[0]) + flat + source.slice(extent[1]);
 }

@@ -82,7 +82,7 @@ def _frame(source: str) -> tuple[int, int, str]:
     render, neither of them the thing being designed.
     """
     hit = re.search(r"""data-k-frame\s*=\s*["']([^"']{1,40})["']""", source, re.I)
-    declared = (hit.group(1).strip().lower() if hit else "")
+    declared = hit.group(1).strip().lower() if hit else ""
     if declared in _PRESETS:
         return (*_PRESETS[declared], declared)
     exact = re.fullmatch(r"(\d{2,4})\s*[x\u00d7]\s*(\d{2,4})", declared)
@@ -91,6 +91,7 @@ def _frame(source: str) -> tuple[int, int, str]:
         if 240 <= width <= 4000 and 240 <= height <= 4000:
             return width, height, "custom"
     return WIDE, 800, "default"
+
 
 #: How far off the grid a value may be before it is worth saying. Four, because that is the scale
 #: the dialect asks for; a 6px gap among 8s and 12s is the kind of thing nobody sees and everybody
@@ -307,8 +308,249 @@ def _read_system(candidate: Path) -> dict | None:
         "space": [int(n) for n in space if isinstance(n, (int, float))]
         if isinstance(space, list) and space
         else [4, 8, 12, 16, 24, 32, 48, 64],
-        "components": doc.get("components") if isinstance(doc.get("components"), dict) else {},
+        "components": {
+            **(doc.get("components") if isinstance(doc.get("components"), dict) else {}),
+            **_component_files(candidate.parent / "components"),
+        },
     }
+
+
+def _component_files(folder: Path) -> dict:
+    """The parts that are files, beside the system: `components/<name>.html`.
+
+    The same folder `kith.services.design_system` reads, so the checker renders a `<k-use>`
+    with the part the app renders it with.
+    """
+    out: dict = {}
+    try:
+        files = sorted(folder.glob("*.html"))
+    except OSError:
+        return out
+    for one in files:
+        name = one.name[: -len(".html")]
+        if not re.fullmatch(r"[\w.-]{1,60}", name, re.ASCII):
+            continue
+        try:
+            text = one.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        use, markup = _split_note(text)
+        if markup:
+            out[name] = {"html": markup, "use": use, "path": str(one)}
+    return out
+
+
+# ── <k-use>: parts a screen references ──────────────────────────────────────────────────────
+#
+# A line-for-line port of `expandText` in `ui/src/lib/design/compose.ts`. The editor expands a
+# `<k-use>` while it builds its tree; this renders in a bare Chromium, which has never heard of
+# one, so the part's markup has to be put in its place first. Two expansions that disagreed would
+# be the checker measuring a different screen from the one the editor shows — the whole class of
+# bug this surface keeps producing — so `ui/src/lib/design/expand.fixture.json` holds both to
+# the same output, byte for byte.
+
+_TAG = re.compile(r"""<!--[\s\S]*?-->|<(/?)([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>""", re.ASCII)
+_SELF_CLOSED = re.compile(r"""<(k-use|k-slot)\b((?:"[^"]*"|'[^']*'|[^>"'])*?)\s*/>""", re.I | re.ASCII)
+_HOLE = re.compile(r"\{\{\s*([A-Za-z_][\w.-]{0,60})\s*\}\}", re.ASCII)
+_NOTE = re.compile(r"^\s*<!--\s*use:\s*([\s\S]*?)-->", re.I)
+_ATTR = re.compile(r"""([^\s"'=<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?""")
+_PROP = re.compile(r"^[a-z_][\w.-]{0,60}$", re.ASCII)
+_RESERVED = {"name", "style", "class", "data-k"}
+_MAX_DEPTH = 8
+
+
+def _open_and_close(html: str) -> str:
+    return _SELF_CLOSED.sub(lambda m: f"<{m.group(1)}{m.group(2)}></{m.group(1)}>", html)
+
+
+def _escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _decode(text: str) -> str:
+    return (
+        text.replace("&quot;", '"')
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+    )
+
+
+def _split_note(text: str) -> tuple[str, str]:
+    match = _NOTE.match(text)
+    if not match:
+        return "", text.strip()
+    return match.group(1).strip(), text[match.end() :].strip()
+
+
+def _fill(html: str, props: dict) -> str:
+    lower = {str(k).lower(): str(v) for k, v in props.items()}
+    return _HOLE.sub(lambda m: _escape(lower.get(m.group(1).lower(), "")), html)
+
+
+def _attributes(text: str) -> list[tuple[str, str]]:
+    out = []
+    for m in _ATTR.finditer(text):
+        raw = (
+            m.group(2)
+            if m.group(2) is not None
+            else m.group(3)
+            if m.group(3) is not None
+            else m.group(4) or ""
+        )
+        out.append((m.group(1).lower(), _decode(raw)))
+    return out
+
+
+def _props(attrs: list[tuple[str, str]]) -> dict:
+    return {
+        name: value
+        for name, value in attrs
+        if name not in _RESERVED and not name.startswith("data-k") and _PROP.match(name)
+    }
+
+
+def _next_use(html: str, start: int):
+    opened = None
+    depth = 0
+    for m in _TAG.finditer(html, start):
+        if m.group(0).startswith("<!--") or m.group(2).lower() != "k-use":
+            continue
+        if m.group(1) != "/":
+            if opened is None:
+                opened = m
+            depth += 1
+            continue
+        depth -= 1
+        if opened is not None and depth == 0:
+            return opened.start(), opened.end(), m.start(), m.end(), opened.group(3) or ""
+    if opened is not None:
+        return opened.start(), opened.end(), len(html), len(html), opened.group(3) or ""
+    return None
+
+
+def _merge_style(base: str, extra: str) -> str:
+    order: list[str] = []
+    values: dict[str, str] = {}
+    for text in (base, extra):
+        for one in text.split(";"):
+            if ":" not in one:
+                continue
+            prop, _, value = one.partition(":")
+            prop, value = prop.strip(), value.strip()
+            if not prop or not value:
+                continue
+            key = prop if prop.startswith("--") else prop.lower()
+            if key not in values:
+                order.append(key)
+            values[key] = value
+    return "; ".join(f"{key}: {values[key]}" for key in order)
+
+
+_STYLE_AT = re.compile(r"""\s*\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+_CLASS_AT = re.compile(r"""\s*\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+
+
+def _dress_root(markup: str, style: str, classes: str, name: str) -> str:
+    at = 0
+    while True:
+        m = _TAG.search(markup, at)
+        if not m:
+            return markup
+        at = m.end()
+        if m.group(0).startswith("<!--") or m.group(1) == "/":
+            continue
+        if m.group(2).lower() == "style":
+            close = markup.lower().find("</style>", at)
+            if close < 0:
+                return markup
+            at = close + 8
+            continue
+        attrs = m.group(3) or ""
+        self_closed = attrs.rstrip().endswith("/")
+        if self_closed:
+            attrs = re.sub(r"\s*/\s*$", "", attrs)
+        style_at = _STYLE_AT.search(attrs)
+        nxt = attrs
+        if style.strip():
+            merged = _merge_style((style_at.group(1) or style_at.group(2) or "") if style_at else "", style)
+            nxt = (
+                nxt.replace(style_at.group(0), f' style="{merged}"', 1)
+                if style_at
+                else f'{nxt} style="{merged}"'
+            )
+        if classes.strip():
+            class_at = _CLASS_AT.search(attrs)
+            joined = " ".join(
+                [(class_at.group(1) or class_at.group(2) or "") if class_at else "", classes]
+            ).strip()
+            current = _CLASS_AT.search(nxt)
+            nxt = (
+                nxt.replace(current.group(0), f' class="{joined}"', 1)
+                if current
+                else f'{nxt} class="{joined}"'
+            )
+        if not re.search(r"\bdata-k-component\s*=", nxt, re.I):
+            nxt = f'{nxt} data-k-component="{name}"'
+        rebuilt = f"<{m.group(2)}{nxt}{' /' if self_closed else ''}>"
+        return markup[: m.start()] + rebuilt + markup[m.end() :]
+
+
+def _missing(name: str, inner: str) -> str:
+    return (
+        f'<div data-k-missing="{_escape(name)}" style="border: 1px dashed #b42318; padding: 8px; '
+        f'color: #b42318; font: 12px system-ui, sans-serif">Missing component: {_escape(name)}{inner}</div>'
+    )
+
+
+def _expand(html: str, parts: dict, stack: tuple[str, ...] = ()) -> str:
+    """Every `<k-use>` replaced by the part it names. `parts` maps a name to its markup."""
+    source = _open_and_close(html)
+    out = []
+    at = 0
+    while True:
+        hit = _next_use(source, at)
+        if not hit:
+            break
+        start, open_end, close_start, end, attr_text = hit
+        out.append(source[at:start])
+        at = end
+        attrs = _attributes(attr_text)
+        found = dict(attrs)
+        name = next((v for k, v in attrs if k == "name"), "")
+        inner = _expand(source[open_end:close_start], parts, stack)
+        part = parts.get(name)
+        if part is None or name in stack or len(stack) >= _MAX_DEPTH:
+            out.append(_missing(name or "(no name)", inner))
+            continue
+        markup = _fill(_split_note(part)[1], _props(attrs))
+        markup = re.sub(
+            r"<k-slot\b[^>]*></k-slot>",
+            lambda _m, filling=inner: filling,
+            _open_and_close(markup),
+            flags=re.I,
+        )
+        markup = _dress_root(markup, found.get("style", ""), found.get("class", ""), name)
+        out.append(_expand(markup, parts, (*stack, name)))
+    out.append(source[at:])
+    return "".join(out)
+
+
+def _markup_of(components: dict) -> dict:
+    """Name to markup, whichever of the two shapes a part was stored in."""
+    out = {}
+    for name, spec in (components or {}).items():
+        html = spec if isinstance(spec, str) else str((spec or {}).get("html") or "")
+        if html.strip():
+            out[str(name)] = html
+    return out
 
 
 def _literal_colours(source: str) -> list[str]:
@@ -528,19 +770,25 @@ def _parts(source: str, inventory: dict) -> tuple[list[str], list[str]]:
     all. A one-off does not owe the inventory anything, and a checker that nagged about it would
     be making an aesthetic judgement, which is the one thing this script is not for.
     """
-    used = sorted(set(re.findall(r'data-k-component\s*=\s*["\']([^"\']{1,60})["\']', source)))
+    used = sorted(
+        set(re.findall(r'data-k-component\s*=\s*["\']([^"\']{1,60})["\']', source))
+        | set(re.findall(r'<k-use\b[^>]*?\bname\s*=\s*["\']([^"\']{1,60})["\']', source, re.I))
+    )
     unknown = [name for name in used if name not in inventory]
     return used, unknown
 
 
 def check(path: Path) -> int:
-    source = path.read_text(encoding="utf-8", errors="replace")
-    wide_px, frame_h, frame_name = _frame(source)
+    written = path.read_text(encoding="utf-8", errors="replace")
+    wide_px, frame_h, frame_name = _frame(written)
     # A phone has no second, narrower pass to do — it is already the narrow one.
     narrow_px = NARROW if wide_px > _NARROW_WORTH_DOING_ABOVE else 0
     system = _system(path)
-    literals = _literal_colours(source)
-    used_parts, unknown_parts = _parts(source, system.get("components") or {})
+    used_parts, unknown_parts = _parts(written, system.get("components") or {})
+    # Everything after this measures the screen as drawn, which is the screen with its parts in
+    # it. A literal colour inside a part is the part's to fix, and is reported against the part.
+    source = _expand(written, _markup_of(system.get("components") or {}))
+    literals = _literal_colours(written)
     viewport = _viewport_units(source)
 
     with _playwright()() as p:
@@ -605,7 +853,10 @@ def check(path: Path) -> int:
         tail = f" … and {len(items) - limit} more" if len(items) > limit else ""
         print(f"{label:<9}{len(items)} — {head}{tail}")
 
-    print(f"system   {system['name']}" + (f" ({system['file']})" if system["file"] else " — no system file found"))
+    print(
+        f"system   {system['name']}"
+        + (f" ({system['file']})" if system["file"] else " — no system file found")
+    )
     report("editable", found["editable"])
     report("tokens", literals)
     report("spacing", found["spacing"])
@@ -617,7 +868,9 @@ def check(path: Path) -> int:
     elif system.get("components"):
         # The inventory exists and this screen used none of it. Said, not failed: a screen can
         # legitimately be the one that is not made of the usual parts.
-        print(f"parts    none used; {len(system['components'])} available — {', '.join(sorted(system['components']))}")
+        print(
+            f"parts    none used; {len(system['components'])} available — {', '.join(sorted(system['components']))}"
+        )
     report("overflow", overflow)
     report("viewport", viewport)
     if glyphs:
@@ -627,7 +880,10 @@ def check(path: Path) -> int:
         print("         symbols standing in for icons — get real ones with find_icons")
     else:
         print(f"{'icons':<9}ok")
-    print(f"frame    {frame_name} · {wide_px}\u00d7{frame_h}" + ("" if frame_name != "default" else " (not declared — say `data-k-frame` on <body>)"))
+    print(
+        f"frame    {frame_name} · {wide_px}\u00d7{frame_h}"
+        + ("" if frame_name != "default" else " (not declared — say `data-k-frame` on <body>)")
+    )
     if narrow_px:
         print(f"height   {wide}px at {wide_px}, {narrow}px at {narrow_px}")
     else:
@@ -639,7 +895,16 @@ def check(path: Path) -> int:
         print("shot     none — could not write the pictures")
 
     failing = any(
-        [found["editable"], literals, found["spacing"], found["contrast"], overflow, unknown_parts, viewport, glyphs]
+        [
+            found["editable"],
+            literals,
+            found["spacing"],
+            found["contrast"],
+            overflow,
+            unknown_parts,
+            viewport,
+            glyphs,
+        ]
     )
     if not failing:
         # The last line of a clean run, because a clean run is the moment the mistake gets made.

@@ -54,11 +54,26 @@ reason a codebase with a component library produces consistent interfaces and on
 does not, and it is the same for you: screen four looks like screen one when it is made of screen
 one's parts, and does not when you draw a fresh button from raw divs each time.
 
-Mark an instance with the part's name, so the checker can see it and the next person can trace it:
+**Use a part by reference, never by copy.** Each part is a file beside the system, and a screen
+points at it:
 
 ```html
-<button data-k-component="button.primary" style="...">Save changes</button>
+<k-use name="button.primary" label="Save changes"></k-use>
+<k-use name="row.detail" label="Checking" value="$3,240"></k-use>
+<k-use name="panel" title="Coming up">
+  <k-use name="row.detail" label="Rent" value="$1,500"></k-use>
+</k-use>
 ```
+
+Change the part's file and every screen that uses it changes. A pasted copy does not, which is
+why copies drift: the same `button.primary` has been found in four versions across seven screens
+of one product. `read_design_system` gives each part's exact tag under `write`, with its props.
+
+* Attributes on `<k-use>` fill the part's `{{holes}}` — `label="Checking"` fills `{{label}}`.
+  Values are text. `name`, `style` and `class` are the tag's own.
+* What you write *inside* `<k-use>` goes where the part has `<k-slot></k-slot>`.
+* `style` on the `<k-use>` changes this one instance — `style="margin-top: 24px"` — and leaves
+  the part alone. To change the part, edit its file (`path` in `read_design_system`).
 
 **The conventions are the house style.** Density, what the brand does and does not do, where the
 primary action goes, decisions already argued out. They are prose because that is the shape
@@ -70,13 +85,22 @@ and it is general.
 
 ```
 update_design_system(
-  components={"card.metric": {"html": "<div data-k-component=...>", "use": "One number with its label."}},
+  components={"card.metric": {
+    "html": "<div data-k=\"metric\" style=\"display:flex; flex-direction:column; gap:4px\"><span>{{label}}</span><strong>{{value}}</strong></div>",
+    "use": "One number with its label."
+  }},
   conventions="...the whole file, with the new line in it..."
 )
 ```
 
+A part's markup is one root element in the dialect, with `{{holes}}` where screens differ and
+`<k-slot></k-slot>` if screens put content inside it. It may carry its own `<style>` block, which
+travels with it — so a part does not depend on whichever screen's stylesheet it was first drawn
+in. It is saved as `.kith/design/components/card.metric.html`.
+
 The trigger for a component is the second screen: the first time you need a card you draw one,
-the second time you need the same card it is a part, and adding it there means every screen
+the second time you need the same card it is a part — add it, then replace the first screen's
+copy with `<k-use>` too, so there is one card and not two. Adding it there means every screen
 after this one has it. The trigger for a convention is the second correction: when he tightens
 the same gap or moves the same button twice, that is not a note about this screen, it is a rule
 about this product, and writing it down is the only thing that stops you re-learning it next
@@ -427,10 +451,18 @@ will do.
 
 ## After they have edited it
 
+**Do not write a generator.** A script that prints screens from Python functions gets you reuse
+and loses the editor: the next run overwrites every change he made by hand. Parts and
+`<k-use>` are the reuse, and the files stay the thing he edits.
+
 **Re-read the file before you touch it again.** This is the one that will catch you out. Your
 default assumption is that a file says what you last wrote in it, and for a design that is wrong
 by design — the whole point is that they change it. Their changes are the answer to the question
 you were about to ask them.
+
+He may also have changed a part — the editor has *Edit component* on every instance — or
+detached one instance into plain markup because that screen needed to differ. A detached copy
+is a decision, not drift: leave it detached unless he says otherwise.
 
 So when you come back to a design: read it, look at what moved, and take that as the brief. If
 they tightened every gap from 16 to 12, that is a preference, and it applies to the next screen

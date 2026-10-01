@@ -33,7 +33,7 @@ import {
   Save,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { DesignInspector } from "@/components/design/design-inspector";
 import { DesignLayers } from "@/components/design/design-layers";
@@ -43,8 +43,10 @@ import { describeFrame } from "@/lib/design/frame";
 import { asFile, pictureName, pngOfDesign, savePicture } from "@/lib/design/export";
 import { attachPicture, referenceInChat } from "@/lib/design/reference";
 import { fetchWorkspaceFile, saveWorkspaceFile } from "@/lib/backend/brain";
-import { applyStyle, materialiseIds, moveNode } from "@/lib/design/edit";
+import { previewHoles } from "@/lib/design/compose";
+import { applyStyle, detachInstance, materialiseIds, moveNode } from "@/lib/design/edit";
 import { type DesignNode, parseDesign } from "@/lib/design/parse";
+import { partsOf } from "@/lib/design/system";
 import { useDesignSystem } from "@/lib/design/use-system";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +57,55 @@ export interface DesignPageProps {
   projectId: number | null;
   title?: string;
   onBack: () => void;
+  /**
+   * Set when this page is a part's own file, opened from an instance on a screen: the part's
+   * name, the instance's props to show its holes with, and the screen's width to lay it out at.
+   */
+  part?: { name: string; props: Record<string, string>; width: number; context: string };
+}
+
+/** A part being edited on its own page, opened from one of its instances. */
+interface OpenPart {
+  name: string;
+  path: string;
+  props: Record<string, string>;
+}
+
+/** A part's file from `.kith/` down: the absolute path is the same for every part and says nothing. */
+function shortPath(path: string): string {
+  const at = path.indexOf(".kith/");
+  return at >= 0 ? path.slice(at) : path;
+}
+
+/**
+ * The instance that owns a node: the nearest one, at or above it, whose part the node came from.
+ *
+ * Nearest by *name*, not just nearest, because parts nest. A button inside a card is an
+ * instance of the button and a part of the card at once; selecting it means the card's file is
+ * where its bytes are, so "edit the part" has to open the card. A node that is not from any part
+ * is its own owner when it is an instance, and has none otherwise.
+ */
+function ownerOf(root: DesignNode, id: string | null): DesignNode | null {
+  if (!id) return null;
+  const trail: DesignNode[] = [];
+  const walk = (node: DesignNode): DesignNode | null => {
+    if (node.id === id) return node;
+    trail.push(node);
+    for (const child of node.children) {
+      const hit = walk(child);
+      if (hit) return hit;
+    }
+    trail.pop();
+    return null;
+  };
+  const node = walk(root);
+  if (!node) return null;
+  const wanted = node.part?.component;
+  if (!wanted) return node.instance ? node : null;
+  for (let at = trail.length - 1; at >= 0; at--) {
+    if (trail[at].instance?.name === wanted) return trail[at];
+  }
+  return null;
 }
 
 /** The node carrying this id, anywhere in the tree. */
@@ -68,9 +119,19 @@ function find(node: DesignNode, id: string | null): DesignNode | null {
   return null;
 }
 
-export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) {
+export function DesignPage({ path, projectId, title, onBack, part }: DesignPageProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const system = useDesignSystem(projectId);
+  const parts = useMemo(() => partsOf(system), [system]);
+  const queries = useQueryClient();
+  /* The part a click asked to change everywhere, opened as its own page over this one.
+   *
+   * A page rather than an edit in place, because "everywhere" is a different file and a
+   * different save: the screen you were on has its own draft, and a part's change should be
+   * seen — alone, at the screen's width, with this instance's values in its holes — before it
+   * lands on every screen that uses it. Back returns to the screen, which redraws with it. */
+  const [opened, setOpened] = useState<OpenPart | null>(null);
+  const [natural, setNatural] = useState(0);
   /* Zoom, because an artboard is a fixed rectangle and the panel is whatever the window is.
    *
    * Fixing the size was the right fix and it created this one: a 1600x1000 screen simply did
@@ -98,8 +159,22 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
 
   const loaded = file.data?.content ?? "";
   const html = draft ?? loaded;
-  const parsed = useMemo(() => parseDesign(html), [html]);
-  const frame = parsed.frame;
+  // The same inputs `DesignView` parses with, so a click's id is an id in this tree too.
+  const parsed = useMemo(
+    () => parseDesign(part ? previewHoles(html, part.props) : html, parts),
+    [html, parts, part],
+  );
+  const frame = part ? { ...parsed.frame, width: part.width, height: Math.max(natural, 80) } : parsed.frame;
+
+  /* A part has no frame height of its own — it is as tall as it is — so the box the zoom
+   * reserves is measured from what was drawn rather than read from the file. */
+  useEffect(() => {
+    const box = artboard.current;
+    if (!part || !box) return;
+    const watch = new ResizeObserver(() => setNatural(box.offsetHeight));
+    watch.observe(box);
+    return () => watch.disconnect();
+  }, [part, opened]);
 
   /* What "fit" is, measured rather than assumed, and re-measured when the panel changes size —
    * opening the inspector or the layers rail is a resize, and a fit computed once would be
@@ -110,6 +185,8 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
     if (!box) return;
     const measure = () => {
       const room = { w: box.clientWidth - 80, h: box.clientHeight - 80 };
+      // A box with no room is a box not on screen; its measurement is not a zoom.
+      if (room.w <= 0 || room.h <= 0) return;
       setFitted(Math.min(1, room.w / frame.width, room.h / frame.height) || 1);
     };
     measure();
@@ -129,7 +206,9 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
 
   const change = useCallback(
     (property: string, value: string | null) => {
-      if (!selected) return;
+      // A node from a part's file has no bytes in this one. The inspector offers the part's
+      // own page or a detach instead; this is the backstop.
+      if (!selected || node?.part || node?.synthetic) return;
       setFailure("");
       setSaved(false);
       setDraft((current) => {
@@ -138,7 +217,31 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
         return applyStyle(source, selected, { [property]: value });
       });
     },
-    [selected, loaded],
+    [selected, loaded, node],
+  );
+
+  /** Every screen's version of this part, opened as its own page. */
+  const editPart = useCallback(
+    (name: string, props: Record<string, string>) => {
+      const found = parts[name];
+      if (!found?.path) {
+        setFailure(`${name} is an inline snippet, not a file — re-save it with update_design_system to edit it here.`);
+        return;
+      }
+      setOpened({ name, path: found.path, props });
+    },
+    [parts],
+  );
+
+  /** This screen's copy of an instance, so it can differ from the others. */
+  const detach = useCallback(
+    (id: string) => {
+      setFailure("");
+      setSaved(false);
+      setDraft((current) => detachInstance(current ?? loaded, id, parts));
+      setSelected(id);
+    },
+    [loaded, parts],
   );
 
   const move = useCallback(
@@ -166,6 +269,9 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
       setSaved(true);
       setDraft(null);
       await file.refetch();
+      // A part is read through the system, not as a file, so every screen drawing it is waiting
+      // on this query rather than on the one above.
+      if (part) await queries.invalidateQueries({ queryKey: ["design-system"] });
     } catch (error) {
       setFailure(error instanceof Error ? error.message : "couldn't save that file");
     } finally {
@@ -236,7 +342,21 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
   const step = (by: number) => setZoom(Math.min(8, Math.max(0.1, Number((scale * by).toFixed(3)))));
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
+      {/* Over the screen rather than instead of it. Swapped out, the screen's viewport was
+          unmounted under its own ResizeObserver, measured zero wide, and came back at -21%
+          zoom — and it would have lost an unsaved draft on the way. */}
+      {opened ? (
+        <div className="absolute inset-0 z-20 bg-background">
+          <DesignPage
+            path={opened.path}
+            projectId={projectId}
+            title={`Component · ${opened.name}`}
+            onBack={() => setOpened(null)}
+            part={{ name: opened.name, props: opened.props, width: frame.width, context: parsed.sheet }}
+          />
+        </div>
+      ) : null}
       <header className="flex shrink-0 items-center gap-3 border-b border-border/70 px-6 py-3">
         <Button variant="ghost" size="sm" onClick={onBack} className="gap-1.5">
           <ArrowLeft className="size-4" />
@@ -245,7 +365,9 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{title || path.split("/").pop()}</div>
           <div className="truncate text-xs text-muted-foreground">
-            {path} · {describeFrame(parsed.frame)}
+            {part
+              ? `${shortPath(path)} · changes here reach every screen that uses ${part.name}`
+              : `${path} · ${describeFrame(parsed.frame)}`}
           </div>
         </div>
 
@@ -362,6 +484,10 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
                 onMove={move}
                 system={system}
                 projectId={projectId}
+                fitContent={Boolean(part)}
+                width={part?.width}
+                preview={part?.props}
+                context={part?.context}
                 className={cn(
                   /* No width, no radius, no background of ours.
                    *
@@ -391,7 +517,14 @@ export function DesignPage({ path, projectId, title, onBack }: DesignPageProps) 
         </div>
 
         <aside className="hidden w-64 shrink-0 overflow-y-auto border-s border-border/70 xl:block">
-          <DesignInspector node={node} onChange={change} system={system} />
+          <DesignInspector
+            node={node}
+            onChange={change}
+            system={system}
+            onEditPart={editPart}
+            onDetach={detach}
+            owner={ownerOf(parsed.root, selected)}
+          />
         </aside>
       </div>
     </div>

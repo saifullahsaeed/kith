@@ -13,9 +13,10 @@
  * coherent palette and nothing downstream has to treat "no system" as a special case.
  */
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { fetchDesignSystem } from "@/lib/backend/brain";
-import { kithSystem, readSystem, type System } from "@/lib/design/system";
+import { components, kithSystem, readSystem, type System } from "@/lib/design/system";
 import { paletteFor } from "@/lib/kith-palette";
 import { useDarkMode } from "@/lib/theme";
 
@@ -30,5 +31,14 @@ export function useDesignSystem(projectId: number | null): System {
 
   const content = found.data?.content;
   const conventions = found.data?.conventions ?? "";
-  return (content ? readSystem(content, conventions) : null) ?? kithSystem(paletteFor(dark));
+  const files = found.data?.components;
+  return useMemo(() => {
+    const system = (content ? readSystem(content, conventions) : null) ?? kithSystem(paletteFor(dark));
+    /* The parts that are files, which `content` cannot hold.
+     *
+     * `content` is the system file's own text and a part now lives in its own file beside it,
+     * so only the server — which resolved the folder — can say what is there. Laid over the
+     * inline ones, the same precedence the service uses, and validated by the same reader. */
+    return files ? { ...system, components: { ...system.components, ...components(files) } } : system;
+  }, [content, conventions, files, dark]);
 }

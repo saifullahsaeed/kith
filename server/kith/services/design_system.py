@@ -18,11 +18,17 @@ holds them to the same fixture.
 **What a system holds.** Colours, a type scale, radii, fonts and a spacing scale — the values.
 And now two things that are not values:
 
-* **`components`** — the project's inventory of parts. A named snippet of the dialect, written
-  once, that Kith composes a screen out of rather than inventing a button from raw divs on every
-  screen. This is the thing that makes four screens look like one product, and it is the reason
-  a codebase with a component library produces consistent UI while a codebase without one does
-  not, regardless of who or what is typing.
+* **`components`** — the project's inventory of parts. Each is a file,
+  `components/<name>.html` beside the system, that a screen *references* with
+  `<k-use name="…">` rather than copying. This is the thing that makes four screens look like
+  one product, and it is the reason a codebase with a component library produces consistent UI
+  while a codebase without one does not, regardless of who or what is typing.
+
+  They were snippets inline in the JSON until 2026-10-01, pasted into each screen and labelled
+  with `data-k-component`. A label on a copy is not a reference: measured that day, ironline's
+  `button.primary` existed in 4 versions across 7 uses, and on Pace (54 screens) he wrote his own
+  Python templating to get reuse at all — which then overwrote every hand edit on its next run.
+  Inline entries still read, so an older system keeps working; a file of the same name wins.
 * **`conventions`** — prose, in a markdown file beside the system. The judgment a JSON file
   cannot hold: this is a dense tool and not a landing page, no shadows, the primary action goes
   bottom-right. Values say what is available; conventions say what this product *does with them*.
@@ -79,6 +85,25 @@ NAME = re.compile(r"[\w.-]{1,60}")
 #: A component's markup. Big enough for a real card, small enough that nobody pastes a page in.
 MAX_COMPONENT = 4_000
 
+#: A component that is a file. Larger, because a file carries its own `<style>` — the reason a
+#: part can stop depending on whichever screen's stylesheet it was first drawn in — and because it
+#: is no longer pasted into every tool result: `read_design_system` lists a file part by name,
+#: props and path, and he reads the markup only when he is changing it.
+MAX_COMPONENT_FILE = 16_000
+
+#: Where a system keeps its parts: a folder beside the system file, one part per file.
+COMPONENTS_DIR = "components"
+
+#: What a part may not contain. The renderer refuses all of it anyway; refusing here means the
+#: refusal happens where somebody can read the reason rather than silently at paint time.
+_UNSAFE = re.compile(r"<\s*script|javascript:|\son\w+\s*=|src\s*=\s*['\"]?https?:", re.I)
+
+#: `<!-- use: one line -->`, the first thing in a part's file.
+_USE_NOTE = re.compile(r"^\s*<!--\s*use:\s*(.*?)-->", re.S | re.I)
+
+#: A hole in a part: `{{label}}`. Kept identical to `HOLE` in `ui/src/lib/design/compose.ts`.
+_HOLE = re.compile(r"\{\{\s*([A-Za-z_][\w.-]{0,60})\s*\}\}")
+
 #: Conventions are meant to be read every time a screen is drawn, so they have to stay short
 #: enough that reading them is free. A page of prose is the budget.
 MAX_CONVENTIONS = 8_000
@@ -93,9 +118,28 @@ class Component:
     #: When to reach for it, in one line. The inventory is useless if choosing from it needs
     #: the same thought as writing the markup.
     use: str = ""
+    #: The part's file, for a part that is one. None for an inline snippet from an older system.
+    path: Path | None = None
+
+    @property
+    def props(self) -> list[str]:
+        """The holes a screen fills, in the order the part first uses them."""
+        out: list[str] = []
+        for name in _HOLE.findall(self.html):
+            if name.lower() not in out:
+                out.append(name.lower())
+        return out
+
+    @property
+    def slot(self) -> bool:
+        """Whether a screen can put content inside it."""
+        return bool(re.search(r"<\s*k-slot\b", self.html, re.I))
 
     def as_dict(self) -> dict:
-        return {"name": self.name, "html": self.html, "use": self.use}
+        out: dict[str, Any] = {"name": self.name, "html": self.html, "use": self.use}
+        if self.path:
+            out["path"] = str(self.path)
+        return out
 
 
 @dataclass
@@ -204,10 +248,51 @@ def _components(raw: Any) -> dict[str, Component]:
         use = "" if isinstance(spec, str) else str((spec or {}).get("use") or "")
         if not html.strip() or len(html) > MAX_COMPONENT:
             continue
-        if re.search(r"<\s*script|javascript:|\son\w+\s*=|src\s*=\s*['\"]?https?:", html, re.I):
+        if _UNSAFE.search(html):
             continue
         out[str(name)] = Component(name=str(name), html=html.strip(), use=use.strip()[:200])
     return out
+
+
+def split_note(text: str) -> tuple[str, str]:
+    """A part file's one-line note and its markup."""
+    match = _USE_NOTE.match(text)
+    if not match:
+        return "", text.strip()
+    return match.group(1).strip(), text[match.end() :].strip()
+
+
+def _component_files(system_file: Path) -> dict[str, Component]:
+    """The parts that are files, beside this system.
+
+    Beside the system rather than resolved on their own, for the reason conventions are: one
+    search decides the palette, the prose and the parts, so a project cannot end up drawing with
+    somebody else's button.
+    """
+    folder = system_file.parent / COMPONENTS_DIR
+    out: dict[str, Component] = {}
+    try:
+        files = sorted(folder.glob("*.html"))
+    except OSError:
+        return out
+    for one in files:
+        name = one.name[: -len(".html")]
+        if not NAME.fullmatch(name):
+            continue
+        try:
+            text = one.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        use, markup = split_note(text)
+        if not markup or len(markup) > MAX_COMPONENT_FILE or _UNSAFE.search(markup):
+            continue
+        out[name] = Component(name=name, html=markup, use=use[:200], path=one)
+    return out
+
+
+def component_file(system_file: Path, name: str) -> Path:
+    """Where the part of this name lives, for this system."""
+    return system_file.parent / COMPONENTS_DIR / f"{name}.html"
 
 
 def _from_design_system(doc: dict) -> System | None:
@@ -492,6 +577,7 @@ def resolve(project_id: int | str | None = None) -> System:
         return System()
     system.path = path
     system.scope = scope
+    system.components = {**system.components, **_component_files(path)}
     system.conventions, system.conventions_path = _conventions_beside(path)
     skills = _skill_folders()
     system.shared = any(parent.resolve() in skills for parent in [path, *path.parents] if parent.exists())
@@ -630,7 +716,16 @@ def save(
     doc["radius"] = _merge(doc.get("radius") or doc.get("radii_px") or {}, radius, replace=replace)
     doc.pop("radii_px", None)
     doc["fonts"] = _merge(doc.get("fonts") or {}, fonts, replace=replace)
-    doc["components"] = _merge(doc.get("components") or {}, components, replace=replace)
+    # Parts are files now, so the JSON keeps only the inline ones an older system already had.
+    # A part named here goes to its file and its inline entry, if any, is retired — two copies
+    # of one part is the exact disagreement files exist to end.
+    parts_in = components if isinstance(components, dict) else {}
+    inline = dict(doc.get("components") or {})
+    if replace and components is not None:
+        inline = {}
+    for part_name in parts_in:
+        inline.pop(part_name, None)
+    doc["components"] = inline
     if space:
         doc["space"] = sorted({int(n) for n in space if isinstance(n, (int, float)) and n > 0})
 
@@ -644,15 +739,53 @@ def save(
     if not checked:
         raise SystemError("None of those colours parsed. A colour is a hex value or a CSS colour name.")
 
-    dropped = sorted(set((doc.get("components") or {}).keys()) - set(checked.components.keys()))
-    if dropped:
+    refused: list[str] = []
+    writes: dict[str, str] = {}
+    removals: list[str] = []
+    for part_name, spec in parts_in.items():
+        if spec is None:
+            removals.append(str(part_name))
+            continue
+        html = spec if isinstance(spec, str) else str((spec or {}).get("html") or "")
+        use = "" if isinstance(spec, str) else str((spec or {}).get("use") or "")
+        _, html = split_note(html)
+        if (
+            not NAME.fullmatch(str(part_name))
+            or not html
+            or len(html) > MAX_COMPONENT_FILE
+            or _UNSAFE.search(html)
+        ):
+            refused.append(str(part_name))
+            continue
+        # A hole named after one of the use's own attributes could never be filled: `name`
+        # says which part, `style` and `class` dress the instance. Said now, with the fix,
+        # rather than discovered as a blank on every screen that uses the part.
+        clashing = sorted({hole.lower() for hole in _HOLE.findall(html)} & {"name", "style", "class"})
+        if clashing:
+            raise SystemError(
+                f"{part_name}: {{{{{clashing[0]}}}}} cannot be a hole — `{clashing[0]}` is the "
+                "<k-use> tag's own attribute. Call it something else, like {{title}} or {{label}}."
+            )
+        note = " ".join(use.split())[:200].replace("--", "-")
+        writes[str(part_name)] = (f"<!-- use: {note} -->\n" if note else "") + html.rstrip() + "\n"
+    if refused:
         raise SystemError(
-            f"These components were refused: {', '.join(dropped)}. A component is markup in the "
-            "dialect — no <script>, no inline handlers, no http(s) sources, under "
-            f"{MAX_COMPONENT} characters, and named with word characters, dots or dashes."
+            f"These components were refused: {', '.join(sorted(refused))}. A component is markup "
+            "in the dialect — no <script>, no inline handlers, no http(s) sources, under "
+            f"{MAX_COMPONENT_FILE:,} characters, and named with word characters, dots or dashes."
         )
 
+    if replace and components is not None:
+        # Replacing the section means the parts not named are gone, and the parts are files.
+        removals.extend(name for name in _component_files(target) if name not in writes)
+
     sandbox.write_file(str(target), json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+    for part_name, text_out in writes.items():
+        sandbox.write_file(str(component_file(target, part_name)), text_out)
+    for part_name in removals:
+        gone = component_file(target, part_name)
+        if gone.is_file():
+            sandbox.remove(str(gone))
 
     if conventions is not None:
         if len(conventions) > MAX_CONVENTIONS:

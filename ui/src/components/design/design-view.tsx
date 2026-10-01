@@ -25,7 +25,8 @@ import { frameTokens } from "@/lib/seal";
 import { type DesignNode, parseDesign } from "@/lib/design/parse";
 import { paletteFor } from "@/lib/kith-palette";
 import { assetPaths, useAssets } from "@/lib/design/assets";
-import { type System, tokensFor } from "@/lib/design/system";
+import { previewHoles } from "@/lib/design/compose";
+import { partsOf, type System, tokensFor } from "@/lib/design/system";
 import { useDesignSystem } from "@/lib/design/use-system";
 import { useDarkMode } from "@/lib/theme";
 import { attrsToProps, elementName, scopeStyleSheet, styleToReact, VOID_TAGS } from "@/lib/design/render";
@@ -45,6 +46,26 @@ export interface DesignViewProps {
   /** Which project the design's own assets and system resolve against. */
   projectId?: number | null;
   className?: string;
+  /**
+   * Drawn at its own height rather than the frame's. A part opened on its own is a button or a
+   * card, not a screen, and pinning it to a 844px-tall artboard would put it on a page of white.
+   */
+  fitContent?: boolean;
+  /** A width to lay out at instead of the frame's — the screen's width, for a part opened from one. */
+  width?: number;
+  /**
+   * Values for a part's holes while it is open on its own — the props of the instance it was
+   * opened from — so you edit a row that says "Checking  $3,240" rather than one that is blank.
+   * Display only: the file keeps its `{{label}}`.
+   */
+  preview?: Record<string, string>;
+  /**
+   * A stylesheet to draw under the design's own — the sheet of the screen a part was opened
+   * from. Parts lean on the screen they sit in: Pace's `row.detail` is classes whose rules
+   * live in the `pace.screen` part, so the row opened alone came out as unstyled text. Already
+   * sanitised; it is another parse's `sheet`.
+   */
+  context?: string;
 }
 
 /** Where a dragged node would land. */
@@ -77,8 +98,25 @@ function contains(node: DesignNode, ancestorId: string, id: string): boolean {
   return ancestor.children.some(walk);
 }
 
-export function DesignView({ html, selected, onSelect, onMove, system, projectId = null, className }: DesignViewProps) {
-  const parsed = useMemo(() => parseDesign(html), [html]);
+export function DesignView({
+  html,
+  selected,
+  onSelect,
+  onMove,
+  system,
+  projectId = null,
+  className,
+  fitContent = false,
+  width,
+  preview,
+  context,
+}: DesignViewProps) {
+  const resolved = useDesignSystem(projectId);
+  const inUse = system ?? resolved;
+  const parts = useMemo(() => partsOf(inUse), [inUse]);
+  // Parts expanded here, so every surface that draws a design — the editor, the board, the
+  // card in a reply — draws the same screen. A design with no `<k-use>` in it parses as before.
+  const parsed = useMemo(() => parseDesign(preview ? previewHoles(html, preview) : html, parts), [html, parts, preview]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
 
@@ -102,11 +140,12 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
         `:where(.${scope}) { color: #000; background: #fff; color-scheme: light; ` +
           `font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 16px; ` +
           `font-weight: 400; line-height: normal; letter-spacing: normal; text-align: left; }`,
+        context ? scopeStyleSheet(context, `.${scope}`) : "",
         scopeStyleSheet(parsed.sheet, `.${scope}`),
       ]
         .filter(Boolean)
         .join("\n"),
-    [parsed.sheet, scope],
+    [parsed.sheet, scope, context],
   );
 
   /* The tokens the dialect is written in, defined where the design can see them.
@@ -134,8 +173,6 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
   const assets = useAssets(wanted, projectId);
 
   const dark = useDarkMode();
-  const resolved = useDesignSystem(projectId);
-  const inUse = system ?? resolved;
 
   const tokens = useMemo(() => {
     const style: Record<string, string> = {};
@@ -190,6 +227,8 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
 
     if (node.classes.length) props.className = node.classes.join(" ");
     if (selected === node.id) props["data-selected"] = "true";
+    // So the editor can outline the instance a selected part belongs to.
+    if (node.instance) props["data-k-instance"] = node.instance.name;
     if (drop?.anchor === node.id) props["data-drop"] = drop.side;
     if (dragging === node.id) props["data-dragging"] = "true";
 
@@ -288,9 +327,9 @@ export function DesignView({ html, selected, onSelect, onMove, system, projectId
        * `auto` rather than `hidden` because this is also the editor: a design that overruns its
        * frame has to stay reachable, and the checker already reports the real height. */
       style={{
-        width: parsed.frame.width,
-        height: parsed.frame.height,
-        overflow: "auto",
+        width: width ?? parsed.frame.width,
+        height: fitContent ? "auto" : parsed.frame.height,
+        overflow: fitContent ? "visible" : "auto",
         ...tokens,
         ...styleToReact(parsed.root.style),
       }}

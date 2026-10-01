@@ -45,6 +45,8 @@ export interface Component {
   html: string;
   /** When to reach for it, in one line. */
   use: string;
+  /** Its file, for a part that is one — `components/<name>.html` beside the system. */
+  path?: string;
 }
 
 export interface System {
@@ -81,17 +83,27 @@ export interface System {
  * `server/kith/services/design_system.py`; if the two refuse different things, a part the
  * server accepted is a part the editor silently will not draw.
  */
-function components(raw: unknown): Record<string, Component> {
+export function components(raw: unknown): Record<string, Component> {
   const out: Record<string, Component> = {};
   if (!raw || typeof raw !== "object") return out;
   for (const [name, spec] of Object.entries(raw as Record<string, unknown>)) {
     if (!/^[\w.-]{1,60}$/.test(name)) continue;
     const entry = (typeof spec === "string" ? { html: spec } : spec) as Record<string, unknown>;
     const html = String(entry?.html ?? "").trim();
-    if (!html || html.length > 4000) continue;
+    const path = typeof entry?.path === "string" && entry.path ? entry.path : undefined;
+    // A part that is a file may be bigger: it carries its own stylesheet. Same numbers as
+    // `MAX_COMPONENT` and `MAX_COMPONENT_FILE` in the service.
+    if (!html || html.length > (path ? 16000 : 4000)) continue;
     if (/<\s*script|javascript:|\son\w+\s*=|src\s*=\s*['"]?https?:/i.test(html)) continue;
-    out[name] = { name, html, use: String(entry?.use ?? "").trim().slice(0, 200) };
+    out[name] = { name, html, use: String(entry?.use ?? "").trim().slice(0, 200), ...(path ? { path } : {}) };
   }
+  return out;
+}
+
+/** The inventory as the renderer wants it: a part's markup and file, by name. */
+export function partsOf(system: System): Record<string, { html: string; path?: string }> {
+  const out: Record<string, { html: string; path?: string }> = {};
+  for (const [name, part] of Object.entries(system.components)) out[name] = { html: part.html, path: part.path };
   return out;
 }
 
