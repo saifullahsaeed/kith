@@ -164,6 +164,12 @@ export function foldRuns(lines: ActivityItem[], conversationId: string): Run[] {
       found.startedAt = at;
       found.description = mark.description ?? "";
       found.phases = mark.phases ?? [];
+    } else if (mark.state === "step") {
+      // The same run going on: running again, one more column, and the agents it already had.
+      found.state = "running";
+      found.endedAt = 0;
+      found.phases = mark.phases ?? found.phases;
+      found.phase = line.text;
     } else if (mark.state === "phase") {
       found.phase = line.text;
     } else if (mark.state === "log") {
@@ -270,7 +276,21 @@ export function mergeRuns(board: Run[], live: Run[]): Run[] {
     });
     // An agent the feed has seen start and the board has not been re-read for yet.
     for (const agent of fresh.agents) if (!agents.some((one) => one.id === agent.id)) agents.push(agent);
-    return { ...run, agents };
+    // The run's own state from the feed too. A run used to go one way — running, then ended — so a
+    // board read behind the feed could only be behind a running run, and keeping its state was
+    // harmless. `add_agents` reopens a finished run for another step, and the board, read while it
+    // was finished, would draw it finished until the next read. The feed drops its oldest lines
+    // first, so whatever it still holds of a run includes the newest: its state is the current one.
+    return {
+      ...run,
+      agents,
+      state: fresh.state,
+      endedAt: fresh.state === "running" ? 0 : fresh.endedAt || run.endedAt,
+      phase: fresh.phase || run.phase,
+      phases: fresh.phases.length > run.phases.length ? fresh.phases : run.phases,
+      said: fresh.said || run.said,
+      cost: fresh.state === "running" ? run.cost : fresh.cost || run.cost,
+    };
   });
   return [...merged, ...live.filter((one) => !known.has(one.id))].sort((a, b) => a.startedAt - b.startedAt);
 }

@@ -76,6 +76,9 @@ class Run:
     #: The folder its agents work in — what a builder's copy is a copy of. "" when there is no
     #: honest answer: a chat outside any project, whose working base is the whole workspace.
     workdir: str = ""
+    #: "script" for a `run_workflow` script, "steps" for a run `add_agents` keeps going. Either
+    #: kind can be continued with more steps once it has ended — see :func:`reopen`.
+    kind: str = "script"
 
     def public(self) -> dict:
         return {
@@ -93,6 +96,7 @@ class Run:
             "cost": self.cost,
             "resumed_from": self.resumed_from,
             "budget": self.budget,
+            "kind": self.kind,
             "agents": sorted(
                 (dict(one) for one in self.agents.values()), key=lambda one: one.get("started", 0)
             ),
@@ -110,6 +114,7 @@ def start(
     phases: list[str],
     folder: str,
     unwatched: bool = False,
+    kind: str = "script",
 ) -> Run | None:
     """Open a run, or None when this conversation already has one going.
 
@@ -128,9 +133,70 @@ def start(
             phases=list(phases),
             folder=folder,
             unwatched=unwatched,
+            kind=kind,
         )
         _RUNS[run.id] = run
     say(run, "started", name, description=description, phases=list(phases), folder=folder)
+    return run
+
+
+def reopen(run: Run, phase: str) -> bool:
+    """Open an ended run for one more step, filed under ``phase``. False when it cannot be.
+
+    The same run rather than a new one, because the steps are one piece of work: the map keeps
+    one picture of it, later agents name earlier ones by label, and the budget is the run's.
+    Refused while this run or any other run of the conversation is going — one at a time, for
+    the reason :func:`start` gives. A fresh halt switch, because the last step may have ended
+    by being stopped, and a set switch would stop the new step before its first agent.
+    """
+    with _LOCK:
+        if any(one.conversation == run.conversation and one.state == RUNNING for one in _RUNS.values()):
+            return False
+        run.state = RUNNING
+        run.reported = False
+        run.note = ""
+        run.said = ""
+        run.ended = 0.0
+        run.halt = threading.Event()
+        run.phases.append(phase)
+        run.phase = phase
+    say(run, "step", phase, phases=list(run.phases), folder=run.folder)
+    return True
+
+
+def restore(
+    run_id: str,
+    conversation: str,
+    name: str,
+    folder: str,
+    phases: list[str],
+    started: float,
+    kind: str = "script",
+) -> Run:
+    """Put a run the server lost in a restart back on the board, ended, so it can be continued.
+
+    Its agents are not drawn again — the map starts from the next step — but what they made is
+    on disk, and that is what a later step reads. Marked reported: its last note was heard
+    before the restart, or it never will be, and waking the chat now would be for nothing.
+    """
+    with _LOCK:
+        found = _RUNS.get(run_id)
+        if found is not None:
+            return found
+        run = Run(
+            id=run_id,
+            conversation=conversation,
+            name=name,
+            description="",
+            phases=list(phases),
+            folder=folder,
+            started=started or time.time(),
+            state=FINISHED,
+            reported=True,
+            ended=time.time(),
+            kind=kind,
+        )
+        _RUNS[run_id] = run
     return run
 
 

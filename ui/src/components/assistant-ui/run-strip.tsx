@@ -354,10 +354,12 @@ export function RunStrip({
   /* Workflows are counted apart from the rest so the count can stay live: a workflow he started
    * is still running long after the turn that started it has finished, and the one-line summary
    * is where you would look for that. */
-  const workflows = facts.names.filter((name) => name === "run_workflow").length;
+  const workflows = facts.names.filter((name) => name === "run_workflow" || name === "add_agents").length;
   /* And an `ask` is said as what it was — questions — rather than as the "message" its tool group
    * counts it as: "1 message" in a run he spent waiting on your answer reads as something he sent. */
-  const run = summariseRun(facts.names.filter((name) => name !== "run_workflow" && name !== "ask"));
+  const run = summariseRun(
+    facts.names.filter((name) => name !== "run_workflow" && name !== "add_agents" && name !== "ask"),
+  );
   const questions = facts.asked ? `asked ${facts.asked} question${facts.asked === 1 ? "" : "s"}` : "";
   const started = useStartedWorkflows(allCalls);
   const steps = turn ? (usage?.rounds?.length ?? 0) : 0;

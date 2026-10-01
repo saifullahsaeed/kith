@@ -262,6 +262,7 @@ warning about, one level up.
 |---|---|
 | Work needs to survive this sitting | `plan_work` — the next 2–5 tasks, with checklists |
 | B cannot start until A is done | A gets the higher priority, or B stays in `planning` with the blocker written |
+| A change to build, in workflow mode | `add_agents` — a builder, then a verifier `after` it; add the next step when they report |
 | Same decided change across many files | `run_workflow(name="migrate-sites")` when allowed; otherwise say it splits |
 | A decided change across several independent places | `run_workflow(name="build-feature")` when allowed |
 | About to call a change done | `run_workflow(name="review-changes")` when allowed |

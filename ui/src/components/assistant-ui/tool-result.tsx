@@ -340,6 +340,7 @@ const WorkflowStarted: FC<{ value: Record<string, unknown>; script: string }> = 
   const conversation = useConversationId();
   const showMap = useAgentMap((s) => s.show);
   const phases = Array.isArray(value.phases) ? (value.phases as unknown[]).map(String) : [];
+  const sent = Array.isArray(value.agents) ? (value.agents as unknown[]).map(String) : [];
 
   return (
     <div className="flex flex-col gap-2 rounded-lg p-2.5 ring-1 ring-border/60">
@@ -357,6 +358,12 @@ const WorkflowStarted: FC<{ value: Record<string, unknown>; script: string }> = 
             </li>
           ))}
         </ol>
+      ) : null}
+      {sent.length ? (
+        <p className="text-[11px] text-muted-foreground">
+          {typeof value.step === "number" ? `Step ${value.step}: ` : ""}
+          {sent.join(", ")}
+        </p>
       ) : null}
       <p className="text-[11px] leading-relaxed text-muted-foreground">
         Runs in the background. He picks the result up in a new turn when it finishes.
@@ -1473,7 +1480,7 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     }
 
     if (
-      name === "run_workflow" &&
+      (name === "run_workflow" || name === "add_agents") &&
       result &&
       typeof result === "object" &&
       looksLikeWorkflow(result as Record<string, unknown>)

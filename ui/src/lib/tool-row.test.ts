@@ -87,6 +87,13 @@ describe("the one fact on each row", () => {
     expect(digestOf("run_tests", {}, ok({ status: "running", for: "20s" }))).toBe("still running · 20s");
   });
 
+  it("says which step of a workflow was sent, and to whom", () => {
+    expect(digestOf("add_agents", {}, ok({ run: "wf-1", step: 2, agents: ["check", "fix"] }))).toBe(
+      "Step 2 · check, fix",
+    );
+    expect(describeCall("add_agents", {}).verb).toBe("sent agents");
+  });
+
   it("reads a background process", () => {
     expect(
       digestOf("check_process", {}, ok({ alive: true, for: "59s", note: "still running; nothing new since you last looked" })),

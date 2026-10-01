@@ -39,6 +39,7 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     web,
     workers,
     workflow,
+    workflow_steps,
 )
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas

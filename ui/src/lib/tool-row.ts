@@ -390,6 +390,11 @@ export function digestOf(name: string, args: Args, wrapped: unknown): string {
       const phases = Array.isArray(r.phases) ? r.phases.map(String) : [];
       return phases.join(" → ");
     }
+    case "add_agents": {
+      const labels = Array.isArray(r.agents) ? r.agents.map(String) : [];
+      const step = typeof r.step === "number" ? `Step ${r.step}` : "";
+      return [step, labels.join(", ")].filter(Boolean).join(" · ");
+    }
     default:
       return generic(value);
   }

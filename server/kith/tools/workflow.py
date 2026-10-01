@@ -211,8 +211,8 @@ def _listing() -> str:
 DESCRIPTION = (
     f"Run a workflow: agents fanned out by a short Python script, in the background. Allowed when "
     f"their message starts with {PREFIX} or workflow mode is on in this chat (your context says "
-    "which) — otherwise this refuses. Only worth it when the work really splits; do small work "
-    "yourself.\n\n"
+    "which) — otherwise this refuses. For work you will steer as it goes — a builder, then a "
+    "verifier after it — add_agents is simpler; a script is for a fan-out planned in full.\n\n"
     "Prefer a saved workflow — tested scripts, run by name with args: run_workflow(name=..., "
     "args={...}). A project may keep its own in .kith/workflows/. Shipped:\n"
     "{listing}\n\n"
@@ -331,34 +331,16 @@ def run_workflow(path: Path, args: dict):
                 "what keeps failing — a fourth try should be their call."
             )
         }
-    # A new run in a turn nobody opened — the one a finished run or test wakes. Refused unless
-    # workflow mode is on, because the mode is the person's standing yes and the prefix is only
-    # a yes to one message. Even then bounded: that turn is exactly where the next step of a
-    # survey → build → review chain belongs (three of these were refused in one evening while
-    # the person was right there), and also how a mode left on would spend money overnight.
     unwatched = session_context.unattended()
-    if earlier is None and unwatched:
-        if session_context.workflow_permission() != "mode":
-            return {
-                "error": (
-                    "Nobody is here to agree to a new workflow. Report what you have, and start the "
-                    "next one when they are back — resuming a run that broke is still allowed."
-                )
-            }
-        chained = workflows.unwatched_in_a_row(conversation)
-        if chained >= MAX_UNWATCHED_RUNS:
-            return {
-                "error": (
-                    f"{chained} workflows have started in a row here with nobody watching. Stop, "
-                    "tell them what those runs found, and let them start the next one."
-                )
-            }
-    if not session_context.workflows_allowed() and earlier is None:
+    if earlier is None:
+        refused = new_run_refusal(conversation, unwatched)
+        if refused:
+            return {"error": refused}
+    elif not earlier["script"].strip():
         return {
             "error": (
-                f"Workflows run only when the person asks for one — their message starts with "
-                f"{PREFIX} — or when workflow mode is on in this chat. Do the work in this turn "
-                f"instead, or suggest a {PREFIX} request if it really wants fanning out."
+                f"{resume} is a step-by-step run, not a script. Continue it with "
+                f'add_agents(run="{resume}", agents=[...]).'
             )
         }
 
@@ -543,6 +525,36 @@ _EDITS = frozenset(workers.WRITING) | {"shell"}
 
 def _kept_because(calls: list[str]) -> bool:
     return any(name in _EDITS for name in calls)
+
+
+def new_run_refusal(conversation: str, unwatched: bool) -> str:
+    """Why this turn may not open a new run, or "" when it may. For `run_workflow` and `add_agents`.
+
+    A new run in a turn nobody opened — the one a finished run or test wakes — is refused unless
+    workflow mode is on, because the mode is the person's standing yes and the prefix is only a
+    yes to one message. Even then bounded: that turn is exactly where the next step of a survey →
+    build → review chain belongs (three of these were refused in one evening while the person was
+    right there), and also how a mode left on would spend money overnight.
+    """
+    if unwatched:
+        if session_context.workflow_permission() != "mode":
+            return (
+                "Nobody is here to agree to a new workflow. Report what you have, and start the "
+                "next one when they are back — resuming a run that broke is still allowed."
+            )
+        chained = workflows.unwatched_in_a_row(conversation)
+        if chained >= MAX_UNWATCHED_RUNS:
+            return (
+                f"{chained} workflows have started in a row here with nobody watching. Stop, "
+                "tell them what those runs found, and let them start the next one."
+            )
+    if not session_context.workflows_allowed():
+        return (
+            f"Workflows run only when the person asks for one — their message starts with "
+            f"{PREFIX} — or when workflow mode is on in this chat. Do the work in this turn "
+            f"instead, or suggest a {PREFIX} request if it really wants fanning out."
+        )
+    return ""
 
 
 def _names() -> str:
@@ -737,7 +749,9 @@ def check_workflow(path: Path, args: dict):
         answer["log"] = log
     if run.state != workflows.RUNNING:
         answer["note"] = run.note
-        if run.state in (workflows.FAILED, workflows.STOPPED):
+        if run.kind == "steps":
+            answer["next"] = f'Add the next step with add_agents(run="{run.id}", agents=[...]).'
+        elif run.state in (workflows.FAILED, workflows.STOPPED):
             answer["next"] = (
                 "Fix the script (it is in the folder as script.py) and call "
                 f'run_workflow(script=..., resume="{run.id}"): agents asked the same thing are '
@@ -779,9 +793,13 @@ def _earlier_run(run_id: str, conversation: str) -> dict | None:
     folder = paths.base_dir() / ".kith" / "scratch" / "workflows" / run_id
     try:
         header = json.loads((folder / "run.json").read_text(encoding="utf-8"))
-        script = (folder / "script.py").read_text(encoding="utf-8")
     except (OSError, ValueError):
         return None
+    try:
+        script = (folder / "script.py").read_text(encoding="utf-8")
+    except OSError:
+        # A run `add_agents` keeps going has no script — its steps are the plan.
+        script = ""
     if not isinstance(header, dict) or header.get("conversation") != conversation:
         return None
     reuse: dict[str, dict] = {}
@@ -1850,6 +1868,11 @@ def _closing_note(
         parts.append(
             f"To fix it: check_workflow shows the failed agents and the log; correct the script and "
             f'call run_workflow(script=..., resume="{run.id}") — agents asked the same thing are reused.'
+        )
+    else:
+        parts.append(
+            f'To keep going, add_agents(run="{run.id}", agents=[...]) adds a step to this run; '
+            "its agents can be named by their labels in after."
         )
     parts.append(f"Everything the run wrote is in {run.folder}.")
     return "\n\n".join(parts)
