@@ -379,6 +379,9 @@ def task_detail(path: Path, task_id: int) -> dict | None:
         # read a task. Always present, empty when no plan is filed, so the interface branches on
         # content and not on whether the key arrived.
         "plan": _plan_for(path, task),
+        # When the plan file last changed, so the task page can say "written 17 Sep" and put the
+        # plan in its activity at the time it was written rather than when the task was filed.
+        "plan_modified": _plan_modified(path, task),
     }
 
 
@@ -391,19 +394,37 @@ def _plan_for(path: Path, task: dict) -> str:
     carry a plan at all.
     """
     from kith.infra import project_files
-    from kith.infra.workspace import paths
 
     try:
-        directory = ""
-        if task.get("project_id"):
-            from kith.infra.db.repositories.projects import get_project
-
-            project = get_project(path, int(task["project_id"]))
-            directory = str((project or {}).get("directory") or "").strip()
-        base = Path(directory) if directory and Path(directory).is_dir() else paths.root()
-        return project_files.read_plan(base, int(task["id"]))
+        return project_files.read_plan(_plan_base(path, task), int(task["id"]))
     except Exception:
         # Same contract as the rest of this: a task must load whether or not its plan does.
+        return ""
+
+
+def _plan_base(path: Path, task: dict) -> Path:
+    """The folder a task's plan lives under: its project's, or his own."""
+    from kith.infra.workspace import paths
+
+    directory = ""
+    if task.get("project_id"):
+        from kith.infra.db.repositories.projects import get_project
+
+        project = get_project(path, int(task["project_id"]))
+        directory = str((project or {}).get("directory") or "").strip()
+    return Path(directory) if directory and Path(directory).is_dir() else paths.root()
+
+
+def _plan_modified(path: Path, task: dict) -> str:
+    """The plan file's modification time as a UTC ISO string, or "" when there is no plan."""
+    from datetime import UTC, datetime
+
+    from kith.infra import project_files
+
+    try:
+        file = project_files.plan_path(_plan_base(path, task), int(task["id"]))
+        return datetime.fromtimestamp(file.stat().st_mtime, UTC).isoformat() if file.is_file() else ""
+    except Exception:
         return ""
 
 
