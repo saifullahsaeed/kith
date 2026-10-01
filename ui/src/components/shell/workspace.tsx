@@ -862,6 +862,7 @@ export function Workspace({
                   navigate(pathForHome());
                 }}
                 onClose={() => navigate(pathForHome())}
+                presence={presence}
               />
             </Suspense>
           </ErrorBoundary>

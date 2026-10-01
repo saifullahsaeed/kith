@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   BellRing,
   Brain,
   Clock,
@@ -20,13 +21,12 @@ import {
   RefreshCw,
   Repeat,
   Search,
-  Sparkles,
+  Sun,
   X,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { TaskDetailPage } from "@/components/control-panel/task-detail";
-import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm";
 import { useNow } from "@/hooks/use-now";
 import {
@@ -40,18 +40,21 @@ import {
 } from "@/lib/backend/brain";
 import { keys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
-import { NavGroup, TabButton } from "./chrome";
+import { Kbd, NavItem, NavLabel } from "./chrome";
+import { PresencePill } from "@/components/shell/presence";
+import type { Presence } from "@/components/shell/chat-states";
 import { WorkspaceFiles } from "./files";
 import { matches, projectLabel } from "./format";
 import { Journal } from "./journal";
 import { Memories } from "./memories";
-import { Lifetime, Overview } from "./overview";
+import { Lifetime } from "./overview";
+import { Today } from "./today";
 import { ProjectPage } from "./project-page";
 import { Projects } from "./projects";
 import { Reminders } from "./reminders";
 import { Schedules } from "./schedules";
 import { Sources } from "./sources";
-import { INPUT, KIND_LABEL } from "./types";
+import { KIND_LABEL } from "./types";
 import type { ProjectRef, Tab } from "./types";
 import { Layer, useLayer } from "@/hooks/use-layer";
 
@@ -62,6 +65,7 @@ export function ControlPanel({
   onOpenTask,
   onNewConversation,
   onClose,
+  presence,
 }: {
   tab: Tab;
   openTask: number | null;
@@ -70,6 +74,8 @@ export function ControlPanel({
   /** Start a chat inside a project, from that project's page. */
   onNewConversation?: (projectId: number) => void;
   onClose: () => void;
+  /** Kith's presence, as the app's own bar says it — this screen covers that bar. */
+  presence?: Presence;
 }) {
   const confirm = useConfirm();
   const cache = useQueryClient();
@@ -229,14 +235,20 @@ export function ControlPanel({
   }, [query, onClose]);
 
   const counts = snap?.counts ?? {};
+  /* The nav's numbers are what is there to *do*, not how much exists: plans waiting for your OK on
+     Projects, reminders still to fire, standing jobs that are on. */
+  const waiting = (snap?.tasks ?? []).filter((task) => task.status === "planning").length;
+  const activeProjects = (snap?.projects ?? []).filter((project) => project.status === "active").length;
+  const upcoming = (snap?.reminders ?? []).filter((reminder) => reminder.status === "pending").length;
+  const standing = (snap?.schedules ?? []).filter((schedule) => schedule.status === "active").length;
   const seconds = Math.max(0, Math.round((now - freshAt) / 1000));
   const freshness = !everLoaded
-    ? "loading…"
+    ? "Loading…"
     : seconds < 30
-      ? "up to date"
+      ? "Up to date"
       : seconds < 90
-        ? "a minute ago"
-        : `${Math.round(seconds / 60)}m ago`;
+        ? "A minute ago"
+        : `${Math.round(seconds / 60)} min ago`;
 
   const props = { snap, query, refresh: load, remove, relevel, create, update };
 
@@ -254,152 +266,126 @@ export function ControlPanel({
        for. `ContextDetailScreen` did convert — it has one scrolling column and measured clean at
        every width. */
     <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
-      {/* Ambient wash so the panel feels like the same warm room as the rest of the app.
-          `fixed inset-0` because `.kith-ambient` no longer positions itself, and this surface is
-          window-scoped. */}
-      <div className="kith-ambient fixed inset-0 opacity-70" />
+      {/* No ambient wash: the design is flat neutral surfaces, so colour is free to mean state. */}
 
       {/* This panel covers the app header, so it owns the top of the window and
           has to reserve the window-control space itself. */}
-      <header className="window-drag-region window-controls-gap relative z-10 flex items-center gap-3 border-b border-border/60 bg-background/70 px-4 py-2.5 backdrop-blur-xl">
-        <span className="relative flex size-8 shrink-0 items-center justify-center rounded-xl bg-kith-soft text-kith ring-1 ring-kith/20">
-          <Brain className="size-4" />
-        </span>
-        <div className="min-w-0 leading-tight">
-          <div className="text-sm font-semibold tracking-tight">Control panel</div>
-          <div className="hidden text-[11px] text-muted-foreground sm:block">
-            everything he is — browse, search, prune
-          </div>
+      {/* One 44px bar, the same grammar as the app's own: where you are, the search, whether
+          the screen is current, Kith, and the way out. It covers the app header, so it keeps the
+          traffic lights' room itself. */}
+      <header className="window-drag-region relative z-10 flex h-11 shrink-0 items-center border-b border-border bg-background">
+        <div className="window-controls-gap flex h-11 w-[232px] shrink-0 items-center gap-2 border-e border-border pe-3">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Back to chats"
+            title="Back to chats"
+            className="text-muted-foreground hover:bg-muted/60 hover:text-foreground flex size-7 items-center justify-center rounded-[7px] transition-colors"
+          >
+            <ArrowLeft className="size-[15px]" />
+          </button>
+          <span className="truncate text-[13px] font-semibold">Control panel</span>
         </div>
-        <div className="relative ml-3 w-56 md:w-72">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            ref={searchBox}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search his mind…"
-            className={`${INPUT} w-full pr-9 pl-9`}
-            aria-label="Search his mind"
-          />
-          <kbd className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 rounded border border-border/60 px-1 font-mono text-[10px] text-muted-foreground/50">
-            ⌘K
-          </kbd>
+        <div className="flex flex-1 items-center px-5">
+          <label className="border-input bg-card text-muted-foreground/80 relative flex h-[30px] w-[460px] items-center gap-2 rounded-lg border px-2.5 text-[13px] transition-colors focus-within:border-ring">
+            <Search className="size-3.5 shrink-0" />
+            <input
+              ref={searchBox}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search memory, journal, tasks, files…"
+              aria-label="Search memory, journal, tasks, files"
+              className="text-foreground placeholder:text-muted-foreground/80 min-w-0 flex-1 bg-transparent outline-none"
+            />
+            <Kbd>⌘K</Kbd>
+          </label>
         </div>
-        <div className="flex-1" />
-
-        {/* What replaced the Live button and the Refresh button: a statement rather than a
-            control. It says the screen is current and, while he is mid-task, that it is
-            keeping up — which is the only thing the toggle was ever really telling you. */}
-        <span
-          className="text-muted-foreground/70 hidden items-center gap-1.5 font-mono text-[11px] tabular-nums sm:flex"
-          title="Updates when something changes, and whenever you come back to the window"
-        >
-          {/* This used to read "keeping up" whenever a task was working, because the panel polled
-              faster while one was — a statement about its own refresh rate. There is no rate to
-              report now: it updates when the board moves. So the dot says whether a refetch is in
-              flight, and the text says when the answer on screen arrived. */}
+        <div className="flex shrink-0 items-center gap-3 px-3.5">
+          {/* What replaced the Live button and the Refresh button: a statement rather than a
+              control. The dot says whether a refetch is in flight; the words, when the answer on
+              screen arrived. */}
           <span
-            className={cn(
-              "size-1.5 rounded-full",
-              loading ? "bg-kith animate-pulse" : "bg-muted-foreground/40",
-            )}
-          />
-          {freshness}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 hover:text-destructive"
-          onClick={onClose}
-          aria-label="Close"
-        >
-          <X className="size-4" />
-        </Button>
+            className="text-muted-foreground/80 hidden items-center gap-1.5 font-mono text-[11px] tabular-nums sm:flex"
+            title="Updates when something changes, and whenever you come back to the window"
+          >
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                loading ? "bg-kith animate-pulse" : "bg-muted-foreground/50",
+              )}
+            />
+            {freshness}
+          </span>
+          {presence ? <PresencePill presence={presence} /> : null}
+          <span className="flex items-center gap-1.5">
+            <Kbd>Esc</Kbd>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close control panel"
+              className="text-muted-foreground hover:bg-muted/60 hover:text-foreground flex size-[30px] items-center justify-center rounded-lg transition-colors"
+            >
+              <X className="size-4" />
+            </button>
+          </span>
+        </div>
       </header>
 
       <div className="relative z-10 flex min-h-0 flex-1">
-        <nav className="w-56 shrink-0 overflow-y-auto border-r border-border/60 bg-sidebar/40 px-3 py-4 backdrop-blur-sm">
-          <div className="space-y-0.5">
-            <TabButton
-              icon={<Sparkles className="size-4" />}
-              active={tab === "overview"}
-              onClick={() => openTab("overview")}
-            >
-              Overview
-            </TabButton>
-            <TabButton
-              icon={<Clock className="size-4" />}
-              active={tab === "lifetime"}
-              onClick={() => openTab("lifetime")}
-            >
-              Lifetime
-            </TabButton>
+        <nav
+          aria-label="Control panel sections"
+          className="flex w-[232px] shrink-0 flex-col overflow-y-auto border-e border-border bg-sidebar px-2.5 py-3"
+        >
+          <NavItem icon={<Sun />} active={tab === "overview"} onClick={() => openTab("overview")}>
+            Today
+          </NavItem>
+
+          <NavLabel>Work</NavLabel>
+          <NavItem
+            icon={<FolderKanban />}
+            active={tab === "projects"}
+            alert={waiting}
+            alertLabel={`${waiting} plan${waiting === 1 ? "" : "s"} waiting for your OK`}
+            count={activeProjects}
+            onClick={() => openTab("projects")}
+          >
+            Projects
+          </NavItem>
+          {/* Upcoming only. The old count was every reminder ever set — 24 of them, all fired —
+              which said there was something here when there was nothing to do. */}
+          <NavItem icon={<BellRing />} active={tab === "reminders"} count={upcoming} onClick={() => openTab("reminders")}>
+            Reminders
+          </NavItem>
+          <NavItem icon={<Repeat />} active={tab === "schedules"} count={standing} onClick={() => openTab("schedules")}>
+            Schedules
+          </NavItem>
+
+          <NavLabel>Mind</NavLabel>
+          <NavItem icon={<Brain />} active={tab === "memory"} count={counts.memories} onClick={() => openTab("memory")}>
+            Memory
+          </NavItem>
+          <NavItem icon={<NotebookPen />} active={tab === "journal"} count={counts.journal} onClick={() => openTab("journal")}>
+            Journal
+          </NavItem>
+          <NavItem icon={<Clock />} active={tab === "lifetime"} onClick={() => openTab("lifetime")}>
+            Lifetime
+          </NavItem>
+
+          <NavLabel>Library</NavLabel>
+          <NavItem icon={<FileText />} active={tab === "sources"} count={counts.sources} onClick={() => openTab("sources")}>
+            Sources
+          </NavItem>
+          <NavItem icon={<FolderTree />} active={tab === "workspace"} onClick={() => openTab("workspace")}>
+            Files
+          </NavItem>
+
+          <div className="text-muted-foreground/80 mt-auto flex gap-1 border-t border-border px-2 pt-3 pb-0.5 text-[11px] whitespace-nowrap">
+            <span>⌘K search</span>
+            <span className="text-muted-foreground/50">·</span>
+            <span>⌘R refresh</span>
+            <span className="text-muted-foreground/50">·</span>
+            <span>Esc close</span>
           </div>
-
-          <NavGroup label="Mind">
-            <TabButton
-              icon={<Brain className="size-4" />}
-              active={tab === "memory"}
-              count={counts.memories}
-              onClick={() => openTab("memory")}
-            >
-              Memory
-            </TabButton>
-            <TabButton
-              icon={<NotebookPen className="size-4" />}
-              active={tab === "journal"}
-              count={counts.journal}
-              onClick={() => openTab("journal")}
-            >
-              Journal
-            </TabButton>
-          </NavGroup>
-
-          <NavGroup label="Doing">
-            {/* Projects is the way in to all work — tasks live inside one. */}
-            <TabButton
-              icon={<FolderKanban className="size-4" />}
-              active={tab === "projects"}
-              count={counts.projects}
-              onClick={() => openTab("projects")}
-            >
-              Projects
-            </TabButton>
-            <TabButton
-              icon={<BellRing className="size-4" />}
-              active={tab === "reminders"}
-              count={counts.reminders}
-              onClick={() => openTab("reminders")}
-            >
-              Reminders
-            </TabButton>
-            <TabButton
-              icon={<Repeat className="size-4" />}
-              active={tab === "schedules"}
-              count={counts.schedules}
-              onClick={() => openTab("schedules")}
-            >
-              Schedules
-            </TabButton>
-          </NavGroup>
-
-          <NavGroup label="Workspace">
-            <TabButton
-              icon={<FileText className="size-4" />}
-              active={tab === "sources"}
-              count={counts.sources}
-              onClick={() => openTab("sources")}
-            >
-              Sources
-            </TabButton>
-            <TabButton
-              icon={<FolderTree className="size-4" />}
-              active={tab === "workspace"}
-              onClick={() => openTab("workspace")}
-            >
-              Files
-            </TabButton>
-          </NavGroup>
         </nav>
 
         {/* A task page manages its own scrolling — two panels, independently — so the
@@ -426,7 +412,7 @@ export function ControlPanel({
           ) : openProject != null ? (
             <div
               key={`project-${openProject}`}
-              className="animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
+              className="animate-[kith-rise_0.35s_ease-out] px-10 pt-7 pb-7"
             >
               <ProjectPage
                 {...props}
@@ -443,10 +429,21 @@ export function ControlPanel({
               // Generous rather than unbounded. These are lists of cards, so the width is
               // useful — but a 2,000px line of prose inside one is worse than a gutter, and
               // some of these hold his notes and journal entries.
-              className="mx-auto max-w-[105rem] animate-[kith-rise_0.35s_ease-out] px-6 py-7 md:px-8"
+              className="animate-[kith-rise_0.35s_ease-out] px-10 pt-7 pb-7"
             >
               {tab === "overview" ? (
-                <Overview snap={snap} timeline={timeline} query={query} onNavigate={openTab} />
+                <Today
+                  snap={snap}
+                  timeline={timeline}
+                  query={query}
+                  onNavigate={openTab}
+                  onOpenProject={(ref) => {
+                    onSelectTab("projects");
+                    setOpenProject(ref);
+                  }}
+                  onOpenTask={onOpenTask}
+                  create={create}
+                />
               ) : tab === "lifetime" ? (
                 <Lifetime events={timeline.filter((event) => matches(query, event.text))} />
               ) : tab === "memory" ? (
