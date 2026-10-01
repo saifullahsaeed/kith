@@ -8,10 +8,22 @@ times, plus a conversation that grows monotonically.
 The catch is that providers do not agree on how caching is asked for, and OpenRouter
 passes that difference through:
 
-* **Automatic** — OpenAI, DeepSeek, Groq, Moonshot, Grok, Z.AI, Gemini 2.5 implicit.
+* **Automatic** — OpenAI, DeepSeek, Groq, Moonshot, Grok, Z.AI, Gemini 2.5 and later.
   Nothing to send. Reads bill at 0.1x to 0.5x.
-* **Explicit** — Anthropic, Alibaba Qwen, Gemini per-block. Without a ``cache_control``
-  breakpoint there is **no caching at all**.
+* **Explicit** — Anthropic, Alibaba Qwen. Without a ``cache_control`` breakpoint there
+  is **no caching at all**.
+
+Gemini accepts breakpoints too, and sending them is worse than not: OpenRouter turns the
+last one it honours into an explicit Gemini cache, and it does not honour one on a tool
+result — so in a tool loop the explicit cache stops at the system prompt, and the implicit
+cache that would have covered the whole growing prefix does not run beside it. Measured
+2026-09-30 on ``gemini-3.8-flash``, Google AI Studio, one conversation growing 22k → 65k:
+
+    with breakpoints   cached 22k, 22k, 22k, 22k, 22k    — the head only, $0.035 by round 5
+    without            cached 0, 20k, 33k, 41k, 53k      — ~82% of the prompt, $0.013
+
+The same shape in production: 75 rounds reading exactly 17,798 tokens each of 125k-186k,
+10.7% cached. Vertex behaves the same without breakpoints (0, 0, 32k, 41k, 53k).
 
 That second case was silently costing real money. Measured on ``claude-sonnet-5`` with an
 identical 13.3k-token prefix:
@@ -44,8 +56,9 @@ from typing import Any
 
 #: Model-id prefixes whose providers need an explicit ``cache_control`` breakpoint.
 #: Matched on the author segment because that is what identifies the provider family —
-#: ``anthropic/claude-opus-5``, ``qwen/qwen3-coder-plus``, ``google/gemini-3.6-flash``.
-NEEDS_BREAKPOINT = ("anthropic/", "qwen/", "google/")
+#: ``anthropic/claude-opus-5``, ``qwen/qwen3-coder-plus``. Not ``google/``: see the module
+#: docstring for why a breakpoint costs Gemini most of its cache.
+NEEDS_BREAKPOINT = ("anthropic/", "qwen/")
 
 #: Smallest prefix worth a breakpoint, in tokens. Providers refuse to cache below their
 #: own minimum (1,024 for most, 4,096 for Anthropic's Opus and Haiku 4.5 and for Gemini

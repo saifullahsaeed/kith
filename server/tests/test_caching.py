@@ -35,7 +35,6 @@ class TestWhichProviders:
             "anthropic/claude-opus-5",
             "anthropic/claude-sonnet-5",
             "qwen/qwen3-coder-plus",
-            "google/gemini-3.6-flash",
             "ANTHROPIC/Claude-Opus-5",
         ],
     )
@@ -52,11 +51,27 @@ class TestWhichProviders:
             "z-ai/glm-5.2",
             "x-ai/grok-4.5",
             "groq/llama-3.3",
+            "google/gemini-3.8-flash",
         ],
     )
     def test_families_that_cache_on_their_own(self, model):
-        # Sending a breakpoint here is harmless but pointless, so it isn't sent.
+        # Sending a breakpoint here is pointless at best, so it isn't sent.
         assert not caching.needs_breakpoint(model)
+
+    def test_gemini_is_left_to_its_implicit_cache(self):
+        """A breakpoint pins Gemini's cache to the system prompt for the rest of the loop.
+
+        OpenRouter ignores the one on a tool result, so the explicit cache it builds stops at
+        the head, and the implicit cache that would follow the growing prefix does not run.
+        Measured live: 22k of 65k cached with breakpoints, 53k of 65k without.
+        """
+        loop = [
+            system(),
+            {"role": "user", "content": BIG},
+            {"role": "tool", "tool_call_id": "call_2", "content": BIG},
+        ]
+        out = caching.apply(loop, "google/gemini-3.8-flash", persona=BIG)
+        assert not any(marked(message) for message in out)
 
 
 class TestPlacement:
