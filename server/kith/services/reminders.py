@@ -41,6 +41,27 @@ def set_reminder(path: Path, args: dict) -> dict:
     return {**reminder, "fires": clock.humanize_until(fire_at)}
 
 
+def edit_reminder(path: Path, reminder_id: int, args: dict) -> dict | None:
+    """The panel's edit of one reminder: any of status, note, and a new time.
+
+    A new time is given the way a new reminder's is — ``in_minutes`` from now (a snooze) or an
+    absolute ``at`` (a naive ISO time is his wall clock) — so the two can never disagree about
+    what "9pm" means. With neither, only the status or the words change.
+    """
+    fire_at = None
+    if args.get("in_minutes") is not None or args.get("at"):
+        fire_at = local_time.resolve_fire_at(args.get("in_minutes"), args.get("at"))
+    note = args.get("note")
+    updated = repo.reminders.update_reminder(
+        path,
+        reminder_id,
+        status=args.get("status"),
+        note=note if isinstance(note, str) else None,
+        fire_at=fire_at,
+    )
+    return {**updated, "fires": clock.humanize_until(updated["fire_at"])} if updated else None
+
+
 def schedule(path: Path, args: dict) -> dict:
     """One recurring schedule. Raises ValueError on a missing note or no cadence."""
     note = (args.get("note") or "").strip()

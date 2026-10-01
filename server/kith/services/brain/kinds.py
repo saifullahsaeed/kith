@@ -114,7 +114,10 @@ def _memory_edit(path: Path, memory_id: int, data: dict) -> dict | None:
     from kith.services import embeddings
 
     content = data.get("content")
-    updated = repo.memories.update_memory(path, memory_id, content, data.get("importance"))
+    tags = data.get("tags")
+    if tags is not None and not isinstance(tags, list):
+        raise ValueError("tags must be a list of strings")
+    updated = repo.memories.update_memory(path, memory_id, content, data.get("importance"), tags)
     if updated is not None and content:
         embeddings.reembed(path, memory_id, content)
     return updated
@@ -174,7 +177,7 @@ KINDS: dict[str, Kind] = {
             # ({note, in_minutes} or {note, at}), so this reuses it rather than growing a
             # second interpretation of "in 20 minutes" that could disagree with his.
             add=lambda p, d: _make_reminder(p, d),
-            edit=lambda p, k, d: repo.reminders.set_reminder_status(p, k, d.get("status", "done")),
+            edit=lambda p, k, d: reminder_service.edit_reminder(p, k, d),
         ),
         Kind(
             "message",

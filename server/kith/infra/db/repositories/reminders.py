@@ -57,6 +57,40 @@ def set_reminder_status(path: Path, reminder_id: int, status: str) -> dict | Non
         return as_dict(row)
 
 
+def update_reminder(
+    path: Path,
+    reminder_id: int,
+    *,
+    status: str | None = None,
+    note: str | None = None,
+    fire_at: str | None = None,
+) -> dict | None:
+    """Change a reminder's words, its time, or its status — one write, so a snooze cannot land half.
+
+    Only a pending reminder can be moved or reworded: one that has fired already did its job, and
+    rewriting it would make the alerts log disagree with what actually reached him. "Remind again"
+    is a new reminder, not an edit of the old one.
+    """
+    if status is not None and status not in REMINDER_STATUSES:
+        raise ValueError(f"status must be one of {REMINDER_STATUSES}")
+    with session(path) as db:
+        row = db.get(Reminder, reminder_id)
+        if row is None:
+            return None
+        if (note is not None or fire_at is not None) and row.status != "pending":
+            raise ValueError("only a pending reminder can be moved or reworded")
+        if note is not None:
+            if not note.strip():
+                raise ValueError("note is required")
+            row.note = note.strip()
+        if fire_at is not None:
+            row.fire_at = fire_at
+        if status is not None:
+            row.status = status
+        db.flush()
+        return as_dict(row)
+
+
 def delete_reminder(path: Path, reminder_id: int) -> bool:
     with session(path) as db:
         return changed(db.execute(delete(Reminder).where(Reminder.id == reminder_id))) > 0

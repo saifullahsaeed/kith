@@ -178,8 +178,17 @@ def set_memory_level(path: Path, memory_id: int, level: str) -> dict | None:
 
 
 def update_memory(
-    path: Path, memory_id: int, content: str | None = None, importance: int | None = None
+    path: Path,
+    memory_id: int,
+    content: str | None = None,
+    importance: int | None = None,
+    tags: list[str] | None = None,
 ) -> dict | None:
+    """Change what a memory says, how much it matters, or what it is filed under.
+
+    `tags` replaces the whole list — the panel edits them as a set of chips, so "what is there
+    now" is the only thing it can say. Blank and repeated tags are dropped rather than stored.
+    """
     with session(path) as db:
         row = db.get(Memory, memory_id)
         if row is None:
@@ -187,7 +196,14 @@ def update_memory(
         if content is not None:
             row.content = content
         if importance is not None:
-            row.importance = int(importance)
+            row.importance = max(0, min(10, int(importance)))
+        if tags is not None:
+            cleaned: list[str] = []
+            for tag in tags:
+                text = str(tag).strip().lstrip("#")
+                if text and text not in cleaned:
+                    cleaned.append(text)
+            row.tags = json.dumps(cleaned)
         db.flush()
         return _public(row)
 
