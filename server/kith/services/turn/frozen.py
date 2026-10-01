@@ -28,6 +28,10 @@ from kith.llm.budget import ContextBudget
 from kith.services import routing as routing_policy
 from kith.services import tuning
 
+#: The answer room a turn reserves when "Longest single reply" is -1 (the model decides). Not a
+#: cap on anything sent — only how much of the window is kept free for the reply.
+_UNSTATED_ANSWER = 8_000
+
 
 @dataclass(frozen=True)
 class Turn:
@@ -90,10 +94,10 @@ def begin(
     # How much room is left, learned from what the provider charges each round.
     #
     # `num_predict` is -1 on a default install — the sentinel for "no limit" — so it cannot
-    # be used as the answer reserve directly. Falling back to the answer cap gives a real
+    # be used as the answer reserve directly. Falling back to `_UNSTATED_ANSWER` gives a real
     # number, and a real number is the whole point: the threshold is absolute, because a
     # percentage of the window is wrong at both ends.
-    wanted_out = config.num_predict if config.num_predict > 0 else tuning.value("max_answer_tokens")
+    wanted_out = config.num_predict if config.num_predict > 0 else _UNSTATED_ANSWER
 
     return Turn(
         config=config,

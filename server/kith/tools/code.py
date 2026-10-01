@@ -334,20 +334,43 @@ def start_process(path: Path, args: dict):
         return {"error": str(exc)}
 
 
+#: The longest `check_process` will sit waiting before it looks anyway.
+_MOST_WAIT = 300
+
+
 @tool(
     "check_process",
     "See what a background process has printed since you last looked, and whether it is still "
     "alive. Only the new output, so you can check a watcher repeatedly without re-reading its "
     "startup banner every time. Call it with no name to list everything you have running. "
     "For a *watcher* — something with no end, printing as it goes — this is how you read it. "
-    "For a task you are waiting to *finish*, you do not need this at all: the ending comes back "
-    "to you by itself. Use it when you want the output now, not to find out whether it is done.",
-    {"name": {**STR, "description": "Which one (optional — omit to list them all)."}},
+    "To wait for something to *finish* in this turn, pass `wait`: the call returns when it ends "
+    "(or when the wait runs out) with everything it printed — one call, not one per look.",
+    {
+        "name": {**STR, "description": "Which one (optional — omit to list them all)."},
+        "wait": {
+            **INT,
+            "description": f"Seconds to wait for it to finish first, up to {_MOST_WAIT}. Omit to look now.",
+        },
+    },
     required=(),
 )
 def check_process(path: Path, args: dict):
+    """What a background process has printed, after waiting for it to end if asked.
+
+    `wait` because looking was the only verb: between 2026-09-24 and 10-01 a test run called
+    `diag` was looked at sixteen times with nothing changed between looks, each one a full round
+    re-sending the turn.
+    """
+    name = str(args.get("name") or "")
     try:
-        return process_service.processes.check(str(args.get("name") or ""))
+        wait = min(_MOST_WAIT, max(0, int(args.get("wait") or 0)))
+    except (TypeError, ValueError):
+        wait = 0
+    try:
+        if name and wait:
+            process_service.processes.wait(name, wait)
+        return process_service.processes.check(name)
     except process_service.ProcessError as exc:
         return {"error": str(exc)}
 

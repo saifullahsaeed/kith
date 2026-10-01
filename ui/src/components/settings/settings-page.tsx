@@ -106,7 +106,7 @@ type Group = (typeof GROUPS)[number]["key"];
  */
 const TUNING_PAGES: Partial<Record<SettingsTab, readonly string[]>> = {
   /* Mapped on what each group *contains*, not on what it is called. The server's `chat` group
-   * is `max_rounds`, `history_keep_recent` and `max_answer_tokens` — pace and history, none of
+   * is `max_rounds` and `history_keep_recent` — pace and history, none of
    * it the reply-length and notification settings the Conversation page already owns through a
    * different endpoint. Putting it under Conversation because of its name would have been two
    * pages disagreeing about who owns "how long an answer is". */

@@ -7,6 +7,7 @@ tolerant matching with nothing else.
 
 from __future__ import annotations
 
+import difflib
 import mimetypes
 import shlex
 import shutil
@@ -397,6 +398,64 @@ def _tolerant_span(before: str, old: str) -> tuple[int, int, str] | None:
     return start, end, _indent_of(lines[i])
 
 
+#: How alike a stretch of the file must be to `old` before it is offered as what he meant.
+_CLOSE_ENOUGH = 0.6
+#: Past this size the search for the closest stretch costs more than the round it saves.
+_CLOSEST_MAX_CHARS = 400_000
+_CLOSEST_SHOWN = 2_000
+
+
+def _not_found(before: str, old: str, path: str) -> str:
+    """The refusal for an `old` that is not in the file, with the stretch it most resembles.
+
+    The plain refusal sent him to read the file again, then send the edit again: two full rounds
+    for one stale line. 57 batches were refused this way between 2026-09-24 and 2026-10-01,
+    usually over a line an earlier edit or a formatter had changed. Showing the closest stretch
+    as it reads now lets the next round be the corrected edit itself.
+    """
+    found = _closest(before, old)
+    if found is None:
+        return (
+            f"that exact text is not in {path}. Whitespace and indentation count — read the "
+            "part you mean to change and copy it verbatim."
+        )
+    first, last, text = found
+    if len(text) > _CLOSEST_SHOWN:
+        text = text[:_CLOSEST_SHOWN] + "\n…"
+    where = f"line {first}" if first == last else f"lines {first}-{last}"
+    return (
+        f"that exact text is not in {path}. The closest it has is at {where}, which reads now:\n"
+        f"{text}\n"
+        "If that is the part you meant, use it as `old`, copied exactly as shown."
+    )
+
+
+def _closest(before: str, old: str) -> tuple[int, int, str] | None:
+    """The run of lines in ``before`` most like ``old``, as (first line, last line, text).
+
+    Compared with each line's leading and trailing whitespace dropped, so an indentation slip
+    does not hide the stretch he meant; `None` when nothing is alike enough to be worth showing.
+    """
+    wanted = old.strip("\n").split("\n")
+    lines = before.split("\n")
+    if not before or len(before) > _CLOSEST_MAX_CHARS or len(wanted) > len(lines):
+        return None
+    span = len(wanted)
+    matcher = difflib.SequenceMatcher(autojunk=False)
+    matcher.set_seq2("\n".join(line.strip() for line in wanted))
+    best, at = _CLOSE_ENOUGH, None
+    for start in range(len(lines) - span + 1):
+        matcher.set_seq1("\n".join(line.strip() for line in lines[start : start + span]))
+        if matcher.real_quick_ratio() <= best or matcher.quick_ratio() <= best:
+            continue
+        ratio = matcher.ratio()
+        if ratio > best:
+            best, at = ratio, start
+    if at is None:
+        return None
+    return at + 1, at + span, "\n".join(lines[at : at + span])
+
+
 def _apply_edit(before: str, old: str, new: str, path: str, replace_all: bool) -> tuple[str, int, bool]:
     """One edit against text already in hand. Returns the result, how many, and whether
     the match had to fall back to whitespace-tolerant matching.
@@ -433,10 +492,7 @@ def _apply_edit(before: str, old: str, new: str, path: str, replace_all: bool) -
         # Ambiguity is not consulted on purpose — replacing any of three identical occurrences
         # with itself changes nothing, so there is nothing to be ambiguous about.
         if not found:
-            raise WorkspaceError(
-                f"that exact text is not in {path}. Whitespace and indentation count — read the "
-                "part you mean to change and copy it verbatim."
-            )
+            raise WorkspaceError(_not_found(before, old, path))
         # Loud, which is what the refusal was protecting: the report says no bytes moved, so it
         # can never read as a change that landed.
         return before, 0, False
@@ -453,10 +509,7 @@ def _apply_edit(before: str, old: str, new: str, path: str, replace_all: bool) -
 
     span = _tolerant_span(before, old)
     if span is None:
-        raise WorkspaceError(
-            f"that exact text is not in {path}. Whitespace and indentation count — read the "
-            "part you mean to change and copy it verbatim."
-        )
+        raise WorkspaceError(_not_found(before, old, path))
     start, end, indent = span
     shifted = _reindent(new, indent, _indent_of(old.split("\n")[0]))
     return before[:start] + shifted + before[end:], 1, True

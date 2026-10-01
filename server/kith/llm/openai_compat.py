@@ -36,7 +36,7 @@ from kith.llm import budget, caching
 #: This table is the whole bug, so it is worth stating plainly: **effort is not a dial on how
 #: hard the model thinks, it is a fraction of the output ceiling** — thinking spends out of it
 #: first and the answer gets what is left. Kith sent the answer cap (`num_predict`, 8,192,
-#: labelled "Longest single answer") as that ceiling, with effort "max" beside it: a
+#: labelled "Longest single reply") as that ceiling, with effort "max" beside it: a
 #: 7,782-token claim on thinking out of 8,192, and the reply left with whatever thinking did
 #: not want — as little as 410 tokens — on a turn whose rounds were writing 5,000-6,500-token
 #: python scripts. OpenRouter's own docs carry the rule this violates: "max_tokens must be
@@ -219,7 +219,7 @@ def output_ceiling(config: Config) -> int:
     """`max_tokens` for the request: what the answer may write, plus what thinking will take.
 
     These were one number for a long time and that is what broke: `num_predict` is labelled
-    "Longest single answer" in the settings, the loop reserves context room by it, and the
+    "Longest single reply" in the settings, the loop reserves context room by it, and the
     transport was handing that same figure to the provider as the ceiling on *everything the
     round produces* — thoughts included, and thoughts first. See `REASONING_SHARE`.
 

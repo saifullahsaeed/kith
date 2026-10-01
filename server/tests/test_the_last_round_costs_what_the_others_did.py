@@ -10,13 +10,10 @@ went with the loop it bounded.
 from __future__ import annotations
 
 import inspect
-from dataclasses import replace
 from pathlib import Path
 
-import pytest
-
 from kith.config import default_config
-from kith.services import agent_loop, tuning
+from kith.services import agent_loop
 
 
 class TestTheForcedFinalAnswer:
@@ -73,14 +70,3 @@ class TestTheForcedFinalAnswer:
         tools_sent, choice = sent[0]
         assert tools_sent, "the schemas were dropped"
         assert choice == "none", "tool_choice=none is what actually stops the narration"
-
-
-class TestTheTwoBoundsTogether:
-    @pytest.mark.parametrize("num_predict", [-1, 0, 100, 100_000])
-    def test_a_config_is_always_bounded(self, num_predict: int):
-        """Whatever the config says, a tick's output has a ceiling."""
-        cap = tuning.value("max_answer_tokens")
-        config = replace(default_config(), num_predict=num_predict)
-        wanted = config.num_predict
-        effective = cap if wanted <= 0 else min(wanted, cap)
-        assert 0 < effective <= cap
