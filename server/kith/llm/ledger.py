@@ -293,9 +293,7 @@ def _has_image(message: dict[str, Any]) -> bool:
 
 
 #: The argument that says what a call was *about*, in the order to look for it. The first four are
-#: the precedence `conversations._let_go_of_old_results` uses when it names a trimmed result back
-#: to him — the two have to agree about what a call was about, or the screen and the stub describe
-#: the same read in different words.
+#: the precedence for naming what a call was about.
 #:
 #: `name` and `id` are here because of what a real conversation did without them: `read_skill`
 #: takes `name` and `view_task` takes `id`, so 191 different skills and 87 different tasks each
@@ -310,10 +308,8 @@ _SUBJECT_KEYS = ("path", "pattern", "command", "query", "name", "id")
 #: produced one subject, and the second call was priced as a repeat of the first and reported
 #: as droppable waste. The subject of "where is this name used" is the name.
 #:
-#: An exception rather than a reordering: the first four keys are a precedence
-#: `conversations._let_go_of_old_results` matches exactly, and the screen and the trimmed-result
-#: stub have to describe the same call in the same words. Moving `name` up would break that
-#: agreement for every tool to fix it for one.
+#: An exception rather than a reordering: moving `name` up would change the subject of every
+#: tool to fix it for one.
 _SUBJECT_FIRST = {"find_symbol": "name", "rename_symbol": "symbol", "start_process": "name"}
 
 #: The `Line.key`s that `itemise` can break down, in the order a screen should show them. Every

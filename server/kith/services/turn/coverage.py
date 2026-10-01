@@ -33,10 +33,8 @@ the same thing. If the file changed between two earlier reads, the turn holds tw
 line, and a note saying "as you read it earlier" would not say which — so that line goes in again.
 That is also the part of a file he changed himself, which is the last thing to collapse.
 
-**Only what is still whole counts.** A result that has been stubbed (`_compact_tool_history`), or
-trimmed on replay (`conversations._let_go_of_old_results`), no longer holds its lines: the stub is
-cut mid-JSON and does not parse, and the replayed trim is a string rather than a result envelope.
-Both are skipped by construction rather than by a flag someone has to remember to check. Something
+**Only what is still whole counts.** A result that has been stubbed (`_compact_tool_history`) no longer
+holds its lines: the stub is cut mid-JSON and does not parse, so it is skipped by construction rather than by a flag someone has to remember to check. Something
 that is whole now can stop being whole later in the turn — see `history._settle_pointers`, which
 is why the decision here has to be a pure function of the messages in front of it.
 """
