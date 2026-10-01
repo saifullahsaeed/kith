@@ -28,8 +28,11 @@ export const keys = {
   /** Names and statuses only. The conversations panel groups by project and needs nothing else;
    *  `brain()` is the whole database and is a third of a megabyte. */
   projects: () => ["projects"] as const,
-  /** The lifetime event log. A second endpoint, so a second key — one key must mean one shape. */
-  timeline: () => ["timeline"] as const,
+  /** The lifetime event log, as pages (`useInfiniteQuery` over `fetchTimelinePage`). A second
+   *  endpoint, so a second key — one key must mean one shape, and an infinite query's shape is
+   *  its pages, so nothing else may sit under this one. The change map below invalidates by the
+   *  `["timeline"]` prefix, which reaches it. */
+  timeline: () => ["timeline", "pages"] as const,
   /** What is installed, and what each plugin decided/offers. */
   plugins: () => ["plugins"] as const,
   /** Only the tabs, which is what the layout needs and is a much smaller answer. */
@@ -94,6 +97,10 @@ export const keys = {
    *  change that refreshes the folder refreshes the file he just wrote; a file path is never a
    *  folder path, so it cannot collide with a listing. */
   workspaceFile: (path: string) => ["workspace", path, "content"] as const,
+  /** What the ⌘K palette found in his folder for one query — names and lines inside files. Its own
+   *  root rather than under `workspace`: the palette reads every `["workspace", path]` entry as a
+   *  folder listing, and a search answer is not one. Made stale by the same `workspace` change. */
+  workspaceSearch: (query: string) => ["workspace-search", query] as const,
   /** One source's stored text. Never changes once ingested — removing it is the only edit. */
   source: (id: number) => ["source", id] as const,
 } as const;
@@ -164,7 +171,7 @@ export const STALE_ON: Record<ChangeKind, Stale[]> = {
   // The inbox badge, and the board's own count of what is waiting on you.
   message: [["messages"], ["brain"], ["timeline"]],
   process: [{ scoped: ["processes"] }],
-  workspace: [["workspace"]],
+  workspace: [["workspace"], ["workspace-search"]],
   // The panel marks which conversation is blocked on you, so a question opening or being answered
   // changes the list as much as it changes the card.
   question: [{ scoped: ["question"] }, ["conversations"]],

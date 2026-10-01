@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 from kith.domain.enums import MEMORY_LEVELS
 from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Memory
-from kith.infra.db.support import keyword_search, utc_now_iso
+from kith.infra.db.support import created_before, keyword_search, span_of, utc_now_iso
 from kith.infra.db.vectors import cosine, pack_vector, unpack_vector
 
 
@@ -102,6 +102,19 @@ def list_memories(path: Path, limit: int = 50) -> list[dict]:
     with session(path) as db:
         rows = db.scalars(select(Memory).order_by(Memory.id.desc()).limit(limit)).all()
         return [_public(row) for row in rows]
+
+
+def memories_before(path: Path, before: str | None, limit: int) -> list[dict]:
+    """A page of the lifetime's memories — see `support.created_before`."""
+    with session(path) as db:
+        return [_public(row) for row in db.scalars(created_before(Memory, before, limit)).all()]
+
+
+def memories_span(path: Path) -> tuple[int, str | None]:
+    """How many there are, and when the first was written — see `support.span_of`."""
+    with session(path) as db:
+        count, first = db.execute(span_of(Memory)).one()
+        return int(count or 0), first
 
 
 def memories_by_level(path: Path, level: str, limit: int = 50, project_id: int | None = None) -> list[dict]:

@@ -30,6 +30,7 @@ export function HeatCalendar({
   min,
   max,
   noun,
+  unknown,
   className,
 }: {
   month: MonthIndex;
@@ -44,6 +45,10 @@ export function HeatCalendar({
   max: MonthIndex;
   /** What is being counted: ["entry", "entries"]. */
   noun: readonly [string, string];
+  /** Days whose count is not known yet — Lifetime's, before the pages reaching them have loaded.
+   *  They stay pickable: an empty-looking day there may be a busy one, and picking it is how you
+   *  load back to it. */
+  unknown?: (key: string) => boolean;
   className?: string;
 }) {
   const year = Math.floor(month / 12);
@@ -54,13 +59,16 @@ export function HeatCalendar({
 
   let total = 0;
   let days = 0;
+  let unloaded = 0;
   const cells = monthCells(year, m).map((day) => {
     if (day == null) return null;
     const key = dayKey(new Date(year, m, day).getTime());
     const n = counts.get(key) ?? 0;
     total += n;
     if (n) days += 1;
-    return { day, key, n };
+    const open = n > 0 || (unknown?.(key) ?? false);
+    if (open && !n) unloaded += 1;
+    return { day, key, n, open };
   });
 
   return (
@@ -72,7 +80,11 @@ export function HeatCalendar({
         <div className="flex min-w-0 flex-1 flex-col gap-px">
           <span className="text-sm font-semibold">{title}</span>
           <span className="text-muted-foreground/80 text-[11.5px] tabular-nums">
-            {total ? `${plural(total, noun[0], noun[1])} on ${plural(days, "day")}` : `No ${noun[1]} this month`}
+            {total
+              ? `${plural(total, noun[0], noun[1])} on ${plural(days, "day")}${unloaded ? " so far" : ""}`
+              : unloaded
+                ? "Not loaded yet — pick a day to go back to it"
+                : `No ${noun[1]} this month`}
           </span>
         </div>
         <MonthButton label="Previous month" disabled={month <= min} onClick={() => onMonth(month - 1)}>
@@ -99,16 +111,20 @@ export function HeatCalendar({
               key={cell.key}
               type="button"
               // A day with nothing on it has nowhere to go; it says so by not being a target.
-              disabled={!cell.n}
+              disabled={!cell.open}
               aria-label={`${cell.day} ${monthName}${cell.key === today ? ", today" : ""}, ${
-                cell.n ? plural(cell.n, noun[0], noun[1]) : `no ${noun[1]}`
+                cell.n ? plural(cell.n, noun[0], noun[1]) : cell.open ? "not loaded yet" : `no ${noun[1]}`
               }`}
               aria-pressed={cell.key === selected}
               onClick={() => onPick(cell.key)}
               className={cn(
                 "focus-visible:ring-ring flex size-8 items-center justify-center rounded-[7px] p-0 text-xs tabular-nums outline-none transition-shadow focus-visible:ring-2 disabled:cursor-default",
                 TINT[heatLevel(cell.n)],
-                cell.n ? "text-foreground hover:ring-foreground/30 hover:ring-1" : "text-muted-foreground/50",
+                cell.n
+                  ? "text-foreground hover:ring-foreground/30 hover:ring-1"
+                  : cell.open
+                    ? "text-muted-foreground hover:ring-foreground/30 hover:ring-1"
+                    : "text-muted-foreground/50",
                 cell.key === selected && "border-foreground border-[1.5px] font-semibold",
               )}
             >

@@ -18,7 +18,7 @@ from kith.domain.enums import TASK_ACTIVE, TASK_PRIORITIES, TASK_STATUSES
 from kith.infra import identity, project_files
 from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import ChecklistItem, Deliverable, Project, Task
-from kith.infra.db.support import notifies, utc_now_iso
+from kith.infra.db.support import created_before, notifies, span_of, utc_now_iso
 from kith.kernel import session_context
 
 # Rank for sorting: high first, then normal, then low.
@@ -103,6 +103,23 @@ def list_tasks(path: Path, status: str | None = None) -> list[dict]:
         tasks = [as_dict(row) for row in db.scalars(query).all()]
     tasks.sort(key=lambda task: (_PRIORITY_RANK.get(str(task.get("priority") or ""), 1), _newest_first(task)))
     return tasks
+
+
+def tasks_before(path: Path, before: str | None, limit: int) -> list[dict]:
+    """A page of the lifetime's tasks, by when they were filed — see `support.created_before`.
+
+    Not :func:`list_tasks`: that is the board's order (priority first), and the lifetime's is
+    time, which is the order the LIMIT has to cut in.
+    """
+    with session(path) as db:
+        return [as_dict(row) for row in db.scalars(created_before(Task, before, limit)).all()]
+
+
+def tasks_span(path: Path) -> tuple[int, str | None]:
+    """How many there are, and when the first was written — see `support.span_of`."""
+    with session(path) as db:
+        count, first = db.execute(span_of(Task)).one()
+        return int(count or 0), first
 
 
 def active_tasks(path: Path) -> list[dict]:

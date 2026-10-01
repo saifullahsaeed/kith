@@ -7,6 +7,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
+from typing import Any
+
+from sqlalchemy import Select, func, select
 
 from kith.infra.db.session import transaction
 from kith.kernel import changes
@@ -88,6 +91,29 @@ def keyword_search(path: Path, table: str, columns: tuple[str, ...], query: str,
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def created_before(model: Any, before: str | None, limit: int) -> Select:
+    """A page of one table for the lifetime: newest first, strictly older than `before`.
+
+    `before` is compared as text, which is right because every `created_at` is
+    :func:`utc_now_iso` — one offset, so string order is time order. ``None`` is the newest
+    page. The LIMIT is the point: the lifetime merges five tables, and each one hands over at
+    most a page of its own rather than all of itself to be sorted and thrown away.
+    """
+    query = select(model).order_by(model.created_at.desc(), model.id.desc()).limit(limit)
+    if before:
+        query = query.where(model.created_at < before)
+    return query
+
+
+def span_of(model: Any) -> Select:
+    """How many rows a table has and when its first was written, over all of it.
+
+    The lifetime's per-kind totals and where its history begins — one aggregate per table,
+    whatever page is on screen.
+    """
+    return select(func.count(), func.min(model.created_at)).select_from(model)
 
 
 def notifies(kind: str) -> Callable:

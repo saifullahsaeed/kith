@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from kith.domain.enums import REMINDER_STATUSES
 from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Reminder
-from kith.infra.db.support import utc_now_iso
+from kith.infra.db.support import created_before, span_of, utc_now_iso
 
 
 def add_reminder(path: Path, fire_at: str, note: str, conversation_id: str = "") -> dict:
@@ -32,6 +32,19 @@ def list_reminders(path: Path, status: str | None = None) -> list[dict]:
         query = query.where(Reminder.status == status)
     with session(path) as db:
         return [as_dict(row) for row in db.scalars(query).all()]
+
+
+def reminders_before(path: Path, before: str | None, limit: int) -> list[dict]:
+    """A page of the lifetime's reminders, by when they were set — see `support.created_before`."""
+    with session(path) as db:
+        return [as_dict(row) for row in db.scalars(created_before(Reminder, before, limit)).all()]
+
+
+def reminders_span(path: Path) -> tuple[int, str | None]:
+    """How many there are, and when the first was written — see `support.span_of`."""
+    with session(path) as db:
+        count, first = db.execute(span_of(Reminder)).one()
+        return int(count or 0), first
 
 
 def due_reminders(path: Path, now_iso: str) -> list[dict]:

@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 
 from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import JournalEntry
-from kith.infra.db.support import utc_now_iso
+from kith.infra.db.support import created_before, span_of, utc_now_iso
 from kith.kernel import session_context
 
 
@@ -34,6 +34,19 @@ def list_journal(path: Path, limit: int = 50) -> list[dict]:
     with session(path) as db:
         rows = db.scalars(select(JournalEntry).order_by(JournalEntry.id.desc()).limit(limit)).all()
         return [as_dict(row) for row in rows]
+
+
+def journal_before(path: Path, before: str | None, limit: int) -> list[dict]:
+    """A page of the lifetime's journal — see `support.created_before`."""
+    with session(path) as db:
+        return [as_dict(row) for row in db.scalars(created_before(JournalEntry, before, limit)).all()]
+
+
+def journal_span(path: Path) -> tuple[int, str | None]:
+    """How many there are, and when the first was written — see `support.span_of`."""
+    with session(path) as db:
+        count, first = db.execute(span_of(JournalEntry)).one()
+        return int(count or 0), first
 
 
 def delete_journal(path: Path, entry_id: int) -> bool:

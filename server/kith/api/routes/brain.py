@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from flask import jsonify, request
 
 from kith.api.blueprint import api
@@ -67,9 +69,42 @@ def schedules():
 
 
 @api.get("/brain/timeline")
-@api.doc(summary="Kith's lifetime", description="Everything that has happened, merged newest-first.")
+@api.doc(
+    summary="Kith's lifetime",
+    description=(
+        "Everything that has happened, merged newest-first. Bare: the newest 500 as an array. "
+        "With ?page=1 or ?before=<iso> (and optionally ?limit=<n>, at most 2000): one page, "
+        "strictly older than `before`, as {events, has_more, totals, message_kinds, oldest}."
+    ),
+)
 def brain_timeline():
-    return jsonify(brain.timeline(AGENT_DB_PATH))
+    """Two shapes, chosen by asking, so nothing that calls it bare has to change.
+
+    The bare array is what the endpoint has always answered and is still right for "what
+    happened lately". A page is for reading all the way back, which the array could not do:
+    it was the newest 500 and nothing told you there were more. A bad `limit` is the default
+    rather than a 400, as the conversation window's is; a `before` that is not a time is a 400,
+    because guessing at a cursor is how a scroll repeats or skips a page.
+    """
+    args = request.args
+    try:
+        limit = int(args.get("limit", brain.PAGE))
+    except ValueError:
+        limit = brain.PAGE
+    if limit < 1:
+        limit = brain.PAGE
+    if "before" not in args and args.get("page") != "1":
+        return jsonify(brain.timeline(AGENT_DB_PATH, limit=min(limit, brain.MAX_PAGE)))
+    before = args.get("before") or None
+    if before is not None:
+        try:
+            when = datetime.fromisoformat(before)
+        except ValueError:
+            return jsonify({"error": f"before is not an ISO time: {before!r}"}), 400
+        # Stored times are UTC with an offset (`utc_now_iso`), and they compare as text, so the
+        # cursor is put in the same form: a `Z` or a +04:00 would otherwise sort wrongly.
+        before = (when if when.tzinfo else when.replace(tzinfo=UTC)).astimezone(UTC).isoformat()
+    return jsonify(brain.timeline_page(AGENT_DB_PATH, before=before, limit=limit))
 
 
 @api.post("/brain/<kind>")

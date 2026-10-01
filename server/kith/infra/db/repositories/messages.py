@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 
 from kith.infra import notify
 from kith.infra.db.engine import as_dict, changed, session
 from kith.infra.db.models import Conversation, Message, Task, TurnLog
-from kith.infra.db.support import notifies, utc_now_iso
+from kith.infra.db.support import created_before, notifies, utc_now_iso
 
 # How many turns the summary looks back over. Enough to see a trend, bounded so the
 # aggregate stays cheap on a database that has been running for months.
@@ -133,6 +133,34 @@ def pending_user_messages(path: Path, limit: int = 5) -> list[dict]:
             .limit(limit)
         ).all()
         return [as_dict(row) for row in rows]
+
+
+def messages_before(path: Path, before: str | None, limit: int) -> list[dict]:
+    """A page of the lifetime's messages, both senders — see `support.created_before`."""
+    with session(path) as db:
+        return [as_dict(row) for row in db.scalars(created_before(Message, before, limit)).all()]
+
+
+#: How a delivered output's alert opens — "Finished something on “X”: Y". Before
+#: `kind = 'delivered'` existed these were filed as notes (26 of them here), so the lifetime
+#: knows an output by its words, and so must its count. Both quotes, as the screen's pattern has.
+DELIVERED_OPENINGS = ("Finished something on \u201c", 'Finished something on "')
+
+
+def messages_span(path: Path) -> tuple[dict[str, int], str | None]:
+    """Every message counted by what it was, and when the first was sent — over the whole channel.
+
+    By ``kind``, except that an output alert is ``delivered`` whatever it was filed as (see
+    `DELIVERED_OPENINGS`); the Lifetime screen classifies a row the same way, so a chip's total
+    and the rows under it agree. `count_messages_by_kind` is the inbox's question and leaves out
+    your own messages; this counts everything the timeline shows.
+    """
+    delivered = or_(*(Message.body.startswith(opening, autoescape=True) for opening in DELIVERED_OPENINGS))
+    what = case((delivered, "delivered"), else_=func.coalesce(Message.kind, "note"))
+    with session(path) as db:
+        rows = db.execute(select(what, func.count()).group_by(what)).all()
+        first = db.scalar(select(func.min(Message.created_at)))
+    return {str(kind): int(count) for kind, count in rows}, first
 
 
 def count_messages_by_kind(path: Path) -> dict[str, int]:

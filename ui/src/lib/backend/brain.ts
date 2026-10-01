@@ -186,10 +186,36 @@ export async function fetchBrain(): Promise<BrainSnapshot> {
   return (await res.json()) as BrainSnapshot;
 }
 
-export async function fetchTimeline(): Promise<TimelineEvent[]> {
-  const res = await fetch("/api/brain/timeline");
+/** One page of the lifetime, newest first — `GET /api/brain/timeline?page=1&before=…`. */
+export interface TimelinePage {
+  events: TimelineEvent[];
+  /** Whether anything older than this page's last event exists. */
+  has_more: boolean;
+  /** How many of each kind there are over all of history, not this page. `null` from a server
+   *  that predates paging. */
+  totals: Partial<Record<TimelineKind, number>> | null;
+  /** Every message counted by what it was (`delivered`, `asked`, `stuck`, `note`…), all history.
+   *  An output alert is `delivered` whatever it was filed as, the way the screen reads it. */
+  message_kinds: Record<string, number> | null;
+  /** When the first thing happened, ISO, or `null` for an empty mind (or an older server). */
+  oldest: string | null;
+}
+
+/** A page of the lifetime: everything strictly older than `before` (the newest page without it).
+ *
+ * Always asks for a page (`page=1`), because the bare endpoint is the old array of the newest
+ * 500 and stays that way for anything that calls it bare. A server from before paging ignores
+ * the parameters and answers that array; it is taken as the one and only page, so the screen
+ * shows what it can rather than asking for "older" forever and getting the same 500 back. */
+export async function fetchTimelinePage({ before, limit }: { before?: string; limit?: number } = {}): Promise<TimelinePage> {
+  const params = new URLSearchParams({ page: "1" });
+  if (before) params.set("before", before);
+  if (limit) params.set("limit", String(limit));
+  const res = await fetch(`/api/brain/timeline?${params}`);
   if (!res.ok) throw new Error(`/api/brain/timeline ${res.status}`);
-  return (await res.json()) as TimelineEvent[];
+  const body = (await res.json()) as TimelinePage | TimelineEvent[];
+  if (Array.isArray(body)) return { events: body, has_more: false, totals: null, message_kinds: null, oldest: null };
+  return body;
 }
 
 export async function deleteBrainItem(kind: string, key: string | number): Promise<void> {

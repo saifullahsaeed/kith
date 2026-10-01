@@ -14,6 +14,12 @@
  *
  * Header and strip stay put while the timeline scrolls under its own sticky day headings, so the
  * strip is still there to jump with from three weeks down.
+ *
+ * All of it, back to the first day. The timeline arrives a page at a time (`timeline-pages.ts`):
+ * the next older page is asked for as you near the end of the list, the strip's thirty days and any
+ * date you jump to are paged in before they are drawn, and the chips count all of history from the
+ * server's totals rather than whatever happens to have loaded. It used to stop at the newest 500
+ * things and say so in a footnote.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -36,16 +42,24 @@ import {
 import type { BrainSnapshot, TimelineEvent } from "@/lib/backend/brain";
 import { cn } from "@/lib/utils";
 import { BUTTON, Chip, Empty, KindTile, PageTitle, Segmented } from "./chrome";
-import { clock, dayKey, longDate, monthIndex, plural, relativeDay } from "./day-format";
+import { clock, dayKey, keyMidnight, longDate, monthIndex, plural, relativeDay } from "./day-format";
 import { useFitPanel } from "./fit-panel";
 import { HeatCalendar } from "./heat-calendar";
 import { plain, sentence } from "./journal-links";
 import { activityStrip, breakdown, buildDays, FILTER_KIND, spanLabel, toLifeEvents } from "./lifetime-fold";
 import type { Burst, LifeEvent, LifeFilter, LifeKind, StripDay } from "./lifetime-fold";
+import type { Paging } from "./timeline-pages";
 import type { Tab } from "./types";
 
-/** What the server sends at most (`brain.timeline(limit=500)`). Hitting it means there is more. */
-const TIMELINE_CAP = 500;
+/** How near the end of the list, in screens, the next older page is asked for — far enough that
+ *  it has usually landed before you get there. */
+const NEAR_END = 1.5;
+/** The most pages fetched to reach one date (the strip's first day, or a day picked from "Jump to
+ *  date") — 10,000 events at the server's page of 500 — before going as far as they got. */
+const REACH_PAGES = 20;
+/** The most pages pulled in without you scrolling, to fill a screen that a filter or a search has
+ *  left short. Past it, "Load older" at the foot of the list asks. */
+const FILL_PAGES = 6;
 /** How many of a job's outputs are named on its folded row before "Show all". */
 const CHIPS = 5;
 
@@ -71,12 +85,18 @@ const ICON: Record<LifeKind, ReactNode> = {
 export function Lifetime({
   snap,
   events,
+  searching = false,
+  paging,
   onOpenTask,
   onNavigate,
 }: {
   snap: BrainSnapshot;
-  /** The timeline, already narrowed by the panel's search. */
+  /** The timeline loaded so far, already narrowed by the panel's search. */
   events: TimelineEvent[];
+  /** Whether that search is narrowing it — the chips then count what matches, not all history. */
+  searching?: boolean;
+  /** Where the loaded pages reach and how to load more. */
+  paging: Paging;
   onOpenTask: (id: number) => void;
   onNavigate: (tab: Tab) => void;
 }) {
@@ -88,7 +108,10 @@ export function Lifetime({
   const sections = useRef(new Map<string, HTMLElement>());
 
   const all = useMemo(() => toLifeEvents(events, snap), [events, snap]);
+  /* All of history while nothing narrows it — the server counts that. A search narrows to what
+     matches, which only the loaded pages can say, so then it counts those. */
   const counts = useMemo(() => {
+    if (paging.totals && !searching) return paging.totals;
     const out: Record<LifeFilter, number> = { all: all.length, tasks: 0, outputs: 0, memory: 0, journal: 0, reminders: 0 };
     for (const event of all) {
       for (const [chip, kind] of Object.entries(FILTER_KIND) as [Exclude<LifeFilter, "all">, LifeKind][]) {
@@ -96,7 +119,7 @@ export function Lifetime({
       }
     }
     return out;
-  }, [all]);
+  }, [all, paging.totals, searching]);
   const shown = useMemo(
     () => (filter === "all" ? all : all.filter((event) => event.kind === FILTER_KIND[filter])),
     [all, filter],
@@ -111,7 +134,8 @@ export function Lifetime({
   }, [filter]);
 
   /** Scroll to a day, or — for a day with nothing on it — the nearest earlier day that has
-   *  something, which is where that date would sit in the list. */
+   *  something, which is where that date would sit in the list. Only for a day already loaded;
+   *  `goTo` pages back to one first. */
   const jump = (key: string) => {
     const target = days.find((day) => day.key <= key) ?? days[days.length - 1];
     const section = target ? sections.current.get(target.key) : undefined;
@@ -122,6 +146,57 @@ export function Lifetime({
     const near = Math.abs(section.offsetTop - el.scrollTop) < el.clientHeight * 2.5;
     el.scrollTo({ top: section.offsetTop, behavior: near ? "smooth" : "auto" });
   };
+
+  /* ── Paging ──
+     Three things ask for older pages, and all go through `paging.loadMore`, which does nothing
+     while a page is on its way: nearing the end of the list (`onScroll`, and after each page
+     lands, for a list too short to scroll); the strip, whose thirty days must all be loaded to
+     be drawn true; and a jump to a day not loaded yet. The last two are one rule — load until
+     something older than a date has arrived — with a cap, so a date before his first day stops
+     at the first day rather than asking forever. */
+  const covered = (ms: number) => !paging.hasMore || (paging.reached !== null && paging.reached < ms);
+  const [target, setTarget] = useState<string | null>(null);
+  const want = Math.min(strip[0]?.midnight ?? 0, target ? keyMidnight(target) : Number.POSITIVE_INFINITY);
+  const reaching = useRef({ want: 0, pages: 0 });
+  const filling = useRef(0);
+
+  useEffect(() => {
+    if (reaching.current.want !== want) reaching.current = { want, pages: 0 };
+    if (paging.loadingMore || paging.failed || covered(want)) return;
+    if (reaching.current.pages >= REACH_PAGES) return;
+    reaching.current.pages += 1;
+    paging.loadMore();
+  });
+
+  // A jump waiting on pages goes once its day has arrived, or once there is no getting there.
+  useEffect(() => {
+    if (!target || paging.loadingMore) return;
+    const there = covered(keyMidnight(target));
+    if (!there && !paging.failed && reaching.current.pages < REACH_PAGES) return;
+    setTarget(null);
+    jump(target);
+  });
+
+  const goTo = (key: string) => {
+    if (covered(keyMidnight(key))) jump(key);
+    else setTarget(key);
+  };
+
+  const nearEnd = () => {
+    const el = scroller.current;
+    return !!el && el.clientHeight > 0 && el.scrollHeight - el.scrollTop - el.clientHeight < el.clientHeight * NEAR_END;
+  };
+  const onScroll = () => {
+    filling.current = 0;
+    if (nearEnd()) paging.loadMore();
+  };
+  // A list that does not reach the bottom of the screen has nothing to scroll, so nothing would
+  // ever ask for the page that fills it.
+  useEffect(() => {
+    if (!paging.hasMore || paging.loadingMore || paging.failed || filling.current >= FILL_PAGES || !nearEnd()) return;
+    filling.current += 1;
+    paging.loadMore();
+  }, [days, paging]);
 
   const opener = (event: LifeEvent): (() => void) | undefined => {
     switch (event.kind) {
@@ -168,14 +243,20 @@ export function Lifetime({
         <JumpToDate
           className="ms-2"
           counts={perDay}
-          oldest={days[days.length - 1]?.midnight ?? Date.now()}
-          onPick={jump}
+          oldest={paging.oldest ?? days[days.length - 1]?.midnight ?? Date.now()}
+          going={target}
+          unknown={
+            paging.hasMore && paging.reached !== null
+              ? (key) => key < dayKey(paging.reached!) && (paging.oldest === null || key >= dayKey(paging.oldest))
+              : undefined
+          }
+          onPick={goTo}
         />
       </PageTitle>
 
-      <ActivityStrip strip={strip} onPick={jump} />
+      <ActivityStrip strip={strip} onPick={goTo} />
 
-      <div ref={scroller} className="relative min-h-0 flex-1 overflow-y-auto pb-7">
+      <div ref={scroller} onScroll={onScroll} className="relative min-h-0 flex-1 overflow-y-auto pb-7">
         {days.length === 0 ? (
           <Empty title={all.length ? "Nothing of this kind" : "Nothing here yet"}>
             {events.length === 0 && all.length === 0
@@ -213,12 +294,40 @@ export function Lifetime({
             </section>
           ))
         )}
-        {events.length >= TIMELINE_CAP && days.length > 0 ? (
-          <p className="text-muted-foreground/80 px-2 pt-5 text-xs">
-            That is as far back as this goes — the timeline holds his newest {TIMELINE_CAP} things.
-          </p>
+        {days.length > 0 || paging.hasMore ? (
+          <ListEnd paging={paging} first={paging.oldest ?? days[days.length - 1]?.midnight ?? null} />
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** The foot of the list: older things on their way, a way to ask for them, or the beginning. */
+function ListEnd({ paging, first }: { paging: Paging; first: number | null }) {
+  return (
+    <div role="status" className="text-muted-foreground/80 flex min-h-[52px] items-center gap-3 px-2 pt-5 text-xs">
+      {paging.loadingMore ? (
+        "Loading older things…"
+      ) : paging.failed ? (
+        <>
+          Couldn&rsquo;t load older things.
+          <button type="button" onClick={paging.loadMore} className={cn(BUTTON.secondary, "h-7 px-2.5 text-xs")}>
+            Try again
+          </button>
+        </>
+      ) : paging.hasMore ? (
+        <button type="button" onClick={paging.loadMore} className={cn(BUTTON.secondary, "h-7 px-2.5 text-xs")}>
+          Load older
+        </button>
+      ) : !paging.totals ? (
+        // A server from before paging sent its newest 500 and no way to ask for more, so this
+        // is where the answer stops, not necessarily where he started.
+        "That's as far back as this goes."
+      ) : first !== null ? (
+        `That's the beginning — the first thing he did was on ${longDate(first)}.`
+      ) : (
+        "That's the beginning."
+      )}
     </div>
   );
 }
@@ -534,12 +643,18 @@ function ActivityStrip({ strip, onPick }: { strip: StripDay[]; onPick: (key: str
 function JumpToDate({
   counts,
   oldest,
+  going,
+  unknown,
   onPick,
   className,
 }: {
   className?: string;
   counts: ReadonlyMap<string, number>;
   oldest: number;
+  /** A day being paged back to, `YYYY-MM-DD`, while its pages load. */
+  going: string | null;
+  /** Days older than anything loaded, whose counts are not known yet. */
+  unknown?: (key: string) => boolean;
   onPick: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -571,6 +686,7 @@ function JumpToDate({
       <button
         type="button"
         aria-expanded={open}
+        aria-busy={going ? true : undefined}
         onClick={() => {
           if (!open) setMonth(monthIndex(Date.now()));
           setOpen((was) => !was);
@@ -578,7 +694,7 @@ function JumpToDate({
         className={cn(BUTTON.secondary, "h-9 gap-2 [&_svg]:size-3.5")}
       >
         <CalendarDays />
-        Jump to date
+        {going ? `Going back to ${longDate(keyMidnight(going))}…` : "Jump to date"}
       </button>
       {open ? (
         <div className="absolute end-0 top-full z-40 mt-2 w-[280px]">
@@ -594,6 +710,7 @@ function JumpToDate({
             min={monthIndex(oldest)}
             max={monthIndex(Date.now())}
             noun={["thing", "things"]}
+            unknown={unknown}
             className="bg-popover shadow-[0_12px_32px_rgba(0,0,0,0.4)]"
           />
         </div>

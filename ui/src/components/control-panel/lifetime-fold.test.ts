@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BrainSnapshot, TimelineEvent } from "@/lib/backend/brain";
-import { activityStrip, breakdown, buildDays, foldDay, spanLabel, toLifeEvents } from "./lifetime-fold";
+import { activityStrip, breakdown, buildDays, chipTotals, foldDay, joinPages, spanLabel, toLifeEvents } from "./lifetime-fold";
 import type { LifeEvent } from "./lifetime-fold";
 
 /** A local time on 30 September 2026, so day boundaries are the reader's own. */
@@ -147,6 +147,61 @@ describe("toLifeEvents", () => {
 
   it("keeps a task's status", () => {
     expect(events.find((e) => e.kind === "task")).toMatchObject({ taskId: 265, status: "working", project: "" });
+  });
+});
+
+describe("pages", () => {
+  const snap = { tasks: [{ id: 7, goal: "Pace screens", status: "working", project_id: 33 }], projects: [{ id: 33, name: "Pace", status: "active" }], messages: [] } as unknown as Pick<
+    BrainSnapshot,
+    "tasks" | "projects" | "messages"
+  >;
+  /** A delivered alert for task 7, `minute` minutes past noon on 30 September, local. */
+  const output = (id: number, minute: number): TimelineEvent => ({
+    kind: "message",
+    at: new Date(at(12, minute)).toISOString(),
+    text: `Finished something on “Pace screens”: screen ${id}`,
+    meta: { id, kind: "delivered", link: "/tasks/7" },
+  });
+  // A job of six screens, and a page edge after the fourth — where the 500th event fell.
+  const newer = { events: [output(6, 50), output(5, 40), output(4, 30), output(3, 20)] };
+  const older = { events: [output(2, 10), output(1, 0), { kind: "journal", at: new Date(at(9)).toISOString(), text: "Morning", meta: { id: 1 } } as TimelineEvent] };
+
+  it("folds a job split by a page edge into one row once both pages are loaded", () => {
+    const first = buildDays(toLifeEvents(joinPages([newer]), snap));
+    expect(first[0]!.bursts.map((burst) => [burst.kind, burst.events.length])).toEqual([["output", 4]]);
+
+    const both = buildDays(toLifeEvents(joinPages([newer, older]), snap));
+    expect(both[0]!.bursts.map((burst) => [burst.kind, burst.events.length])).toEqual([
+      ["output", 6],
+      ["journal", 1],
+    ]);
+    // The same row, grown — so a row you had open stays open as the older page lands under it.
+    expect(both[0]!.bursts[0]!.key).toBe(first[0]!.bursts[0]!.key);
+    expect(both[0]!.bursts[0]!.events.map((e) => e.text)).toEqual(["screen 6", "screen 5", "screen 4", "screen 3", "screen 2", "screen 1"]);
+  });
+
+  it("draws an event once even when two pages both hold it", () => {
+    const overlapping = { events: [output(3, 20), ...older.events] };
+    expect(joinPages([newer, overlapping]).filter((event) => event.meta.id === 3)).toHaveLength(1);
+  });
+
+  it("knows a question from a note without the snapshot, which holds only the newest messages", () => {
+    const [asked] = toLifeEvents(
+      [{ kind: "message", at: "2026-08-02T10:00:00Z", text: "Which font?", meta: { id: 5, kind: "asked", link: "/chat/x", projectId: 33 } }],
+      snap,
+    );
+    expect(asked).toMatchObject({ kind: "asked", link: "/chat/x", project: "Pace" });
+  });
+
+  it("counts the chips over all of history from the server's totals", () => {
+    const totals = chipTotals({
+      totals: { task: 259, memory: 90, journal: 709, reminder: 24, message: 254 },
+      message_kinds: { delivered: 101, asked: 68, stuck: 8, note: 74, reachout: 3 },
+    });
+    // Notes and reach-outs are not on this screen, so "All" does not count them.
+    expect(totals).toEqual({ all: 259 + 101 + 90 + 709 + 24 + 68 + 8, tasks: 259, outputs: 101, memory: 90, journal: 709, reminders: 24 });
+    // A server from before paging sends no totals, and the screen counts what it has.
+    expect(chipTotals({ totals: null, message_kinds: null })).toBeNull();
   });
 });
 

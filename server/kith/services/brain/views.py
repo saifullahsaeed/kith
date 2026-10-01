@@ -69,45 +69,120 @@ def _with_progress(path: Path, tasks: list[dict]) -> list[dict]:
     ]
 
 
-def timeline(path: Path, limit: int = 500) -> list[dict]:
-    events: list[dict] = []
-    for m in repo.memories.list_memories(path, _LIMIT):
-        events.append(
-            {
-                "kind": "memory",
-                "at": m["created_at"],
-                "text": m["content"],
-                "meta": {"id": m["id"], "level": m["level"], "importance": m["importance"]},
-            }
-        )
-    for j in repo.journal.list_journal(path, _LIMIT):
-        events.append({"kind": "journal", "at": j["created_at"], "text": j["entry"], "meta": {"id": j["id"]}})
-    for t in repo.tasks.list_tasks(path):
-        events.append(
-            {
-                "kind": "task",
-                "at": t["created_at"],
-                "text": t["goal"],
-                "meta": {"id": t["id"], "status": t["status"]},
-            }
-        )
-    for r in repo.reminders.list_reminders(path):
-        events.append(
-            {
-                "kind": "reminder",
-                "at": r["created_at"],
-                "text": r["note"],
-                "meta": {"id": r["id"], "status": r["status"], "fireAt": r["fire_at"]},
-            }
-        )
-    for m in repo.messages.list_messages(path):
-        events.append(
-            {
-                "kind": "message",
-                "at": m["created_at"],
-                "text": m["body"],
-                "meta": {"id": m["id"], "read": m["read"]},
-            }
-        )
+#: A lifetime page when nobody says how big, and the most anybody can ask for at once.
+PAGE = 500
+MAX_PAGE = 2000
+
+
+def timeline(path: Path, limit: int = PAGE) -> list[dict]:
+    """The newest `limit` events — the bare array `GET /api/brain/timeline` has always answered."""
+    return timeline_page(path, limit=limit)["events"]
+
+
+def timeline_page(path: Path, *, before: str | None = None, limit: int = PAGE) -> dict:
+    """One page of his lifetime, newest first: every event strictly older than `before`.
+
+    Five tables merged by time, and the merge is a page wide rather than history wide. Each
+    table hands over its own newest `limit + 1` rows older than `before` — its own ORDER BY and
+    LIMIT — so the merged page is right without anything having read the rest. This used to
+    load every table whole (a thousand-odd rows here, growing every hour) to keep 500, and it
+    could not see past them at all: the Lifetime screen ended on whatever day the 500th fell.
+
+    ``has_more`` is whether anything older exists. ``totals`` and ``message_kinds`` are counted
+    over all of history, not the page, so the screen's chips say how many there are rather
+    than how many it happens to have loaded. ``oldest`` is when the first thing happened, so a
+    date picker knows how far back it can go before the pages reaching it have arrived.
+
+    A page never ends partway through events that share a timestamp: the next page asks for
+    strictly older than the last one shown, so a tie cut in half would lose its second half.
+    The tied run is held back for the next page — unless it is the whole page, where holding
+    it back would page forever (and the run's remainder is skipped: `limit` events written in
+    one microsecond is not something this database does).
+    """
+    limit = max(1, min(int(limit), MAX_PAGE))
+    take = limit + 1
+    events = [
+        *(_memory(m) for m in repo.memories.memories_before(path, before, take)),
+        *(_journal(j) for j in repo.journal.journal_before(path, before, take)),
+        *(_task(t) for t in repo.tasks.tasks_before(path, before, take)),
+        *(_reminder(r) for r in repo.reminders.reminders_before(path, before, take)),
+        *(_message(m) for m in repo.messages.messages_before(path, before, take)),
+    ]
     events.sort(key=lambda e: e["at"], reverse=True)
-    return events[:limit]
+    has_more = len(events) > limit
+    page = events[:limit]
+    if has_more and page[-1]["at"] == events[limit]["at"]:
+        cut = page[-1]["at"]
+        kept = [e for e in page if e["at"] != cut]
+        page = kept or page
+    spans = {
+        "memory": repo.memories.memories_span(path),
+        "journal": repo.journal.journal_span(path),
+        "task": repo.tasks.tasks_span(path),
+        "reminder": repo.reminders.reminders_span(path),
+    }
+    message_kinds, first_message = repo.messages.messages_span(path)
+    firsts = [first for _, first in spans.values() if first] + ([first_message] if first_message else [])
+    return {
+        "events": page,
+        "has_more": has_more,
+        "totals": {
+            **{kind: count for kind, (count, _) in spans.items()},
+            "message": sum(message_kinds.values()),
+        },
+        "message_kinds": message_kinds,
+        "oldest": min(firsts) if firsts else None,
+    }
+
+
+def _memory(m: dict) -> dict:
+    return {
+        "kind": "memory",
+        "at": m["created_at"],
+        "text": m["content"],
+        "meta": {"id": m["id"], "level": m["level"], "importance": m["importance"]},
+    }
+
+
+def _journal(j: dict) -> dict:
+    return {"kind": "journal", "at": j["created_at"], "text": j["entry"], "meta": {"id": j["id"]}}
+
+
+def _task(t: dict) -> dict:
+    return {
+        "kind": "task",
+        "at": t["created_at"],
+        "text": t["goal"],
+        "meta": {"id": t["id"], "status": t["status"]},
+    }
+
+
+def _reminder(r: dict) -> dict:
+    return {
+        "kind": "reminder",
+        "at": r["created_at"],
+        "text": r["note"],
+        "meta": {"id": r["id"], "status": r["status"], "fireAt": r["fire_at"]},
+    }
+
+
+def _message(m: dict) -> dict:
+    """A message, with what the screen needs to say what it was.
+
+    `kind`, `link` and `projectId` ride along because the screen used to look them up in the
+    snapshot, and the snapshot holds the newest hundred messages — fine while the timeline
+    stopped at 500 events, wrong for a page from August, whose questions and stops would have
+    lost their kind and dropped off the screen.
+    """
+    return {
+        "kind": "message",
+        "at": m["created_at"],
+        "text": m["body"],
+        "meta": {
+            "id": m["id"],
+            "read": m["read"],
+            "kind": m.get("kind") or "note",
+            "link": m.get("link"),
+            "projectId": m.get("project_id"),
+        },
+    }

@@ -15,9 +15,20 @@ from pathlib import Path
 from typing import Any
 
 from kith.services.brain.kinds import KINDS, require
-from kith.services.brain.views import snapshot, snapshot_tasks, timeline
+from kith.services.brain.views import MAX_PAGE, PAGE, snapshot, snapshot_tasks, timeline, timeline_page
 
-__all__ = ["KINDS", "create", "delete", "snapshot", "snapshot_tasks", "timeline", "update"]
+__all__ = [
+    "KINDS",
+    "MAX_PAGE",
+    "PAGE",
+    "create",
+    "delete",
+    "snapshot",
+    "snapshot_tasks",
+    "timeline",
+    "timeline_page",
+    "update",
+]
 
 
 def delete(path: Path, kind: str, key: str) -> bool:

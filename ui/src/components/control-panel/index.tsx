@@ -32,7 +32,6 @@ import {
   createBrainItem,
   deleteBrainItem,
   fetchBrain,
-  fetchTimeline,
   ingestSource,
   setMemoryLevel,
   updateBrainItem,
@@ -55,6 +54,7 @@ import { Schedules } from "./schedules";
 import { Sources } from "./sources";
 import { PanelError, PanelLoading, RETRY_EVERY, STALE_AFTER, StaleBanner } from "./panel-states";
 import { SearchPalette } from "./search-palette";
+import { useTimelinePages } from "./timeline-pages";
 import { KIND_LABEL } from "./types";
 import type { ProjectRef, Tab } from "./types";
 import { Layer, useLayer } from "@/hooks/use-layer";
@@ -115,10 +115,11 @@ export function ControlPanel({
        again by itself, and the error screen says how often. */
     refetchInterval: (q) => (q.state.status === "error" ? RETRY_EVERY : false),
   });
-  const events = useQuery({ queryKey: keys.timeline(), queryFn: fetchTimeline });
+  // Pages of it, loaded as far back as Lifetime has scrolled; Today reads the newest of them.
+  const { query: events, events: timeline, paging } = useTimelinePages();
   const snap = board.data ?? null;
-  const timeline = events.data ?? [];
-  const loading = board.isFetching || events.isFetching;
+  // An older page arriving because you scrolled is not the panel refreshing.
+  const loading = board.isFetching || (events.isFetching && !events.isFetchingNextPage);
   // What the freshness line reports. `dataUpdatedAt` is when the answer arrived, which is the thing
   // that was being tracked by hand — and unlike a hand-kept timestamp it cannot drift from the data
   // it describes. It is 0 until the first success, though, and rendering that as an age gives "29
@@ -516,7 +517,14 @@ export function ControlPanel({
                   create={create}
                 />
               ) : tab === "lifetime" ? (
-                <Lifetime snap={snap} events={timeline.filter((event) => matches(query, event.text))} onOpenTask={onOpenTask} onNavigate={openTab} />
+                <Lifetime
+                  snap={snap}
+                  events={timeline.filter((event) => matches(query, event.text))}
+                  searching={query.trim() !== ""}
+                  paging={paging}
+                  onOpenTask={onOpenTask}
+                  onNavigate={openTab}
+                />
               ) : tab === "memory" ? (
                 <Memories {...props} snap={snap} />
               ) : tab === "journal" ? (
@@ -528,7 +536,7 @@ export function ControlPanel({
               ) : tab === "schedules" ? (
                 <Schedules {...props} snap={snap} />
               ) : tab === "sources" ? (
-                <Sources snap={snap} query={query} remove={remove} ingest={ingest} />
+                <Sources snap={snap} query={query} remove={remove} ingest={ingest} onNewConversation={onNewConversation} />
               ) : (
                 <WorkspaceFiles />
               )}

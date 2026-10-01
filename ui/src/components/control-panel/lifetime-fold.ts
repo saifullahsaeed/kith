@@ -11,8 +11,13 @@
  *   - otherwise, back-to-back events of the same kind on the same project are one burst
  *     ("Remembered 2 things").
  *
+ * The timeline arrives a page at a time (`fetchTimelinePage`), and the folding is done over every
+ * page loaded so far rather than page by page: a page edge falls wherever the 500th event falls,
+ * which is as likely as not the middle of a job, and a job cut in two by it would be two rows that
+ * say "Finished 30 things" and "Finished 24 things" about the same task. Joined first, it is one.
+ *
  * Pure, so the folding is tested on its own (`lifetime-fold.test.ts`) and the screen only draws. */
-import type { BrainSnapshot, Message, TimelineEvent } from "@/lib/backend/brain";
+import type { BrainSnapshot, Message, TimelineEvent, TimelinePage } from "@/lib/backend/brain";
 import { dayKey, keyMidnight, midnight, msOf } from "./day-format";
 import { projectMatcher } from "./journal-links";
 
@@ -59,6 +64,45 @@ const ASKED = /^I need an answer before I can carry on:\s*/;
 
 type Snapshot = Pick<BrainSnapshot, "tasks" | "projects" | "messages">;
 
+/** Every loaded page as one newest-first list, each event once.
+ *
+ * Pages follow a cursor (strictly older than the last event shown), so they do not overlap —
+ * but a refetch can land between two of them, and an event drawn twice is a row that says
+ * he did something twice. Deduped by kind and row id, which is what an event is. */
+export function joinPages(pages: readonly Pick<TimelinePage, "events">[]): TimelineEvent[] {
+  const seen = new Set<string>();
+  const out: TimelineEvent[] = [];
+  for (const page of pages) {
+    for (const event of page.events) {
+      const id = `${event.kind}:${String(event.meta.id ?? event.at)}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(event);
+    }
+  }
+  return out;
+}
+
+/** What each chip counts over all of history, from the server's totals — or `null` when the
+ *  server sent none (one from before paging), and the screen counts what it has loaded.
+ *
+ *  Outputs, questions and stops are messages, counted by what each was, as `toLifeEvents` reads
+ *  them; notes and reach-outs are not on this screen, so "All" leaves them out too. */
+export function chipTotals(page: Pick<TimelinePage, "totals" | "message_kinds"> | undefined): Record<LifeFilter, number> | null {
+  if (!page?.totals || !page.message_kinds) return null;
+  const { totals, message_kinds: said } = page;
+  const out: Record<LifeFilter, number> = {
+    all: 0,
+    tasks: totals.task ?? 0,
+    outputs: said.delivered ?? 0,
+    memory: totals.memory ?? 0,
+    journal: totals.journal ?? 0,
+    reminders: totals.reminder ?? 0,
+  };
+  out.all = out.tasks + out.outputs + out.memory + out.journal + out.reminders + (said.asked ?? 0) + (said.stuck ?? 0);
+  return out;
+}
+
 /** The timeline, as things he did — newest first. Notes and reach-outs are dropped: they are the
  *  inbox's business, and a note to you is not something he did. */
 export function toLifeEvents(timeline: readonly TimelineEvent[], snap: Snapshot): LifeEvent[] {
@@ -88,12 +132,16 @@ export function toLifeEvents(timeline: readonly TimelineEvent[], snap: Snapshot)
     const key = `${event.kind}:${id ?? event.at}`;
 
     if (event.kind === "message") {
-      // The snapshot's row carries what the timeline's does not: its kind, its link, its project.
+      /* What it was, where it links and what project it is about. The timeline row carries them
+         now; it used not to, and the snapshot's row was the only place to look — which holds the
+         newest hundred messages, so a page from August would lose them. Either, then. */
       const message = id != null ? (messages.get(id) as (Message & { project_id?: number | null }) | undefined) : undefined;
+      const link = message?.link ?? (typeof event.meta.link === "string" ? event.meta.link : undefined);
+      const projectId = message?.project_id ?? (typeof event.meta.projectId === "number" ? event.meta.projectId : undefined);
       const delivered = DELIVERED.exec(event.text);
       if (delivered) {
         const on = delivered[1]!.trim();
-        const linked = message?.link?.startsWith("/tasks/") ? Number(message.link.slice(7)) : Number.NaN;
+        const linked = link?.startsWith("/tasks/") ? Number(link.slice(7)) : Number.NaN;
         const taskId = Number.isFinite(linked) ? linked : taskByGoal.get(on);
         out.push({
           key: `output:${id ?? event.at}`,
@@ -102,22 +150,16 @@ export function toLifeEvents(timeline: readonly TimelineEvent[], snap: Snapshot)
           text: delivered[2]!.trim(),
           on,
           taskId,
-          ...ofTask(taskId, message?.project_id),
+          ...ofTask(taskId, projectId),
         });
         continue;
       }
-      const kind = message?.kind ?? (ASKED.test(event.text) ? "asked" : "");
+      const said = message?.kind ?? (typeof event.meta.kind === "string" ? event.meta.kind : undefined);
+      const kind = said ?? (ASKED.test(event.text) ? "asked" : "");
       if (kind === "asked") {
-        out.push({
-          key,
-          kind: "asked",
-          ms,
-          text: event.text.replace(ASKED, ""),
-          link: message?.link ?? undefined,
-          ...inProject(message?.project_id),
-        });
+        out.push({ key, kind: "asked", ms, text: event.text.replace(ASKED, ""), link, ...inProject(projectId) });
       } else if (kind === "stuck") {
-        out.push({ key, kind: "stopped", ms, text: event.text, link: message?.link ?? undefined, ...inProject(message?.project_id) });
+        out.push({ key, kind: "stopped", ms, text: event.text, link, ...inProject(projectId) });
       }
       continue;
     }
