@@ -377,6 +377,28 @@ _ROUND_FAILED_DIRECTIVE = (
 #: asked "?" and then "what are you doing man" three times in four minutes.
 _EMPTY_ROUNDS_BEFORE_GIVING_UP = 1
 
+#: Gemini's own finish reason for a round where it started a tool call and could not write one
+#: its decoder would accept. OpenRouter reports it as `finish_reason: "error"` with no error
+#: object, no content, no call and nothing billed — so at the branch below it is a silent round,
+#: and it was handled as one: the empty-round nudge, the identical request again, and a dead turn
+#: blaming "all reasoning". That recovery cannot work. The failure is a property of the prompt,
+#: not a blip, and a trailing system message does not change the prompt where it matters.
+#:
+#: Measured, 2026-09-30, `20260930-175514809-db351f` on `google/gemini-3.8-flash`, Google AI
+#: Studio: three turns in a row died on it. Replaying the first one's exact prompt, four times
+#: each:
+#:
+#:     as sent                                  4 of 4 malformed
+#:     + the empty-round directive              4 of 4 malformed   (what the loop did)
+#:     temperature 0.7                          4 of 4 malformed
+#:     tool_choice "required"                   0 of 4 — each one the call it had been attempting
+#:
+#: "required" is Gemini's function-calling mode ANY, which decodes against the declared schemas,
+#: so the call cannot come out malformed. It also means the round cannot answer in prose, which
+#: costs nothing here: the model had already decided to call something. So the round is sent
+#: once more that way, with nothing added to the conversation, and the next goes back to "auto".
+_MALFORMED_CALL = "MALFORMED_FUNCTION_CALL"
+
 #: Spent when a round came back empty and the turn is going again. Deliberately not
 #: `_ROUND_FAILED_DIRECTIVE` — nothing failed, the request got through — and deliberately not
 #: `_LANDING_DIRECTIVE`, because narrowing the toolset rewrites the cached prefix and tells him
@@ -462,6 +484,7 @@ def _send_round(
     schemas: list[dict],
     retries: _Retries,
     routing=None,
+    tool_choice: str = "auto",
 ) -> Iterator[dict]:
     """One round's model call, attempted up to `_ROUND_ATTEMPTS` times.
 
@@ -499,7 +522,9 @@ def _send_round(
         failure = None
         spoke = False
         content, tool_calls, stats, spoken = "", [], None, ""
-        for event in _stream_once(convo, config, host, tools=schemas, routing=routing):
+        for event in _stream_once(
+            convo, config, host, tools=schemas, tool_choice=tool_choice, routing=routing
+        ):
             kind = event["type"]
             if kind == "delta":
                 spoke = True
@@ -709,6 +734,28 @@ def stream_agent(
         )
 
 
+def _came_back_empty(model: str, times: int, stats: dict | None) -> str:
+    """What a turn says when its rounds kept coming back with nothing in them.
+
+    "All reasoning" only when that is what the provider reported. A round the provider ended
+    with an error is a different fact, and naming it is what tells a model that went quiet
+    from a host that failed it — the first report of `_MALFORMED_CALL` read as the former.
+    """
+    stats = stats or {}
+    if stats.get("finishReason") == "error":
+        native = str(stats.get("nativeFinishReason") or "")
+        return (
+            f"{model} ended its response with an error{f' ({native})' if native else ''} "
+            f"{times} times in a row — no answer and no tool call. Nothing was lost, but there "
+            "is nothing to show either. Try again, or switch model."
+        )
+    return (
+        f"{model} returned an empty response {times} times in a row — "
+        "all reasoning, no answer and no tool call. Nothing was lost, but there is "
+        "nothing to show either. Try again, or switch model."
+    )
+
+
 def _directive(convo: list[dict[str, Any]], text: str) -> dict:
     """Say something to him that is the harness speaking, not his person. Returns the event.
 
@@ -829,6 +876,9 @@ def _run_turn(
     #: Rounds that came back with nothing in them, in a row. See
     #: `_EMPTY_ROUNDS_BEFORE_GIVING_UP`.
     empty_rounds = 0
+    #: Whether the next request must call a tool, because the last one tried to and the provider
+    #: could not parse what it wrote. One round only. See `_MALFORMED_CALL`.
+    constrain_next = False
     #: Folds this turn has tried, whether or not they came back with notes. See `_MAX_FOLDS`.
     folds = 0
 
@@ -919,8 +969,10 @@ def _run_turn(
         # this one call.
         round_config = replace(config, effort=landing_effort) if landing and landing_effort else config
 
+        tool_choice = "required" if constrain_next else "auto"
+        constrain_next = False
         content, tool_calls, stats, failure, spoken = yield from _send_round(
-            convo, round_config, host, schemas, retries, routing=routing
+            convo, round_config, host, schemas, retries, routing=routing, tool_choice=tool_choice
         )
 
         if failure is not None:
@@ -1005,18 +1057,17 @@ def _run_turn(
                 yield {"type": "error", "message": _cut_off(round_config)}
                 return
 
+            # Nor when it was a call the provider could not parse: the model was not silent, it
+            # was mid-call. Asked again with the call constrained to the schemas, not nudged.
+            if tool_choice == "auto" and (stats or {}).get("nativeFinishReason") == _MALFORMED_CALL:
+                constrain_next = True
+                continue
+
             empty_rounds += 1
             if empty_rounds <= _EMPTY_ROUNDS_BEFORE_GIVING_UP:
                 yield _directive(convo, _EMPTY_ROUND_DIRECTIVE)
                 continue
-            yield {
-                "type": "error",
-                "message": (
-                    f"{config.model} returned an empty response {empty_rounds} times in a row — "
-                    "all reasoning, no answer and no tool call. Nothing was lost, but there is "
-                    "nothing to show either. Try again, or switch model."
-                ),
-            }
+            yield {"type": "error", "message": _came_back_empty(config.model, empty_rounds, stats)}
             return
 
         # Reset here and not at the top of the round: the question this counter asks is "is this

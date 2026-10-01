@@ -431,6 +431,11 @@ def stream_once(
     # as "returned an empty response — try again, or switch model" while the provider was
     # saying `length` on both. See `REASONING_SHARE`.
     finish = ""
+    # The upstream's own word for it, which OpenRouter passes beside its normalised one. It is
+    # the only place a Gemini `MALFORMED_FUNCTION_CALL` shows: the normalised reason for that is
+    # "error", with no `error` object, no content, no call and a zero bill — so without this the
+    # loop sees a round that simply had nothing in it. See `agent_loop._MALFORMED_CALL`.
+    native = ""
     generation = ""
     try:
         for raw_line in response.iter_lines(decode_unicode=True):
@@ -476,6 +481,8 @@ def stream_once(
             # truncated round costs is the loop's decision, not the transport's.
             if choices[0].get("finish_reason"):
                 finish = str(choices[0]["finish_reason"])
+            if choices[0].get("native_finish_reason"):
+                native = str(choices[0]["native_finish_reason"])
             delta = choices[0].get("delta") or {}
 
             reasoning = delta.get("reasoning") or delta.get("reasoning_content")
@@ -515,7 +522,7 @@ def stream_once(
         "type": "turn",
         "content": answer,
         "tool_calls": tool_calls,
-        "stats": _stats(usage, time.time() - started, config.model, served_by, finish, generation),
+        "stats": _stats(usage, time.time() - started, config.model, served_by, finish, generation, native),
     }
 
 
@@ -680,6 +687,7 @@ def _stats(
     provider: str = "",
     finish: str = "",
     generation: str = "",
+    native: str = "",
 ) -> dict[str, str | int | float]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
@@ -725,6 +733,9 @@ def _stats(
         # loop reads it to tell a cut-off round from a quiet one, and the transcript keeps it,
         # which is what makes a round diagnosable a day later instead of only while it happens.
         "finishReason": finish,
+        # The same fact in the upstream's own vocabulary, when it is more specific than the
+        # normalised one — blank when the host does not send it.
+        "nativeFinishReason": native,
         # The provider's id for this round, so a number here can be taken back to the row it
         # came from. Blank on any host that does not send one.
         "generationId": generation,
