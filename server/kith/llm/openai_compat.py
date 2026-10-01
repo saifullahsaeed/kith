@@ -519,13 +519,30 @@ def stream_once(
         for _, slot in sorted(calls.items())
         if slot["name"]
     ]
-    yield {
-        "type": "turn",
-        "content": answer,
-        "tool_calls": tool_calls,
-        "stats": _stats(
-            usage, time.time() - started, config.model, served_by, finish, generation, native, tier
-        ),
+    stats = _stats(usage, time.time() - started, config.model, served_by, finish, generation, native, tier)
+    if stats is not None:
+        stats["prefix"] = fingerprint(payload)
+    yield {"type": "turn", "content": answer, "tool_calls": tool_calls, "stats": stats}
+
+
+def fingerprint(payload: dict[str, Any]) -> dict[str, Any]:
+    """What this request's prompt was, in a few hundred bytes: a short hash of the tools block,
+    of the request settings, and of every message in order.
+
+    For the one question the cache numbers cannot answer on their own — *where* a prompt stopped
+    matching the one before it. Two rounds' lists are compared from the front; the first hash
+    that differs is the message that broke the cache, without storing either prompt.
+    """
+    import hashlib
+
+    def short(value: Any) -> str:
+        return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:8]
+
+    settings = {k: v for k, v in payload.items() if k not in ("messages", "tools", "stream", "stream_options")}
+    return {
+        "tools": short(payload.get("tools") or []),
+        "settings": short(settings),
+        "messages": [short(message) for message in payload.get("messages") or []],
     }
 
 
