@@ -91,6 +91,15 @@ def update_reminder(
         return as_dict(row)
 
 
+def attach_conversation(path: Path, reminder_id: int, conversation_id: str) -> None:
+    """Give a reminder that belonged to no chat the one it fired into."""
+    with session(path) as db:
+        row = db.get(Reminder, reminder_id)
+        if row is not None:
+            row.conversation_id = conversation_id
+            db.flush()
+
+
 def delete_reminder(path: Path, reminder_id: int) -> bool:
     with session(path) as db:
         return changed(db.execute(delete(Reminder).where(Reminder.id == reminder_id))) > 0

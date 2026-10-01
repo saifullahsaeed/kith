@@ -18,7 +18,7 @@ from collections.abc import Callable
 from kith.engine.run import processes
 from kith.infra.db import repositories as repo
 from kith.kernel import clock, session_context
-from kith.services import local_time, workflows
+from kith.services import conversations, local_time, workflows
 from kith.services.activity import feed
 from kith.settings import AGENT_DB_PATH
 
@@ -94,10 +94,23 @@ def fire_due(now_iso: str, resume: Resume) -> list[str]:
     Grouped, so two reminders due for the same chat at once become one continuation with both
     notes rather than two replies talking past each other.
     """
-    reminders = [r for r in repo.reminders.due_reminders(AGENT_DB_PATH, now_iso) if r.get("conversation_id")]
-    schedules = [s for s in repo.schedules.due_schedules(AGENT_DB_PATH, now_iso) if s.get("conversation_id")]
+    reminders = repo.reminders.due_reminders(AGENT_DB_PATH, now_iso)
+    schedules = repo.schedules.due_schedules(AGENT_DB_PATH, now_iso)
     if not reminders and not schedules:
         return []
+
+    # One set from the Control Panel belongs to no chat — there was none to take it from — and
+    # these used to be skipped for that reason: never fired, never retired, pending forever, while
+    # the panel said it was set. Firing starts its chat instead, and the row keeps it, so a
+    # standing job's later runs land in the same thread.
+    for r in reminders:
+        if not r.get("conversation_id"):
+            r["conversation_id"] = _home(r["note"])
+            repo.reminders.attach_conversation(AGENT_DB_PATH, r["id"], r["conversation_id"])
+    for s in schedules:
+        if not s.get("conversation_id"):
+            s["conversation_id"] = _home(s["note"])
+            repo.schedules.attach_conversation(AGENT_DB_PATH, s["id"], s["conversation_id"])
 
     by_conversation: dict[str, list[str]] = {}
     for r in reminders:
@@ -127,6 +140,11 @@ def fire_due(now_iso: str, resume: Resume) -> list[str]:
         repo.schedules.reschedule(AGENT_DB_PATH, s["id"], nxt)
         feed.publish("reminder", f"(standing) {s['note']}", conversation=s["conversation_id"])
     return woken
+
+
+def _home(note: str) -> str:
+    """A chat for something due that has none, named after what it is about."""
+    return conversations.start(AGENT_DB_PATH, note)["id"]
 
 
 def _continue(conversation_id: str, notes: list[str], resume: Resume, because: str = DUE) -> None:

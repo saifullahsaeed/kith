@@ -37,7 +37,10 @@ def set_reminder(path: Path, args: dict) -> dict:
     if not note:
         raise ValueError("note is required")
     fire_at = local_time.resolve_fire_at(args.get("in_minutes"), args.get("at"))
-    reminder = repo.reminders.add_reminder(path, fire_at, note, conversation_id=session_context.current())
+    # From a chat, the chat it was set in; from the panel, the one it names (a "remind again"
+    # carries the original's) — or none, and the scheduler gives it one when it fires.
+    chat = session_context.current() or str(args.get("conversation_id") or "")
+    reminder = repo.reminders.add_reminder(path, fire_at, note, conversation_id=chat)
     return {**reminder, "fires": clock.humanize_until(fire_at)}
 
 
@@ -69,7 +72,6 @@ def schedule(path: Path, args: dict) -> dict:
         raise ValueError("note is required")
     every, daily = args.get("every_minutes"), args.get("daily_at")
     next_fire = local_time.next_fire_after(every, daily)
-    sched = repo.schedules.add_schedule(
-        path, note, next_fire, every, daily, conversation_id=session_context.current()
-    )
+    chat = session_context.current() or str(args.get("conversation_id") or "")
+    sched = repo.schedules.add_schedule(path, note, next_fire, every, daily, conversation_id=chat)
     return {**sched, "fires": clock.humanize_until(next_fire)}

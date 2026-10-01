@@ -53,6 +53,17 @@ def due_schedules(path: Path, now_iso: str) -> list[dict]:
 
 
 @notifies("schedule")
+def attach_conversation(path: Path, schedule_id: int, conversation_id: str) -> None:
+    """Give a standing job that belonged to no chat the one its first run started — every later
+    run posts there too, so a daily job reads as one thread rather than a new chat a day."""
+    with session(path) as db:
+        row = db.get(Schedule, schedule_id)
+        if row is not None:
+            row.conversation_id = conversation_id
+            db.flush()
+
+
+@notifies("schedule")
 def reschedule(path: Path, schedule_id: int, next_fire: str) -> dict | None:
     with session(path) as db:
         row = db.get(Schedule, schedule_id)

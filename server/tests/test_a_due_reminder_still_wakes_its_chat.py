@@ -32,17 +32,42 @@ class TestWhatIsDueWakesItsOwnChat:
 
         assert woken == [conv]
 
-    def test_a_reminder_with_no_conversation_is_left_alone(self, db: Path, monkeypatch):
-        """It belongs to nobody's chat, so there is no chat to continue. Before, the loop
-        would eventually pick it up on a generic step; there is no generic step now."""
+    def test_a_reminder_with_no_conversation_starts_one(self, db: Path, monkeypatch):
+        """Set from the Control Panel, it belongs to no chat. It used to be left alone for that
+        reason (2026-08-08: "there is no chat to continue") — which, once the panel could set
+        reminders, meant one that never fired and never retired. Now firing starts its chat."""
         monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
         woken: list[str] = []
         monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume, **_: woken.append(cid))
-        repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "no chat")
+        made = repo.reminders.add_reminder(db, "2020-01-01T00:00:00+00:00", "check the build")
 
         scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
 
-        assert woken == []
+        assert len(woken) == 1
+        assert conversations.get(db, woken[0])["title"].startswith("check the build")
+        [row] = [r for r in repo.reminders.list_reminders(db) if r["id"] == made["id"]]
+        assert row["conversation_id"] == woken[0]
+        assert row["status"] == "done"
+
+    def test_a_standing_job_with_no_conversation_keeps_the_one_it_started(self, db: Path, monkeypatch):
+        """Its later runs post to the same thread, not a new chat a day."""
+        monkeypatch.setattr(scheduler, "AGENT_DB_PATH", db)
+        woken: list[str] = []
+        monkeypatch.setattr(scheduler, "_continue", lambda cid, notes, resume, **_: woken.append(cid))
+        job = repo.schedules.add_schedule(db, "check CI", "2020-01-01T00:00:00+00:00", every_minutes=60)
+
+        scheduler.fire_due("2030-01-01T00:00:00+00:00", _resume)
+
+        [row] = [s for s in repo.schedules.list_schedules(db) if s["id"] == job["id"]]
+        assert row["conversation_id"] == woken[0]
+
+    def test_a_reminder_set_from_the_panel_can_name_its_chat(self, db: Path, monkeypatch):
+        """A "remind again" carries the original's chat, so it reports back where it began."""
+        from kith.services import brain
+
+        conv = conversations.start(db, "hi")["id"]
+        made = brain.create(db, "reminder", {"note": "again", "in_minutes": 5, "conversation_id": conv})
+        assert made["conversation_id"] == conv
 
     def test_two_reminders_for_one_chat_wake_it_once(self, db: Path, monkeypatch):
         """Not two replies talking past each other — one turn, told about both."""
