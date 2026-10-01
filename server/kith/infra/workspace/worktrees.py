@@ -145,6 +145,7 @@ def open_for(worker_id: str, folder: Path | str | None = None) -> Path | None:
         if made.exit_code == 0:
             _carry_notes(source, where, work)
             _carry_untracked(source, where)
+            _carry_environment(source, where)
             _baseline(where)
             # After the baseline, and it would not matter if it were before: these are ignored
             # in the source, so `add -A` never stages them and they can never reach a diff.
@@ -320,6 +321,60 @@ def _carry_untracked(source: Path, copy: Path) -> None:
             origin = source / name
             try:
                 if not origin.is_file() or origin.is_symlink() or origin.stat().st_size > _LARGEST_UNTRACKED:
+                    continue
+                target = copy / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(origin, target)
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+
+#: The largest environment file carried into a copy. A `.env` is a few dozen lines.
+_LARGEST_ENV = 100_000
+
+
+def _is_environment(name: str) -> bool:
+    """`.env`, `.env.local`, `.env.test` — not the `.env.example` a project commits for people."""
+    base = Path(name).name
+    if base != ".env" and not base.startswith(".env."):
+        return False
+    return not base.endswith((".example", ".sample", ".template", ".dist"))
+
+
+def _carry_environment(source: Path, copy: Path) -> None:
+    """Copy in the project's environment files, which every project ignores and its code needs.
+
+    A Django backend reads `SECRET_KEY` from `backend/.env`; without it the suite stops before
+    collecting a test. Two verifiers on 2026-10-01 reported every backend claim "unverified"
+    for exactly that reason, and the builders' own test runs failed the same way. Ignored files
+    are never staged in a copy, so these are not in anyone's patch, and a copy's commands cannot
+    reach the network to send them anywhere — the boundary is what makes carrying them safe.
+
+    Found with ``--directory``, so an ignored `node_modules` is named once rather than listed
+    file by file. Never raises, for the reason `_carry_notes` gives.
+    """
+    try:
+        listed = _git(
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            cwd=source,
+            timeout=_TIMEOUT,
+        )
+        if listed.exit_code != 0:
+            return
+        for name in listed.output.split("\0"):
+            name = name.strip()
+            if not name or name.endswith("/") or ".kith" in Path(name).parts or not _is_environment(name):
+                continue
+            origin = source / name
+            try:
+                if not origin.is_file() or origin.is_symlink() or origin.stat().st_size > _LARGEST_ENV:
                     continue
                 target = copy / name
                 target.parent.mkdir(parents=True, exist_ok=True)

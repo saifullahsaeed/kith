@@ -437,6 +437,10 @@ def stream_once(
     # loop sees a round that simply had nothing in it. See `agent_loop._MALFORMED_CALL`.
     native = ""
     generation = ""
+    # Which of the upstream's service tiers served it — "flex", "priority", "default" — as
+    # OpenRouter passes it on each chunk. A host pin like `openai/flex` is a preference with
+    # fallbacks on, so this is the only record of whether the cheaper tier actually took it.
+    tier = ""
     try:
         for raw_line in response.iter_lines(decode_unicode=True):
             if not raw_line:
@@ -461,6 +465,8 @@ def stream_once(
             # OpenAI-compatible host sets it, so this stays blank rather than guessing.
             if not served_by and chunk.get("provider"):
                 served_by = str(chunk["provider"])
+            if not tier and chunk.get("service_tier"):
+                tier = str(chunk["service_tier"])
             # The provider's own id for this round, on every chunk beside the one above and
             # likewise read nowhere. It is what makes a round in a transcript the same object
             # as a row in the provider's log, which is the difference between reading a bill
@@ -522,7 +528,9 @@ def stream_once(
         "type": "turn",
         "content": answer,
         "tool_calls": tool_calls,
-        "stats": _stats(usage, time.time() - started, config.model, served_by, finish, generation, native),
+        "stats": _stats(
+            usage, time.time() - started, config.model, served_by, finish, generation, native, tier
+        ),
     }
 
 
@@ -688,6 +696,7 @@ def _stats(
     finish: str = "",
     generation: str = "",
     native: str = "",
+    tier: str = "",
 ) -> dict[str, str | int | float]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
@@ -728,6 +737,10 @@ def _stats(
         # has billed anywhere from $0.13 to $6.59 per million uncached prompt tokens on this
         # install. Blank for a plain OpenAI-compatible endpoint that does not say.
         "provider": provider,
+        # The tier that host served it on, blank when it does not say. "flex" bills at half
+        # the standard rate on OpenAI; without this a pin to `openai/flex` that fell back to the
+        # standard tier looks exactly like one that held.
+        "serviceTier": tier,
         # Why the response stopped. It travels with the numbers rather than as its own field on
         # the `turn` event because this dict already goes everywhere the fact is needed — the
         # loop reads it to tell a cut-off round from a quiet one, and the transcript keeps it,

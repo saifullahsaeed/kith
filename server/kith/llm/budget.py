@@ -60,7 +60,13 @@ _FIRST_ROUND: dict[str, float] = {}
 #: The band a calibrated ratio is held to. Outside it, something is wrong with the arithmetic
 #: rather than with the model — a ratio of 20 would silently disable the guard, and one of
 #: 0.5 would make it fire on every round of every turn.
-MIN_RATIO, MAX_RATIO = 2.0, 6.0
+#:
+#: **The floor was 2.0, and a real model sits below it.** `openai/gpt-6.1-sol-pro` bills about
+#: 1.4 characters a token — 3.3x what OpenRouter's own count makes of the same request, where
+#: plain Sol bills 0.89x. Clamped at 2.0, the meter said 237k on a request billed at 349k, so
+#: nothing folded before 272k, the line past which OpenAI doubles every rate: flex input went
+#: from $1 to $2 a million, and each round cost $0.23 to say a sentence (2026-10-01).
+MIN_RATIO, MAX_RATIO = 1.0, 6.0
 
 #: What one image part costs, regardless of how many bytes its data URI is. A page render at
 #: high detail is roughly this; being out by a factor of two here is immaterial next to being

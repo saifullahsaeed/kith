@@ -2,6 +2,7 @@ import type { ThreadMessageLike } from "@assistant-ui/react";
 
 import { TURN_TIMING } from "@/lib/backend/adapter";
 import { USAGE_PART, type ContextLedger, type StoredTurn } from "@/lib/backend";
+import { servedBy } from "@/lib/served-by";
 
 /**
  * A stored conversation, rebuilt as the thread saw it.
@@ -91,7 +92,7 @@ export function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
         });
         if (typeof part.costUsd === "number") costUsd = (costUsd ?? 0) + part.costUsd;
         if (part.model) model = part.model;
-        if (part.provider) provider = part.provider;
+        if (part.provider) provider = servedBy(part.provider, part.serviceTier);
         if (part.at) lastRoundAt = part.at;
       }
     }

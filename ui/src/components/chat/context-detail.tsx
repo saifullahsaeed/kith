@@ -16,6 +16,7 @@ import {
 } from "@/lib/backend";
 import { foldNow } from "@/lib/commands";
 import { copyText } from "@/lib/files";
+import { servedBy } from "@/lib/served-by";
 import { byGroup, FOLDS_AT, GROUP_OF, type GroupReading } from "@/lib/context-groups";
 import { formatCompact, formatTokens } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
@@ -425,8 +426,11 @@ function Receipt({ round }: { round: LastRoundFigures | null }) {
         <div className="text-muted-foreground/40 text-[9px] tracking-[0.12em] uppercase">
           served by
         </div>
-        <div className="max-w-[12rem] truncate font-mono text-[11px]" title={round.provider || "—"}>
-          {round.provider || "—"}
+        <div
+          className="max-w-[12rem] truncate font-mono text-[11px]"
+          title={servedBy(round.provider, round.serviceTier) || "—"}
+        >
+          {servedBy(round.provider, round.serviceTier) || "—"}
         </div>
       </div>
     </div>

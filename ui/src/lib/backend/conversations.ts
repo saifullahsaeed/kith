@@ -76,6 +76,7 @@ export type StoredPart =
       costUsd?: number;
       model?: string;
       provider?: string;
+      serviceTier?: string;
     }
   // `baseline` is `{}` — not absent — on a turn recorded before this field existed; a
   // structurally real-but-empty reading, not a real one, which is why it's `Partial`.

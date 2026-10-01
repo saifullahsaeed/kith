@@ -8,6 +8,7 @@ import type { TurnUsage } from "@/components/assistant-ui/turn-usage";
 import type { Usage } from "@/lib/tokens";
 
 import { foldNow, stopTurn } from "@/lib/commands";
+import { servedBy } from "@/lib/served-by";
 import { readEvents, toWireMessages } from "./stream";
 import type { ContextLedger, JsonObject, JsonValue } from "./types";
 
@@ -450,7 +451,9 @@ let retried = 0;
             costUsd = (costUsd ?? 0) + stats.costUsd;
           }
           if (typeof stats.model === "string" && stats.model) model = stats.model;
-          if (typeof stats.provider === "string" && stats.provider) provider = stats.provider;
+          if (typeof stats.provider === "string" && stats.provider) {
+            provider = servedBy(stats.provider, stats.serviceTier);
+          }
         } else if (event.type === "context") {
           // `context` is replaced rather than accumulated: this is a reading of the window
           // as it stands, not a thing that happened, so the last one is the only one still
