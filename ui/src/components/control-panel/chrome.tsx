@@ -264,13 +264,15 @@ export function PageTitle({
   return (
     <div className="flex items-end gap-4">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <h1 className="flex items-baseline gap-2 text-2xl font-[650] tracking-[-0.01em]">
+        {/* Line heights as the board draws them — the type scale's own 32px leading put every
+            screen's content 7px lower than its design. */}
+        <h1 className="flex items-baseline gap-2 text-2xl leading-[1.2] font-[650] tracking-[-0.01em]">
           <span className="truncate">{title}</span>
           {count !== undefined && count !== null ? (
             <span className="text-muted-foreground/80 text-[15px] font-normal tabular-nums">{count}</span>
           ) : null}
         </h1>
-        {subtitle ? <p className="text-muted-foreground m-0 text-[13px]">{subtitle}</p> : null}
+        {subtitle ? <p className="text-muted-foreground m-0 text-[13px] leading-[1.25]">{subtitle}</p> : null}
       </div>
       {children ? <div className="flex shrink-0 items-center gap-2">{children}</div> : null}
     </div>

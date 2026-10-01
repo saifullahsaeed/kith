@@ -18,7 +18,6 @@ import {
   FolderKanban,
   FolderTree,
   NotebookPen,
-  RefreshCw,
   Repeat,
   Search,
   Sun,
@@ -47,13 +46,15 @@ import { WorkspaceFiles } from "./files";
 import { matches, projectLabel } from "./format";
 import { Journal } from "./journal";
 import { Memories } from "./memories";
-import { Lifetime } from "./overview";
+import { Lifetime } from "./lifetime";
 import { Today } from "./today";
 import { ProjectPage } from "./project-page";
 import { Projects } from "./projects";
 import { Reminders } from "./reminders";
 import { Schedules } from "./schedules";
 import { Sources } from "./sources";
+import { PanelError, PanelLoading, RETRY_EVERY, STALE_AFTER, StaleBanner } from "./panel-states";
+import { SearchPalette } from "./search-palette";
 import { KIND_LABEL } from "./types";
 import type { ProjectRef, Tab } from "./types";
 import { Layer, useLayer } from "@/hooks/use-layer";
@@ -71,8 +72,9 @@ export function ControlPanel({
   openTask: number | null;
   onSelectTab: (tab: Tab) => void;
   onOpenTask: (id: number) => void;
-  /** Start a chat inside a project, from that project's page. */
-  onNewConversation?: (projectId: number) => void;
+  /** Start a chat inside a project (or none — a task may have no project), from that project's
+   *  page or a task's composer. */
+  onNewConversation?: (projectId: number | null) => void;
   onClose: () => void;
   /** Kith's presence, as the app's own bar says it — this screen covers that bar. */
   presence?: Presence;
@@ -80,10 +82,20 @@ export function ControlPanel({
   const confirm = useConfirm();
   const cache = useQueryClient();
   const layer = useLayer(Layer.Panel);
+  /* The panel covers the chat rather than replacing it, so the composer underneath kept keyboard
+     focus when it opened: a list shortcut pressed straight away — ↓, E, F — was typed into a chat
+     you could not see. Whatever holds focus outside the panel lets go of it on open. */
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const held = document.activeElement;
+    if (held instanceof HTMLElement && root.current && !root.current.contains(held)) held.blur();
+  }, []);
   const [query, setQuery] = useState("");
   // Work drills down: projects list → one project → one task.
   const [openProject, setOpenProject] = useState<ProjectRef | null>(null);
-  const searchBox = useRef<HTMLInputElement>(null);
+  /* ⌘K search. It was a field that filtered the open page; it is a palette over everything now,
+     and filtering the page is one of the things it can do (`query` is what that sets). */
+  const [palette, setPalette] = useState(false);
   // A clock, not a poll: the relative times on this panel go stale with nothing having changed.
   // See hooks/use-now.ts for why that distinction is worth naming.
   const now = useNow(10_000);
@@ -95,7 +107,14 @@ export function ControlPanel({
    * ran it three times over, and the interval ran it again for luck. The cache dedupes that: three
    * invalidations inside a frame are one refetch, and any other reader of `["brain"]` gets the same
    * response rather than making its own request. */
-  const board = useQuery({ queryKey: keys.brain(), queryFn: fetchBrain });
+  const board = useQuery({
+    queryKey: keys.brain(),
+    queryFn: fetchBrain,
+    /* The one timer here, and only while broken. Freshness is pushed, but a server that is down
+       pushes nothing — not even "I'm back" — so while the last answer was an error the panel asks
+       again by itself, and the error screen says how often. */
+    refetchInterval: (q) => (q.state.status === "error" ? RETRY_EVERY : false),
+  });
   const events = useQuery({ queryKey: keys.timeline(), queryFn: fetchTimeline });
   const snap = board.data ?? null;
   const timeline = events.data ?? [];
@@ -170,7 +189,7 @@ export function ControlPanel({
     await updateBrainItem(kind, key, data);
     load();
   };
-  const ingest = async (input: { url?: string; text?: string }) => {
+  const ingest = async (input: { url?: string; text?: string; title?: string }) => {
     await ingestSource(input);
     load();
   };
@@ -197,8 +216,9 @@ export function ControlPanel({
 
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        searchBox.current?.focus();
-        searchBox.current?.select();
+        // A second ⌘K puts it away again. Opening it over someone else's dialog would stack two.
+        if (palette) setPalette(false);
+        else if (layer.frontmost()) setPalette(true);
         return;
       }
       if (event.key === "Escape") {
@@ -214,25 +234,27 @@ export function ControlPanel({
         // Escape inside a field belongs to that field. `typing` was computed here and never
         // consulted, so pressing Escape to abandon an edit also wiped the panel-wide search —
         // two unrelated things undone by one key.
-        if (typing && event.target !== searchBox.current) return;
-        // Then a search: closing the panel because someone wanted to undo a filter
-        // would lose their place.
+        if (typing) return;
+        // Then a page filter: closing the panel because someone wanted to undo a filter
+        // would lose their place. (The palette, while open, owns Escape itself — it is a
+        // dialog, so `frontmost()` above is already false.)
         if (query) {
           setQuery("");
           return;
         }
-        if (!typing) onClose();
+        onClose();
         return;
       }
-      // A bare "/" is the other search convention, but only when not already typing.
-      if (event.key === "/" && !typing) {
+      // A bare "/" is the other search convention, but only when not already typing — and not
+      // when the page has a search of its own that took it first (Journal does).
+      if (event.key === "/" && !typing && !event.defaultPrevented && layer.frontmost()) {
         event.preventDefault();
-        searchBox.current?.focus();
+        setPalette(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [query, onClose]);
+  }, [query, onClose, palette, layer]);
 
   const counts = snap?.counts ?? {};
   /* The nav's numbers are what is there to *do*, not how much exists: plans waiting for your OK on
@@ -241,10 +263,19 @@ export function ControlPanel({
   const activeProjects = (snap?.projects ?? []).filter((project) => project.status === "active").length;
   const upcoming = (snap?.reminders ?? []).filter((reminder) => reminder.status === "pending").length;
   const standing = (snap?.schedules ?? []).filter((schedule) => schedule.status === "active").length;
-  const seconds = Math.max(0, Math.round((now - freshAt) / 1000));
-  const freshness = !everLoaded
-    ? "Loading…"
-    : seconds < 30
+  /* What is wrong, if anything, with what is on screen. Never loaded and failing is the error
+     screen; loaded, failing, and older than STALE_AFTER is the banner. A refetch that fails a few
+     seconds after a good answer is neither — what is showing is still current. */
+  const unreachable = !snap && board.isError;
+  const stale = !!snap && board.isError && now - board.dataUpdatedAt > STALE_AFTER;
+  // While the board is failing its age is the board's: the timeline answering a second ago made
+  // this say "Up to date" beside a banner saying four minutes, and over a screen that never loaded.
+  const seconds = Math.max(0, Math.round((now - (board.isError ? board.dataUpdatedAt : freshAt)) / 1000));
+  const freshness = unreachable
+    ? "Not answering"
+    : !everLoaded || !snap
+      ? "Loading…"
+      : seconds < 30
       ? "Up to date"
       : seconds < 90
         ? "A minute ago"
@@ -265,7 +296,7 @@ export function ControlPanel({
        not a constant. Until that exists it covers the window, which is the shape it was designed
        for. `ContextDetailScreen` did convert — it has one scrolling column and measured clean at
        every width. */
-    <div className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
+    <div ref={root} className="fixed inset-0 z-30 flex flex-col bg-background text-foreground">
       {/* No ambient wash: the design is flat neutral surfaces, so colour is free to mean state. */}
 
       {/* This panel covers the app header, so it owns the top of the window and
@@ -287,18 +318,40 @@ export function ControlPanel({
           <span className="truncate text-[13px] font-semibold">Control panel</span>
         </div>
         <div className="flex flex-1 items-center px-5">
-          <label className="border-input bg-card text-muted-foreground/80 relative flex h-[30px] w-[460px] items-center gap-2 rounded-lg border px-2.5 text-[13px] transition-colors focus-within:border-ring">
-            <Search className="size-3.5 shrink-0" />
-            <input
-              ref={searchBox}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search memory, journal, tasks, files…"
-              aria-label="Search memory, journal, tasks, files"
-              className="text-foreground placeholder:text-muted-foreground/80 min-w-0 flex-1 bg-transparent outline-none"
-            />
-            <Kbd>⌘K</Kbd>
-          </label>
+          {/* A button that opens the palette, as the board draws it. While a page filter is on it
+              says so — the filter changes what every list shows, so it cannot be invisible — with
+              its own way off beside it. */}
+          <div className="relative flex w-[460px] items-center">
+            <button
+              type="button"
+              onClick={() => setPalette(true)}
+              aria-haspopup="dialog"
+              aria-label={query ? `Search — this page is filtered to “${query}”` : "Search memory, journal, tasks, files"}
+              className="border-input bg-card text-muted-foreground/80 hover:border-ring/60 focus-visible:border-ring flex h-[30px] w-full items-center gap-2 rounded-lg border px-2.5 text-[13px] transition-colors outline-none"
+            >
+              <Search className="size-3.5 shrink-0" />
+              {query ? (
+                <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-left">
+                  <span className="text-foreground truncate">{query}</span>
+                  <span className="shrink-0 text-xs">filtering this page</span>
+                </span>
+              ) : (
+                <span className="flex-1 truncate text-left">Search memory, journal, tasks, files…</span>
+              )}
+              {query ? <span className="w-5 shrink-0" /> : <Kbd>⌘K</Kbd>}
+            </button>
+            {query ? (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label="Clear the page filter"
+                title="Clear the page filter (Esc)"
+                className="text-muted-foreground hover:bg-muted/60 hover:text-foreground absolute end-1 flex size-[22px] items-center justify-center rounded-md transition-colors"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-3 px-3.5">
           {/* What replaced the Live button and the Refresh button: a statement rather than a
@@ -390,14 +443,26 @@ export function ControlPanel({
 
         {/* A task page manages its own scrolling — two panels, independently — so the
             scroll container moves inside it. Everything else still scrolls here. */}
+        {/* A column so the stale banner can sit above whatever page is open — the task page
+            included, which is exactly the window's height and would be pushed off the bottom by
+            anything placed inside its own scroller. */}
+        <div className="flex min-w-0 flex-1 flex-col">
+        {stale ? <StaleBanner since={board.dataUpdatedAt} now={now} /> : null}
         <main
-          className={cn("min-w-0 flex-1", openTask != null ? "overflow-hidden" : "overflow-y-auto")}
+          className={cn("min-h-0 min-w-0 flex-1", openTask != null ? "overflow-hidden" : "overflow-y-auto")}
         >
-          {!snap ? (
-            <div className="flex h-full items-center justify-center gap-3 text-sm text-muted-foreground">
-              <RefreshCw className="size-4 animate-spin" />
-              Loading his mind…
-            </div>
+          {unreachable ? (
+            <PanelError
+              tab={tab}
+              task={openTask != null}
+              error={board.error}
+              since={board.errorUpdatedAt}
+              now={now}
+              retrying={board.isFetching}
+              onRetry={load}
+            />
+          ) : !snap ? (
+            <PanelLoading tab={tab} task={openTask != null} />
           ) : openTask != null ? (
             <div key={`task-${openTask}`} className="h-full animate-[kith-rise_0.35s_ease-out]">
               <TaskDetailPage
@@ -407,6 +472,12 @@ export function ControlPanel({
                 trail={openProject != null ? projectLabel(snap, openProject) : undefined}
                 onBack={() => onSelectTab("projects")}
                 onChanged={load}
+                onOpenTask={onOpenTask}
+                onOpenProject={(ref) => {
+                  onSelectTab("projects");
+                  setOpenProject(ref);
+                }}
+                onNewConversation={onNewConversation}
               />
             </div>
           ) : openProject != null ? (
@@ -445,11 +516,11 @@ export function ControlPanel({
                   create={create}
                 />
               ) : tab === "lifetime" ? (
-                <Lifetime events={timeline.filter((event) => matches(query, event.text))} />
+                <Lifetime snap={snap} events={timeline.filter((event) => matches(query, event.text))} onOpenTask={onOpenTask} onNavigate={openTab} />
               ) : tab === "memory" ? (
                 <Memories {...props} snap={snap} />
               ) : tab === "journal" ? (
-                <Journal snap={snap} query={query} remove={remove} />
+                <Journal snap={snap} query={query} remove={remove} onNavigate={openTab} onOpenProject={(ref) => { onSelectTab("projects"); setOpenProject(ref); }} />
               ) : tab === "projects" ? (
                 <Projects {...props} snap={snap} onOpenProject={setOpenProject} />
               ) : tab === "reminders" ? (
@@ -464,7 +535,25 @@ export function ControlPanel({
             </div>
           )}
         </main>
+        </div>
       </div>
+
+      <SearchPalette
+        open={palette}
+        onOpenChange={setPalette}
+        snap={snap}
+        seed={query}
+        onFilter={setQuery}
+        onOpenTab={(t, filter) => {
+          openTab(t);
+          setQuery(filter);
+        }}
+        onOpenProject={(id) => {
+          onSelectTab("projects");
+          setOpenProject(id);
+        }}
+        onOpenTask={onOpenTask}
+      />
     </div>
   );
 }

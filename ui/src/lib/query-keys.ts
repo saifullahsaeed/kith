@@ -90,6 +90,12 @@ export const keys = {
   workingOn: (conversationId: string) => ["workingOn", conversationId] as const,
   /** One folder's listing in his workspace. */
   workspace: (path: string) => ["workspace", path] as const,
+  /** One file's text, for the Files screen's preview. Under `workspace` so the same `workspace`
+   *  change that refreshes the folder refreshes the file he just wrote; a file path is never a
+   *  folder path, so it cannot collide with a listing. */
+  workspaceFile: (path: string) => ["workspace", path, "content"] as const,
+  /** One source's stored text. Never changes once ingested — removing it is the only edit. */
+  source: (id: number) => ["source", id] as const,
 } as const;
 
 /** A key prefix — what `invalidateQueries` matches on. */

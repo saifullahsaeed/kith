@@ -36,3 +36,29 @@ export function Breakdown({ counts }: { counts: Tally }) {
     </span>
   );
 }
+
+/**
+ * The 2026-09-30 redesign's bar: 4px, and coloured by state rather than by who is acting — done
+ * green, being worked the same green at half strength, approved and not yet started blue. Plans
+ * waiting for your OK are still the empty track. `ProgressBar` above is the older one, left as it
+ * is for the screens that have not moved to the new design.
+ *
+ * No tasks, no segments: the caller decides whether an empty track is worth drawing at all.
+ */
+export function SegmentBar({ counts, className }: { counts: Tally; className?: string }) {
+  const segment = (n: number, tone: string) =>
+    n && counts.total ? (
+      <span className={cn("h-1 shrink-0 rounded-full", tone)} style={{ width: `${(n / counts.total) * 100}%` }} />
+    ) : null;
+  return (
+    <span
+      role="img"
+      aria-label={`${counts.done} of ${counts.total} done`}
+      className={cn("bg-muted flex h-1 shrink-0 gap-0.5 overflow-hidden rounded-full", className)}
+    >
+      {segment(counts.done, "bg-roam")}
+      {segment(counts.working, "bg-roam/45")}
+      {segment(counts.approved, "bg-sky-500/70 dark:bg-[#6FA8F0]/70")}
+    </span>
+  );
+}

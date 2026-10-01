@@ -135,6 +135,15 @@ export interface Source {
   origin: string;
   created_at: string;
   chars: number;
+  /** How many passages he stored it as, when the server says. `list_sources` does not yet, so
+   *  the Sources screen leaves that number out rather than guess it from the length. */
+  passages?: number;
+}
+
+/** One source in full — `GET /api/sources/<id>`. */
+export interface SourceDetail extends Source {
+  content: string;
+  project_id: number | null;
 }
 
 export interface Schedule {
@@ -349,6 +358,26 @@ export async function fetchTaskDetail(id: number): Promise<TaskDetail> {
   const res = await fetch(`/api/tasks/${id}`);
   if (!res.ok) throw new Error(`/api/tasks/${id} ${res.status}`);
   return (await res.json()) as TaskDetail;
+}
+
+/** The full stored text of one source, which the snapshot leaves out — a page can be 20,000
+ *  characters and the list only needs to say how many. Null when there is no such source: the
+ *  route answers `{}` for that rather than a 404. */
+export async function fetchSource(id: number): Promise<SourceDetail | null> {
+  const res = await fetch(`/api/sources/${id}`);
+  if (!res.ok) throw new Error(`/api/sources/${id} ${res.status}`);
+  const body = (await res.json()) as Partial<SourceDetail>;
+  if (body.id == null) return null;
+  const content = body.content ?? "";
+  return {
+    id: body.id,
+    title: body.title ?? "",
+    origin: body.origin ?? "",
+    created_at: body.created_at ?? "",
+    chars: Array.from(content).length,
+    content,
+    project_id: body.project_id ?? null,
+  };
 }
 
 /** Feed Kith a link or pasted text to read and remember. */
