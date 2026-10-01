@@ -141,6 +141,41 @@ class TestAnInstalledCopy:
         updates.check(force=True)
         assert len(calls) == 2, "'Check now' has to actually look"
 
+    def test_six_hours_includes_the_ones_spent_asleep(self, monkeypatch):
+        """A laptop that checked just before a release, then slept, must look again on waking.
+
+        This used `time.monotonic()`, which on macOS does not advance during sleep — so an
+        installed 0.6.0 kept calling 0.6.0 the newest a day after 0.7.0 was published.
+        """
+        calls = []
+
+        def counted():
+            calls.append(1)
+            return release()
+
+        now = [1_000_000.0]
+        monkeypatch.setattr(updates.time, "time", lambda: now[0])
+        monkeypatch.setattr(updates, "_fetch", counted)
+        updates.check()
+        now[0] += updates._EVERY + 1  # the lid was shut overnight
+        updates.check()
+        assert len(calls) == 2
+
+    def test_a_clock_set_backwards_does_not_freeze_the_answer(self, monkeypatch):
+        calls = []
+
+        def counted():
+            calls.append(1)
+            return release()
+
+        now = [1_000_000.0]
+        monkeypatch.setattr(updates.time, "time", lambda: now[0])
+        monkeypatch.setattr(updates, "_fetch", counted)
+        updates.check()
+        now[0] -= 3600
+        updates.check()
+        assert len(calls) == 2
+
 
 class TestWhenGitHubCannotBeReached:
     @pytest.fixture(autouse=True)

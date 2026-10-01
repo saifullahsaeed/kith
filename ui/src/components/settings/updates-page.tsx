@@ -7,6 +7,7 @@ import {
   SettingSection,
 } from "@/components/settings/setting-row";
 import { useUpdate } from "@/components/shell/update-notice";
+import { checkForUpdate } from "@/lib/backend";
 
 /**
  * What is running, and whether there is anything newer.
@@ -18,6 +19,14 @@ import { useUpdate } from "@/components/shell/update-notice";
  */
 export function UpdatesPage() {
   const { data, refetch, isFetching } = useUpdate();
+
+  // The POST, then the read. `refetch()` alone is a GET the server answers from its six-hour
+  // cache, so this button used to repeat the old answer rather than look — the footer's
+  // "Check" was the only one that did.
+  const look = async () => {
+    await checkForUpdate().catch(() => undefined);
+    await refetch();
+  };
 
   const running = data?.current || "";
   const checked = data?.checkedAt ? new Date(data.checkedAt).toLocaleString() : "";
@@ -47,7 +56,7 @@ export function UpdatesPage() {
               {checked ? (
                 <span className="text-muted-foreground text-[11.5px]">{checked}</span>
               ) : null}
-              <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+              <Button variant="outline" size="sm" onClick={() => void look()} disabled={isFetching}>
                 {isFetching ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : (

@@ -140,7 +140,13 @@ def check(force: bool = False) -> dict:
     """
     global _cached, _checked_at
     with _lock:
-        fresh = _cached is not None and (time.monotonic() - _checked_at) < _EVERY
+        # Wall clock, not `time.monotonic()`. On macOS that is `mach_absolute_time()`, which
+        # stops while the machine sleeps — so "six hours" meant six hours *awake*, and a laptop
+        # that checked just before a release went on saying the old version was the newest for
+        # days of lid-closed nights. A clock set backwards reads as stale rather than as fresh
+        # forever.
+        age = time.time() - _checked_at
+        fresh = _cached is not None and 0 <= age < _EVERY
         if fresh and not force:
             return dict(_cached or {})
 
@@ -160,7 +166,7 @@ def check(force: bool = False) -> dict:
                 "notes": "",
                 "publishedAt": "",
             }
-            _checked_at = time.monotonic()
+            _checked_at = time.time()
             return dict(_cached)
 
         state = {
@@ -190,5 +196,5 @@ def check(force: bool = False) -> dict:
                 state["newer"] = is_newer(state["latest"], current)
 
         _cached = state
-        _checked_at = time.monotonic()
+        _checked_at = time.time()
         return dict(state)
