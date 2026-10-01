@@ -18,7 +18,7 @@ stream parser — so "he was cut off" and "he had nothing to say" were the same 
 turn ended by advising a change of model.
 
 The model was not the problem. The install was sending `max_tokens: 8192` (`num_predict`, the
-setting labelled "Longest single answer") with `reasoning: {effort: "max"}` beside it, and
+setting labelled "Longest single reply") with `reasoning: {effort: "max"}` beside it, and
 OpenRouter documents effort as a *share of max_tokens*: max ~95%, high ~80%, medium ~50%. So
 thinking held a 7,782-token claim on 8,192 and the reply got what thinking did not want — as
 little as 410 tokens — on a turn whose every productive round was emitting 5,000-6,500-token
@@ -34,7 +34,7 @@ Put to the live provider on 2026-08-21, one prompt asking for a long script, bot
 Two fixes, two layers, one test file because they are one bug:
 
 * the ceiling on the wire is the answer cap *plus* the thinking budget, never the cap alone,
-  so "Longest single answer" means the answer (`llm.openai_compat`);
+  so "Longest single reply" means the answer (`llm.openai_compat`);
 * a nothing-round whose provider said `length` is reported as the cut-off it is, once, rather
   than nudged and then blamed on the model (`services.agent_loop`).
 """
@@ -98,7 +98,7 @@ class TestTheAnswerKeepsItsCap:
             assert output_ceiling(config) > thinking_budget(config)
 
     def test_a_bigger_answer_cap_gets_a_bigger_budget_not_a_bigger_share(self):
-        """The two numbers scale together up to the clamp, so raising "Longest single answer"
+        """The two numbers scale together up to the clamp, so raising "Longest single reply"
         cannot quietly cost thinking room."""
         assert thinking_budget(_config(effort="medium", cap=1_000)) == 1_000
         assert thinking_budget(_config(effort="medium", cap=4_000)) == 4_000
@@ -289,7 +289,7 @@ class TestTheTurnSaysWhatActuallyHappened:
 
         assert "cut off" in message
         assert "output ceiling" in message
-        assert "Longest single answer" in message
+        assert "Longest single reply" in message
         assert "switch model" not in message
         assert "empty response" not in message
 

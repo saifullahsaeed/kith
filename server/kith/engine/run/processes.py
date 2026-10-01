@@ -257,6 +257,22 @@ class Processes:
         _changed(_current_conversation())
         return self.check(wanted, told=False)
 
+    def wait(self, name: str, seconds: float, conversation_id: str | None = None) -> None:
+        """Block until that process has ended, or ``seconds`` have passed.
+
+        Reads nothing, so the output it prints meanwhile is all still there for the `check` that
+        follows. Polled rather than `process.wait`, so the registry lock is never held while
+        waiting and a `stop_process` from elsewhere is not queued behind it.
+        """
+        deadline = time.monotonic() + max(0.0, seconds)
+        while time.monotonic() < deadline:
+            with self._lock:
+                self._reap()
+                found = self._find(name, conversation_id)
+                if found is None or not found.running:
+                    return
+            time.sleep(0.3)
+
     def check(
         self, name: str = "", conversation_id: str | None = None, *, told: bool = True
     ) -> dict[str, Any]:

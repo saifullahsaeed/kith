@@ -434,26 +434,10 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="messages",
     ),
     # -- rhythm ------------------------------------------------------------- #
-    Tunable(
-        key="max_answer_tokens",
-        env="KITH_MAX_ANSWER_TOKENS",
-        label="Longest single answer",
-        help="Output tokens one round may produce, and the room a turn reserves for its "
-        "answer when the model states no limit of its own. It bounds what is written, not "
-        "what a session costs — that ceiling is 'session_cost_cents'.",
-        # 2,000 was a gag on the half of the work that produces something. It is *per response*, so
-        # any single round that needed to write a file or a multi-hunk edit was truncated — and
-        # giving a step fifty rounds while capping each one at 2,000 tokens would have left it just
-        # as unable to finish, in more rounds.
-        #
-        # Cheap to lift, measured: output is 4.2% of the billable tokens on this install (0.34M out
-        # against 7.8M uncached in). The thing being rationed was costing almost nothing.
-        default=8_000,
-        group="chat",
-        minimum=200,
-        maximum=32_000,
-        unit="tokens",
-    ),
+    # `max_answer_tokens` stood here, labelled "Longest single answer", beside the Conversation
+    # page's "Longest single reply" (`num_predict`). Only the second reached the request; the first
+    # was read only when the second was -1. Set to 30,000 on this install while every round was
+    # capped at 8,192 — two 16,384-token file writes were cut off under it on 2026-10-01.
     Tunable(
         key="session_cost_cents",
         env="KITH_SESSION_COST_CENTS",

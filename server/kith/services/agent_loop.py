@@ -177,7 +177,7 @@ def _cut_off(config: Config) -> str:
     return (
         f"{config.model} was cut off before it said anything: the round hit {where}{room}, "
         "and spent all of it reasoning. Nothing earlier in this turn was lost. Raise 'Longest "
-        "single answer', or think less hard, and ask again."
+        "single reply', or think less hard, and ask again."
     )
 
 
@@ -398,6 +398,56 @@ _EMPTY_ROUNDS_BEFORE_GIVING_UP = 1
 #: costs nothing here: the model had already decided to call something. So the round is sent
 #: once more that way, with nothing added to the conversation, and the next goes back to "auto".
 _MALFORMED_CALL = "MALFORMED_FUNCTION_CALL"
+
+#: How a provider says a response stopped at its output ceiling. OpenRouter normalises the
+#: finish to `tool_calls` when the response had begun a call, and leaves the real reason in
+#: `nativeFinishReason` — `max_output_tokens` on OpenAI, `max_tokens` on Anthropic, `MAX_TOKENS`
+#: on Gemini — so both are read.
+_OUT_OF_TOKENS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
+
+def _ran_out(stats: dict | None) -> bool:
+    """Did this round stop because it reached its output ceiling?"""
+    stats = stats or {}
+    return any(
+        str(stats.get(key) or "").lower() in _OUT_OF_TOKENS for key in ("finishReason", "nativeFinishReason")
+    )
+
+
+def _unfinished(raw: Any, last: bool, ran_out: bool) -> bool:
+    """Are this call's arguments incomplete — cut off, or not JSON at all?
+
+    These were read as ``{}`` and the call was run with nothing in it, so a `write_file` that
+    reached the output ceiling half-way through its content came back as ``KeyError: 'path'``.
+    Measured 2026-10-01: two 16,384-token writes in a row, about seven minutes, ended that way,
+    and nothing told him why. A call with no arguments at all is only suspect as the *last* call
+    of a round that ran out: earlier ones finished before the ceiling did.
+    """
+    if isinstance(raw, str) and raw.strip():
+        try:
+            json.loads(raw)
+        except json.JSONDecodeError:
+            return True
+        return False
+    return last and ran_out and not raw
+
+
+def _cut_call(config: Config, ran_out: bool) -> str:
+    """What an unfinished call answers in place of running."""
+    if not ran_out:
+        return (
+            "Not run — this call's arguments were not valid JSON, so nothing was done. Send it "
+            "again with well-formed arguments."
+        )
+    ceiling = openai_compat.output_ceiling(config)
+    where = f"its {ceiling:,}-token output ceiling" if ceiling else "the provider's output limit"
+    return (
+        f"Not run — this call was cut off. The response hit {where} before the call's arguments "
+        "were complete, so nothing was done and nothing was written. The same call sent again "
+        "will be cut off in the same place. Make it smaller: write a big file in parts (write_file "
+        "the first part, then add the rest with edit_files), or split it into several files."
+    )
+
 
 #: Spent when a round came back empty and the turn is going again. Deliberately not
 #: `_ROUND_FAILED_DIRECTIVE` — nothing failed, the request got through — and deliberately not
@@ -1125,10 +1175,13 @@ def _run_turn(
         # thing left is running them — which lets a run of network-bound calls go
         # out concurrently instead of queueing behind each other.
         planned = []
-        for call in tool_calls:
+        ran_out = _ran_out(stats)
+        for position, call in enumerate(tool_calls):
             function = call.get("function") or {}
             name = function.get("name", "")
-            arguments = _arguments(function.get("arguments"))
+            raw = function.get("arguments")
+            cut = _unfinished(raw, position == len(tool_calls) - 1, ran_out)
+            arguments = {} if cut else _arguments(raw)
             call_id = f"c{call_index}"
             call_index += 1
 
@@ -1140,9 +1193,16 @@ def _run_turn(
             sig = f"{bare}@{write_epoch}"
             seen = seen_calls.get(sig, 0)
             seen_calls[sig] = seen + 1
-            repeat = _is_repeat(name, seen, dispatched)
+            repeat = not cut and _is_repeat(name, seen, dispatched)
             planned.append(
-                {"id": call_id, "name": name, "arguments": arguments, "repeat": repeat, "raw": call}
+                {
+                    "id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                    "repeat": repeat,
+                    "raw": call,
+                    "cut": _cut_call(round_config, ran_out) if cut else "",
+                }
             )
 
         # Anything in this round that changes files moves the epoch on, so a call repeated
@@ -1316,6 +1376,8 @@ _SHOWN = "(shown to you as a picture below)"
 
 
 def _run(step: dict, run: Callable[..., Any], allow: set[str] | None = None) -> Any:
+    if step.get("cut"):
+        return {"error": step["cut"]}
     if step["repeat"]:
         # `error`, not `note`. A note reads as an acknowledgement, and the one thing this reply
         # must not be mistaken for is the call having happened.
