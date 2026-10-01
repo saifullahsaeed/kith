@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BrainSnapshot } from "@/lib/backend/brain";
 import { keys } from "@/lib/query-keys";
-import { render, testQueryClient } from "@/test/render";
+import { useFileViewer } from "@/lib/files";
+import { render, testQueryClient, waitFor } from "@/test/render";
 import { SearchPalette, type PaletteProps } from "./search-palette";
 import { ago, whatHappened } from "./panel-states";
 
@@ -133,10 +134,12 @@ describe("SearchPalette", () => {
     expect(props.onOpenProject).not.toHaveBeenCalled();
   });
 
-  it("answers nothing with did-you-mean, which Enter takes", () => {
+  // Awaited since 2026-10-01: under All, "nothing matches" now waits for his folder's search to
+  // answer (here a 404, as an older server gives) rather than being said before it has looked.
+  it("answers nothing with did-you-mean, which Enter takes", async () => {
     const { input } = open();
     fireEvent.change(input, { target: { value: "nuclaer" } });
-    expect(screen.getByText("Nothing matches ‘nuclaer’")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing matches ‘nuclaer’")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /nuclear/ })).toBeInTheDocument();
     fireEvent.keyDown(input, { key: "Enter" });
     expect(input).toHaveValue("nuclear");
@@ -155,6 +158,96 @@ describe("SearchPalette", () => {
   it("starts from the page's filter when one is set", () => {
     const { input } = open({ seed: "blast" });
     expect(input).toHaveValue("blast");
+  });
+});
+
+describe("SearchPalette — his folder", () => {
+  /** `fetch` that answers the folder search with `answer`, and everything else with a 404. */
+  function serve(answer: (query: string) => Response | Promise<Response>) {
+    const asked: { query: string; signal: AbortSignal | null | undefined }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = new URL(String(input), "http://kith.test");
+      if (url.pathname !== "/api/workspace/search") return Promise.resolve(new Response("{}", { status: 404 }));
+      const query = url.searchParams.get("q") ?? "";
+      asked.push({ query, signal: init?.signal });
+      return Promise.resolve(answer(query));
+    });
+    return asked;
+  }
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  const hit = (over: Record<string, unknown>) => ({
+    path: "src/retry.py",
+    name: "retry.py",
+    kind: "content",
+    type: "file",
+    size: 120,
+    modified: 1790761163,
+    ...over,
+  });
+
+  it("shows a line inside a file with its number and the match bold, and Enter opens that file", async () => {
+    serve(() => json({ results: [hit({ line: 41, text: "def retry_with_backoff(attempt):" })], truncated: false }));
+    const { props, input } = open();
+    fireEvent.change(input, { target: { value: "backoff" } });
+    const row = await screen.findByRole("option", { name: /retry\.py/ });
+    expect(within(row).getByText("41")).toBeInTheDocument();
+    expect(within(row).getByText("backoff").tagName).toBe("B");
+    // The preview shows the line again, and says where it was found.
+    expect(screen.getByText(/Found inside the file, on line 41/)).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(useFileViewer.getState().path).toBe("src/retry.py");
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("puts a file found by name above a line found inside one", async () => {
+    serve(() =>
+      json({
+        results: [hit({ path: "backoff-plan.md", name: "backoff-plan.md", kind: "name" }), hit({ line: 3, text: "backoff = 2" })],
+        truncated: false,
+      }),
+    );
+    const { input } = open();
+    fireEvent.change(input, { target: { value: "backoff" } });
+    await screen.findByRole("option", { name: /retry\.py/ });
+    const names = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+    expect(names[0]).toContain("backoff-plan.md");
+    expect(names[1]).toContain("retry.py");
+  });
+
+  it("asks once typing pauses, not once a letter", async () => {
+    const asked = serve(() => json({ results: [], truncated: false }));
+    // A blank seed, so the palette does not reopen on the last test's search and ask for that.
+    const { input } = open({ seed: " " });
+    for (const value of ["b", "ba", "bac", "back"]) fireEvent.change(input, { target: { value } });
+    await waitFor(() => expect(asked.map((a) => a.query)).toEqual(["back"]));
+  });
+
+  it("cancels a search the next one has made moot", async () => {
+    const asked = serve((query) => (query === "back" ? new Promise<Response>(() => {}) : json({ results: [], truncated: false })));
+    const { input } = open({ seed: " " });
+    fireEvent.change(input, { target: { value: "back" } });
+    await waitFor(() => expect(asked).toHaveLength(1));
+    fireEvent.change(input, { target: { value: "backoff" } });
+    await waitFor(() => expect(asked).toHaveLength(2));
+    expect(asked[0].signal?.aborted).toBe(true);
+  });
+
+  it("falls back to names it already had when the server has no search, and says so", async () => {
+    const asked = serve(() => new Response("{}", { status: 404 }));
+    const client = testQueryClient();
+    client.setQueryData(keys.conversations(500, ""), []);
+    client.setQueryData(keys.workspace("."), [{ name: "backoff-notes.md", type: "file", size: 10, modified: 0 }]);
+    render(
+      <MemoryRouter>
+        <SearchPalette open onOpenChange={vi.fn()} snap={snap} seed="" onFilter={vi.fn()} onOpenTab={vi.fn()} onOpenProject={vi.fn()} onOpenTask={vi.fn()} />
+      </MemoryRouter>,
+      { client },
+    );
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "backoff" } });
+    await waitFor(() => expect(asked).toHaveLength(1));
+    expect(await screen.findByRole("option", { name: /backoff-notes\.md/ })).toBeInTheDocument();
+    expect(await screen.findByText(/not by what’s inside them/)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

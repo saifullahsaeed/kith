@@ -15,7 +15,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   ArrowRight,
@@ -36,6 +36,7 @@ import {
 
 import { fetchConversations, fetchPermissions } from "@/lib/backend";
 import { fetchWorkspace, type BrainSnapshot, type WorkspaceEntry } from "@/lib/backend/brain";
+import { searchWorkspace, type WorkspaceHit } from "@/lib/backend/workspace";
 import { formatBytes } from "@/lib/bytes";
 import { copyText, useFileViewer } from "@/lib/files";
 import { keys } from "@/lib/query-keys";
@@ -49,9 +50,11 @@ import {
   anywhere,
   buildEntries,
   filesFrom,
+  filesFromHits,
   folderLabel,
   groups as groupsOf,
   marks,
+  mergeFiles,
   search,
   searchedLine,
   shortName,
@@ -68,6 +71,23 @@ import type { Tab } from "./types";
 
 /** The same ceiling, and so the same cache entry, as the sidebar and the projects page. */
 const CHAT_LIMIT = 500;
+
+/** How long typing has to pause before his folder is searched. Short enough that a search feels
+ *  live; long enough that "retry policy" is one request and not twelve. */
+const SEARCH_PAUSE_MS = 180;
+/** One letter matches half of every file. Two is where a content search starts to mean something. */
+const SEARCH_MIN = 2;
+const NO_HITS: WorkspaceHit[] = [];
+
+/** `value`, once it has stopped changing for `ms`. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(value), ms);
+    return () => window.clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
 
 type Filter = "all" | SearchKind;
 const FILTERS: readonly Filter[] = ["all", ...CHIP_KINDS];
@@ -175,10 +195,35 @@ function Palette({
   const permissions = useQuery({ queryKey: keys.permissions(), queryFn: fetchPermissions, staleTime: 60_000 });
   const rootPath = permissions.data?.workspace?.root ?? "";
 
-  /* Files by name only, from listings already in the cache — the root, and every folder the Files
-     page has opened. The server has no search of the workspace, and walking it from here would be
-     forty requests on a connection pool of six. */
-  const files = useMemo(() => {
+  /* His folder, searched on the server: names anywhere in it and lines inside files. Asked once the
+     typing pauses, and the query's `signal` cancels a search the next keystroke has made moot —
+     a 1.5-second search left running for every letter is how six sockets get used up.
+
+     Silent when it cannot: an older server answers 404 and `supported` comes back false, an error
+     leaves `data` empty, and either way the names below are still there — which is what this
+     palette had before the route existed. `keepPreviousData` holds the last answer while the next
+     is in flight; `search()` re-scores it against what is typed now, so a stale hit that no longer
+     matches simply drops out rather than flickering. */
+  const typed = text.trim();
+  const asked = useSettled(typed, SEARCH_PAUSE_MS);
+  const found = useQuery({
+    queryKey: keys.workspaceSearch(asked),
+    queryFn: ({ signal }) => searchWorkspace(asked, { signal }),
+    enabled: asked.length >= SEARCH_MIN,
+    staleTime: 15_000,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  // A module constant when there is nothing, so the file list below is not rebuilt every render.
+  const hits = typed.length >= SEARCH_MIN && found.data ? found.data.results : NO_HITS;
+  // Whether file search looked inside files, for what an empty result says it searched.
+  const inside = found.data?.supported === true;
+  const looking =
+    typed.length >= SEARCH_MIN && found.data?.supported !== false && (asked !== typed || found.isFetching);
+
+  /* Plus names from listings already in the cache — the root, and every folder the Files page has
+     opened. They are what the empty query lists, and the whole of file search on an older server. */
+  const cached = useMemo(() => {
     const listings: Record<string, WorkspaceEntry[]> = {};
     for (const [key, data] of cache.getQueriesData<unknown>({ queryKey: ["workspace"] })) {
       const path = key[1];
@@ -193,6 +238,7 @@ function Palette({
     return filesFrom(listings);
     // `root.data` is the dependency that matters: it is the listing this palette asked for.
   }, [cache, root.data]);
+  const files = useMemo(() => mergeFiles(cached, filesFromHits(hits)), [cached, hits]);
 
   const entries = useMemo(() => buildEntries(snap, chats.data ?? [], files, rootPath), [snap, chats.data, files, rootPath]);
   const totals = useMemo(() => search(entries, "").counts, [entries]);
@@ -367,6 +413,9 @@ function Palette({
           text={text}
           filter={filter}
           totals={totals}
+          inside={inside}
+          // Only where files are among what is shown: a Journal search has nothing to wait for.
+          looking={looking && (filter === "all" || filter === "file")}
           searching={searching}
           suggestion={suggestion}
           onSuggest={(next) => {
@@ -417,9 +466,18 @@ function Palette({
                           {row.prefix}
                           <Marked text={snippet(row.title, words)} words={words} />
                         </span>
-                        <span className="text-muted-foreground/80 truncate text-[11.5px]">
-                          <Marked text={row.meta} words={words} />
-                        </span>
+                        {row.kind === "file" && row.value.match === "content" ? (
+                          // A line inside the file: its number, then the line, cut to keep the match
+                          // on screen — the reason this row exists is that text.
+                          <span className="text-muted-foreground/80 truncate font-mono text-[11px]">
+                            <span className="text-muted-foreground/50 me-1.5 tabular-nums">{row.value.line}</span>
+                            <Marked text={snippet(row.meta, words, 18)} words={words} />
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground/80 truncate text-[11.5px]">
+                            <Marked text={row.meta} words={words} />
+                          </span>
+                        )}
                       </span>
                       {on ? <Key className="text-foreground/80">↵</Key> : null}
                     </div>
@@ -445,6 +503,7 @@ function Palette({
               snap={snap}
               chats={chats.data ?? []}
               rootPath={rootPath}
+              inside={inside}
               onOpen={() => open(selected)}
             />
           ) : null}
@@ -526,6 +585,8 @@ function NoResults({
   text,
   filter,
   totals,
+  inside,
+  looking,
   searching,
   suggestion,
   onSuggest,
@@ -534,6 +595,9 @@ function NoResults({
   text: string;
   filter: Filter;
   totals: Record<SearchKind, number>;
+  inside: boolean;
+  /** His folder is still being searched — "nothing matches" would be said too early. */
+  looking: boolean;
   searching: boolean;
   suggestion: string | null;
   onSuggest: (text: string) => void;
@@ -546,6 +610,13 @@ function NoResults({
       </div>
     );
   }
+  if (looking) {
+    return (
+      <div role="status" className="text-muted-foreground/80 flex min-h-0 flex-1 items-center justify-center text-[12.5px]">
+        Looking through his folder…
+      </div>
+    );
+  }
   // What widening would add: every kind but the one the chip narrowed to.
   const others = (["memory", "task", "project", "chat", "file", "journal", "source"] as SearchKind[])
     .filter((kind) => kind !== filter)
@@ -553,7 +624,7 @@ function NoResults({
   return (
     <div role="status" className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
       <span className="text-foreground text-sm font-semibold">Nothing matches ‘{text.trim()}’</span>
-      <span className="text-muted-foreground/80 mt-[5px] max-w-[560px] text-xs">{searchedLine(filter, totals)}</span>
+      <span className="text-muted-foreground/80 mt-[5px] max-w-[560px] text-xs">{searchedLine(filter, totals, inside)}</span>
       {suggestion ? (
         <div className="mt-[18px] flex items-center gap-2">
           <span className="text-muted-foreground text-[12.5px]">Did you mean</span>
@@ -601,6 +672,7 @@ function Preview({
   snap,
   chats,
   rootPath,
+  inside,
   onOpen,
 }: {
   row: SearchEntry;
@@ -608,6 +680,8 @@ function Preview({
   snap: BrainSnapshot | null;
   chats: { projectId: number | null }[];
   rootPath: string;
+  /** Whether the server searched inside files — what a file's "found by" line can claim. */
+  inside: boolean;
   onOpen: () => void;
 }) {
   const projects = snap?.projects ?? [];
@@ -783,13 +857,32 @@ function Preview({
       const f = row.value;
       heading = <Marked text={f.name} words={words} />;
       sub = folderLabel(f.folder, rootPath);
-      chips = <Chip>{f.type === "dir" ? "Folder" : formatBytes(f.size)}</Chip>;
-      body = (
-        <p className="text-muted-foreground/80 mt-[18px] text-[12.5px] leading-normal">
-          Found by its name. Files are searched by name in his folder and in the folders you&apos;ve opened on the
-          Files page — not by what&apos;s inside them.
-        </p>
+      chips = (
+        <>
+          {f.match === "content" && f.line ? <Chip>Line {f.line}</Chip> : null}
+          <Chip>{f.type === "dir" ? "Folder" : formatBytes(f.size)}</Chip>
+        </>
       );
+      body =
+        f.match === "content" ? (
+          <>
+            <div className="border-border bg-card mt-[18px] flex gap-3 overflow-hidden rounded-[10px] border px-3 py-2.5 font-mono text-[12px] leading-[1.55]">
+              <span className="text-muted-foreground/50 shrink-0 tabular-nums select-none">{f.line}</span>
+              <span className="text-foreground/80 min-w-0 break-words whitespace-pre-wrap">
+                <Marked text={f.text ?? ""} words={words} />
+              </span>
+            </div>
+            <p className="text-muted-foreground/80 mt-3 text-[12.5px] leading-normal">
+              Found inside the file, on line {f.line}. Opening it shows the whole file.
+            </p>
+          </>
+        ) : (
+          <p className="text-muted-foreground/80 mt-[18px] text-[12.5px] leading-normal">
+            {inside
+              ? "Found by its name."
+              : "Found by its name. Files are searched by name in his folder and in the folders you’ve opened on the Files page — not by what’s inside them."}
+          </p>
+        );
       fact(
         "Where",
         <span className="font-mono text-xs">

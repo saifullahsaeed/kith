@@ -31,6 +31,7 @@ import {
   Pencil,
   RefreshCw,
   Trash2,
+  Upload,
 } from "lucide-react";
 
 import { FileViewer, skipTextRead } from "@/components/files";
@@ -61,6 +62,8 @@ import { cn } from "@/lib/utils";
 import { BUTTON, Kbd, PageTitle } from "./chrome";
 import { EntryIcon, Preview } from "./files-preview";
 import { FolderTree } from "./files-tree";
+import { DropTarget, UploadTray } from "./files-upload";
+import { carriesFiles, dropped, useUploads } from "./upload-queue";
 import { joinPath, modifiedLabel, parentOf, sortEntries, visibleEntries, type SortBy } from "./library";
 
 /* ── Small preferences, kept per viewer ─────────────────────────────────── */
@@ -128,6 +131,12 @@ export function WorkspaceFiles() {
   // The open file lives in the full-window viewer, so the folder listing stays put.
   const [file, setFile] = useState<{ path: string; content: string | null; error?: string } | null>(null);
   const list = useRef<HTMLDivElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  // The folder a drag of files from the machine would land in: the open one, or the folder row
+  // under the pointer. Null when nothing is being dragged over the list.
+  const [dropInto, setDropInto] = useState<string | null>(null);
+  // Enter and leave fire for every row the pointer crosses; only a depth of zero is "gone".
+  const dragDepth = useRef(0);
 
   /* One query per folder, and it pauses while you are typing into the listing.
    *
@@ -297,6 +306,58 @@ export function WorkspaceFiles() {
   };
 
   const copyPath = (relative: string) => copyText(hostPath(relative));
+
+  /* Upload: the toolbar button, and files dropped from the machine onto the list or a folder in it.
+     A file that lands in the folder on screen is selected, so the preview shows what just arrived. */
+  const onLanded = useCallback(
+    (folder: string, saved: { name: string }) => {
+      if (folder === path) setSelectedName(saved.name);
+    },
+    [path],
+  );
+  const uploads = useUploads(onLanded);
+
+  /** Where a drag at this element would put its files: a folder row's folder, or the open one. */
+  const dropFolderAt = (target: EventTarget | null): string => {
+    const row = target instanceof Element ? target.closest<HTMLElement>("[data-name]") : null;
+    const name = row?.dataset.name;
+    const entry = name != null ? visible.find((e) => e.name === name) : undefined;
+    return entry?.type === "dir" ? join(entry.name) : path;
+  };
+  /* Stopped here, not left to bubble: the window has its own drop target — attach to the chat
+     composer — and a file dropped into a folder must not also turn up as an attachment. */
+  const dragHandlers = {
+    onDragEnter: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepth.current += 1;
+      setDropInto(dropFolderAt(event.target));
+    },
+    onDragOver: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "copy";
+      const into = dropFolderAt(event.target);
+      if (into !== dropInto) setDropInto(into);
+    },
+    onDragLeave: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.stopPropagation();
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDropInto(null);
+    },
+    onDrop: (event: React.DragEvent) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepth.current = 0;
+      setDropInto(null);
+      const { files, folders } = dropped(event);
+      uploads.add(files, dropFolderAt(event.target), folders);
+    },
+  };
 
   // Keyboard, because a file list you can only mouse through isn't one. Bound to the listing
   // rather than the window so it can't fight the chat composer.
@@ -521,6 +582,22 @@ export function WorkspaceFiles() {
           <FolderPlus className="text-muted-foreground size-3.5" />
           New folder
         </button>
+        <button type="button" onClick={() => picker.current?.click()} className={cn(BUTTON.secondary, "gap-[7px]")}>
+          <Upload className="text-muted-foreground size-3.5" />
+          Upload
+        </button>
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          aria-label={`Upload files to ${here}`}
+          onChange={(event) => {
+            uploads.add(Array.from(event.target.files ?? []), path);
+            // Cleared, so choosing the same file again (after a "keep both", say) still fires.
+            event.target.value = "";
+          }}
+        />
         {/* Kept although the design has no refresh: his file tools announce what they write, but
             a shell command he runs does not, and neither does anything you do in Finder — so
             without this the only way to see those would be leaving the screen. ⌘R does the same. */}
@@ -573,7 +650,7 @@ export function WorkspaceFiles() {
           onGo={(to) => go(to)}
         />
 
-        <section aria-label={`Files in ${here}`} className="relative flex min-h-0 min-w-0 flex-col">
+        <section aria-label={`Files in ${here}`} className="relative flex min-h-0 min-w-0 flex-col" {...dragHandlers}>
           {view === "list" ? (
             <div className="border-border/80 text-muted-foreground/80 flex h-9 shrink-0 items-center gap-3 border-b px-4 text-[10.5px] font-semibold tracking-[0.1em] uppercase">
               <span className="w-7 shrink-0" />
@@ -651,7 +728,8 @@ export function WorkspaceFiles() {
               {visible.map((entry, i) => {
                 const isDir = entry.type === "dir";
                 const on = current?.name === entry.name;
-                const ringed = menuFor === entry.name && !on;
+                // A folder a drag of files is over gets the same ring: it is where they will land.
+                const ringed = (menuFor === entry.name && !on) || (isDir && dropInto === join(entry.name));
                 const kind = isDir ? "Folder" : classify(entry.name).label;
                 return (
                   <ContextMenu key={entry.name} onOpenChange={(open) => setMenuFor(open ? entry.name : null)}>
@@ -698,6 +776,15 @@ export function WorkspaceFiles() {
               })}
             </div>
           )}
+
+          <UploadTray
+            items={uploads.items}
+            onReplace={uploads.replace}
+            onKeepBoth={uploads.keepBoth}
+            onCancel={uploads.cancel}
+            onDismiss={uploads.dismiss}
+          />
+          <DropTarget folder={dropInto ?? path} active={dropInto !== null} onPick={() => picker.current?.click()} />
 
           <div className="border-border/80 text-muted-foreground/80 flex h-10 shrink-0 items-center gap-3 border-t px-4 text-xs">
             <span className="tabular-nums">{tally}</span>

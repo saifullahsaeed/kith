@@ -23,6 +23,7 @@ import type {
   Task,
   WorkspaceEntry,
 } from "@/lib/backend/brain";
+import type { WorkspaceHit } from "@/lib/backend/workspace";
 import { formatBytes } from "@/lib/bytes";
 import { dayLabel, time, when } from "@/lib/dates";
 import { shortPath } from "./format";
@@ -78,6 +79,11 @@ export interface FileItem {
   type: "dir" | "file";
   size: number;
   modified: number;
+  /** How the server's search found it. Absent for a name from a cached listing. */
+  match?: "name" | "content";
+  /** For a content match: the line it is on, one-based, and that line's text. */
+  line?: number;
+  text?: string;
 }
 
 /** Memory and journal rows carry their project; the server sends it and `brain.ts` doesn't
@@ -153,8 +159,9 @@ const NOISE = new Set([".DS_Store", ".git", "node_modules", "__pycache__", ".ven
 
 /**
  * Files as the listings have them: every folder's entries that has been fetched, keyed by the
- * folder's path. There is no server-side search of the workspace, so this is names only, in the
- * folders something has already listed — the root always, and whatever the Files page opened.
+ * folder's path — names only, in the folders something has already listed. What the empty query
+ * shows, and the whole of file search on a server older than `/api/workspace/search`; with that
+ * route, `filesFromHits` adds the rest of his folder and the lines inside it.
  */
 export function filesFrom(listings: Record<string, WorkspaceEntry[]>): FileItem[] {
   const out: FileItem[] = [];
@@ -166,6 +173,39 @@ export function filesFrom(listings: Record<string, WorkspaceEntry[]>): FileItem[
     }
   }
   return out;
+}
+
+/** What `/api/workspace/search` found, as the palette's file rows. */
+export function filesFromHits(hits: WorkspaceHit[]): FileItem[] {
+  return hits.map((hit) => {
+    const cut = hit.path.lastIndexOf("/");
+    const item: FileItem = {
+      path: hit.path,
+      name: hit.name,
+      folder: cut > 0 ? hit.path.slice(0, cut) : ".",
+      type: hit.type === "dir" ? "dir" : "file",
+      size: hit.size,
+      modified: hit.modified,
+      match: hit.kind,
+    };
+    if (hit.kind === "content") {
+      item.line = hit.line;
+      item.text = hit.text ?? "";
+    }
+    return item;
+  });
+}
+
+/**
+ * The names the listings already had, and what the server's search found, as one list.
+ *
+ * A file the server found by name and a listing also has is one row, the server's. A line inside a
+ * file is its own row even beside that file's name — "it is called this" and "it says this on line
+ * 41" are two different answers, and the second is the one worth opening at.
+ */
+export function mergeFiles(cached: FileItem[], found: FileItem[]): FileItem[] {
+  const named = new Set(found.filter((f) => f.match !== "content").map((f) => f.path));
+  return [...found, ...cached.filter((f) => !named.has(f.path))];
 }
 
 /** Where a folder is, for line two: `~/Kith/ironline-haulage/.kith`. */
@@ -260,6 +300,23 @@ export function buildEntries(
   }
 
   for (const f of files) {
+    if (f.match === "content") {
+      // The line is what the row shows under the name, so it is the `meta` that gets searched and
+      // bolded. The folder goes in `body`: still searched, shown in the preview instead.
+      out.push(
+        entry(
+          { kind: "file", value: f },
+          `file:${f.path}#L${f.line ?? 0}`,
+          f.path,
+          "",
+          f.name,
+          flat(f.text),
+          folderLabel(f.folder, root),
+          f.modified * 1000,
+        ),
+      );
+      continue;
+    }
     const meta = join(folderLabel(f.folder, root), f.type === "dir" ? "folder" : formatBytes(f.size));
     out.push(entry({ kind: "file", value: f }, `file:${f.path}`, f.path, "", f.name, meta, "", f.modified * 1000));
   }
@@ -520,13 +577,18 @@ export function anywhere(entries: SearchEntry[], word: string): boolean {
   return entries.some((e) => e.hay.title.includes(word) || e.hay.meta.includes(word) || e.hay.body.includes(word));
 }
 
-/** What an empty search looked through: "Searched all 709 journal entries." */
-export function searchedLine(filter: "all" | SearchKind, totals: Record<SearchKind, number>): string {
-  if (filter === "file") return `Searched the names of all ${noun("file", totals.file)}.`;
+/** What an empty search looked through: "Searched all 709 journal entries."
+ *
+ *  `inside` is whether the server searched his folder's contents too. Without it (an older server)
+ *  files were matched by name in the listings already fetched, and the line says exactly that. */
+export function searchedLine(filter: "all" | SearchKind, totals: Record<SearchKind, number>, inside = false): string {
+  const folder = "the names and contents of everything in his folder";
+  if (filter === "file") return inside ? `Searched ${folder}.` : `Searched the names of all ${noun("file", totals.file)}.`;
   if (filter !== "all") return `Searched all ${noun(filter, totals[filter])}.`;
-  // Files last, because they alone were searched by name rather than by what they say.
+  // Files last, because they were searched differently from the rest.
   const parts = KIND_ORDER.filter((k) => k !== "file" && totals[k] > 0).map((k) => noun(k, totals[k]));
-  if (totals.file > 0) parts.push(`the names of ${noun("file", totals.file)}`);
+  if (inside) parts.push(folder);
+  else if (totals.file > 0) parts.push(`the names of ${noun("file", totals.file)}`);
   if (parts.length === 0) return "There is nothing to search yet.";
   const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
   return `Searched ${list}.`;

@@ -10,7 +10,7 @@ from kith.api.blueprint import api
 from kith.infra import default_app, permissions
 from kith.infra import workspace as sandbox
 from kith.infra.db import repositories as repo
-from kith.services import handoff
+from kith.services import handoff, uploads, workspace_search
 from kith.settings import AGENT_DB_PATH
 
 
@@ -368,3 +368,78 @@ def _mutate(action):
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"ok": True})
+
+
+def _flag(raw: object) -> bool:
+    return str(raw or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+@api.get("/workspace/search")
+@api.doc(
+    summary="Search his folder by name and by content",
+    description=(
+        "Files and folders whose name contains ?q=, then lines in files that contain it — "
+        "case-insensitive substring, names first. Skips dependency and build folders, hidden "
+        "ones unless ?hidden=1, binaries and files over 1 MB. Stops after ?limit= results "
+        "(default 50) or about 1.5 seconds, and says so with `truncated`. ?path= narrows it "
+        "to one folder inside his workspace."
+    ),
+)
+def workspace_search_route():
+    query = request.args.get("q") or ""
+    try:
+        limit = int(request.args.get("limit") or workspace_search.DEFAULT_LIMIT)
+    except ValueError:
+        return jsonify({"error": "limit must be a number"}), 400
+    try:
+        found = workspace_search.search(
+            query,
+            limit=limit,
+            under=request.args.get("path") or ".",
+            hidden=_flag(request.args.get("hidden")),
+        )
+    except workspace_search.SearchError as bad:
+        return jsonify({"error": str(bad)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(
+        {"query": query, "results": found.results, "truncated": found.truncated, "engine": found.engine}
+    )
+
+
+@api.post("/workspace/upload")
+@api.doc(
+    summary="Put a file from your machine into his folder",
+    description=(
+        "Multipart: the file as `file`, and `folder` — relative to his workspace, default its "
+        "root. Refuses a name that is already taken with a 409 carrying the file that is there, "
+        "unless `overwrite=1`. At most 200 MB per file."
+    ),
+)
+def workspace_upload():
+    """The Files screen's Upload button and its drop target, one file per request.
+
+    One per request so each file has its own progress, its own answer and its own 409 — a batch
+    would have to invent a partial-success shape for "three went in, the fourth was taken".
+    """
+    # Refused on the declared length before the body is parsed: werkzeug spools a multipart
+    # body to disk as it reads it, so a check after `request.files` would come after the 2 GB
+    # drop it exists to stop. The slack is the multipart framing around the bytes.
+    declared = request.content_length
+    if declared is not None and declared > uploads.MAX_UPLOAD_BYTES + 64 * 1024:
+        limit = uploads.MAX_UPLOAD_BYTES // (1024 * 1024)
+        return jsonify({"error": f"that file is over the {limit} MB limit for one file"}), 413
+    sent = request.files.get("file")
+    if sent is None:
+        return jsonify({"error": "file required"}), 400
+    folder = request.form.get("folder") or request.args.get("folder") or "."
+    overwrite = _flag(request.form.get("overwrite") or request.args.get("overwrite"))
+    try:
+        saved = uploads.save(sent.stream, sent.filename, folder, overwrite=overwrite)
+    except uploads.AlreadyThere as taken:
+        return jsonify({"error": str(taken), "existing": taken.existing}), taken.status
+    except uploads.UploadRefused as refused:
+        return jsonify({"error": str(refused)}), refused.status
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **saved})

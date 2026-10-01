@@ -12,8 +12,10 @@ import {
   buildEntries,
   editDistance,
   filesFrom,
+  filesFromHits,
   groups,
   marks,
+  mergeFiles,
   search,
   searchedLine,
   snippet,
@@ -267,5 +269,43 @@ describe("did you mean", () => {
 describe("terms", () => {
   it("lowercases, splits and dedupes", () => {
     expect(terms("  Ironline  ironline Sign-in ")).toEqual(["ironline", "sign-in"]);
+  });
+});
+
+describe("files from his folder's search", () => {
+  const hits = filesFromHits([
+    { path: "backoff-plan", name: "backoff-plan", kind: "name", type: "dir", size: 0, modified: 10 },
+    { path: "src/retry.py", name: "retry.py", kind: "content", type: "file", line: 41, text: "def retry_with_backoff():", size: 9, modified: 20 },
+    { path: "src/retry.py", name: "retry.py", kind: "content", type: "file", line: 52, text: "backoff *= 2", size: 9, modified: 20 },
+  ]);
+
+  it("knows the folder each hit is in", () => {
+    expect(hits.map((h) => h.folder)).toEqual([".", "src", "src"]);
+    expect(hits[1]).toMatchObject({ match: "content", line: 41, text: "def retry_with_backoff():" });
+  });
+
+  it("keeps one row per name and one per line, the server's over the listing's", () => {
+    const cached = filesFrom({ ".": [{ name: "backoff-plan", type: "dir", size: 0, modified: 1 }, { name: "other.md", type: "file", size: 1, modified: 1 }] });
+    const merged = mergeFiles(cached, hits);
+    expect(merged.map((f) => `${f.path}:${f.line ?? ""}`)).toEqual(["backoff-plan:", "src/retry.py:41", "src/retry.py:52", "other.md:"]);
+    expect(merged[0].modified).toBe(10);
+  });
+
+  it("finds a line by what it says, ranks a name above it, and keys each line apart", () => {
+    const found = search(buildEntries(null, [], hits, "/Users/someone/Kith"), "backoff");
+    const rows = found.byKind.file;
+    expect(rows[0].key).toBe("file:backoff-plan");
+    // The two lines rank as any two rows do — a line that starts with the word first.
+    expect(rows.slice(1).map((e) => e.key)).toEqual(["file:src/retry.py#L52", "file:src/retry.py#L41"]);
+    // The line is what line two shows, so it is what the match is bolded in.
+    expect(rows[2].meta).toBe("def retry_with_backoff():");
+  });
+
+  it("says it looked inside files only when it did", () => {
+    const totals = search(entries, "").counts;
+    expect(searchedLine("file", totals, true)).toBe("Searched the names and contents of everything in his folder.");
+    expect(searchedLine("all", totals, true)).toBe(
+      "Searched 2 projects, 2 memories, 2 journal entries, 2 tasks, 1 chat and the names and contents of everything in his folder.",
+    );
   });
 });
