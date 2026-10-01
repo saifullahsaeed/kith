@@ -70,6 +70,8 @@ export interface RoundStats {
   finishReason?: string | null;
   model?: string | null;
   provider?: string | null;
+  /** The host's service tier for this round — "flex", "priority", "default" — when it says. */
+  serviceTier?: string | null;
   [key: string]: number | string | null | undefined;
 }
 

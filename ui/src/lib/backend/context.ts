@@ -143,6 +143,8 @@ export interface Sent {
 export interface LastRound {
   model: string;
   provider: string;
+  /** The host's service tier, "" when it did not say. Absent from an older server. */
+  serviceTier?: string;
   promptTokens: number;
   responseTokens: number;
   cachedTokens: number;

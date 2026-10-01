@@ -361,6 +361,7 @@ def _last_round(conversation_id: str) -> dict | None:
     return {
         "model": str(found.get("model") or ""),
         "provider": str(found.get("provider") or ""),
+        "serviceTier": str(found.get("serviceTier") or ""),
         "promptTokens": int(found.get("promptTokens") or 0),
         "responseTokens": int(found.get("responseTokens") or 0),
         "cachedTokens": int(found.get("cachedTokens") or 0),

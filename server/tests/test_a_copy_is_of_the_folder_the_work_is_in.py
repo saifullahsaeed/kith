@@ -143,6 +143,42 @@ class TestAProjectInsideTheWorkspaceRepository:
         assert (workspace / "finance" / "app.py").read_text() == "print('changed')\n"
 
 
+class TestWhatTheProjectNeedsToRun:
+    def test_its_environment_file_is_carried_but_never_patched(self, workspace: Path):
+        """Without `backend/.env` a Django suite stops before collecting a test."""
+        (workspace / "finance" / ".env").write_text("SECRET_KEY=s3cret\n")
+        (workspace / "finance" / ".env.example").write_text("SECRET_KEY=\n")
+        (workspace / ".gitignore").write_text(".kith/\nnode_modules/\n.env\n")
+        _git(workspace, "add", ".gitignore", "finance/.env.example")
+        _git(workspace, "commit", "-qm", "env")
+
+        copy = worktrees.open_for(_id("e1"), workspace / "finance")
+        assert copy is not None
+        assert (copy / "finance" / ".env").read_text() == "SECRET_KEY=s3cret\n"
+        (copy / "finance" / "app.py").write_text("print('changed')\n")
+        diff = worktrees.diff_in(copy)
+        assert "app.py" in diff
+        assert "s3cret" not in diff
+
+    def test_the_check_uses_the_projects_own_tools(self, tmp_path: Path, monkeypatch):
+        """`ruff` lived in `backend/venv` and the copy's check said "command not found"."""
+        from kith.infra.workspace import files
+
+        backend = tmp_path / "backend"
+        (backend / "venv" / "bin").mkdir(parents=True)
+        (backend / "ruff.toml").write_text("")
+        ruff = backend / "venv" / "bin" / "ruff"
+        ruff.write_text("#!/bin/sh\necho checked-with-project-ruff >&2\nexit 3\n")
+        ruff.chmod(0o755)
+        monkeypatch.setattr(paths, "root", lambda: tmp_path)
+        monkeypatch.setattr(files, "root", lambda: tmp_path)
+        monkeypatch.setattr(paths, "base_dir", lambda: tmp_path)
+
+        found = files.check_code(str(backend))
+        assert found["clean"] is False
+        assert "checked-with-project-ruff" in found["problems"]
+
+
 class TestARepositoryNestedInTheWorkspace:
     def test_the_copy_is_of_the_nested_repository(self, workspace: Path):
         nested = _repo(workspace / "reviewer")

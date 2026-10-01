@@ -51,6 +51,7 @@ _TTL_SECONDS = 600
 _TIMEOUT_SECONDS = 6
 
 _cache: dict[str, tuple[float, tuple[str, ...]]] = {}
+_tables: dict[str, tuple[float, list[endpoint_policy.Endpoint]]] = {}
 _lock = threading.Lock()
 
 
@@ -63,7 +64,7 @@ def for_conversation(config: Config, agent_db: Path, conversation_id: str) -> Ro
     table could not be read, has nothing stored and ranks again next turn — which is the right
     behaviour and not a retry loop, because the write happens as soon as one succeeds.
     """
-    base = tuning.routing()
+    base = _for_this_model(tuning.routing(), config)
     if not _rankable(base, config) or not conversation_id:
         return resolved(config) if not conversation_id else base
 
@@ -78,6 +79,39 @@ def for_conversation(config: Config, agent_db: Path, conversation_id: str) -> Ro
         return base
     conversations.remember_provider_order(agent_db, conversation_id, order, config.model)
     return replace(base, order=order)
+
+
+def _for_this_model(base: Routing, config: Config) -> Routing:
+    """The settings routing, without a pin that names no host of this model.
+
+    The pin is one setting for every model, and a host belongs to one. Pinned to `openai/flex`
+    for Sol, the same conversation switched to Gemini, Opus and Mimo and sent each of them
+    `order: ["openai/flex"]` — which the router ignores for a model that host does not serve, and
+    which also switched off this install's own host ranking, because a pin outranks it. So the
+    other three models were routed unranked, by whoever OpenRouter picked (2026-10-01).
+
+    Kept when the table cannot be read: not knowing is not evidence the pin is wrong, and
+    honouring it is what happened before this existed.
+    """
+    if not base.pinned or not (config.api_key and is_openrouter(config.base_url)):
+        return base
+    hosts = _hosts(config)
+    if not hosts or endpoint_policy.serves(hosts, base.pinned):
+        return base
+    return replace(base, pinned="")
+
+
+def _hosts(config: Config) -> list[endpoint_policy.Endpoint]:
+    """The model's endpoint table, from a short-lived cache: asked once per turn, read rarely."""
+    key = f"hosts\n{config.model}"
+    with _lock:
+        cached = _tables.get(key)
+        if cached and time.time() - cached[0] < _TTL_SECONDS:
+            return cached[1]
+    rows = _rows(config)
+    with _lock:
+        _tables[key] = (time.time(), rows)
+    return rows
 
 
 def _rankable(base: Routing, config: Config) -> bool:
@@ -102,7 +136,7 @@ def resolved(config: Config) -> Routing:
     Deliberately total, like `for_conversation`: it always returns a usable `Routing`, and the
     worst case is the `sort` that shipped before any of this.
     """
-    base = tuning.routing()
+    base = _for_this_model(tuning.routing(), config)
     if not _rankable(base, config):
         return base
     order = _order_for(config, base.prefer_by)
@@ -187,3 +221,4 @@ def forget() -> None:
     """Drop the cache. For tests, and for the settings UI after a model change."""
     with _lock:
         _cache.clear()
+        _tables.clear()

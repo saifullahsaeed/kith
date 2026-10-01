@@ -626,7 +626,7 @@ def timeline(conversation_id: str) -> list[dict]:
             # footer had token counts and no price or model, while the live copy had both.
             if isinstance(stats.get("costUsd"), (int, float)):
                 usage["costUsd"] = float(stats["costUsd"])
-            for key in ("model", "provider"):
+            for key in ("model", "provider", "serviceTier"):
                 if stats.get(key):
                     usage[key] = str(stats[key])
             assistant()["parts"].append(usage)

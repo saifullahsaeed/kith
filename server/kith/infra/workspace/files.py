@@ -737,6 +737,25 @@ _CHECKERS = (
 )
 
 
+#: Where a project keeps its own copies of the tools it is checked with, nearest first.
+_PROJECT_BINS = (".venv/bin", "venv/bin", "node_modules/.bin")
+
+
+def _with_project_tools(command: str, folder: Path) -> str:
+    """``command``, run with the project's own tools ahead of whatever is on `PATH`.
+
+    `ruff check .` in a backend whose ruff lives in `backend/venv` answered "ruff: command not
+    found" from a workflow's copy (2026-10-01), where `HOME` is not yours and nothing your shell
+    profile adds to `PATH` is there. The project's own version is also the right one to check it
+    with anywhere. Set inside the command rather than in the environment, because a login shell's
+    `path_helper` reorders an inherited `PATH`.
+    """
+    bins = [str(folder / one) for one in _PROJECT_BINS if (folder / one).is_dir()]
+    if not bins:
+        return command
+    return "PATH=" + shlex.quote(":".join(bins)) + ':"$PATH" ' + command
+
+
 def check_code(path: str = ".") -> dict:
     """Run whatever this project is checked with, and report only what is wrong.
 
@@ -777,7 +796,7 @@ def check_code(path: str = ".") -> dict:
     for marker, command, label in _CHECKERS:
         if not (target / marker).is_file():
             continue
-        argv: list[str] = ["bash", "-lc", command]
+        argv: list[str] = ["bash", "-lc", _with_project_tools(command, target)]
         env: dict[str, str] | None = None
         # A worker's copy runs its check inside the copy's boundary: a project's build is
         # arbitrary code, and a builder's is code a model just wrote.

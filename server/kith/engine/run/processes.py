@@ -255,10 +255,18 @@ class Processes:
         # than an optimistic one.
         time.sleep(0.4)
         _changed(_current_conversation())
-        return self.check(wanted)
+        return self.check(wanted, told=False)
 
-    def check(self, name: str = "", conversation_id: str | None = None) -> dict[str, Any]:
-        """What a process has said since last time, or a list of them all."""
+    def check(
+        self, name: str = "", conversation_id: str | None = None, *, told: bool = True
+    ) -> dict[str, Any]:
+        """What a process has said since last time, or a list of them all.
+
+        ``told`` is whether this answer reaches whoever started it as a reading of the process —
+        `check_process`, or `run_tests` waiting on its run. When it does and the process has
+        finished, the finish is not reported again later. `start` asks with it off: a quick
+        command can be gone by the time `start` looks, and that first glance is not a report.
+        """
         with self._lock:
             self._reap()
             if not name:
@@ -309,6 +317,12 @@ class Processes:
                 result["exitCode"] = found.exit_code
                 ending = "finished" if found.exit_code == 0 else f"exited with code {found.exit_code}"
                 result["note"] = f"it has {ending} — {'the end of' if replayed else 'this is'} its output"
+                # Seen finishing, so there is nothing left to tell anyone. Without this the
+                # conversation is woken anyway once its turn ends, and pays for a whole turn to
+                # say so: a test run read here at 11:36 woke the chat at 11:38 to re-send 349k
+                # tokens and report "already included in my last update" — $0.25 (2026-10-01).
+                if told:
+                    found._reported = True
             elif not output:
                 result["note"] = "still running; nothing new since you last looked"
             return result

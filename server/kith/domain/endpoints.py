@@ -410,6 +410,24 @@ def _banded(endpoints: list[Endpoint], keys: tuple) -> list[Endpoint]:
     return out
 
 
+def serves(hosts: list[Endpoint], pinned: str) -> bool:
+    """Would OpenRouter's `provider.order` find ``pinned`` among these hosts?
+
+    It takes three spellings, and all three are in use here: a host's tag (`openai/flex`), the
+    provider part of one (`openai`, which matches all of that provider's endpoints), and the
+    display name a person types from the website (`DeepSeek`).
+    """
+    want = pinned.strip().lower()
+    if not want:
+        return False
+    for one in hosts:
+        tag = one.slug.lower()
+        name = one.name.lower()
+        if want in (tag, tag.split("/")[0], name, name.replace(" ", "")):
+            return True
+    return False
+
+
 def from_api(row: dict) -> Endpoint:
     """One row of the endpoints response, read defensively.
 
