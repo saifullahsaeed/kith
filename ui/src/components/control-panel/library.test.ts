@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   ancestorsOf,
-  askLine,
   bareUrl,
   blocksOf,
   domainOf,
@@ -13,6 +12,7 @@ import {
   passageWindows,
   passagesOf,
   sortEntries,
+  sourceQuestion,
   sourceKind,
   visibleEntries,
 } from "./library";
@@ -109,15 +109,14 @@ describe("sources", () => {
     expect(sourceKind({ origin: "pasted", title: "Version 2.0 notes" })).toBe("text");
   });
 
-  it("asks about a source by id, after whatever you had typed, and only once", () => {
+  // Since 2026-10-01 "Ask about this" sends a whole message from the panel instead of appending
+  // a line to the focused chat's composer, so the builder takes the question and there is no
+  // "already there" case to refuse.
+  it("asks about a source by id and title, then the question", () => {
     const source = { id: 12, title: "Events that trigger workflows" };
-    expect(askLine("", source)).toBe('About source #12 ("Events that trigger workflows"): ');
-    expect(askLine("Compare these.  ", source)).toBe(
-      'Compare these.\n\nAbout source #12 ("Events that trigger workflows"): ',
+    expect(sourceQuestion(source, "  which events run on forks?  ")).toBe(
+      "About source #12 (“Events that trigger workflows”):\n\nwhich events run on forks?",
     );
-    expect(askLine('About source #12 ("Events…"): why', source)).toBeNull();
-    // #120 is a different source.
-    expect(askLine("About source #120: x", source)).not.toBeNull();
   });
 
   it("names a link by its site", () => {

@@ -11,20 +11,16 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
-import { AlignLeft, ExternalLink, File, Info, Link as LinkIcon, MessageSquare, Search, Upload } from "lucide-react";
+import { AlignLeft, ArrowUp, ExternalLink, File, Info, Link as LinkIcon, MessageSquare, Search, Upload } from "lucide-react";
 
 import { fetchSource } from "@/lib/backend/brain";
 import type { BrainSnapshot, Source } from "@/lib/backend/brain";
-import { activeComposer } from "@/lib/active-composer";
 import { keys } from "@/lib/query-keys";
-import { pathForHome } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Layer, useLayer } from "@/hooks/use-layer";
 import { BUTTON, Kbd, Label, LiveDot, PageTitle, Segmented } from "./chrome";
 import { matches } from "./format";
 import {
-  askLine,
   bareUrl,
   blocksOf,
   domainOf,
@@ -32,8 +28,10 @@ import {
   passagesOf,
   shortDate,
   sourceKind,
+  sourceQuestion,
   type SourceKind,
 } from "./library";
+import { sendInNewChat } from "./start-chat";
 import type { Handlers } from "./types";
 
 type Ingest = (input: { url?: string; text?: string; title?: string }) => Promise<void>;
@@ -86,17 +84,22 @@ export function Sources({
   query,
   remove,
   ingest,
+  onNewConversation,
 }: {
   snap: BrainSnapshot;
   query: string;
   remove: Handlers["remove"];
   ingest: Ingest;
+  /** Open a new chat in a project (or none) and go to it — where "Ask about this" sends. */
+  onNewConversation?: (projectId: number | null) => void;
 }) {
   const layer = useLayer(Layer.Panel);
-  const ask = useAsk();
-  const [askNote, setAskNote] = useState("");
+  /* Which source the question box is open on, and a count that moves the cursor back into it
+   * when you ask again — from the button or ↵ on the list. */
+  const [asking, setAsking] = useState<{ id: number; nonce: number } | null>(null);
   const askAbout = (source: Source) => {
-    setAskNote(ask(source) ? "" : "Open a chat first — there's no conversation here to ask in.");
+    setSelectedId(source.id);
+    setAsking((was) => ({ id: source.id, nonce: (was?.nonce ?? 0) + 1 }));
   };
   const [filter, setFilter] = useState<Filter>("all");
   // Null means "the first one": after feeding him something, the newest source is selected the
@@ -254,10 +257,7 @@ export function Sources({
               <SourceList
                 items={items}
                 selected={selected}
-                onSelect={(s) => {
-                  setSelectedId(s.id);
-                  setAskNote("");
-                }}
+                onSelect={(s) => setSelectedId(s.id)}
                 onAsk={(s) => askAbout(s)}
                 onRemove={(s) => void removeOne(s)}
                 empty={query ? "Nothing here matches the search." : "None of this kind yet."}
@@ -284,7 +284,9 @@ export function Sources({
               kind={selected.kind}
               snap={snap}
               onAsk={() => askAbout(selected)}
-              askNote={askNote}
+              asking={asking?.id === selected.id ? asking.nonce : 0}
+              onStopAsking={() => setAsking(null)}
+              onNewConversation={onNewConversation}
               onRemove={() => void removeOne(selected)}
             />
           ) : (
@@ -296,29 +298,6 @@ export function Sources({
       )}
     </div>
   );
-}
-
-/* ── Asking about one ───────────────────────────────────────────────────── */
-
-/**
- * Put "About source #12 ("…"): " in the chat you were last in, and go there.
- *
- * The id rather than the text: he has `read_source`, and a source is up to 20,000 characters that
- * would otherwise land in the transcript as a stale copy. The composer is the focused chat's —
- * the same slot a dropped file and a design reference use, because the panel sits above every
- * chat pane and none of them is reachable by a hook from here. Appended, never assigned: you may
- * have been halfway through a sentence.
- */
-function useAsk() {
-  const navigate = useNavigate();
-  return (source: Source): boolean => {
-    const composer = activeComposer();
-    if (!composer) return false;
-    const next = askLine(composer.getState().text, source);
-    if (next !== null) composer.setText(next);
-    navigate(pathForHome());
-    return true;
-  };
 }
 
 /* ── Feeding him ────────────────────────────────────────────────────────── */
@@ -607,15 +586,19 @@ function Reader({
   kind,
   snap,
   onAsk,
-  askNote,
+  asking,
+  onStopAsking,
+  onNewConversation,
   onRemove,
 }: {
   source: Source;
   kind: SourceKind;
   snap: BrainSnapshot;
   onAsk: () => void;
-  /** Said when there was no chat to put the question in. */
-  askNote: string;
+  /** Non-zero while the question box is open on this source; a new value puts the cursor in it. */
+  asking: number;
+  onStopAsking: () => void;
+  onNewConversation?: (projectId: number | null) => void;
   onRemove: () => void;
 }) {
   const detail = useQuery({
@@ -627,6 +610,32 @@ function Reader({
   const full = detail.data;
   const { passages, total } = useMemo(() => passagesOf(full?.content ?? ""), [full?.content]);
   const project = full?.project_id != null ? snap.projects.find((p) => p.id === full.project_id) : undefined;
+
+  /* Asking about it: a question box under the header, and Ask sends it.
+   *
+   * It used to put `About source #12 ("…"): ` in whichever chat you were last in and take you
+   * there to finish the sentence and press Enter — so it did nothing at all with no chat open, and
+   * otherwise left the actual asking for another screen. Now the question is written here and
+   * sent as the first message of a new chat (see `start-chat.ts`), in the source's project when it
+   * has one, and you are taken to that chat to see him answer. */
+  const askBox = useRef<HTMLInputElement>(null);
+  const [question, setQuestion] = useState("");
+  const [askNote, setAskNote] = useState("");
+  useEffect(() => {
+    if (asking) askBox.current?.focus();
+  }, [asking]);
+  const sendQuestion = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!question.trim()) return;
+    const where = full?.project_id ?? null;
+    const text = sourceQuestion(source, question);
+    if (onNewConversation && sendInNewChat(() => onNewConversation(where), text, where)) {
+      setQuestion("");
+      onStopAsking();
+      return;
+    }
+    setAskNote("Couldn't start a chat from here.");
+  };
 
   // Which passages are on screen, for "Passages 14–17 of 38".
   const body = useRef<HTMLDivElement>(null);
@@ -725,6 +734,8 @@ function Reader({
           <button
             type="button"
             onClick={onAsk}
+            aria-expanded={asking > 0}
+            aria-controls="rd-ask"
             className={cn(BUTTON.primary, "gap-[7px] pr-3.5 pl-3")}
           >
             <MessageSquare className="size-3.5" />
@@ -741,7 +752,45 @@ function Reader({
           </button>
         </div>
       </div>
-      {askNote ? <p className="text-kith mt-2 mr-4 ml-20 text-[12.5px]">{askNote}</p> : null}
+      {asking ? (
+        <form id="rd-ask" onSubmit={sendQuestion} className="mt-3.5 mr-6 ml-20 flex flex-col gap-1">
+          <label htmlFor="rd-ask-q" className="sr-only">
+            Ask him about this source
+          </label>
+          <span className="border-input bg-background focus-within:border-ring flex h-10 items-center gap-2 rounded-[10px] border pr-1.5 pl-3 transition-colors">
+            <input
+              ref={askBox}
+              id="rd-ask-q"
+              value={question}
+              onChange={(event) => {
+                setQuestion(event.target.value);
+                setAskNote("");
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  onStopAsking();
+                }
+              }}
+              placeholder="What do you want to know about it?"
+              className="placeholder:text-muted-foreground/80 h-[38px] min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+            />
+            <Kbd>↵</Kbd>
+            <button
+              type="submit"
+              aria-label="Send to him in a new chat"
+              disabled={!question.trim()}
+              className="bg-muted/60 text-muted-foreground enabled:hover:bg-muted enabled:hover:text-foreground flex size-7 shrink-0 items-center justify-center rounded-[7px] transition-colors"
+            >
+              <ArrowUp className="size-3.5" aria-hidden />
+            </button>
+          </span>
+          <span className={cn("text-[11.5px]", askNote ? "text-kith" : "text-muted-foreground/80")}>
+            {askNote ||
+              `Sends to him in a new chat${project ? ` in ${project.name}` : ""}, and takes you there to see his answer · Esc to cancel`}
+          </span>
+        </form>
+      ) : null}
 
       <dl className="bg-background border-border/80 mt-[18px] mr-6 ml-20 grid grid-cols-4 overflow-hidden rounded-[10px] border">
         <Fact label="Added">{added || "—"}</Fact>

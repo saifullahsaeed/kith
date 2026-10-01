@@ -23,6 +23,7 @@ import { AnyFileAttachmentAdapter } from "@/lib/attachments";
 import { clearActiveComposer, setActiveComposer } from "@/lib/active-composer";
 import { alreadyGoing, draftFor, useDrafts } from "@/lib/drafts";
 import { forgetMissingPaths } from "@/lib/files";
+import { usePosted } from "@/lib/outbox";
 import { rescueHeld } from "@/lib/queued-send";
 import { useFocusedChat } from "@/lib/focused-chat";
 import { keys } from "@/lib/query-keys";
@@ -246,6 +247,31 @@ export function ChatPane({
   const runtime = useLocalRuntime(adapter, {
     initialMessages: resumed,
     adapters: { attachments },
+  });
+
+  /* A first message posted for this tab from outside it — the Control Panel's "Request changes"
+   * and "Ask about this" (see `lib/outbox`). Sent through this runtime's own `append`, which is
+   * where a typed message ends up too, so the project binding, the id the stream reports and the
+   * turn claim are the ordinary ones rather than a second implementation of them.
+   *
+   * Only into a chat that is still fresh. If this tab has meanwhile been named, or a turn is
+   * running in it, sending would land in a conversation the message was not meant for — and a
+   * send mid-turn aborts the run in flight (`performRoundtrip`'s first line). The words go into
+   * the composer instead, after anything already there, for you to send or not. */
+  usePosted(uid, (message) => {
+    const thread = runtime.thread;
+    if (idRef.current || thread.getState().isRunning) {
+      const composer = thread.composer;
+      const now = composer.getState().text;
+      if (!now.includes(message.text)) {
+        composer.setText(now.trim() ? `${now.trimEnd()}\n\n${message.text}` : message.text);
+      }
+      return;
+    }
+    // Before the append, because the adapter reads the project when the run starts.
+    pendingProject.current = message.projectId;
+    setProjectId(message.projectId);
+    thread.append({ role: "user", content: [{ type: "text", text: message.text }] });
   });
 
   /* A draft chat that has just been named takes its tab with it.

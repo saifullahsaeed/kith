@@ -61,7 +61,7 @@ import {
 } from "@/lib/backend/brain";
 import { BUTTON, Kbd, LiveDot, Segmented } from "./chrome";
 import { shortPath } from "./format";
-import { startChatWith } from "./start-chat";
+import { sendInNewChat } from "./start-chat";
 import {
   LONG_TABLE,
   chatAbout,
@@ -162,7 +162,8 @@ export function TaskDetailPage({
   onOpenTask?: (id: number) => void;
   /** Open the task's project, from the breadcrumb and the rail. Falls back to `onBack`. */
   onOpenProject?: (ref: ProjectRef) => void;
-  /** Open a new chat in a project (or none), which the composer fills with what you wrote. */
+  /** Open a new chat in a project (or none) and go to it; what you wrote is sent as its first
+   *  message (see `start-chat.ts`). */
   onNewConversation?: (projectId: number | null) => void;
 }) {
   const confirm = useConfirm();
@@ -365,13 +366,16 @@ export function TaskDetailPage({
     replyBox.current?.focus();
   };
 
-  /* The composer starts a chat, because that is where you talk to him — see `start-chat.ts` for
-   * why a task has nowhere of its own to send to. */
+  /* The composer starts a chat and sends what you wrote as its first message, because a chat is
+   * where you talk to him — see `start-chat.ts` for why a task has nowhere of its own to send to.
+   * The text names the task (`chatAbout`), so he knows which one it is about. */
   const send = (event: FormEvent) => {
     event.preventDefault();
     if (!reply.trim()) return;
     const text = chatAbout(task, reply, changing);
-    if (onNewConversation && startChatWith(() => onNewConversation(task.project_id ?? null), text, task.project_id ?? null)) {
+    if (onNewConversation && sendInNewChat(() => onNewConversation(task.project_id ?? null), text, task.project_id ?? null)) {
+      setReply("");
+      setChanging(false);
       return;
     }
     // Nowhere to put it: the words go on the clipboard rather than nowhere, and the page says so.
@@ -557,7 +561,7 @@ export function TaskDetailPage({
               type="button"
               className={BUTTON.secondary}
               onClick={() => {
-                // The ask, written for you — Enter sends it into a chat about this task.
+                // The ask, written for you — Enter sends it to him in a new chat about this task.
                 setChanging(false);
                 setReply((was) => was || "Can you write the plan for this one?");
                 replyBox.current?.focus();
@@ -718,13 +722,13 @@ export function TaskDetailPage({
                 placeholder={
                   changing ? "Say what should change in the plan…" : "Reply to him — or say what to change in the plan…"
                 }
-                title="Opens a chat with him about this task, with what you wrote ready to send"
+                title="Sends this to him in a new chat about the task, and takes you there"
                 className="placeholder:text-muted-foreground/80 h-[38px] min-w-0 flex-1 bg-transparent text-[13px] outline-none"
               />
               <Kbd>↵</Kbd>
               <button
                 type="submit"
-                aria-label="Start a chat about this task with what you wrote"
+                aria-label="Send to him in a new chat about this task"
                 disabled={!reply.trim()}
                 className="bg-muted/60 text-muted-foreground enabled:hover:bg-muted enabled:hover:text-foreground flex size-7 shrink-0 items-center justify-center rounded-[7px] transition-colors"
               >

@@ -149,15 +149,18 @@ export function blocksOf(text: string): Block[] {
 }
 
 /**
- * What the composer should hold after "Ask about this": what you had typed, a blank line, then
- * `About source #12 ("Title"): ` for you to finish. Null when it already names this source —
- * clicking twice is a slip, not a request to ask twice.
+ * The message "Ask about this" sends: which source, then your question.
+ *
+ * The id rather than the text: he has `read_source`, and a source is up to 20,000 characters that
+ * would otherwise land in the transcript as a stale copy. The title rides along so the message
+ * reads as something a person wrote, and so he can tell at a glance whether it is the one he
+ * thinks. Shaped like the task page's `chatAbout`, since both start a chat about one thing.
+ *
+ * Until 2026-10-01 this was `askLine`, which appended `About source #12 ("…"): ` to whatever the
+ * focused chat's composer held for you to finish and send there. It sends from the panel now.
  */
-export function askLine(held: string, source: { id: number; title: string }): string | null {
-  const mark = `source #${source.id}`;
-  if (new RegExp(`${mark}(?!\\d)`).test(held)) return null;
-  const line = `About ${mark} ("${source.title}"): `;
-  return held.trim() ? `${held.trimEnd()}\n\n${line}` : line;
+export function sourceQuestion(source: { id: number; title: string }, question: string): string {
+  return `About source #${source.id} (“${source.title}”):\n\n${question.trim()}`;
 }
 
 /** "Sep 29" — the list's date. */
