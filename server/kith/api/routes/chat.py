@@ -30,7 +30,7 @@ from kith.schemas import (
 )
 from kith.services import conversations, history, host_costs, questions, steering
 from kith.services.activity import describe_call, feed, short_args
-from kith.services.agent_loop import stream_agent, without_image
+from kith.services.agent_loop import _images_from, stream_agent, without_image
 from kith.services.turn import report
 from kith.services.turn.prompt import _build_messages, _conversation_chars, framing
 from kith.settings import AGENT_DB_PATH
@@ -927,7 +927,14 @@ def _readable(event: dict) -> dict:
     """
     if event.get("type") != "tool_result":
         return event
-    return {**event, "result": without_image(event.get("result"))}
+    out = {**event, "result": without_image(event.get("result"))}
+    # The bytes go to a file beside the transcript instead, so the next turn can send the picture
+    # again exactly as this one did. Leaving it out of the replay changed the prompt at the first
+    # picture of every turn that looked at one, and the cache stopped there.
+    kept = conversations.keep_pictures(_images_from(event.get("result")))
+    if kept:
+        out["pictures"] = kept
+    return out
 
 
 class _MindFeed:

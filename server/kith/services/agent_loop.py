@@ -28,7 +28,7 @@ from kith.domain.tooling import ToolHost, itself
 from kith.kernel import session_context
 from kith.llm import ledger, ollama, openai_compat
 from kith.llm.budget import ContextBudget, conversation_chars
-from kith.services import brief, compaction, history, tuning
+from kith.services import brief, compaction, conversations, history, tuning
 from kith.services.turn import frozen
 from kith.services.turn.history import (
     _MAX_FOLDS,
@@ -1289,11 +1289,7 @@ def _run_turn(
                     # of the same app, in this case — so splitting them would put six turns of
                     # nothing between the first and the last.
                     convo.append(answer)
-                    parts: list[dict] = []
-                    for picture in images:
-                        parts.append({"type": "text", "text": f"Here is {picture['path'] or 'the image'}:"})
-                        parts.append({"type": "image_url", "image_url": {"url": picture["image"]}})
-                    convo.append({"role": "user", "content": parts})
+                    convo.append(conversations.picture_message(images))
                     continue
                 convo.append(answer)
 

@@ -420,7 +420,7 @@ _KEEP_ASKED_CHARS = 60_000
 
 def _theirs(message: dict[str, Any]) -> bool:
     """Is this a message the person wrote? A wake rides in their slot and is not them."""
-    return message.get("role") == "user" and not message.get("_wake")
+    return message.get("role") == "user" and not message.get("_wake") and not message.get("_picture")
 
 
 def _what_they_asked(history: list[dict[str, Any]], upto: int) -> list[dict[str, Any]]:

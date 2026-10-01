@@ -417,9 +417,71 @@ def full_messages(conversation_id: str) -> list[dict]:
                     "_call": call.get("arguments") or {},
                 }
             )
+            # The pictures that rode after this result, put back as they went — see `keep_pictures`.
+            shown = _pictures_again(entry.get("pictures"))
+            if shown:
+                out.append({**picture_message(shown), "_picture": True})
     _point_again(out, turn_of)
     for message in out:
         message.pop("_call", None)
+    return out
+
+
+def picture_message(pictures: list[dict]) -> dict:
+    """The message that carries a tool's pictures, after its result. One builder, because the
+    turn that sends it and the replay that sends it again have to produce the same bytes."""
+    parts: list[dict] = []
+    for picture in pictures:
+        parts.append({"type": "text", "text": f"Here is {picture.get('path') or 'the image'}:"})
+        parts.append({"type": "image_url", "image_url": {"url": picture["image"]}})
+    return {"role": "user", "content": parts}
+
+
+def _pictures_dir() -> Path:
+    from kith import settings as live
+
+    return live.DATA_DIR / "pictures"
+
+
+def keep_pictures(pictures: list[dict]) -> list[dict]:
+    """Write each picture's data URI to a file named by its hash; return ``[{"path", "file"}]``.
+
+    The transcript keeps the path and drops the bytes (`chat._readable`), and the path is not
+    enough to show it again: a screenshot is retaken under the same name minutes later. So the
+    exact bytes that were sent are kept, once each however often they are looked at, and the
+    replay reads them back. Best-effort: a picture that cannot be kept is replayed as nothing,
+    which costs the cache from there and nothing else.
+    """
+    import hashlib
+
+    kept: list[dict] = []
+    for picture in pictures:
+        uri = str(picture.get("image") or "")
+        try:
+            name = hashlib.sha256(uri.encode()).hexdigest()[:32] + ".uri"
+            folder = _pictures_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / name
+            if not target.exists():
+                target.write_text(uri, encoding="utf-8")
+            kept.append({"path": picture.get("path"), "file": name})
+        except OSError:
+            continue
+    return kept
+
+
+def _pictures_again(kept: Any) -> list[dict]:
+    """The pictures `keep_pictures` wrote, as the turn sent them, or [] if any is missing —
+    half a picture message would not match either."""
+    if not isinstance(kept, list) or not kept:
+        return []
+    out: list[dict] = []
+    for item in kept:
+        try:
+            uri = (_pictures_dir() / str(item["file"])).read_text(encoding="utf-8")
+        except (OSError, KeyError, TypeError):
+            return []
+        out.append({"path": item.get("path"), "image": uri})
     return out
 
 
