@@ -484,6 +484,30 @@ function sanitiseKeyframes(body: string, dropped: string[]): string {
   return out.join("\n");
 }
 
+function embeddedFontBody(body: string): string | null {
+  const kept = new Map<string, string>();
+  for (const declaration of splitDeclarations(body)) {
+    const colon = declaration.indexOf(":");
+    if (colon < 0) return null;
+    const name = declaration.slice(0, colon).trim().toLowerCase();
+    const value = declaration.slice(colon + 1).trim();
+    if (kept.has(name)) return null;
+    let valid = false;
+    if (name === "font-family") valid = /^(?:[A-Za-z][\w -]{0,80}|"[A-Za-z][\w -]{0,80}"|'[A-Za-z][\w -]{0,80}')$/.test(value);
+    else if (name === "src") {
+      // No network or local() lookup: one bounded base64 WOFF/WOFF2 source.
+      valid = value.length <= 2_000_000 && /^url\(\s*(["']?)(data:font\/(?:woff2?|x-woff);base64,[A-Za-z0-9+/]+={0,2})\1\s*\)(?:\s+format\((["'])(?:woff2?)\3\))?$/.test(value);
+    } else if (name === "font-weight") valid = /^(?:normal|bold|[1-9]00)$/.test(value);
+    else if (name === "font-style") valid = /^(?:normal|italic|oblique)$/.test(value);
+    else if (name === "font-display") valid = /^(?:auto|block|swap|fallback|optional)$/.test(value);
+    else if (name === "unicode-range") valid = /^U\+[0-9A-F?]{1,6}(?:-[0-9A-F]{1,6})?(?:\s*,\s*U\+[0-9A-F?]{1,6}(?:-[0-9A-F]{1,6})?)*$/i.test(value);
+    if (!valid) return null;
+    kept.set(name, value);
+  }
+  if (!kept.has("font-family") || !kept.has("src")) return null;
+  return [...kept].map(([name, value]) => `${name}: ${value}`).join("; ");
+}
+
 export function sanitiseStyleSheet(css: string, dropped: string[]): string {
   const text = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const out: string[] = [];
@@ -518,9 +542,12 @@ export function sanitiseStyleSheet(css: string, dropped: string[]): string {
     i = j;
 
     if (prelude.startsWith("@")) {
-      // A media query renders even though nothing in it can be dragged; every other at-rule
-      // either fetches (`@import`, `@font-face`) or declares something the editor cannot see.
-      if (/^@media\b/i.test(prelude) && safeValue(prelude.slice(6).replace(/[()]/g, " "))) {
+      // Embedded fonts are inert assets; remote fonts and imports stay forbidden.
+      if (/^@font-face$/i.test(prelude)) {
+        const font = embeddedFontBody(body);
+        if (font) out.push(`@font-face { ${font} }`);
+        else dropped.push("unsafe font-face");
+      } else if (/^@media\b/i.test(prelude) && safeValue(prelude.slice(6).replace(/[()]/g, " "))) {
         const inner = sanitiseStyleSheet(body, dropped);
         if (inner) out.push(`${prelude} {\n${inner}\n}`);
       } else if (/^@(keyframes|supports)\b/i.test(prelude) && /^@[\w-]+\s+[\w\s(),:.%<>=-]{0,120}$/.test(prelude)) {

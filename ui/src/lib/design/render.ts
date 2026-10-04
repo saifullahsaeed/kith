@@ -62,6 +62,13 @@ export function scopeStyleSheet(sheet: string, scope: string): string {
     const body = sheet.slice(open + 1, j - 1);
     i = j;
 
+    if (/^@font-face$/i.test(prelude)) {
+      // The parser has already limited this to embedded font data. Descriptors
+      // are declarations, not nested selector rules; recursing erases them.
+      out.push(`${prelude} { ${body.trim()} }`);
+      continue;
+    }
+
     if (prelude.startsWith("@")) {
       out.push(`${prelude} {\n${scopeStyleSheet(body, scope)}\n}`);
       continue;
