@@ -61,7 +61,7 @@ lint: ## ruff (server), oxlint (ui) — the fast pass, not the gate
 	@cd ui && npm run lint
 
 test: venv ## run the server test suite
-	@cd server && $(PY) -m pytest -q
+	@cd server && $(PY) -m pytest -q -n auto
 
 # Delegates rather than re-listing the steps, which is the whole reason `./check` exists. This
 # target used to be `lint test` and describe itself as "everything CI would run", and both CI

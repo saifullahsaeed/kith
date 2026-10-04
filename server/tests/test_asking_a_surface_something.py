@@ -22,7 +22,7 @@ from kith.services.plugins import calls
 
 
 @pytest.fixture(autouse=True)
-def a_live_turn():
+def a_live_turn(monkeypatch):
     """A wait only happens when a turn is actually running and somebody is there.
 
     Both halves are checked before anything parks — see the module docstring in `calls` — so
@@ -32,6 +32,10 @@ def a_live_turn():
     # would mark the surface unresponsive and every later case would fail on that instead of on
     # what it was testing. Which is how the deadlock in `forget_misses` was found.
     calls.forget_misses()
+    # The server's own deadline is 20s, and every test that lets a call go unanswered waited it
+    # out for real: five of them, 200 seconds of a 13-minute suite spent asleep. A deadline of
+    # half a second exercises the same branch.
+    monkeypatch.setattr(calls, "DEADLINE", 0.5)
     turn = live_turns.begin("c-1")
     try:
         with session_context.working_in("c-1"):

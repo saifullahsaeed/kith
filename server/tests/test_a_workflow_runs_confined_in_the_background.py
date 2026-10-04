@@ -328,7 +328,7 @@ class TestTheLimitsHold:
 
     def test_the_clock_ends_a_run_that_runs_too_long(self, db: Path, project: Path, agents, monkeypatch):
         monkeypatch.setattr(workflow, "MAX_SECONDS", 1)
-        run = _wait(_start(db, 'META = {"name": "slow"}\nimport time\ntime.sleep(30)')["run"])
+        run = _wait(_start(db, 'META = {"name": "slow"}\nimport time\ntime.sleep(3)')["run"])
         assert run.state == workflows.FAILED
         assert "ran past" in run.note
 

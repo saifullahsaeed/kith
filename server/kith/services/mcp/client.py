@@ -176,12 +176,10 @@ class StdioServer:
         process, self._process = self._process, None
         if process is None:
             return
-        for close in (process.stdin, process.stdout):
-            try:
-                if close:
-                    close.close()
-            except OSError:
-                pass
+        # Ended first, pipes closed after. Closing a buffered stdout while another thread is parked
+        # in `readline` on it blocks until that read returns — for a server that never answers,
+        # the whole of its silence — so a timed-out call took thirty seconds to report a
+        # one-second timeout. A dead process ends the read and the close is then immediate.
         try:
             process.terminate()
             process.wait(timeout=2)
@@ -190,6 +188,12 @@ class StdioServer:
             # pipe and, for something like a database bridge, a connection.
             with contextlib.suppress(OSError):
                 process.kill()
+        for close in (process.stdin, process.stdout):
+            try:
+                if close:
+                    close.close()
+            except OSError:
+                pass
 
     @property
     def alive(self) -> bool:

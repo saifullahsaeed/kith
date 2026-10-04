@@ -65,7 +65,7 @@ if [[ "$what" == "all" || "$what" == "server" ]]; then
   # `repo.get(id)["status"] == "done"` subscripts an Optional deliberately — a None there fails
   # the test, which is the assertion. Everything else is enforced the same everywhere.
   step "types"  .venv/bin/python -m pyright
-  step "pytest" .venv/bin/python -m pytest tests/ -q
+  step "pytest" .venv/bin/python -m pytest tests/ -q -n auto
 fi
 
 if [[ "$what" == "all" || "$what" == "ui" ]]; then

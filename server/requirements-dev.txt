@@ -27,6 +27,12 @@ pytest>=9.1,<10
 # outlives `monkeypatch` reads the shipped database rather than the test's.
 pytest-randomly>=4.0,<5
 
+# Runs the suite across every core. It was 13m45s on one, nearly all of it waiting on real
+# timeouts and subprocess teardown with the machine 57% idle; across twelve workers it is
+# 2m15s. Each worker gets its own temporary directories from pytest, and the suite passes
+# shuffled (above), which is the property that makes splitting it safe.
+pytest-xdist>=3.8,<4
+
 # Type checking, which `./check server` has run since the `types` step was added — and which CI
 # has failed on ever since, with "No module named pyright" on every run.
 #
