@@ -30,7 +30,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO
+from typing import IO
 
 from kith.infra import permissions
 from kith.infra import workspace as sandbox
@@ -110,7 +110,7 @@ def folder_in(root: Path, raw: str | None) -> Path:
 
 
 def save(
-    stream: BinaryIO,
+    stream: IO[bytes],
     filename: str | None,
     folder: str | None = ".",
     *,

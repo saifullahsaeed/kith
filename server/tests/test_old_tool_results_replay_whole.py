@@ -31,7 +31,9 @@ def _a_conversation(db: Path, turns: int) -> str:
     for turn in range(turns):
         conversations.record(db, conversation_id, "user", f"turn {turn}")
         conversations.record_event(
-            conversation_id, "tool_call", {"id": f"c{turn}", "name": "read_file", "arguments": {"path": f"f{turn}.py"}}
+            conversation_id,
+            "tool_call",
+            {"id": f"c{turn}", "name": "read_file", "arguments": {"path": f"f{turn}.py"}},
         )
         conversations.record_event(
             conversation_id, "tool_result", {"id": f"c{turn}", "name": "read_file", "result": f"{turn}-{BIG}"}

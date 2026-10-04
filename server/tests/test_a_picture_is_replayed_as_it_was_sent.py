@@ -32,7 +32,12 @@ def _looked(db: Path, uri: str = URI) -> str:
     conversations.record(db, conversation_id, "user", "look")
     call = {"type": "tool_call", "id": "c1", "name": "read_file", "arguments": {"paths": ["shot.png"]}}
     conversations.record_event(conversation_id, "tool_call", call)
-    result = {"type": "tool_result", "id": "c1", "name": "read_file", "result": {"ok": True, "result": {"path": "shot.png", "image": uri}}}
+    result = {
+        "type": "tool_result",
+        "id": "c1",
+        "name": "read_file",
+        "result": {"ok": True, "result": {"path": "shot.png", "image": uri}},
+    }
     conversations.record_event(conversation_id, "tool_result", _readable(result))
     conversations.record(db, conversation_id, "assistant", "seen")
     conversations.record(db, conversation_id, "user", "next")
@@ -43,7 +48,9 @@ def test_the_picture_comes_back_after_its_result(db: Path):
     messages = conversations.full_messages(_looked(db))
     tool = next(i for i, m in enumerate(messages) if m.get("role") == "tool")
     picture = messages[tool + 1]
-    assert picture["content"] == conversations.picture_message([{"path": "shot.png", "image": URI}])["content"]
+    assert (
+        picture["content"] == conversations.picture_message([{"path": "shot.png", "image": URI}])["content"]
+    )
 
 
 def test_the_transcript_still_holds_no_bytes(db: Path):

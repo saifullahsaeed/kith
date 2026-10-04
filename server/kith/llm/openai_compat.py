@@ -538,7 +538,9 @@ def fingerprint(payload: dict[str, Any]) -> dict[str, Any]:
     def short(value: Any) -> str:
         return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:8]
 
-    settings = {k: v for k, v in payload.items() if k not in ("messages", "tools", "stream", "stream_options")}
+    settings = {
+        k: v for k, v in payload.items() if k not in ("messages", "tools", "stream", "stream_options")
+    }
     return {
         "tools": short(payload.get("tools") or []),
         "settings": short(settings),
@@ -709,7 +711,7 @@ def _stats(
     generation: str = "",
     native: str = "",
     tier: str = "",
-) -> dict[str, str | int | float]:
+) -> dict[str, Any]:
     usage = usage or {}
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
