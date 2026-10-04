@@ -182,3 +182,48 @@ class TestTheValveStillOpens:
         assert _past_fold_point(_convo(1), 0) is False
         enormous = [{"role": "tool", "content": "x" * int(fold_policy.fold_at(0) * 3.7 * 1.1)}]
         assert _past_fold_point(enormous, 0) is True
+
+
+class TestTheLoopItselfLeavesTheHistoryAlone:
+    """The same property, driven through `_make_room` rather than a helper that imitates it.
+
+    This is the test that was missing on Oct 4: a conversation on a 400k window, past its tool
+    budget but nowhere near the fold point, had one old tool result stubbed per round — each a
+    rewrite of an early message, each re-billing the whole history uncached ($0.22 a round
+    against $0.011 cached). Every test above passed throughout because they called
+    `_compact_tool_history` themselves instead of asking the loop what it does.
+    """
+
+    WINDOW = 400_000
+
+    def _round(self, convo: list[dict[str, Any]]) -> None:
+        from kith.domain.chat import Config
+        from kith.llm.budget import ContextBudget
+
+        config = Config(
+            model="m",
+            num_ctx=self.WINDOW,
+            num_predict=1_000,
+            system="",
+            think=False,
+            context_window=self.WINDOW,
+        )
+        making = agent_loop._make_room(
+            convo,
+            [],
+            ContextBudget(),
+            take_reading=lambda: ledger.take(convo, window=self.WINDOW),
+            config=config,
+            host="",
+        )
+        for _ in making:
+            pass
+
+    def test_a_turn_past_its_tool_budget_but_short_of_the_fold_is_never_rewritten(self):
+        convo = _convo(1)
+        for results in range(2, 40):  # 39 x 9,000 chars is well past 12% of a 400k window
+            grown = _convo(results)
+            before = [dict(m) for m in convo]
+            self._round(grown)
+            assert grown[: len(before)] == before, f"an old message was rewritten at {results} results"
+            convo = grown

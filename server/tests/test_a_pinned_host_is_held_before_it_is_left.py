@@ -12,6 +12,8 @@ still costs a cold cache and never a dead turn.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from kith.domain.chat import Config, Routing
 from kith.llm.openai_compat import _routing_options
 from kith.services import agent_loop
@@ -31,11 +33,11 @@ def _sender(*outcomes: list[dict]):
     return fake, sent
 
 
-def _run(monkeypatch, routing, *outcomes):
+def _run(monkeypatch, routing, *outcomes, convo=None):
     fake, sent = _sender(*outcomes)
     monkeypatch.setattr(agent_loop, "_stream_once", fake)
     monkeypatch.setattr(agent_loop.time, "sleep", lambda _s: None)
-    gen = agent_loop._send_round([], _config(), "host", [], agent_loop._Retries(), routing=routing)
+    gen = agent_loop._send_round(convo or [], _config(), "host", [], agent_loop._Retries(), routing=routing)
     try:
         while True:
             next(gen)
@@ -82,3 +84,28 @@ class TestTheRound:
         (_, _, _, failure, _), sent = _run(monkeypatch, Routing(), NO_ENDPOINT)
         assert failure is not None
         assert len(sent) == 1 and sent[0].strict is False
+
+
+class TestABigPromptWaitsLonger:
+    """2026-10-04: five rounds of 190k-205k tokens fell off the pin after ~3s and billed $0.43-0.52
+    each on Azure with no cache, against ~$0.012 cached. A big prompt waits for its host."""
+
+    BIG: ClassVar[list[dict]] = [{"role": "user", "content": "x" * 400_000}]
+
+    def test_a_small_prompt_keeps_the_short_patience(self, monkeypatch):
+        (_, _, _, _failure, _), sent = _run(monkeypatch, Routing(pinned="openai/flex"), BUSY, BUSY, BUSY, OK)
+        assert [r.strict for r in sent] == [True, True, False]
+
+    def test_a_big_prompt_stays_locked_through_a_longer_outage(self, monkeypatch):
+        busy_then_ok = [BUSY] * 5 + [OK]
+        (_, _, _, failure, _), sent = _run(
+            monkeypatch, Routing(pinned="openai/flex"), *busy_then_ok, convo=self.BIG
+        )
+        assert failure is None
+        assert [r.strict for r in sent] == [True] * 6, (
+            "the pin was released while the host was still coming back"
+        )
+
+    def test_a_pin_that_never_returns_is_still_released_in_the_end(self, monkeypatch):
+        (_, _, _, _failure, _), sent = _run(monkeypatch, Routing(pinned="openai/flex"), BUSY, convo=self.BIG)
+        assert len(sent) == 7 and [r.strict for r in sent][-1] is False

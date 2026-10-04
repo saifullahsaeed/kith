@@ -317,8 +317,11 @@ class TestAPointerIsNeverLeftPointingAtNothing:
         for _ in making:
             pass
 
-        assert original.get("_stubbed"), "the setup should have stubbed what the pointer points at"
-        assert _numbered(pointer) == list(range(20, 80)), "the request went out pointing at a stub"
+        # Old tool output is no longer stubbed on every round — that rewrote an early message each
+        # time and re-billed the whole history uncached. With room to spare nothing is touched,
+        # so the pointer still points at the whole result.
+        assert not original.get("_stubbed"), "a round with room to spare rewrote an old result"
+        assert pointer.get("_deduped"), "the pointer was rewritten although what it points at is intact"
 
 
 class TestTheMeterCountsWhatIsSent:

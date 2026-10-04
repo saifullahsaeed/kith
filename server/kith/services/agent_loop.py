@@ -31,6 +31,7 @@ from kith.llm.budget import ContextBudget, conversation_chars
 from kith.services import brief, compaction, conversations, history, tuning
 from kith.services.turn import frozen
 from kith.services.turn.history import (
+    _CHARS_PER_TOKEN,
     _MAX_FOLDS,
     _compact_call_arguments,
     _compact_images,
@@ -90,7 +91,22 @@ _ROUND_ATTEMPTS = 3
 #: connection, an upstream briefly out of instances — and a long wait on a turn someone is
 #: watching is indistinguishable from a hang.
 def _backoff(attempt: int) -> float:
-    return 1.0 * (2 ** (attempt - 1))
+    return min(_BACKOFF_CEILING, 1.0 * (2 ** (attempt - 1)))
+
+
+#: Extra attempts a pinned host gets before the pin is released, once the prompt is big enough
+#: that leaving it is the expensive move. Three attempts is ~3s of patience, and a busy flex host
+#: is not always busy for 3s: measured Oct 1-4, five rounds of 190k-205k tokens ran out of
+#: patience, fell through to Azure (no cache, no flex rate) and billed $0.43-0.52 each against
+#: ~$0.012 cached — $2.47 for five rounds. Waiting a further ~30s costs nothing but the wait.
+_PATIENT_EXTRA_ATTEMPTS = 4
+
+#: How large a prompt has to be, in tokens, before the pin is worth waiting for. Under it a cold
+#: round costs cents and the short wait is the bigger price.
+_PATIENT_PROMPT_TOKENS = 50_000
+
+#: Longest single wait between attempts, so the patient schedule is 1, 2, 4, 8, 8, 8 seconds.
+_BACKOFF_CEILING = 8.0
 
 
 #: A failure worth sending the same request into again. Matched on the message because that is
@@ -568,16 +584,19 @@ def _send_round(
     failure: dict | None = None
     spoken = ""
 
-    for attempt in range(1, _ROUND_ATTEMPTS + 1):
+    attempts = _ROUND_ATTEMPTS
+    if routing is not None and routing.pinned:
+        if conversation_chars(convo, schemas) / _CHARS_PER_TOKEN >= _PATIENT_PROMPT_TOKENS:
+            attempts += _PATIENT_EXTRA_ATTEMPTS
+
+    for attempt in range(1, attempts + 1):
         failure = None
         spoke = False
         content, tool_calls, stats, spoken = "", [], None, ""
         # The pin is held as a lock until the last attempt, then released — see `Routing.strict`.
-        locked = attempt < _ROUND_ATTEMPTS and routing is not None and bool(routing.pinned)
-        sent = replace(routing, strict=True) if locked else routing
-        for event in _stream_once(
-            convo, config, host, tools=schemas, tool_choice=tool_choice, routing=sent
-        ):
+        locked = attempt < attempts and routing is not None and bool(routing.pinned)
+        sent = replace(routing, strict=True) if locked and routing is not None else routing
+        for event in _stream_once(convo, config, host, tools=schemas, tool_choice=tool_choice, routing=sent):
             kind = event["type"]
             if kind == "delta":
                 spoke = True
@@ -606,7 +625,7 @@ def _send_round(
         # OpenRouter answers "no endpoints" for a pinned host that is down — so it still earns
         # the unlocked last attempt rather than ending the round.
         released = locked and failure.get("kind") != "context_overflow" and not _unreachable(failure)
-        if spoke or attempt == _ROUND_ATTEMPTS or not (_worth_retrying(failure) or released):
+        if spoke or attempt == attempts or not (_worth_retrying(failure) or released):
             break
         yield {
             "type": "retrying",
@@ -672,23 +691,6 @@ def _make_room(
     40-round turn would remove shell and every file tool for the remaining 37 and leave him
     structurally unable to do what he was asked. Trim the history; leave the capability alone.
     """
-    # Age out old tool results first, every round, before anything asks whether there is room.
-    #
-    # **This used to be gated, and the gate is why it never ran.** Reaching it required 80% of
-    # the window — 838,860 tokens on the model this install uses — and across 478 real turns
-    # nothing came close: the median turn is 16 rounds and the p90 is 83, at 193k and ~400k
-    # tokens a round. So a sixty-round turn carried sixty rounds of shell output, all of it
-    # equally present, and the machinery for exactly that had never once fired.
-    #
-    # The gate was right about its own problem and wrong about the cause. It went in because
-    # trimming to `live_tool_chars` — 80,000 characters, 1.9% of this window — made him re-read
-    # files he had already read, 54% of all reads. That is a budget sized for a small model, not
-    # evidence against trimming, and `live_tool_budget` now scales it with the window: nearly
-    # six times the old allowance before anything is let go, and nothing at all is rewritten
-    # below it, so the cached prefix a normal turn depends on is untouched. See
-    # `test_the_live_set_is_sized_to_the_window`.
-    _compact_tool_history(convo, offload, window=config.context_window)
-
     book = take_reading()
 
     # The whole request, in tokens at this turn's calibrated ratio — the ledger's own total, so
@@ -725,10 +727,11 @@ def _make_room(
             # every round, for the rest of the turn. A turn out of folds grows, at cache-read
             # price, until `tight` says otherwise.
             #
-            # Tool history is deliberately not re-run here: the unconditional pass above has
-            # already taken it to the live budget this round, and calling it again with the same
-            # arguments would find nothing left to do. Images and call arguments have no such
-            # pass, so this is still the only thing that trims them.
+            # Old tool output is stubbed here too and only here: running it every round once the live
+            # set passed its budget stubbed one more old result per round, each one rewriting a
+            # message early in the history and re-billing everything after it uncached (measured
+            # Oct 4 on gpt-6.1-sol: $0.011 a round cached, $0.22 a round at each break).
+            _compact_tool_history(convo, offload, window=config.context_window)
             _compact_images(convo)
             _compact_call_arguments(convo)
         book = take_reading()
