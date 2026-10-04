@@ -544,6 +544,7 @@ def retire_superseded(config_db: Path) -> list[str]:
 
     held = registry.rows(config_db)
     retired: list[str] = []
+    carried: set[str] = set()
     for plugin_id, kind in SUPERSEDED.items():
         record = held.get(plugin_id)
         if not record or record.get("retiredAt"):
@@ -555,16 +556,23 @@ def retire_superseded(config_db: Path) -> list[str]:
             continue
         if not any(isinstance(one, dict) and one.get("kind") == kind for one in surfaces):
             continue
+        shipped_skills = registry.root() / plugin_id / "skills"
+        names = (
+            {one.name for one in shipped_skills.iterdir() if one.is_dir()}
+            if shipped_skills.is_dir()
+            else set()
+        )
         try:
             uninstall(config_db, plugin_id)
         except Exception as exc:  # pragma: no cover - a tidy-up must not stop the app starting
             print(f"[kith] plugins: could not retire {plugin_id} ({exc})")
             continue
         retired.append(plugin_id)
+        carried |= names
     if retired:
         from kith.services import skills
 
-        skills.resync()
+        skills.resync(frozenset(carried))
     return retired
 
 

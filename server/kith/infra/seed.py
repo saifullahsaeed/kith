@@ -184,11 +184,16 @@ def _write_manifest(paths: dict[str, str], live: Path | None = None) -> None:
         pass
 
 
-def sync(name: str, bundled: Path, live: Path) -> Report:
+def sync(name: str, bundled: Path, live: Path, restore: frozenset[str] = frozenset()) -> Report:
     """Reconcile one shipped tree against the copy at `live`. Returns what changed.
 
     `name` prefixes every key in both records ("persona", "skills"), so the two trees share one
     manifest and one history file and their keys cannot collide.
+
+    `restore` names keys to deliver even though they are absent and were released before. An
+    absence is normally an answer ("they deleted it"), but not when Kith itself cleared the file
+    out of the way — retiring a plugin takes back the copy of a skill it imported, and the
+    bundled one that replaces it must land.
     """
     report = Report()
     if not bundled.is_dir() or bundled.resolve() == live.resolve():
@@ -218,7 +223,7 @@ def sync(name: str, bundled: Path, live: Path) -> Report:
             # Never placed here by us, never carried by a release they could have had, and not
             # a first run — so it is genuinely new and they have not had the chance to refuse
             # it. Anything else absent is a removal, and a removal is an answer.
-            if not first_run and (key in manifest or key in history):
+            if not first_run and (key in manifest or key in history) and key not in restore:
                 continue
             if _write(target, shipped):
                 report.added.append(key)

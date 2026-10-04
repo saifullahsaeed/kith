@@ -146,11 +146,26 @@ class Skill:
 _seeded = False
 
 
-def resync() -> None:
+_restore: frozenset[str] = frozenset()
+
+
+def resync(restore: frozenset[str] = frozenset()) -> None:
     """Reconcile with the bundled skills again on the next `root()`, for something that has just
-    cleared a skill out of the way of a bundled one."""
-    global _seeded
+    cleared a skill out of the way of a bundled one.
+
+    `restore` is the names of the skills it cleared: those are delivered even if an earlier
+    release already shipped them, because their absence is Kith's doing and not an answer.
+    """
+    global _seeded, _restore
     _seeded = False
+    _restore = frozenset(f"skills/{name}/{file}" for name in restore for file in _bundled_files(name))
+
+
+def _bundled_files(name: str) -> list[str]:
+    folder = settings.BUNDLED_SKILLS_DIR / name
+    if not folder.is_dir():
+        return []
+    return [path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file()]
 
 
 def root() -> Path:
@@ -172,7 +187,7 @@ def root() -> Path:
     place = settings.skills_dir()
     if not _seeded:
         _seeded = True
-        seed.sync("skills", settings.BUNDLED_SKILLS_DIR, place)
+        seed.sync("skills", settings.BUNDLED_SKILLS_DIR, place, _restore)
     # After the sync, not before: `seed.sync` reads an absent folder as a first run and copies
     # everything, and a `mkdir` here would have already made it exist and turned that into a
     # file-by-file reconcile against a folder with nothing in it.
