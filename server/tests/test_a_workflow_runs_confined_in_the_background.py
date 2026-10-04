@@ -664,6 +664,7 @@ class TestWorkflowMode:
         assert "`port-rag`" in said and "check_workflow" in said
         workflows.end(run, workflows.FINISHED, "done")
 
+    @needs_confinement
     def test_the_mode_lets_run_workflow_start_without_the_prefix(self, db: Path, project: Path, agents):
         with session_context.working_in("conv-mode"), session_context.may_run_workflows("mode"):
             answer = workflow.run_workflow(db, {"script": 'META = {"name": "m"}\nfinish(agent("look"))'})
@@ -680,6 +681,7 @@ class TestWorkflowMode:
             answer = workflow.run_workflow(db, {"script": 'META = {"name": "m"}\nfinish(1)'})
         assert "Nobody is here" in answer["error"]
 
+    @needs_confinement
     def test_in_the_mode_a_woken_turn_can_start_the_next_step(self, db: Path, project: Path, agents):
         """Survey, then build, then review: the second and third start in the turn the one before
         wakes. Refusing that is how three runs were refused in one evening with the person right

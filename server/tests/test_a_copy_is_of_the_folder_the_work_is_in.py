@@ -344,6 +344,9 @@ def _wait(run_id: str, seconds: float = 30) -> workflows.Run:
     return run
 
 
+@pytest.mark.skipif(
+    not confinement.available(), reason="a workflow script needs sandbox-exec, which is macOS-only"
+)
 class TestABuildersEditsAreNotDeletedWithTheRun:
     def test_a_builder_that_edited_but_has_no_patch_keeps_its_copy(
         self, db: Path, project: Path, tmp_path: Path, monkeypatch
