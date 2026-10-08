@@ -252,7 +252,9 @@ DESCRIPTION = (
     "continuing a run this chat started is always allowed.\n\n"
     "agents: [{label, kind, prompt, after}]. label: unique in the run — how later agents name "
     "this one. kind: scout (default), builder, verifier, merge (after: the builders to put "
-    "together; checked in one copy), revise (after: one builder; prompt: what to change). after: "
+    "together; checked in one copy), revise (after: one builder; prompt: what to change — it "
+    "carries on that builder's own conversation with everything it read, so a builder that came "
+    "back empty is revised, not sent again from zero). after: "
     "labels from this step or earlier ones — after a builder it starts from that patch, after a "
     "scout or verifier that report is added to its prompt. Agents without an after run at once, "
     f"{workflow.AT_ONCE} at a time. Optional per agent: model (strong|main|fast), schema.\n\n"
@@ -737,5 +739,5 @@ def _step_note(
         + (f" — later agents can go after any of: {', '.join(usable)}." if usable else ".")
         + " Or, if the work is done, apply what you want and tell them."
     )
-    parts.append(f"Everything the run wrote is in {run.folder}.")
+    parts.append(f"Everything the run wrote is in {run.folder}{workflow._transcripts_line(run)}.")
     return "\n\n".join(parts)

@@ -161,3 +161,42 @@ class TestItHasNoLandingPhase:
 
         assert worker.reserve == 0
         assert ordinary.reserve > 0, "every other caller still lands"
+
+
+class TestItsConversationIsKeptBesideTheReport:
+    """The report is what enters the caller's context; the whole conversation is kept beside it.
+
+    Kept, not returned into anyone's prompt — that is the economics above, unchanged. It is what
+    a workflow saves for reading afterwards and what a revision carries on from, so a builder that
+    spent its rounds reading does not have to read it all again.
+    """
+
+    def test_every_call_and_result_is_kept_and_the_report_ends_it(self, db: Path, monkeypatch):
+        fake, _ = _rounds(("Looking.", [_a_call("list_projects")]), ("Found it.", []))
+        monkeypatch.setattr(agent_loop, "_stream_once", fake)
+
+        answer, report = workers.run_agent(db, "scout", "find the ledger", "")
+
+        roles = [message["role"] for message in report.messages]
+        assert roles[:2] == ["system", "user"]
+        assert report.messages[1]["content"] == "find the ledger"
+        assert "tool" in roles
+        assert report.messages[-1] == {"role": "assistant", "content": "Found it."}
+        assert answer["findings"] == "Found it."
+
+    def test_it_runs_as_an_agent_and_the_caller_does_not(self, db: Path, monkeypatch):
+        from kith.kernel import session_context
+
+        during: list[str] = []
+
+        def fake(convo, config, host, tools=None, tool_choice="auto", routing=None):
+            during.append(session_context.agent())
+            yield {"type": "delta", "role": "text", "text": "Done."}
+            yield {"type": "turn", "content": "Done.", "tool_calls": [], "stats": {}}
+
+        monkeypatch.setattr(agent_loop, "_stream_once", fake)
+
+        workers.run_agent(db, "scout", "x", "")
+
+        assert during == ["scout"]
+        assert session_context.agent() == ""

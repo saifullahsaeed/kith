@@ -564,8 +564,11 @@ def run_agent(
     from kith.infra.workspace import paths
 
     base = str(worktrees.base_in(Path(worktree), folder or paths.base_dir())) if worktree else ""
-    with session_context.working_from(
-        worktree, mirror_of=str(_source_of(worktree)) if worktree else "", base=base
+    with (
+        session_context.as_agent(kind),
+        session_context.working_from(
+            worktree, mirror_of=str(_source_of(worktree)) if worktree else "", base=base
+        ),
     ):
         for event in stream_agent(
             started,
@@ -584,6 +587,10 @@ def run_agent(
             # sent it, so the persona it shares with that conversation is a cache read.
             conversation_id=conversation,
             landing_reserve=shape["reserve"](budget),
+            # Everything it was sent and every result it got, kept: saved beside its report so
+            # anyone can read what it actually did, and handed back whole to a revision so it
+            # carries on from what it read instead of starting again.
+            keep=report.messages,
         ):
             report.saw(event)
             if watch is not None:
@@ -599,6 +606,7 @@ def run_agent(
                 break
 
         answer = report.done()
+        report.ended(report.text.strip() or report.said_before.strip())
         if "value" in handed:
             answer["submitted"] = handed["value"]
             answer["findings"] = (
@@ -788,6 +796,21 @@ class _Report:
         #: closing note, which is the one place a person sees what a fan-out spent.
         self.cost = 0.0
         self.failed: list[str] = []
+        #: The agent's whole conversation, as the model was sent it — filled by the loop itself
+        #: (see `agent_loop._run_turn`'s ``keep``), with the report put on the end by `ended`.
+        self.messages: list[dict] = []
+
+    def ended(self, findings: str) -> None:
+        """Put the report on the end of the conversation, where the model's last words go.
+
+        The loop does not append a closing answer — a turn's last message reaches the transcript
+        through the chat route, which an agent does not have — so without this a saved agent
+        ends on its last tool result, and a revision would continue from before it reported.
+        """
+        last = self.messages[-1] if self.messages else {}
+        said_it = last.get("role") == "assistant" and not last.get("tool_calls") and last.get("content")
+        if findings.strip() and self.messages and not said_it:
+            self.messages.append({"role": "assistant", "content": findings})
 
     def stopped(self) -> None:
         """Someone pressed Stop while this was out."""

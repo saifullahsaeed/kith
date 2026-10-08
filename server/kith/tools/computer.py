@@ -69,7 +69,9 @@ def shell(path: Path, args: dict):
     "with `offset`/`limit`, which window every file you asked for. `symbol` is the exception "
     "and needs a single path — a name can be defined in several of them and there would be no "
     "right answer. A read without a range returns the first 400 lines and tells you if there's "
-    "more.",
+    "more. The first file you open under a folder with a CLAUDE.md or AGENTS.md — there or in "
+    "any folder above it, up to the repository's top — brings those rules with it, so you never "
+    "need to go and read them yourself.",
     {
         "paths": {
             **LIST_STR,
@@ -90,6 +92,10 @@ def shell(path: Path, args: dict):
     required=("paths",),
 )
 def read_file(path: Path, args: dict):
+    return _with_rules(path, _read(args), many(args, "paths", "path"))
+
+
+def _read(args: dict):
     wanted_all = many(args, "paths", "path")
     if not wanted_all:
         return {"error": "Nothing to read — `paths` is a list of files to open."}
@@ -151,10 +157,7 @@ def _read_several(wanted: list[str], args: dict):
     pictures = []
     for one in wanted:
         try:
-            body = read_file(
-                Path(),
-                {"paths": [one], "offset": args.get("offset"), "limit": args.get("limit")},
-            )
+            body = _read({"paths": [one], "offset": args.get("offset"), "limit": args.get("limit")})
         except Exception as exc:  # a bad path in a batch must not lose the good ones
             body = f"{type(exc).__name__}: {exc}"
         if isinstance(body, dict):
@@ -181,6 +184,28 @@ def _read_several(wanted: list[str], args: dict):
     # A plain string when there is nothing to look at, so every batch that reads code is shaped
     # exactly as it was before this.
     return {"text": text, "images": pictures} if pictures else text
+
+
+def _with_rules(path: Path, result, wanted: list[str]):
+    """``result`` with the rules of the folders ``wanted`` is in, if this work has not seen them.
+
+    See `services/instructions` for what and how often. A refusal goes back untouched: a read
+    that failed has shown nothing, and the rules arrive with the next one that works.
+    """
+    if isinstance(result, dict) and result.get("error"):
+        return result
+    from kith.services import instructions
+
+    rules = instructions.attach(path, wanted)
+    if not rules:
+        return result
+    if isinstance(result, str):
+        return f"{result}\n\n{rules}"
+    if isinstance(result, dict) and isinstance(result.get("text"), str):
+        return {**result, "text": f"{result['text']}\n\n{rules}"}
+    if isinstance(result, dict):
+        return {**result, "rules": rules}
+    return result
 
 
 def _is_data_uri(value) -> bool:
@@ -238,9 +263,10 @@ def _read_symbol(wanted: str, symbol: str, offset=None, limit=None) -> str:
     required=("path", "content"),
 )
 def write_file(path: Path, args: dict):
-    return _reporting_lost_definitions(
+    written = _reporting_lost_definitions(
         args["path"], lambda: sandbox.write_file(args["path"], args.get("content") or "")
     )
+    return _with_rules(path, written, [args["path"]])
 
 
 def _reporting_lost_definitions(wanted: str | list[str], write):
@@ -381,10 +407,8 @@ def edit_files(path: Path, args: dict):
     fallback = str(args.get("path") or "").strip()
     if fallback:
         edits = [{**one, "path": one.get("path") or fallback} for one in edits]
-    return _reporting_lost_definitions(
-        [str(one.get("path") or "") for one in edits],
-        lambda: sandbox.edit_files(edits),
-    )
+    edited = [str(one.get("path") or "") for one in edits]
+    return _with_rules(path, _reporting_lost_definitions(edited, lambda: sandbox.edit_files(edits)), edited)
 
 
 @tool(

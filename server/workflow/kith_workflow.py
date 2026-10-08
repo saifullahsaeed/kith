@@ -340,8 +340,8 @@ def merge(*built, label: str | None = None, check: bool = True, tests=False) -> 
 def revise(built: dict, feedback: str, label: str | None = None) -> dict:
     """Send a builder (or a merge) back into its own copy with feedback, and get the new result.
 
-    The copy still has every edit that was made, and the builder is handed back its brief and its
-    report, so it picks up where it stopped instead of starting over. Use it for a builder that
+    The copy still has every edit that was made, and the builder is handed back its own whole
+    conversation — everything it read — so it picks up where it stopped instead of starting over. Use it for a builder that
     came back empty or half done, for a seam two builders disagree on, or to fix what a merge's
     check or a verifier found. Returns the same shape as a builder, with the *whole* diff so far.
     """
@@ -355,6 +355,7 @@ def revise(built: dict, feedback: str, label: str | None = None) -> dict:
                 "diff": str(built.get("diff") or ""),
                 "label": str(built.get("label") or ""),
                 "report": built.get("report") if isinstance(built.get("report"), str) else json.dumps(built.get("report"), default=str),
+                "transcript": str(built.get("transcript") or ""),
             },
             "feedback": str(feedback),
             "label": None if label is None else str(label),

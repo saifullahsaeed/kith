@@ -63,6 +63,18 @@ def touched_files(path: Path, conversation_id: str, limit: int | None = None) ->
         return [as_dict(row) for row in rows]
 
 
+def touch_of(path: Path, conversation_id: str, file_path: str) -> dict | None:
+    """The latest touch of one file in one conversation, or None if it was never touched."""
+    with session(path) as db:
+        row = db.scalar(
+            select(FileTouch).where(
+                FileTouch.conversation_id == conversation_id,
+                FileTouch.path == file_path,
+            )
+        )
+        return as_dict(row) if row is not None else None
+
+
 def count_touched(path: Path, conversation_id: str) -> int:
     """How many files in total, so a capped manifest can say what it is not showing."""
     with session(path) as db:

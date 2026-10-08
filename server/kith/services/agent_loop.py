@@ -765,6 +765,7 @@ def stream_agent(
     steer: Callable[[], str] | None = None,
     landing_reserve: int | None = None,
     landing_directive: str = "",
+    keep: list[dict[str, Any]] | None = None,
 ) -> Iterator[dict]:
     """Run the tool loop for one turn.
 
@@ -791,6 +792,7 @@ def stream_agent(
             steer=steer,
             landing_reserve=landing_reserve,
             landing_directive=landing_directive,
+            keep=keep,
         )
 
 
@@ -867,6 +869,7 @@ def _run_turn(
     steer: Callable[[], str] | None = None,
     landing_reserve: int | None = None,
     landing_directive: str = "",
+    keep: list[dict[str, Any]] | None = None,
 ) -> Iterator[dict]:
     """Run the tool loop.
 
@@ -884,12 +887,21 @@ def _run_turn(
     reason ``resume`` is: taking new input is the adapter's business, and a loop that imported
     the store would be the loop deciding where messages come from.
 
+    ``keep``, when given, is filled with the turn's conversation as it goes — the list the loop
+    appends to, not a copy. For a workflow agent, whose turn reaches no transcript: it is what
+    is saved for reading afterwards and what a revision continues from.
+
     Nothing arrives mid-round on purpose. A round is the only moment ``convo`` is a list a
     provider will accept — inside one there is a half-read stream and a tool call announced but
     not yet answered — so the wait is at most one round, and a torn message list costs more
     than the seconds.
     """
     convo = list(messages)
+    if keep is not None:
+        # The caller's list *is* the conversation from here on, so what it holds when the turn
+        # ends is exactly what the model was sent — every call, every result, every directive.
+        keep[:] = convo
+        convo = keep
     # Everything this turn settles before its first round — the session id, the spill target,
     # the budget and reserve, the routing, the MCP snapshot and the ledger's name sets. Each is
     # read once and never re-read, and `services/turn/frozen.py` holds the reasons why. Unpacked

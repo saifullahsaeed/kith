@@ -242,8 +242,10 @@ DESCRIPTION = (
     "copy, the project check (and tests) run there: {diff, patch_file, applied, conflicts, check, "
     "tests, clean, agent}. Use it before verifying, and hand the woken turn its patch.\n"
     "revise(built, feedback) — the builder (or merge) goes back into its copy, edits intact, with "
-    "your feedback; returns the whole diff so far. For an empty or half-done patch, a seam, or "
-    "what a check or verifier found.\n"
+    "your feedback, and carries on its own conversation — everything it read is still in front of "
+    "it; returns the whole diff so far. For an empty or half-done patch (revise it rather than "
+    "sending a new builder, which starts reading from zero), a seam, or what a check or verifier "
+    "found.\n"
     "parallel([fn, ...]) — results in order, None where one failed; bind loop variables: "
     "[lambda p=p: agent(...) for p in parts]. pipeline(items, stage1, stage2, ...) — each item "
     "through the stages on its own (a stage may take (value, item, index)); None drops it.\n"
@@ -1323,6 +1325,7 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
             schema=schema,
             folder=run.workdir or None,
         )
+        transcript = _save_transcript(run, label, agent_id, report.messages)
         said = str(answer.get("findings") or "")
         cost = report.cost
         submitted = "submitted" in answer
@@ -1357,7 +1360,11 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
         tally = str(answer.get("looked_at") or "")
         key = str(message.get("_key") or _ask_key(message))
         if kind != "builder":
-            _keep(run, key, {"kind": kind, "label": label, "value": shaped, "report": said})
+            _keep(
+                run,
+                key,
+                {"kind": kind, "label": label, "value": shaped, "report": said, "transcript": transcript},
+            )
             mark(
                 "done",
                 tally or "reported",
@@ -1371,11 +1378,23 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
         diff = str(answer.get("patch") or "")
         patch_file = _save_patch(run, label, agent_id, diff)
         outcome = _outcome(patch_file, diff, on_top_of)
+        if not diff.strip() and report.calls:
+            # How it spent its rounds, said here because the report cannot be trusted to: a
+            # builder that read for thirty rounds and one that decided nothing needed changing
+            # both come back "changed nothing", and only the count tells them apart.
+            outcome += f" after {len(report.calls)} calls ({tally})"
         # Edited and came back empty: whatever it wrote, the diff did not see. Not deleted with the
         # run, which is how four builders' 54 screens were lost on 2026-09-30.
         hold = not diff.strip() and _kept_because(report.calls)
-        if hold:
+        if hold and any(name in workers.WRITING for name in report.calls):
             outcome += f" — but it edited files; its copy is kept at {worktree} for a day"
+        elif hold:
+            # A shell can write files too, so the copy is kept — but it is not evidence of an
+            # edit, and saying "it edited files" of eighteen builders that never called an edit
+            # tool told Kith the opposite of what happened.
+            outcome += f" — it made no edits, but ran commands; its copy is kept at {worktree} for a day"
+        if not diff.strip() and report.calls:
+            outcome += ". To carry on from what it read rather than start again, revise it"
         mark(
             "done",
             tally or outcome,
@@ -1386,7 +1405,14 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
             outcome=outcome,
         )
         agents.record(f'- builder "{label}" — {outcome}', cost)
-        built = {"report": shaped, "diff": diff, "patch_file": patch_file, "label": label, "agent": agent_id}
+        built = {
+            "report": shaped,
+            "diff": diff,
+            "patch_file": patch_file,
+            "label": label,
+            "agent": agent_id,
+            "transcript": transcript,
+        }
         # Kept open for `revise`, closed with the run. The brief and report ride along, so a
         # revision is handed back exactly what this builder was told and said.
         kept = agents.keep_copy(
@@ -1403,6 +1429,39 @@ def _one_agent(run: workflows.Run, path: Path, message: dict, agents: _Agents, c
             from kith.infra.workspace import worktrees
 
             worktrees.close(Path(worktree))
+
+
+def _save_transcript(run: workflows.Run, label: str, agent_id: str, messages: list[dict]) -> str:
+    """Write one agent's whole conversation into the run folder; its path, or "" if it could not.
+
+    An agent's turn reaches no transcript — it runs under its parent's conversation and records
+    nothing there on purpose — so until this its report was all that survived. Nineteen builders
+    on 2026-10-02/03 came back empty and the only way to see what they had spent thirty rounds
+    on was a list of tool names in the flight recorder. This is the record, and the thing a
+    revision continues from.
+    """
+    if not messages or not run.folder:
+        return ""
+    folder = Path(run.folder) / "transcripts"
+    target = folder / f"{_slug(label)}-{agent_id}.json"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(messages, default=str), encoding="utf-8")
+    except OSError:
+        return ""
+    return str(target)
+
+
+def _transcript_of(built: dict) -> list[dict]:
+    """The conversation a builder had, read back from where `_save_transcript` put it; [] if none."""
+    where = str(built.get("transcript") or "")
+    if not where:
+        return []
+    try:
+        messages = json.loads(Path(where).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [one for one in messages if isinstance(one, dict)] if isinstance(messages, list) else []
 
 
 def _save_patch(run: workflows.Run, label: str, agent_id: str, diff: str) -> str:
@@ -1608,12 +1667,30 @@ def _revise(run: workflows.Run, path: Path, message: dict, agents: _Agents, cont
         key = agent_id
     so_far = worktrees.diff_in(Path(worktree))
     added, removed = _diffstat(so_far)
+    rounds = int(workers.ROLES["builder"]["rounds"]())
     ask = (
         f"{feedback}\n\nYour copy still has every edit made so far (+{added} −{removed} lines) — "
         "`changes` shows them. Carry on from there: make the edits this needs, check them, and "
         "report what you changed this time."
     )
-    rounds = int(workers.ROLES["builder"]["rounds"]())
+    # Its own conversation, whole, when there is one — everything it read is still above, so
+    # this round goes on from where it stopped rather than from its report. That is what made
+    # a revision worth sending to a builder that ran out of rounds reading: until this, it
+    # started again from a summary and read everything a second time.
+    earlier = _transcript_of(built)
+    if earlier:
+        ask += (
+            f"\n\nEverything you read before is above, so do not read it again. You have {rounds} "
+            "more rounds."
+        )
+        if rebuilt:
+            ask += (
+                " Your copy is a fresh one with your edits applied, so absolute paths into the old "
+                "one no longer work — paths relative to the project are the same."
+            )
+        carried = [*earlier, {"role": "user", "content": ask}]
+    else:
+        carried = workers.follow_on("builder", objective, said, ask, context, rounds)
     mark = _marker(run, agent_id, label, "builder", run.phase)
     watch = _watching(mark, agents)
     mark("running", label, prompt=feedback[:4000], phase=run.phase, after=[earlier_label])
@@ -1627,11 +1704,12 @@ def _revise(run: workflows.Run, path: Path, message: dict, agents: _Agents, cont
             worktree=worktree,
             give_up=lambda: run.halt.is_set() or agents.over_budget(),
             watch=watch,
-            carried=workers.follow_on("builder", objective, said, ask, context, rounds),
+            carried=carried,
             rounds=rounds,
             context=context,
             folder=run.workdir or None,
         )
+        transcript = _save_transcript(run, label, agent_id, report.messages)
         said_now = str(answer.get("findings") or "")
         if report.cut_short or (report.error and not (report.text.strip() or report.said_before.strip())):
             why = "stopped" if report.cut_short else report.error
@@ -1664,7 +1742,14 @@ def _revise(run: workflows.Run, path: Path, message: dict, agents: _Agents, cont
             agents.keep_copy(key, worktree=worktree, objective=objective, report=said_now, label=label)
             or kept
         )
-        value = {"report": said_now, "diff": diff, "patch_file": patch_file, "label": label, "agent": key}
+        value = {
+            "report": said_now,
+            "diff": diff,
+            "patch_file": patch_file,
+            "label": label,
+            "agent": key,
+            "transcript": transcript,
+        }
         _keep(
             run,
             str(message.get("_key") or _ask_key(message)),
@@ -1874,8 +1959,19 @@ def _closing_note(
             f'To keep going, add_agents(run="{run.id}", agents=[...]) adds a step to this run; '
             "its agents can be named by their labels in after."
         )
-    parts.append(f"Everything the run wrote is in {run.folder}.")
+    parts.append(f"Everything the run wrote is in {run.folder}{_transcripts_line(run)}.")
     return "\n\n".join(parts)
+
+
+def _transcripts_line(run: workflows.Run) -> str:
+    """Where the agents' whole conversations are, for the end of a closing note — "" if none."""
+    folder = Path(run.folder) / "transcripts" if run.folder else None
+    if folder is None or not folder.is_dir() or not any(folder.iterdir()):
+        return ""
+    return (
+        f" — each agent's whole conversation is in {folder}, so when one comes back wrong or empty, "
+        "read what it actually did"
+    )
 
 
 def _took(seconds: float) -> str:

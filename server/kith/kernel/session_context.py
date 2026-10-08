@@ -151,6 +151,31 @@ def nobody_watching() -> Iterator[None]:
         _unattended.reset(token)
 
 
+#: The kind of workflow agent this work belongs to — "scout", "builder", "verifier" — or "" for
+#: the conversation itself.
+#:
+#: An agent runs under its parent's conversation id (so the persona it shares is a cache read),
+#: which makes `current` unable to tell the two apart. Most readers do not need to. The ones that
+#: remember things *per conversation* across turns do: what an agent was shown is not something
+#: the conversation has seen, and the other way round.
+_agent: ContextVar[str] = ContextVar("kith_agent", default="")
+
+
+def agent() -> str:
+    """The kind of workflow agent doing this work, or "" when it is the conversation itself."""
+    return _agent.get()
+
+
+@contextmanager
+def as_agent(kind: str) -> Iterator[None]:
+    """Run a block as one workflow agent's work."""
+    token = _agent.set(str(kind or "agent"))
+    try:
+        yield
+    finally:
+        _agent.reset(token)
+
+
 @contextmanager
 def working_on(project_id: int | None) -> Iterator[None]:
     """Run a block as work on one project, whatever the conversation says.

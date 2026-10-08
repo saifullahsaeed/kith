@@ -87,6 +87,39 @@ def record(path: Path, tool_name: str, arguments: dict, result: object = None) -
             continue
 
 
+def has_seen(path: Path, resolved: str) -> bool:
+    """Has this conversation already opened ``resolved`` as it is on disk now — whole or in part?
+
+    False for work belonging to no conversation, which is the safe answer for a caller deciding
+    whether to show something again.
+    """
+    conversation_id = session_context.current()
+    if not conversation_id:
+        return False
+    try:
+        row = repo.touches.touch_of(path, conversation_id, resolved)
+    except Exception:
+        return False
+    return bool(row) and row["action"] in ("read", "wrote") and row["version"] == _version(resolved)
+
+
+def shown(path: Path, resolved: str, extent: str = "") -> None:
+    """Record that this conversation was handed ``resolved`` without asking for it by name.
+
+    For text a tool attaches to its own result — a folder's instructions arriving with a read —
+    so the manifest and :func:`has_seen` know it is in the conversation the same way a read of
+    it would. ``extent`` as in :func:`record`: "" for the whole file. Silent on failure, like
+    :func:`record`.
+    """
+    conversation_id = session_context.current()
+    if not conversation_id:
+        return
+    try:
+        repo.touches.touch(path, conversation_id, resolved, "read", _version(resolved), extent)
+    except Exception:
+        pass
+
+
 def seen(path: Path, conversation_id: str, limit: int | None = None) -> list[dict]:
     """Files this conversation has touched, each with whether it has moved since.
 

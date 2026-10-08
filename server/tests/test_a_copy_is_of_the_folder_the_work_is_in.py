@@ -332,6 +332,7 @@ class _Report:
         self.text = "said"
         self.said_before = ""
         self.calls = calls
+        self.messages: list[dict] = []
 
 
 def _wait(run_id: str, seconds: float = 30) -> workflows.Run:

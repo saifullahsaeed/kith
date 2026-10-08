@@ -45,6 +45,7 @@ class _Report:
         self.text = "said"
         self.said_before = ""
         self.calls: list[str] = ["grep"]
+        self.messages: list[dict] = []
 
 
 @pytest.fixture

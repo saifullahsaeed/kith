@@ -44,6 +44,7 @@ class _Report:
         self.text = "said"
         self.said_before = ""
         self.calls: list[str] = ["grep"]
+        self.messages: list[dict] = []
 
 
 @pytest.fixture
@@ -496,6 +497,75 @@ class TestBuildingOnPatches:
         assert "2 of 2 applied" in run.note and "apply that one" in run.note
         merged = next((Path(run.folder)).glob("all-*.patch")).read_text()
         assert "one.py" in merged and "extra.py" in merged and "two.py" in merged
+
+
+class TestAnAgentsConversationIsKept:
+    """Every agent's whole conversation is saved, and a revision carries on from it.
+
+    Measured 2026-10-02/03: nineteen builders came back empty, each having spent thirty rounds
+    reading, and the retries were fresh builders that read the same files again. What they had
+    read was thrown away, and nobody could see it.
+    """
+
+    @pytest.fixture
+    def readers(self, project: Path, monkeypatch):
+        """Builders that read and run things and edit nothing, each with a conversation to keep."""
+        _git_project(project)
+        seen: list[dict] = []
+
+        def fake(path, kind, objective, conversation, **kw):
+            seen.append({"kind": kind, "objective": objective, **kw})
+            report = _Report()
+            report.calls = ["read_file", "read_file", "shell"]
+            began = kw.get("carried") or [
+                {"role": "system", "content": "the brief"},
+                {"role": "user", "content": objective},
+            ]
+            report.messages = [*began, {"role": "assistant", "content": f"read for: {objective[:30]}"}]
+            return {"findings": "read a lot", "looked_at": "read_file x2, shell", "patch": ""}, report
+
+        monkeypatch.setattr(workers, "run_agent", fake)
+        return seen
+
+    def test_an_empty_builder_says_how_it_spent_its_calls_and_not_that_it_edited(
+        self, db: Path, project: Path, readers
+    ):
+        run = _wait(_add(db, agents=[{"label": "one", "kind": "builder", "prompt": "write one.py"}])["run"])
+
+        assert "changed nothing after 3 calls (read_file x2, shell)" in run.note
+        assert "it made no edits, but ran commands" in run.note
+        assert "it edited files" not in run.note
+        assert "revise it" in run.note
+
+    def test_its_conversation_is_saved_and_the_note_says_where(self, db: Path, project: Path, readers):
+        run = _wait(_add(db, agents=[{"label": "one", "kind": "builder", "prompt": "write one.py"}])["run"])
+
+        saved = list((Path(run.folder) / "transcripts").glob("one-*.json"))
+        assert len(saved) == 1
+        assert json.loads(saved[0].read_text())[-1] == {
+            "role": "assistant",
+            "content": "read for: write one.py",
+        }
+        assert str(Path(run.folder) / "transcripts") in run.note
+
+    def test_a_revision_carries_on_the_builders_own_conversation(self, db: Path, project: Path, readers):
+        run = _wait(_add(db, agents=[{"label": "one", "kind": "builder", "prompt": "write one.py"}])["run"])
+        earlier = json.loads(next((Path(run.folder) / "transcripts").glob("one-*.json")).read_text())
+
+        run = _wait(
+            _add(
+                db,
+                run=run.id,
+                agents=[{"label": "again", "kind": "revise", "prompt": "now write it", "after": ["one"]}],
+            )["run"]
+        )
+
+        assert run.state == workflows.FINISHED, run.note
+        carried = readers[-1]["carried"]
+        assert carried[: len(earlier)] == earlier, "everything it read is handed back, not a summary"
+        assert carried[-1]["role"] == "user"
+        assert carried[-1]["content"].startswith("now write it")
+        assert "Everything you read before is above" in carried[-1]["content"]
 
 
 @needs_confinement
