@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,8 +36,8 @@ from kith.infra.db import repositories as repo
 from kith.infra.workspace import worktrees
 from kith.infra.workspace.base import WorkspaceError
 from kith.infra.workspace.paths import base_dir
-from kith.kernel import changes, live_turns, session_context
-from kith.services import conversations, tuning
+from kith.kernel import changes, live_turns, session_context, stopping
+from kith.services import conversations, steering, tuning
 from kith.settings import AGENT_DB_PATH
 
 #: The lifecycle an agent's row carries, which is what has to survive a restart.
@@ -339,6 +340,7 @@ def post(to_id: str, from_id: str, kind: str, body: str) -> str:
     """Leave mail for a session and hand it over if it can be. Returns what delivery did."""
     repo.agent_mail.post(AGENT_DB_PATH, to_id, from_id, kind, body)
     changes.publish("agents", to_id)
+    _wake(to_id)
     return deliver(to_id)
 
 
@@ -407,6 +409,78 @@ def _render(conversation_id: str, mail: dict) -> tuple[str, str, dict]:
     heading = _HEADINGS.get(kind, "From {who}").format(who=who)
     text = f"[{heading}]\n\n{str(mail.get('body') or '').strip()}"
     return ("user" if from_handler else "system"), text, {"id": from_id, "name": who, "kind": kind}
+
+
+# --------------------------------------------------------------------------- #
+# Waiting for agents
+# --------------------------------------------------------------------------- #
+
+#: Set when mail arrives for a conversation, so a handler parked in `wait_for` wakes at once.
+_arrived: dict[str, threading.Event] = {}
+_arrived_lock = threading.Lock()
+
+#: The longest one `wait_for_agents` call holds a turn. Long enough that a handler is not
+#: woken to do nothing; short enough that a forgotten tree does not hold a thread for a day.
+WAIT_MINUTES_MAX = 60
+
+#: How often a wait looks again without being woken: an agent stopped or closed by someone else
+#: sends no mail, and the wait should notice that its agents are no longer busy.
+_RECHECK_SECONDS = 5.0
+
+
+def _event(conversation_id: str) -> threading.Event:
+    with _arrived_lock:
+        return _arrived.setdefault(conversation_id, threading.Event())
+
+
+def _wake(conversation_id: str) -> None:
+    _event(conversation_id).set()
+
+
+def wait_for(conversation_id: str, minutes: float = 20) -> dict:
+    """`wait_for_agents`: hold this turn until one of its agents reports or asks something.
+
+    Why it exists, measured on the first real run (2026-10-20): handlers told to end their turn
+    while their agents worked did not — ending a turn reads to a model as giving up — and with
+    nothing else to do they read the code they had just handed out, 63 to 211 calls each. A wait
+    is something to do. It returns as soon as there is mail (which the turn then takes at its next
+    step, in the usual way), when the person says something, when none of its agents is busy any
+    more, when the turn is stopped, or after `minutes`.
+    """
+    if not children(conversation_id):
+        return {"ok": False, "error": "You have no open agents to wait for."}
+    limit = max(0.1, min(float(minutes or 20), WAIT_MINUTES_MAX)) * 60
+    deadline = time.monotonic() + limit
+    switch = stopping.current(conversation_id)
+    arrived = _event(conversation_id)
+    while True:
+        arrived.clear()
+        mail = repo.agent_mail.waiting(AGENT_DB_PATH, conversation_id)
+        if mail:
+            return {"ok": True, "arrived": _summary(mail)}
+        if steering.waiting(conversation_id):
+            return {"ok": True, "note": "Your person said something — it is next."}
+        if switch is not None and switch.is_set():
+            return {"ok": True, "note": "Stopped."}
+        if not _busy_below(conversation_id):
+            return {"ok": True, "note": "None of your agents is working any more, and nothing new has arrived."}
+        left = deadline - time.monotonic()
+        if left <= 0:
+            still = [label(one) for one in children(conversation_id) if busy(one)]
+            return {
+                "ok": True,
+                "note": f"Nothing yet after {round(limit / 60)} min. Still working: {', '.join(still)}. "
+                "Wait again, or message one if it has been quiet too long.",
+            }
+        arrived.wait(timeout=min(_RECHECK_SECONDS, left))
+
+
+def _summary(mail: list[dict]) -> str:
+    said = []
+    for one in mail:
+        who = label(row(str(one.get("from_id") or ""))) if one.get("from_id") else "Kith"
+        said.append(f"{one.get('kind')} from {who}")
+    return ", ".join(said) + " — it is below."
 
 
 # --------------------------------------------------------------------------- #
@@ -549,12 +623,17 @@ def _questions_text(questions: list) -> str:
 
 
 def release(conversation_id: str) -> None:
-    """Let go of an agent's open question unanswered — it is being stopped."""
+    """Let go of a turn parked on its handler — an open question, or a wait for its agents.
+
+    Called when the turn is stopped: the question is let go unanswered, and the wait wakes to find
+    its stop switch set.
+    """
     with _asking_lock:
         asked = _asking.get(conversation_id)
     if asked is not None:
         asked.answer = None
         asked.event.set()
+    _wake(conversation_id)
 
 
 def note_up(conversation_id: str, text: str) -> dict:

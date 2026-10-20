@@ -375,6 +375,55 @@ class TestAsking:
         assert answer["answered"] is False
 
 
+class TestWaiting:
+    """`wait_for_agents`: a handler's way to do nothing while its agents work — measured as the
+    missing piece on the first real run, where handlers read instead."""
+
+    def test_it_returns_when_an_agent_reports(self, started, no_turns, monkeypatch):
+        chat, agent = started
+        # The handler's turn is running — it is the turn calling `wait_for_agents` — so the report
+        # waits for its next step instead of starting a turn of its own.
+        real = live_turns.current
+        monkeypatch.setattr(live_turns, "current", lambda one: object() if one == chat else real(one))
+        later = threading.Timer(0.3, lambda: agents.post(chat, agent["id"], "report", "done"))
+        later.start()
+        began = time.monotonic()
+        answer = agents.wait_for(chat, minutes=1)
+        assert answer == {"ok": True, "arrived": "report from api — it is below."}
+        assert time.monotonic() - began < 5
+
+    def test_it_returns_when_nothing_is_working_any_more(self, db, started, no_turns):
+        chat, agent = started
+        repo.conversations.set_agent(db, agent["id"], agent_state=agents.DONE)
+        assert "None of your agents is working" in agents.wait_for(chat, minutes=1)["note"]
+
+    def test_stopping_the_turn_ends_the_wait(self, started, no_turns, monkeypatch):
+        chat, _ = started
+        switch = threading.Event()
+        monkeypatch.setattr(agents.stopping, "current", lambda conversation_id: switch)
+        answer: dict = {}
+        waiting = threading.Thread(target=lambda: answer.update(agents.wait_for(chat, minutes=1)))
+        waiting.start()
+        time.sleep(0.2)
+        switch.set()
+        agents.release(chat)
+        waiting.join(timeout=5)
+        assert answer == {"ok": True, "note": "Stopped."}
+
+    def test_there_is_nothing_to_wait_for_without_agents(self, db):
+        assert agents.wait_for(_chat(db), minutes=1)["ok"] is False
+
+
+class TestTheDefaultStrategy:
+    def test_it_is_lead_dont_read_and_it_ships(self):
+        from kith import settings
+        from kith.services import tuning
+
+        assert tuning.value("agent_strategy") == "lead-dont-read"
+        manifest = (settings.BUNDLED_SKILLS_DIR / "lead-dont-read" / "SKILL.md").read_text()
+        assert "name: lead-dont-read" in manifest and "wait_for_agents" in manifest
+
+
 class TestClosing:
     def test_unmerged_work_is_refused_then_merged_work_is_closed(self, db, started, no_turns, repo_dir):
         chat, agent = started

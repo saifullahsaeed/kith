@@ -413,6 +413,11 @@ export function digestOf(name: string, args: Args, wrapped: unknown): string {
         .filter(Boolean)
         .join(" · ");
     }
+    case "wait_for_agents": {
+      // What ended the wait: what arrived, or why it stopped waiting.
+      if (typeof r.arrived === "string") return short(r.arrived.replace(/ — it is below\.$/, ""));
+      return typeof r.note === "string" ? short(r.note) : "";
+    }
     case "close_agents": {
       const closed = Array.isArray(r.closed) ? r.closed.length : 0;
       const refused = Array.isArray(r.refused) ? (r.refused as unknown[]).filter(isObj) : [];

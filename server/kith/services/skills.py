@@ -431,11 +431,23 @@ INDEX_BUDGET_CHARS = 6_000
 def index() -> str:
     """The skills section of the system prompt: names and descriptions, nothing else.
 
-    The active agent strategy is left out: its whole text is already in the prompt (see
-    :func:`strategy`), and listing it as something to `read_skill` would invite reading it twice.
+    Agent strategies are left out (`metadata: kind: agent-strategy`, or the one named by the
+    setting). The active one's whole text is already in the prompt (see :func:`strategy`), and the
+    others are choices for the person in Settings, not instructions for him to go and read.
     """
     leading = _strategy_name()
-    return render_index([one for one in installed() if one.name != leading], first=_bundled_names())
+    return render_index(
+        [one for one in installed() if one.name != leading and not is_strategy(one)], first=_bundled_names()
+    )
+
+
+def is_strategy(skill: Skill) -> bool:
+    """Whether a skill is an agent strategy — chosen in Settings rather than read on demand."""
+    return str((skill.metadata or {}).get("kind") or "") == STRATEGY_KIND
+
+
+#: The `metadata.kind` that marks a skill as an agent strategy.
+STRATEGY_KIND = "agent-strategy"
 
 
 def _strategy_name() -> str:

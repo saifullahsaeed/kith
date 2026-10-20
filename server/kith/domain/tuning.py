@@ -234,7 +234,9 @@ TUNABLES: tuple[Tunable, ...] = (
         "instructions ride in every session's prompt — the person's chat and every agent alike — "
         "so changing strategy is choosing or editing a skill, not changing code. Blank means no "
         "strategy: the agent tools are still there, with nothing telling him how to use them.",
-        default="divide-and-conquer",
+        # `lead-dont-read` since 2026-10-20: the first real run under `divide-and-conquer` had
+        # every handler keep reading the code it had just handed out. Both ship; this picks one.
+        default="lead-dont-read",
         group="context",
         kind="text",
     ),

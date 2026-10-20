@@ -32,10 +32,10 @@ def _here() -> str:
     "start_agents",
     "Start agents — full sessions like you, with every tool and skill you have — to work on parts "
     "of the task in parallel. Each gets its own conversation and, inside a git repository, its own "
-    "worktree on a new branch from your last commit. They run in the background: end your turn "
-    "after starting them, and each one's report arrives here when it finishes (and its questions "
-    "as they come up). Follow the agent strategy in your instructions for when to do this and how "
-    "to split the work; doing a small or tightly coupled task yourself is often right.",
+    "worktree on a new branch from your last commit. They run in the background: then call "
+    "`wait_for_agents`, and each one's report arrives here when it finishes (and its questions as "
+    "they come up). Follow the agent strategy in your instructions for when to do this and how to "
+    "split the work; doing a small or tightly coupled task yourself is often right.",
     {
         "agents": {
             "type": "array",
@@ -151,3 +151,19 @@ def close_agents(path: Path, args: dict):
     if not here:
         return {"ok": False, "error": "There are no agents outside a conversation."}
     return agents.close(here, list(args.get("agents") or []), force=bool(args.get("force")))
+
+
+@tool(
+    "wait_for_agents",
+    "Wait for your agents: holds your turn until one of them reports or asks you something, then "
+    "returns and the report or question is right below. Use it instead of reading their code or "
+    "checking on them while they work. Also returns when your person says something, when none of "
+    "your agents is working any more, or after `minutes` (default 20, at most 60) — call it again "
+    "to keep waiting.",
+    {"minutes": {"type": "number", "description": "How long to wait at most. Default 20."}},
+)
+def wait_for_agents(path: Path, args: dict):
+    here = _here()
+    if not here:
+        return {"ok": False, "error": "There are no agents outside a conversation."}
+    return agents.wait_for(here, float(args.get("minutes") or 20))

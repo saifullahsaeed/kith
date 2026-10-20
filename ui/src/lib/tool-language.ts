@@ -188,6 +188,7 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   message_agents: { verb: "messaged", group: "agents" },
   stop_agents: { verb: "stopped", of: "agents", group: "agents" },
   close_agents: { verb: "closed", of: "agents", group: "agents" },
+  wait_for_agents: { verb: "waited for his agents", group: "agents" },
 };
 
 /** What each plural argument used to be called, for reading back old tool calls. */

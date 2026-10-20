@@ -129,8 +129,13 @@ class TestWhichOnesKeepTheirDescription:
     def test_the_real_install_keeps_every_shipped_description(self):
         from kith import settings
 
-        # The active agent strategy is not listed: its whole text is in the prompt already.
-        shipped = {p.name for p in settings.BUNDLED_SKILLS_DIR.iterdir() if p.is_dir()} - {skills._strategy_name()}
+        # Agent strategies are not listed: the active one's whole text is in the prompt already,
+        # and the others are a setting, not something to read.
+        shipped = {
+            p.name
+            for p in settings.BUNDLED_SKILLS_DIR.iterdir()
+            if p.is_dir() and "kind: agent-strategy" not in (p / "SKILL.md").read_text()
+        }
         listed = skills.index()
         described = {
             line.split("**")[1] for line in listed.splitlines() if line.startswith("- **") and "—" in line
