@@ -72,13 +72,75 @@ export function findAgent(nodes: readonly AgentNode[], id: string): AgentNode | 
 export function agentTook(node: Pick<AgentNode, "createdAt" | "updatedAt" | "state" | "working" | "asking">, now: number): string {
   const started = Date.parse(node.createdAt);
   if (Number.isNaN(started)) return "";
-  const busy = ["live", "asking", "waiting"].includes(agentLook(node));
-  const ended = busy ? now : Date.parse(node.updatedAt);
-  const seconds = Math.max(0, Math.round(((Number.isNaN(ended) ? now : ended) - started) / 1000));
+  const ended = busyLook(agentLook(node)) ? now : Date.parse(node.updatedAt);
+  return durationWord(((Number.isNaN(ended) ? now : ended) - started) / 1000);
+}
+
+/** Still at it, as far as a clock is concerned: running, or parked on someone else's work. */
+function busyLook(look: AgentLook): boolean {
+  return look === "live" || look === "asking" || look === "waiting";
+}
+
+/** `23m 26s`, `1h 4m` — the map's way of saying a duration. */
+function durationWord(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/**
+ * How long a whole tree has been at it: from its first agent's start to now while any agent is
+ * still busy, and to the last thing any of them did once none is. Closed agents count — they were
+ * part of the work — which is also why a tree of nothing but closed agents still has an age.
+ */
+export function treeTook(nodes: readonly AgentNode[], now: number): string {
+  let started = Infinity;
+  let ended = -Infinity;
+  let busy = false;
+  for (const { node } of flattenAgents(nodes, true)) {
+    const born = Date.parse(node.createdAt);
+    const last = Date.parse(node.updatedAt);
+    if (!Number.isNaN(born)) started = Math.min(started, born);
+    if (!Number.isNaN(last)) ended = Math.max(ended, last);
+    if (busyLook(agentLook(node))) busy = true;
+  }
+  if (!Number.isFinite(started)) return "";
+  return durationWord(((busy || !Number.isFinite(ended) ? now : ended) - started) / 1000);
+}
+
+/** A tree at a glance — the Activity tab's card. */
+export interface AgentSummary {
+  /** Agents in each state, anywhere in the tree. `idle` is not a state an agent is ever in, so it
+   *  is not counted. */
+  working: number;
+  waiting: number;
+  asking: number;
+  done: number;
+  stopped: number;
+  closed: number;
+  /** Tokens the agents have processed between them — the conductor's own are not in it. */
+  tokens: number;
+  /** Who is parked on a question to its handler, oldest first. */
+  askingNames: string[];
+}
+
+export function summarizeAgents(nodes: readonly AgentNode[]): AgentSummary {
+  const out: AgentSummary = { working: 0, waiting: 0, asking: 0, done: 0, stopped: 0, closed: 0, tokens: 0, askingNames: [] };
+  for (const { node } of flattenAgents(nodes, true)) {
+    out.tokens += node.tokens || 0;
+    const look = agentLook(node);
+    if (look === "live") out.working += 1;
+    else if (look === "asking") {
+      out.asking += 1;
+      out.askingNames.push(node.name);
+    } else if (look === "waiting") out.waiting += 1;
+    else if (look === "done") out.done += 1;
+    else if (look === "stopped") out.stopped += 1;
+    else if (look === "closed") out.closed += 1;
+  }
+  return out;
 }
 
 /** `446512` → `446.5k`, `1234567` → `1.2M`: a token count at a glance. */

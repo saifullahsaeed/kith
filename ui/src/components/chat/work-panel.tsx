@@ -18,7 +18,7 @@ import { keys } from "@/lib/query-keys";
  * Gone, and what is left is the things a conversation genuinely cannot say, each as a card:
  *
  * * **what he is working on**, and how far through its checklist;
- * * **the agents** in this chat's tree, as a map;
+ * * **the agents** in this chat's tree, counted — the map is a click away;
  * * **what is running in the background** while he does something else, and what will start on
  *   its own;
  * * **what is in his head**, by group, with the button that shrinks it.
@@ -68,7 +68,8 @@ export function WorkPanel({
             {/* What he is on right now, and how far through it. */}
             <WorkingOn conversationId={conversationId} />
 
-            {/* The agents this chat's tree has, as a map. Nothing when there are none. */}
+            {/* The agents this chat's tree has, counted, and the way into the map. Nothing when
+                there are none. */}
             <AgentsCard conversationId={conversationId} />
 
             {/* What is running while he does something else. Renders nothing when there is

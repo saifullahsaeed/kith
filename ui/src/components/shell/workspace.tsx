@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { BoardOverlay } from "@/components/design/board-overlay";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -22,6 +22,7 @@ import { useHostEffects } from "@/components/shell/use-host-effects";
 
 import { AgentTreeHost } from "@/components/chat/agent-tree";
 import { ChatPane } from "@/components/chat/chat-pane";
+import { ConductorTabs } from "@/components/chat/conductor-tabs";
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
 import { LayoutView } from "@/components/shell/layout/layout-view";
@@ -29,6 +30,13 @@ import { useLayout } from "@/components/shell/layout/store";
 import { surfaceFor } from "@/components/shell/layout/surfaces";
 import { useCanAttach } from "@/lib/active-composer";
 import { useAgentTree } from "@/lib/agents";
+import {
+  conductorOf,
+  openInConductor,
+  shownIn,
+  supersedeOpens,
+  useAgentViews,
+} from "@/lib/agent-views";
 import { OpenConversation } from "@/lib/open-conversation";
 import { useDrafts, useDraftedTabs } from "@/lib/drafts";
 import {
@@ -181,14 +189,21 @@ export function Workspace({
    *  Read once by the pane that mounts next; the pane owns it from then on. */
   const draftProject = useRef<number | null>(null);
 
-  /** Open a conversation: a tab, focused if it is already somewhere. */
+  const cache = useQueryClient();
+
+  /** Open a conversation: its tab, focused if it is already somewhere.
+   *
+   *  *Its* tab being its conductor's. An agent opens inside the tab of the chat at the top of its
+   *  tree, as that tab's sub-view, rather than as a tab of its own — every agent looked at used to
+   *  leave a tab behind, and every tab a mounted pane. A conversation that is its own conductor is
+   *  simply its own tab, and opening it puts that tab back on the conductor. See `lib/agent-views`. */
   const openConversation = useCallback(
     (id: string) => {
       draftProject.current = null;
-      openSurface({ surface: "chat", conversationId: id });
       remember(id);
+      void openInConductor(cache, id, (root) => openSurface({ surface: "chat", conversationId: root }));
     },
-    [openSurface],
+    [cache, openSurface],
   );
 
   /** A fresh chat. Its tab is keyed on nothing until the first turn names it, which is why
@@ -196,6 +211,8 @@ export function Workspace({
   const newConversation = useCallback(
     (project: number | null = null) => {
       draftProject.current = project;
+      // An agent still being looked up must not land on top of the chat you have just started.
+      supersedeOpens();
       openSurface({ surface: "chat", conversationId: "" });
       remember("");
     },
@@ -219,7 +236,7 @@ export function Workspace({
    * Sticky instead: a click outside a chat leaves the answer where it was. It only changes when
    * a chat is genuinely focused, or when the one being pointed at is no longer open. */
   const lastChat = useRef("");
-  const conversationId = useMemo(() => {
+  const tabConversation = useMemo(() => {
     const all = panesOf(layoutTree);
     const pane = all.find((one) => one.id === focusedPane);
     const here = pane?.tabs[pane.active];
@@ -240,6 +257,17 @@ export function Workspace({
     return lastChat.current;
   }, [focusedPane, layoutTree]);
 
+  /* Two answers now, where there was one.
+   *
+   * `tabConversation` is the tab's identity — its key in the layout, its companions, its drafts —
+   * and stays the conductor's while one of its agents is on screen. `conversationId` is what is on
+   * screen: the agent, if the tab is showing one (see `lib/agent-views`). Everything that is about
+   * *a conversation* — the title bar's light and pill, the sidebar's mark, the context screen, the
+   * file viewer's project, what a turn may open — reads the second, so an agent's page behaves as
+   * it did as a tab of its own. Only what is about *the tab* reads the first. */
+  const agentViews = useAgentViews((state) => state.views);
+  const conversationId = shownIn(agentViews, tabConversation);
+
   /** The header's buttons are toggles: pressing one twice puts the surface away again.
    *
    * A surface that is *about* a conversation goes into that chat's own column rather than
@@ -250,8 +278,10 @@ export function Workspace({
    * `board` and `settings` are about Kith rather than about a chat, so they stay tabs. */
   const toggleSurface = useCallback(
     (surface: "work" | "board" | "settings") => {
-      if (BOUND.has(surface) && conversationId) {
-        const hostKey = tabKey({ surface: "chat", conversationId });
+      // The tab's conversation, not the one on screen: the column belongs to the tab, and draws
+      // whichever conversation the tab is showing (see `renderSurface`).
+      if (BOUND.has(surface) && tabConversation) {
+        const hostKey = tabKey({ surface: "chat", conversationId: tabConversation });
         const held = companions[hostKey] ?? [];
         // The companion column is one thing with tabs now, so the button toggles the column:
         // anything open in it closes, and an empty column opens on Activity. Asking only about
@@ -260,11 +290,11 @@ export function Workspace({
           for (const one of held) detach(hostKey, tabKey(one));
           return;
         }
-        const key = tabKey({ surface, conversationId });
+        const key = tabKey({ surface, conversationId: tabConversation });
         if (held.some((one) => tabKey(one) === key)) {
           detach(hostKey, key);
         } else {
-          attach(hostKey, { surface, conversationId });
+          attach(hostKey, { surface, conversationId: tabConversation });
         }
         return;
       }
@@ -274,7 +304,7 @@ export function Workspace({
       if (treeHasTab(layoutTree, key)) closeTab(key);
       else openSurface(ref);
     },
-    [attach, closeTab, companions, conversationId, detach, layoutTree, openSurface],
+    [attach, closeTab, companions, tabConversation, detach, layoutTree, openSurface],
   );
 
   // Reopen where you were. A reload used to land on an empty chat with the conversation you
@@ -303,9 +333,31 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.conversationId]);
 
+  /* An agent on screen as its conductor's sub-view has no tab of its own, so a surface its turn
+   * asks for (the browser, a plugin's view) goes into the column of the tab it is shown in —
+   * attached under the tab's conversation like every panel there, and drawn for the agent while the
+   * agent is what the tab shows. Left to the store, a host with no tab is opened as a stray tab. */
+  const openFromTurn = useCallback(
+    (ref: TabRef) => {
+      if (
+        tabConversation &&
+        conversationId !== tabConversation &&
+        BOUND.has(ref.surface) &&
+        ref.conversationId === conversationId
+      ) {
+        attach(tabKey({ surface: "chat", conversationId: tabConversation }), {
+          ...ref,
+          conversationId: tabConversation,
+        } as TabRef);
+        return;
+      }
+      openSurface(ref);
+    },
+    [attach, conversationId, openSurface, tabConversation],
+  );
   /* Effects a plugin asks Kith to perform — opening its own tab, so far. See `use-host-effects`
    * for why this is the renderer's job and the dead end it closes. */
-  useHostEffects(conversationId, openSurface);
+  useHostEffects(conversationId, openFromTurn);
 
   const inbox = useMessages();
 
@@ -436,10 +488,17 @@ export function Workspace({
    * module that refuses to know what a surface holds. */
   useEffect(() => {
     const tabs = new Set<string>();
+    // And the agents opened inside a tab, which go with it for the same reason.
+    const roots = new Set<string>();
     for (const pane of panesOf(layoutTree)) {
-      for (const tab of pane.tabs) if (tab.surface === "chat" && tab.uid) tabs.add(tab.uid);
+      for (const tab of pane.tabs) {
+        if (tab.surface !== "chat") continue;
+        if (tab.uid) tabs.add(tab.uid);
+        if (tab.conversationId) roots.add(tab.conversationId);
+      }
     }
     useDrafts.getState().keep(tabs);
+    useAgentViews.getState().keep(roots);
   }, [layoutTree]);
   // The room glows green while he is working, and is otherwise his own amber.
   const wash = working ? "var(--roam)" : "var(--kith)";
@@ -456,25 +515,38 @@ export function Workspace({
   const surfaceBody = useCallback(
     (ref: TabRef, onClose: () => void) => {
       switch (ref.surface) {
-        case "chat":
-          /* No key here. `PaneView` keys the body on the tab's permanent `uid`, which is what
-           * survives a draft chat being named — keying on the conversation unmounted the pane
-           * mid-first-reply and threw away the runtime streaming into it.
+        case "chat": {
+          /* Keyed on *which sub-view*, never on the conversation. `PaneView` keys the body on the
+           * tab's permanent `uid`, which is what survives a draft chat being named — keying on the
+           * conversation unmounted the pane mid-first-reply and threw away the runtime streaming
+           * into it. The conductor is always `"conductor"`, named or not, so that still holds; an
+           * agent is its own key, so picking another one on the strip swaps the pane outright.
+           * That swap is the point: one `ChatPane` per tab, the one on screen, with nothing held
+           * mounted behind it — see `lib/agent-views`.
            *
            * `initialProject` is only handed to a chat that has no conversation yet. It used to
            * go to every pane that mounted, read off a mutable ref cleared by one code path out
            * of several — so opening "New chat here" on project 7 and then clicking an existing
            * chat's tab re-bound *that* conversation to project 7 on the server. */
+          const root = ref.conversationId ?? "";
+          const shown = shownIn(agentViews, root);
+          const agent = shown !== root;
           return (
             <ChatPane
-              conversationId={ref.conversationId ?? ""}
-              initialProject={ref.conversationId ? null : draftProject.current}
-              active={(ref.conversationId ?? "") === conversationId}
+              key={agent ? `agent:${shown}` : "conductor"}
+              conversationId={shown}
+              initialProject={root ? null : draftProject.current}
+              // The tab is what is focused, whichever of its conversations it is showing.
+              active={root === tabConversation}
               /* Where this tab's unsent text is kept, so it survives the tab being switched
-                 away from — which unmounts this pane. See `lib/drafts`. */
-              uid={ref.uid}
+                 away from — which unmounts this pane. See `lib/drafts`. The conductor's only:
+                 an agent's pane has no composer, and until its record arrives it does not know
+                 it is an agent's — so with the tab's `uid` it would write its own empty box
+                 over the conductor's draft. */
+              uid={agent ? undefined : ref.uid}
             />
           );
+        }
 
         case "work":
           return (
@@ -531,6 +603,7 @@ export function Workspace({
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
+      agentViews,
       closeTab,
       config,
       conversationId,
@@ -540,6 +613,7 @@ export function Workspace({
       route.settingsTab,
       route.tab,
       route.taskId,
+      tabConversation,
     ],
   );
 
@@ -557,31 +631,68 @@ export function Workspace({
   const renderSurface = useCallback(
     (ref: TabRef) => {
       const host = surfaceBody(ref, () => closeTab(tabKey(ref)));
+      // Only chats carry a column, or a strip — anything else is its body and nothing more.
+      if (ref.surface !== "chat") return host;
       const hostKey = tabKey(ref);
       /* No early return for a chat with nothing beside it, and that absence is load-bearing —
        * `withCompanions` says why at length. In short: returning the host itself here and a
        * `<Companions>` there changes the element *type* at this position the moment the first
        * panel opens, and React answers a changed type by unmounting everything below it. The chat
-       * losing its runtime and refetching itself is what that looked like from a chair. */
-      const held = ref.surface === "chat" ? (companions[hostKey] ?? []) : [];
-      return withCompanions(
-        ref,
-        host,
-        held.map((one) => {
-          const key = tabKey(one);
-          return {
-            key,
-            // The bare surface name: which conversation it is about is the tab it is sitting
-            // in, so "Work — find me a domain…" here would be repeating the tab above it.
-            title: surfaceFor(one).title,
-            icon: surfaceFor(one).icon,
-            body: surfaceBody(one, () => detach(hostKey, key)),
-          };
-        }),
-        (key) => detach(hostKey, key),
+       * losing its runtime and refetching itself is what that looked like from a chair. The same
+       * goes for `ConductorTabs` around it: every chat gets one, strip or no strip. */
+      const held = companions[hostKey] ?? [];
+
+      /* What the tab is showing — its own conversation, or one of its agents.
+       *
+       * The column is the tab's: its panels are attached under the tab's conversation and stay
+       * attached whichever conversation is picked on the strip. What each one *draws* is about the
+       * conversation on screen, the way it was when an agent had a tab and a column of its own — so
+       * Activity on an agent's page is that agent's. Keyed on the sub-view, so a panel built for
+       * one conversation is not handed another's id mid-life (a browser, say, would keep the view
+       * it had); the conductor's key is fixed, so naming a draft does not rebuild its column. */
+      const root = ref.conversationId ?? "";
+      const shown = shownIn(agentViews, root);
+      const viewKey = shown === root ? "conductor" : `agent:${shown}`;
+      return (
+        <ConductorTabs
+          root={root}
+          open={agentViews[root]?.open ?? NO_AGENTS}
+          shown={shown}
+          // Remembered like any other open, or a reload would put the tab back on whatever was
+          // opened last from outside it.
+          onShow={(id) => {
+            useAgentViews.getState().show(root, id);
+            remember(id);
+          }}
+          onClose={(id) => {
+            useAgentViews.getState().close(root, id);
+            const now = shownIn(useAgentViews.getState().views, root);
+            if (now !== shown) remember(now);
+          }}
+        >
+          {withCompanions(
+            ref,
+            host,
+            held.map((one) => {
+              const key = tabKey(one);
+              const about =
+                shown && BOUND.has(one.surface) ? ({ ...one, conversationId: shown } as TabRef) : one;
+              return {
+                key,
+                // The bare surface name: which conversation it is about is the tab it is sitting
+                // in, so "Work — find me a domain…" here would be repeating the tab above it.
+                title: surfaceFor(one).title,
+                icon: surfaceFor(one).icon,
+                body: <Fragment key={viewKey}>{surfaceBody(about, () => detach(hostKey, key))}</Fragment>,
+              };
+            }),
+            (key) => detach(hostKey, key),
+            shown,
+          )}
+        </ConductorTabs>
       );
     },
-    [closeTab, companions, detach, surfaceBody],
+    [agentViews, closeTab, companions, detach, surfaceBody],
   );
 
   /** The project the focused chat is bound to.
@@ -610,12 +721,49 @@ export function Workspace({
    * when it opens. That is empty on a reload and never filled for a background tab, so after a
    * reload three open chats read "New chat", "New chat" and one real name — two tabs claiming
    * to be new, neither of them new, and nothing to tell them apart. */
-  const { data: known = [] } = useQuery({
+  const { data: known = [], isSuccess: knownRead } = useQuery({
     queryKey: keys.conversations(TITLE_LIMIT, ""),
     queryFn: async () => (await fetchConversations(TITLE_LIMIT)).conversations,
     staleTime: 30_000,
   });
-  const cache = useQueryClient();
+
+  /* Agent tabs from before agents opened inside their conductor's tab, folded into it — once, on
+   * load, and only where the conductor's tab is open too. That is the case that costs: two tabs on
+   * one tree, two mounted panes, when the strip in the conductor's tab can hold the agent. An agent
+   * tab whose conductor is not open is left as it is; turning it into its conductor's tab would be
+   * a change to an arrangement nobody asked to change. A pinned one is left too — a pin is a
+   * decision about that tab.
+   *
+   * After the listing has been read, so `conductorOf` answers every chat in it from the cache and
+   * only a tab that is not one (an agent, or a chat too old to be listed) costs a request. If you
+   * were looking at the agent, the conductor's tab comes forward showing it; otherwise it joins the
+   * strip without taking the tab over. */
+  const foldedOld = useRef(false);
+  useEffect(() => {
+    if (foldedOld.current || !knownRead) return;
+    foldedOld.current = true;
+    const chats = panesOf(useLayout.getState().tree)
+      .flatMap((one) => one.tabs)
+      .filter((tab) => tab.surface === "chat" && tab.conversationId);
+    for (const tab of chats) {
+      const id = tab.conversationId ?? "";
+      const key = tabKey(tab);
+      void conductorOf(cache, id).then((root) => {
+        const { tree, pins, focused } = useLayout.getState();
+        if (root === id || key in pins || !treeHasTab(tree, key)) return;
+        if (!treeHasTab(tree, tabKey({ surface: "chat", conversationId: root }))) return;
+        const front = panesOf(tree).find((one) => one.id === focused);
+        const showing = front?.tabs[front.active];
+        if (showing && tabKey(showing) === key) {
+          openSurface({ surface: "chat", conversationId: root });
+          useAgentViews.getState().show(root, id);
+        } else {
+          useAgentViews.getState().fold(root, id);
+        }
+        closeLayoutTab(key);
+      });
+    }
+  }, [cache, closeLayoutTab, knownRead, openSurface]);
   const titleForTab = useCallback(
     (ref: TabRef) => {
       // Any tab that names a conversation, not only a chat — `tabTitle` decides what to do
@@ -684,9 +832,10 @@ export function Workspace({
   const presence = presenceFor(conversationId, facts, started[conversationId], focusedRoot);
   const showAgents = useAgentTree((s) => s.show);
 
-  /** Whether the chat in front of you has its companion column open — any tab of it. */
-  const companionOpen = conversationId
-    ? (companions[tabKey({ surface: "chat", conversationId })] ?? []).length > 0
+  /** Whether the chat in front of you has its companion column open — any tab of it. The tab's
+   *  column, which is the one on screen whichever of its conversations is showing. */
+  const companionOpen = tabConversation
+    ? (companions[tabKey({ surface: "chat", conversationId: tabConversation })] ?? []).length > 0
     : hasTab("work");
 
   /* Where the title bar's tab strip is drawn — a node the header renders and the layout portals
@@ -936,6 +1085,10 @@ export function ScreenLoading() {
     </div>
   );
 }
+
+/** A tab no agent has been opened in — one empty list, so its strip's props do not change identity
+ *  on every render. */
+const NO_AGENTS: readonly string[] = [];
 
 /** Keep (or clear) the conversation to reopen on the next load. */
 function remember(conversationId: string): void {

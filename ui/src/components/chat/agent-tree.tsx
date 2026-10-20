@@ -82,23 +82,21 @@ export function AgentTreeDialog({ root, onOpen }: { root: string; onOpen: (id: s
 }
 
 /**
- * The map itself — in the title bar's dialog, and as a card in the Activity tab.
+ * The map itself, as the title bar's dialog draws it.
  *
- * `compact` is the column's version: narrower nodes, and the details under the map instead of
- * beside it, because the column is a third of the window and the map scrolls sideways inside it.
+ * It was a card in the Activity tab too, in a narrower top-to-bottom version of its own. That card
+ * counts the tree now and opens this dialog instead (see `agents-card`), so there is one map.
  * `current` marks the conversation on screen, so an agent's own page shows where it sits.
  */
 export function AgentMap({
   root,
   onOpen,
   heading,
-  compact = false,
   current = "",
 }: {
   root: string;
   onOpen: (id: string) => void;
   heading: (summary: string) => React.ReactNode;
-  compact?: boolean;
   current?: string;
 }) {
   const cache = useQueryClient();
@@ -150,21 +148,19 @@ export function AgentMap({
               : "No agents under this chat yet. He starts them when the work splits.",
       )}
 
-      <div className={cn("flex min-h-0 flex-1 gap-4", compact && "flex-col gap-3")}>
+      <div className="flex min-h-0 flex-1 gap-4">
         <div className="min-h-0 min-w-0 flex-1 overflow-auto pb-1">
           {data ? (
-            // Left to right in the dialog, top to bottom in the column: a third of the window
-            // cannot hold three columns of nodes side by side, but it can hold a tree that steps in.
-            <div className={cn("flex py-1", compact ? "flex-col" : "w-max items-center")}>
+            // Left to right: the chat, then each level of agents in a column beside it.
+            <div className="flex w-max items-center py-1">
               {/* A server older than the map sends no `self`; the tree is still worth drawing. */}
-              <SelfNode self={data.self ?? { ...NO_SELF, id: root }} compact={compact} current={current === root} />
+              <SelfNode self={data.self ?? { ...NO_SELF, id: root }} current={current === root} />
               {shown.length ? (
                 <Children
                   nodes={shown}
                   now={now}
                   selected={selected}
                   onSelect={(id) => setSelected((was) => (was === id ? "" : id))}
-                  compact={compact}
                   current={current}
                 />
               ) : null}
@@ -172,17 +168,11 @@ export function AgentMap({
           ) : null}
         </div>
         {chosen ? (
-          <Details
-            node={chosen}
-            now={now}
-            onOpen={onOpen}
-            onClose={() => setSelected("")}
-            compact={compact}
-          />
+          <Details node={chosen} now={now} onOpen={onOpen} onClose={() => setSelected("")} />
         ) : null}
       </div>
 
-      <div className={cn("border-border flex items-center gap-3 border-t pt-3", compact && "pt-2.5")}>
+      <div className="border-border flex items-center gap-3 border-t pt-3">
         {counts.closed ? (
           <button
             type="button"
@@ -224,7 +214,7 @@ const NO_SELF: AgentTreeSelf = {
 };
 
 /** The chat the tree grows from: its title, and the model and context its last round carried. */
-function SelfNode({ self, compact, current }: { self: AgentTreeSelf; compact: boolean; current: boolean }) {
+function SelfNode({ self, current }: { self: AgentTreeSelf; current: boolean }) {
   const look: AgentLook = self.working ? "live" : "idle";
   const detail = [self.modelUsed ? shortModel(self.modelUsed) : "", self.contextTokens ? `${tokensWord(self.contextTokens)} in context` : ""]
     .filter(Boolean)
@@ -232,8 +222,7 @@ function SelfNode({ self, compact, current }: { self: AgentTreeSelf; compact: bo
   return (
     <div
       className={cn(
-        "bg-card flex shrink-0 flex-col gap-0.5 rounded-xl border px-4 py-3",
-        compact ? "w-full px-3 py-2.5" : "w-80",
+        "bg-card flex w-80 shrink-0 flex-col gap-0.5 rounded-xl border px-4 py-3",
         current ? "border-kith/60" : "border-border",
       )}
     >
@@ -260,47 +249,14 @@ function Children({
   now,
   selected,
   onSelect,
-  compact,
   current,
 }: {
   nodes: AgentNode[];
   now: number;
   selected: string;
   onSelect: (id: string) => void;
-  compact: boolean;
   current: string;
 }) {
-  if (compact) {
-    // Top to bottom: a rail down the left from the node above, and a tick in to each node — the
-    // rail stopping at the last tick rather than running on past it.
-    return (
-      <ul className="mt-2 flex flex-col gap-2 pl-5">
-        {nodes.map((node, at) => (
-          <li
-            key={node.id}
-            className={cn(
-              "relative flex flex-col",
-              "before:bg-border before:absolute before:-top-2 before:-left-2.5 before:w-px",
-              at === nodes.length - 1 ? "before:h-[30px]" : "before:-bottom-2",
-              "after:bg-border after:absolute after:top-[22px] after:-left-2.5 after:h-px after:w-2.5",
-            )}
-          >
-            <MapNode
-              node={node}
-              now={now}
-              selected={selected === node.id}
-              onSelect={() => onSelect(node.id)}
-              compact
-              current={current === node.id}
-            />
-            {node.agents?.length ? (
-              <Children nodes={node.agents} now={now} selected={selected} onSelect={onSelect} compact current={current} />
-            ) : null}
-          </li>
-        ))}
-      </ul>
-    );
-  }
   return (
     <>
       <span aria-hidden className="bg-border h-px w-6 shrink-0" />
@@ -328,18 +284,10 @@ function Children({
               now={now}
               selected={selected === node.id}
               onSelect={() => onSelect(node.id)}
-              compact={false}
               current={current === node.id}
             />
             {node.agents?.length ? (
-              <Children
-                nodes={node.agents}
-                now={now}
-                selected={selected}
-                onSelect={onSelect}
-                compact={false}
-                current={current}
-              />
+              <Children nodes={node.agents} now={now} selected={selected} onSelect={onSelect} current={current} />
             ) : null}
           </li>
         ))}
@@ -354,14 +302,12 @@ function MapNode({
   now,
   selected,
   onSelect,
-  compact,
   current,
 }: {
   node: AgentNode;
   now: number;
   selected: boolean;
   onSelect: () => void;
-  compact: boolean;
   current: boolean;
 }) {
   const look = agentLook(node);
@@ -375,8 +321,7 @@ function MapNode({
       aria-pressed={selected}
       title={AGENT_WORD[look]}
       className={cn(
-        "bg-card flex shrink-0 cursor-pointer flex-col gap-0.5 rounded-xl border text-left transition-colors",
-        compact ? "h-11 w-full justify-center px-3" : "w-72 px-4 py-2.5",
+        "bg-card flex w-72 shrink-0 cursor-pointer flex-col gap-0.5 rounded-xl border px-4 py-2.5 text-left transition-colors",
         selected
           ? "border-teal-500/70 ring-2 ring-teal-500/25"
           : current
@@ -402,13 +347,11 @@ function Details({
   now,
   onOpen,
   onClose,
-  compact,
 }: {
   node: AgentNode;
   now: number;
   onOpen: (id: string) => void;
   onClose: () => void;
-  compact: boolean;
 }) {
   const [taskOpen, setTaskOpen] = useState(false);
   const look = agentLook(node);
@@ -423,10 +366,7 @@ function Details({
   return (
     <aside
       aria-label={`${node.name}, in detail`}
-      className={cn(
-        "bg-card border-border flex shrink-0 flex-col gap-3 overflow-y-auto rounded-xl border p-4",
-        compact ? "w-full" : "w-80",
-      )}
+      className="bg-card border-border flex w-80 shrink-0 flex-col gap-3 overflow-y-auto rounded-xl border p-4"
     >
       <div className="flex items-start gap-2">
         <AgentDot look={look} className="mt-[7px] size-2" />

@@ -99,6 +99,9 @@ export function withCompanions(
   host: React.ReactNode,
   panels: CompanionPanel[],
   onClose: (key: string) => void,
+  /** The conversation the tab is showing, when that is one of its agents rather than the tab's
+   *  own — see `Companions`. */
+  about?: string,
 ): React.ReactNode {
   if (ref.surface !== "chat") return host;
   return (
@@ -107,6 +110,7 @@ export function withCompanions(
       panels={panels}
       onClose={onClose}
       conversationId={ref.conversationId ?? ""}
+      about={about}
     />
   );
 }
@@ -176,6 +180,7 @@ export function Companions({
   panels,
   onClose,
   conversationId,
+  about,
 }: {
   host: React.ReactNode;
   panels: CompanionPanel[];
@@ -183,6 +188,11 @@ export function Companions({
   /** The chat this column belongs to. Absent only where there is no chat to attach to, and then
    *  the tab row shows what is attached and nothing more. */
   conversationId?: string;
+  /** What the column is *about* right now, when that is not `conversationId`: an agent shown in
+   *  its conductor's tab (see `lib/agent-views`). The column still belongs to the tab — what is
+   *  attached, which tab was picked — but what lights its row is the conversation on screen, the
+   *  same one its panels are drawn for. */
+  about?: string;
 }) {
   const box = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(readWidth);
@@ -438,7 +448,7 @@ export function Companions({
             style={full ? undefined : { width, maxWidth: `calc(100% - ${CHAT_MIN}px)` }}
           >
             {bound ? (
-              <LiveRow {...row} conversationId={conversationId ?? ""} />
+              <LiveRow {...row} conversationId={about || conversationId || ""} />
             ) : (
               <TabRow {...row} />
             )}
