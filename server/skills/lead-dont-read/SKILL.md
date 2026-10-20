@@ -25,9 +25,9 @@ You can start agents with `start_agents`: full sessions like you, each with its 
 
 **5. One level.** An agent splits its part again only when that part is far beyond one sitting — more than about ten files to change or three thousand lines to read. Otherwise it does the work. Every extra level is another coordinator with its own growing context and another hop for every question.
 
-**6. Write each task so it stands alone.** The agent cannot see your conversation. Say the goal and why, what exists (paths), the contract it must keep, what it owns and must not touch, how to check its work, what done means, and — for read-only work — the finding format above.
+**6. Say where, and write each task so it stands alone.** Pass `folder` to `start_agents` when you are not working inside the project itself — agents branch from that folder's repository. The agent cannot see your conversation. Say the goal and why, what exists (paths), the contract it must keep, what it owns and must not touch, how to check its work, what done means, and — for read-only work — the finding format above.
 
-**7. While they work, wait.** Call `wait_for_agents`. It returns when one of them reports or asks you something. Answer questions from what you know; `ask` up only what you cannot. Steer with `message_agents` when a report or a question shows drift. Do not read their code while you wait — that is the one thing this strategy exists to stop.
+**7. While they work, wait.** `start_agents` waits for you: it returns when the first of them reports or asks you something. Handle that, then call `wait_for_agents` for the next — never `sleep` in a shell, never read their code to pass the time. Answer questions from what you know; `ask` up only what you cannot. Steer with `message_agents` when a report or a question shows drift.
 
 **8. A report is a claim.** For building: read the branch (`git log -p HEAD..<branch>`), merge it, run it. For findings: the verify step is the check. Send short or wrong work back with `message_agents` — it keeps everything it learned.
 

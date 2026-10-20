@@ -35,7 +35,7 @@ from pathlib import Path
 from kith.infra.db import repositories as repo
 from kith.infra.workspace import worktrees
 from kith.infra.workspace.base import WorkspaceError
-from kith.infra.workspace.paths import base_dir
+from kith.infra.workspace.paths import base_dir, root
 from kith.kernel import changes, live_turns, session_context, stopping
 from kith.services import conversations, steering, tuning
 from kith.settings import AGENT_DB_PATH
@@ -206,14 +206,21 @@ def _task_of(conversation_id: str) -> str:
 NAME_CHARS = 40
 
 
-def start(handler_id: str, specs: list[dict]) -> dict:
-    """Start agents under ``handler_id``. One entry per spec: what was started, or why not."""
-    folder = Path(session_context.isolated_base() or base_dir())
+def start(handler_id: str, specs: list[dict], folder: str = "") -> dict:
+    """Start agents under ``handler_id``. One entry per spec: what was started, or why not.
+
+    ``folder`` is where the work is — the repository the agents branch from, or the folder they
+    share. Defaults to where the handler is working, and is required when that is only the
+    workspace itself (see :func:`_where`).
+    """
+    where = _where(folder)
+    if isinstance(where, str):
+        return {"ok": False, "error": where}
     handler = row(handler_id) or {}
     project_id = repo.conversations.project_of(AGENT_DB_PATH, handler_id)
     started: list[dict] = []
     wants_own = any(str(spec.get("workspace") or "own") == "own" for spec in specs)
-    left_out = worktrees.uncommitted(folder) if wants_own else []
+    left_out = worktrees.uncommitted(where) if wants_own else []
     for spec in specs:
         name = " ".join(str(spec.get("name") or "").split())[:NAME_CHARS]
         task = str(spec.get("task") or "").strip()
@@ -226,7 +233,7 @@ def start(handler_id: str, specs: list[dict]) -> dict:
             )
             continue
         try:
-            started.append(_start_one(handler_id, handler, folder, project_id, name, task, spec))
+            started.append(_start_one(handler_id, handler, where, project_id, name, task, spec))
         except WorkspaceError as exc:
             started.append({"name": name, "error": str(exc)})
     changes.publish("agents", root_of(handler_id))
@@ -239,6 +246,38 @@ def start(handler_id: str, specs: list[dict]) -> dict:
             "tell them to `git merge` your branch."
         )
     return answer
+
+
+def _where(asked: str) -> Path | str:
+    """The folder agents work from, or why it cannot be decided.
+
+    Named by the caller, or else wherever the caller is working. Refused when that is the bare
+    workspace: a conversation bound to no project works from the workspace root, which is one
+    repository holding many projects — and an agent branched from it gets a checkout of all of
+    them (2.5 GB each, measured on 2026-10-20) and none of the repository the work is actually in.
+    """
+    text = str(asked or "").strip()
+    if text:
+        chosen = Path(text).expanduser()
+        if not chosen.is_absolute():
+            chosen = Path(session_context.isolated_base() or base_dir()) / chosen
+        if not chosen.is_dir():
+            return f"There is no folder at {chosen}."
+        return chosen
+    here = Path(session_context.isolated_base() or base_dir())
+    try:
+        bare = here.resolve() == root().resolve()
+    except OSError:
+        bare = False
+    if bare:
+        typed = session_context.sent_from_directory()
+        hint = f" This message came from a terminal in {typed} — if the work is there, pass that." if typed else ""
+        return (
+            "Say which folder the work is in: pass `folder` (the project or repository the agents "
+            f"should work from). This conversation is not bound to a project, so it is working from "
+            f"the whole workspace, {here}.{hint}"
+        )
+    return here
 
 
 def _start_one(
@@ -274,13 +313,16 @@ def _start_one(
             agent_source="\n".join([*sources, str(opened.source)]),
         )
     else:
-        # Sharing the handler's folder — by choice, or because there is no repository to branch.
-        # An agent's handler that is itself in a worktree shares that worktree, pinned the same way.
+        # Sharing the folder — by choice, or because there is no repository to branch. An agent
+        # whose handler is itself in a worktree, sharing that same folder, shares that worktree,
+        # pinned the same way; anywhere else it is only based there (see `pinned`).
         workspace = "shared"
+        handler_worktree = str(handler.get("agent_worktree") or "")
+        inside = bool(handler_worktree) and _within(folder, Path(handler_worktree))
         fields.update(
-            agent_worktree=str(handler.get("agent_worktree") or ""),
+            agent_worktree=handler_worktree if inside else "",
             agent_folder=str(folder),
-            agent_source="\n".join(sources),
+            agent_source="\n".join(sources) if inside else "",
         )
     repo.conversations.set_agent(AGENT_DB_PATH, agent_id, **fields)
     post(agent_id, handler_id, "task", task)
@@ -293,16 +335,31 @@ def _start_one(
     }
 
 
+def _within(folder: Path, parent: Path) -> bool:
+    try:
+        folder.resolve().relative_to(parent.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 @contextlib.contextmanager
 def pinned(conversation_id: str) -> Iterator[None]:
-    """Run a block in an agent's own folder: its worktree, when it has one. A no-op otherwise."""
+    """Run a block in an agent's own folder: its worktree, or the folder it shares. A no-op for a chat."""
     found = row(conversation_id)
-    worktree = str((found or {}).get("agent_worktree") or "")
-    if not found or not found.get("parent_id") or not worktree:
+    if not found or not found.get("parent_id"):
         yield
         return
-    sources = [line for line in str(found.get("agent_source") or "").splitlines() if line.strip()]
-    with session_context.working_from(worktree, mirror_of=sources, base=str(found.get("agent_folder") or "") or None):
+    worktree = str(found.get("agent_worktree") or "")
+    folder = str(found.get("agent_folder") or "")
+    if worktree:
+        sources = [line for line in str(found.get("agent_source") or "").splitlines() if line.strip()]
+        with session_context.working_from(worktree, mirror_of=sources, base=folder or None):
+            yield
+    elif folder:
+        with session_context.based_in(folder):
+            yield
+    else:
         yield
 
 
@@ -724,7 +781,6 @@ def close(handler_id: str, names: list[str], *, force: bool = False) -> dict:
     it has commits that are not in the closing session's checkout, unless forced. Merging is the
     caller's job; this only refuses to throw unmerged work away by default.
     """
-    folder = Path(session_context.isolated_base() or base_dir())
     targets, missing = _targets(handler_id, names)
     closed, refused = [], []
     for target in targets:
@@ -735,11 +791,7 @@ def close(handler_id: str, names: list[str], *, force: bool = False) -> dict:
             if working:
                 refused.append({"agent": name, "why": f"still working: {', '.join(working)} — stop first, or force"})
                 continue
-            unmerged = [
-                str(one.get("agent_branch"))
-                for one in group
-                if one.get("agent_branch") and not worktrees.merged(str(one.get("agent_branch")), folder)
-            ]
+            unmerged = [str(one.get("agent_branch")) for one in group if not _merged_home(one)]
             if unmerged:
                 refused.append(
                     {
@@ -757,6 +809,20 @@ def close(handler_id: str, names: list[str], *, force: bool = False) -> dict:
         **({"refused": refused} if refused else {}),
         **({"unknown": missing} if missing else {}),
     }
+
+
+def _merged_home(found: dict) -> bool:
+    """Whether an agent's branch is in the checkout it branched from — its handler's.
+
+    Asked of that checkout, not of wherever the closing session happens to be working: a conductor
+    bound to no project works from the whole workspace, and asking the workspace about a branch of
+    another repository finds no such branch and answers "nothing to merge".
+    """
+    branch = str(found.get("agent_branch") or "")
+    if not branch:
+        return True
+    sources = [line for line in str(found.get("agent_source") or "").splitlines() if line.strip()]
+    return bool(sources) and worktrees.merged(branch, sources[-1])
 
 
 def _close_one(found: dict) -> None:

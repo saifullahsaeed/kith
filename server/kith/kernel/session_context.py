@@ -267,6 +267,26 @@ def arriving_from(directory: str | None) -> Iterator[None]:
 
 
 @contextmanager
+def based_in(folder: str | None) -> Iterator[None]:
+    """Run a block with relative paths and command directories in ``folder`` — and nothing else.
+
+    :func:`working_from`'s location without its grant. An agent that shares its handler's folder
+    works *there*: its relative paths, its shell's directory. But that folder is the person's own
+    project, and being started by a handler is no reason to stop asking about writing in it — so
+    no copy is named, nothing is bent, and `permissions` sees an ordinary conversation.
+    """
+    text = str(folder or "").strip()
+    if not text:
+        yield
+        return
+    token = _isolated.set(((), "", text))
+    try:
+        yield
+    finally:
+        _isolated.reset(token)
+
+
+@contextmanager
 def working_from(
     directory: str | None, mirror_of: str | tuple[str, ...] | list[str] | None = None, base: str | None = None
 ) -> Iterator[None]:

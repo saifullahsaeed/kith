@@ -279,6 +279,47 @@ class TestStarting:
         assert row["agents"] == 1 and row["agentsWorking"] == 1
 
 
+class TestWhereTheWorkIs:
+    """Trial 2 (2026-10-20): a conductor bound to no project works from the whole workspace, and
+    four builders each got a 2.5 GB checkout of it instead of the project they were building."""
+
+    def test_the_bare_workspace_is_refused_with_where_the_message_came_from(self, db, no_turns, monkeypatch):
+        workspace = paths.root()
+        monkeypatch.setattr(agents, "base_dir", lambda: workspace)
+        with session_context.arriving_from("/somewhere/project"):
+            answer = agents.start(_chat(db), [{"name": "x", "task": "t"}])
+        assert answer["ok"] is False
+        assert "pass `folder`" in answer["error"] and "/somewhere/project" in answer["error"]
+
+    def test_a_named_folder_is_where_they_branch_from(self, db, repo_dir, no_turns, monkeypatch):
+        monkeypatch.setattr(agents, "base_dir", lambda: paths.root())
+        answer = agents.start(_chat(db), [{"name": "x", "task": "t"}], folder=str(repo_dir))
+        row = repo.conversations.get(db, answer["agents"][0]["id"])
+        assert row["agent_source"].splitlines()[-1] == str(repo_dir.resolve())
+        assert (Path(row["agent_worktree"]) / "app.py").exists()
+
+    def test_a_shared_agent_works_in_the_folder_without_being_granted_it(self, db, repo_dir, no_turns, monkeypatch):
+        monkeypatch.setattr(agents, "base_dir", lambda: paths.root())
+        answer = agents.start(_chat(db), [{"name": "r", "task": "t", "workspace": "shared"}], folder=str(repo_dir))
+        with agents.pinned(answer["agents"][0]["id"]):
+            assert session_context.isolated_base() == str(repo_dir)
+            assert session_context.isolated_copy() == ""
+
+    def test_start_agents_waits_for_the_first_report(self, db, repo_dir, no_turns, monkeypatch):
+        from kith.tools import agents as tool
+
+        monkeypatch.setattr(agents, "base_dir", lambda: repo_dir)
+        seen = {}
+        monkeypatch.setattr(agents, "wait_for", lambda here, minutes=20: seen.setdefault("waited", here) and {"ok": True})
+        chat = _chat(db)
+        with session_context.working_in(chat):
+            answer = tool.start_agents(Path("x"), {"agents": [{"name": "a", "task": "t"}]})
+            assert seen["waited"] == chat and "waited" in answer
+            seen.clear()
+            tool.start_agents(Path("x"), {"agents": [{"name": "b", "task": "t"}], "wait": False})
+            assert "waited" not in seen
+
+
 class TestMail:
     def test_a_running_turn_takes_it_at_its_next_step(self, db, started, no_turns, monkeypatch):
         chat, agent = started

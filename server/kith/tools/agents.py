@@ -32,10 +32,11 @@ def _here() -> str:
     "start_agents",
     "Start agents — full sessions like you, with every tool and skill you have — to work on parts "
     "of the task in parallel. Each gets its own conversation and, inside a git repository, its own "
-    "worktree on a new branch from your last commit. They run in the background: then call "
-    "`wait_for_agents`, and each one's report arrives here when it finishes (and its questions as "
-    "they come up). Follow the agent strategy in your instructions for when to do this and how to "
-    "split the work; doing a small or tightly coupled task yourself is often right.",
+    "worktree on a new branch from your last commit. This call then WAITS: it returns when the "
+    "first of them reports or asks you something, and that report or question is right below. "
+    "Handle it, then call `wait_for_agents` for the next. Follow the agent strategy in your "
+    "instructions for when to do this and how to split the work; doing a small or tightly coupled "
+    "task yourself is often right.",
     {
         "agents": {
             "type": "array",
@@ -70,7 +71,18 @@ def _here() -> str:
                 },
                 "required": ["name", "task"],
             },
-        }
+        },
+        "folder": {
+            "type": "string",
+            "description": (
+                "Where the work is: the project folder or repository they branch from or share. "
+                "Defaults to where you are working; needed when that is the whole workspace."
+            ),
+        },
+        "wait": {
+            "type": "boolean",
+            "description": "Default true. false returns at once — only for work of your own that does not overlap theirs.",
+        },
     },
     required=("agents",),
 )
@@ -81,7 +93,15 @@ def start_agents(path: Path, args: dict):
     specs = [one for one in args.get("agents") or [] if isinstance(one, dict)]
     if not specs:
         return {"ok": False, "error": "Name at least one agent and its task."}
-    return agents.start(here, specs)
+    answer = agents.start(here, specs, folder=str(args.get("folder") or ""))
+    # Waiting is the default because telling a handler to wait did not make it wait: on the first
+    # real runs handlers read the code they had handed out, or ran `sleep` in a loop, while their
+    # agents worked. A call that does not return until there is something to act on is the shape
+    # of waiting; `wait: false` is the way out for work of its own.
+    started = [one for one in answer.get("agents") or [] if "error" not in one]
+    if started and args.get("wait", True) is not False:
+        answer["waited"] = agents.wait_for(here)
+    return answer
 
 
 @tool(
