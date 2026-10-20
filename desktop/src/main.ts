@@ -25,6 +25,8 @@
 
 import { app, dialog } from "electron";
 
+import { tolerateDroppedSockets } from "./server/sockets";
+
 import { loadWhenReady, recoverFromBackendRestarts, waitForBackend } from "./server/backend";
 import { APP_ICON, BACKEND_ORIGIN, BACKEND_WAIT_MS } from "./config";
 import {
@@ -41,6 +43,9 @@ import { ensureServer, stopServer } from "./server/server-process";
 import { createMainWindow, markQuitting, showMainWindow } from "./window/window";
 import { installWebViewChannel } from "./web/web-view-channel";
 import { forgetAll as forgetWebViews } from "./web/web-views";
+
+// Before anything opens a socket. See `server/sockets.ts`.
+tolerateDroppedSockets();
 
 // A second instance would fight the first over the same backend and the same
 // window; hand focus to the original instead.

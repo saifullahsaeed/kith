@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ago, mark, moodOf, soonest, summary, took, turns, until, type State } from "./tray";
+import { ago, mark, moodOf, singleFlight, soonest, summary, took, turns, until, type State } from "./tray";
 
 const idle: State = {
   working: 0,
@@ -190,5 +190,73 @@ describe("the header, once there is something specific to say", () => {
     expect(summary({ ...idle, waiting: [{ label: "a" }, { label: "b" }] })).toBe(
       "Waiting on you — 2 things",
     );
+  });
+});
+
+/**
+ * Four agents made events faster than the server answered seven reads, and the old coalescing let
+ * the reads overlap without limit — 222 sockets from the shell, then a modal error per dropped one.
+ */
+describe("re-reading the menu", () => {
+  it("never runs twice at once, and runs once more after a poke that came mid-run", async () => {
+    vi.useFakeTimers();
+    try {
+      let inFlight = 0;
+      let most = 0;
+      let runs = 0;
+      const finish: Array<() => void> = [];
+      const poke = singleFlight(
+        () =>
+          new Promise<void>((resolve) => {
+            runs += 1;
+            inFlight += 1;
+            most = Math.max(most, inFlight);
+            finish.push(() => {
+              inFlight -= 1;
+              resolve();
+            });
+          }),
+        400,
+      );
+
+      poke();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(runs).toBe(1);
+
+      // A stream of events while the first read is still out.
+      for (let i = 0; i < 10; i++) {
+        poke();
+        await vi.advanceTimersByTimeAsync(400);
+      }
+      expect(runs).toBe(1);
+      expect(most).toBe(1);
+
+      finish.shift()!();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(runs).toBe(2); // one more, for everything that happened meanwhile — not ten
+      finish.shift()!();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runs).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps going after a read fails", async () => {
+    vi.useFakeTimers();
+    try {
+      let runs = 0;
+      const poke = singleFlight(async () => {
+        runs += 1;
+        throw new Error("server down");
+      }, 400);
+      poke();
+      await vi.advanceTimersByTimeAsync(400);
+      poke();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(runs).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

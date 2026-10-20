@@ -104,8 +104,15 @@ const IDLE: State = {
 };
 let state: State = IDLE;
 
+/** How long one menu read may take. A read that never ends holds its socket for ever, and the
+ *  next refresh opens another — see `singleFlight`. */
+const READ_TIMEOUT_MS = 10_000;
+
 async function read(path: string): Promise<Record<string, unknown>> {
-  const response = await fetch(`${BACKEND_ORIGIN}${path}`, { headers: apiHeaders() });
+  const response = await fetch(`${BACKEND_ORIGIN}${path}`, {
+    headers: apiHeaders(),
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+  });
   if (!response.ok) throw new Error(String(response.status));
   return (await response.json()) as Record<string, unknown>;
 }
@@ -461,15 +468,66 @@ function render(onQuit: () => void): void {
  * appears while you are still looking at the screen it appeared on.
  */
 function refresh(onQuit: () => void): void {
-  if (refreshing) return;
-  refreshing = setTimeout(() => {
-    refreshing = null;
-    void readState().then((next) => {
-      state = next;
+  reread ??= singleFlight(
+    async () => {
+      state = await readState();
       render(onQuit);
       countdown(onQuit);
-    });
-  }, 400);
+    },
+    400,
+    (callback, ms) => (refreshing = setTimeout(callback, ms)),
+  );
+  reread();
+}
+
+let reread: (() => void) | null = null;
+
+/**
+ * `run`, coalesced over `delayMs` **and never twice at once** — a poke while it runs means one
+ * more run after it, not another alongside it.
+ *
+ * The 400ms coalescing alone was not enough, and four agents found out why (2026-10-20). The timer
+ * was cleared the moment it fired, before the seven reads it started had come back, so the next
+ * burst of events started seven more alongside them. Every tool call is an event, four agents make
+ * a steady stream of them, and once the server answered slower than one refresh per 400ms the
+ * reads overlapped without limit: 222 sockets open from this process to a server that stops
+ * accepting at 100. Connections queued past that were dropped, and Node's fetch throws on a
+ * dropped socket from inside a socket callback (`setTypeOfService EINVAL`) — a modal error dialog,
+ * again and again.
+ */
+export function singleFlight(
+  run: () => Promise<void>,
+  delayMs: number,
+  schedule: (callback: () => void, ms: number) => unknown = setTimeout,
+): () => void {
+  let waiting = false;
+  let running = false;
+  let again = false;
+  const start = (): void => {
+    waiting = false;
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    void run()
+      .catch(() => {
+        /* a menu read that failed is redrawn from the next one */
+      })
+      .finally(() => {
+        running = false;
+        if (again) {
+          again = false;
+          poke();
+        }
+      });
+  };
+  const poke = (): void => {
+    if (waiting) return;
+    waiting = true;
+    schedule(start, delayMs);
+  };
+  return poke;
 }
 
 /** Keep "next: in 12m" honest while nothing else is happening. Stops when there is nothing due. */
@@ -536,6 +594,7 @@ export function destroyTray(): void {
   unsubscribe = null;
   if (refreshing) clearTimeout(refreshing);
   refreshing = null;
+  reread = null;
   if (ticking) clearTimeout(ticking);
   ticking = null;
   if (spinning) clearInterval(spinning);
