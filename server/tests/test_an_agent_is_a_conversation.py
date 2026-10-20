@@ -417,6 +417,24 @@ class TestRestart:
         assert "Kith restarted" in resumed["content"]
 
 
+    def test_an_interrupted_ask_in_an_agent_is_closed_without_a_card(self, started):
+        from kith.services import questions
+
+        _, agent = started
+        conversations.record_event(agent["id"], "tool_call", {"id": "c1", "name": "ask", "arguments": {"questions": [{"question": "q?", "options": ["a"]}]}})
+        assert questions.recover_interrupted() == 1
+        assert questions.open_question(agent["id"]) is None
+        closed = [e for e in conversations.read(agent["id"]) if e.get("type") == "tool_result"]
+        assert "your handler" in closed[-1]["result"]["note"]
+
+    def test_deleting_a_chat_closes_its_agents_and_their_worktrees(self, db, started):
+        chat, agent = started
+        worktree = Path(repo.conversations.get(db, agent["id"])["agent_worktree"])
+        agents.forget(chat)
+        assert repo.conversations.get(db, agent["id"])["agent_state"] == agents.CLOSED
+        assert not worktree.exists()
+
+
 # --------------------------------------------------------------------------- #
 # What a session is told
 # --------------------------------------------------------------------------- #
