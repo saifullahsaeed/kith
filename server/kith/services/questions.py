@@ -303,7 +303,7 @@ def recover_interrupted() -> int:
 
     Returns how many were recovered, for the line the server prints at startup.
     """
-    from kith.services import conversations
+    from kith.services import agents, conversations
 
     found = 0
     for conversation_id in conversations.interrupted_asks():
@@ -318,6 +318,17 @@ def recover_interrupted() -> int:
         if asked is None:
             continue
         call_id, questions_asked = asked
+        # An agent asked its handler, not the person, so no card comes back for anyone to click.
+        # The books are closed the same way; the agent is resumed by `agents.recover`, and an
+        # answer its handler sends later arrives as an ordinary message.
+        if agents.is_agent(conversation_id):
+            conversations.record_event(
+                conversation_id,
+                "tool_result",
+                {"id": call_id, "name": "ask", "result": {"ok": True, "answered": False, "note": _AGENT_INTERRUPTED}},
+            )
+            found += 1
+            continue
         conversations.record_event(
             conversation_id,
             "tool_result",
@@ -333,6 +344,13 @@ def recover_interrupted() -> int:
         changes.publish("question", conversation=conversation_id)
         found += 1
     return found
+
+
+#: What an agent's interrupted `ask` is closed with.
+_AGENT_INTERRUPTED = (
+    "Kith restarted before your handler answered. If an answer comes, it arrives as a message; "
+    "until then carry on with what you have, and say which way you went and why."
+)
 
 
 def _asked_in(conversation_id: str) -> tuple[str, list[dict]] | None:

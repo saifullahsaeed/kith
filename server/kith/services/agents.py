@@ -671,6 +671,18 @@ def _close_one(found: dict) -> None:
     repo.agent_mail.take(AGENT_DB_PATH, conversation_id)
 
 
+def forget(conversation_id: str) -> None:
+    """A conversation is being deleted: close everything under it, and it too if it is an agent.
+
+    Forced, because deleting the conversation is the person's decision about all of it — and an
+    agent left running under a conversation that no longer exists would report to nobody, in a
+    worktree nobody can reach to clean up.
+    """
+    for one in [*subtree(conversation_id), *([row(conversation_id)] if is_agent(conversation_id) else [])]:
+        if one:
+            _close_one(one)
+
+
 # --------------------------------------------------------------------------- #
 # Restart
 # --------------------------------------------------------------------------- #

@@ -6,7 +6,7 @@ from flask import jsonify, request
 
 from kith.api.blueprint import api
 from kith.infra.db import repositories as repo
-from kith.services import conversations
+from kith.services import agents, conversations
 from kith.settings import AGENT_DB_PATH
 
 
@@ -178,5 +178,6 @@ def set_conversation_project(conversation_id: str):
 )
 def delete_conversation(conversation_id: str):
     purge = str(request.args.get("purge", "")).lower() in ("1", "true", "yes")
+    agents.forget(conversation_id)
     conversations.delete(AGENT_DB_PATH, conversation_id, keep_file=not purge)
     return jsonify({"ok": True, "purged": purge})
