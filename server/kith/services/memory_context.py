@@ -209,8 +209,6 @@ def presence_block(path: Path) -> str:
     if typed_in:
         lines.append(f"This message was sent from a terminal, in {typed_in}.")
 
-    lines += _workflow_lines()
-
     last = repo.activity.last_activity_at(path)
     since = clock.humanize_since(last)
     if since:
@@ -228,48 +226,3 @@ def presence_block(path: Path) -> str:
         extra = f" (+{len(waiting) - 1} more)" if len(waiting) > 1 else ""
         lines.append(f"Next reminder {clock.humanize_until(nxt['fire_at'])}: {nxt['note']}{extra}.")
     return "\n".join(lines)
-
-
-def _workflow_lines() -> list[str]:
-    """Whether he may start a workflow this turn, and whether one is already running here.
-
-    Said here, with the clock, because both are true of this turn and no other: workflow mode can
-    be switched off between two messages, and a run that was going an hour ago has finished. A
-    tool description cannot carry either — it is the same on every turn — and the decision to
-    fan out is made before any tool is called, so this is the only place the fact can be when it
-    matters.
-    """
-    from kith.services import workflows
-
-    lines: list[str] = []
-    why = session_context.workflow_permission()
-    if why == "mode":
-        # It used to say "you may", then argued against it: "do small or tightly coupled work
-        # yourself; a fan-out on a one-turn task is wasted money". Over 19 turns in this mode not
-        # one workflow started, and the one time he weighed it he quoted that back. They turn the
-        # mode on because they want agents on the work, so that is what it says; which work is
-        # small is still his call.
-        lines.append(
-            "Workflow mode is ON in this chat — they turned it on because they want the work done by "
-            "agents. For anything past a quick answer or a small edit, lead: send agents with "
-            "add_agents — a builder for a change, a scout for wide reading, a verifier before you "
-            "call it done; one agent is a fine first step — and add the next step to the same run "
-            "when they report. Doing all of it yourself is for small things."
-        )
-    elif why == "asked":
-        lines.append(
-            "They asked for agents on this (/workflow): use add_agents — a builder, then a verifier "
-            "after it — or run_workflow for a fan-out planned in full."
-        )
-    try:
-        running = workflows.running(session_context.current())
-    except Exception:
-        running = None
-    if running is not None:
-        working = sum(1 for one in running.agents.values() if one.get("state") != "done")
-        where = f", in {running.phase}" if running.phase else ""
-        lines.append(
-            f"A workflow is running in this chat: `{running.name}` ({running.id}){where}, "
-            f"{working} agent{'s' if working != 1 else ''} working. check_workflow shows where it is."
-        )
-    return lines

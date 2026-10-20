@@ -328,9 +328,9 @@ _GATHERING_TOOLS = frozenset(
 # `add_deliverable` all describe what this turn did and are exactly what landing is for; a task
 # or a project is a commitment to do something else later, which is the thing the budget is
 # trying to stop.
-# A workflow is new work at its largest — a fan-out of agents, each with a budget of its own — so
-# a turn with just enough left to finish must not start one.
-_STARTING_TOOLS = frozenset({"add_task", "create_project", "run_workflow", "add_agents"})
+# Starting agents is new work at its largest — whole sessions, each with a budget of its own — so
+# a turn with just enough left to finish must not start them.
+_STARTING_TOOLS = frozenset({"add_task", "create_project", "start_agents"})
 
 #: What landing takes away. Everything else he keeps, which is the inversion: a tool built
 #: tomorrow is usable while finishing unless it goes and looks or opens new work.

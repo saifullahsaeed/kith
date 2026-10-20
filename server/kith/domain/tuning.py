@@ -227,47 +227,28 @@ TUNABLES: tuple[Tunable, ...] = (
         unit="calls",
     ),
     Tunable(
-        key="subtask_rounds",
-        env="KITH_SUBTASK_ROUNDS",
-        label="Rounds a sub-agent gets",
-        help="How long an isolated sub-agent may look before it has to report back. Small on "
-        "purpose: the whole value of one is that the searching happens somewhere the main "
-        "turn never has to read, and a scout that wanders for twenty rounds costs more than "
-        "the answer is worth. If they keep coming back with nothing, the objectives are too "
-        "broad, not the budget too small.",
-        default=10,
+        key="agent_strategy",
+        env="KITH_AGENT_STRATEGY",
+        label="How he leads agents",
+        help="The skill that says when to start agents and how to split work between them. Its "
+        "instructions ride in every session's prompt — the person's chat and every agent alike — "
+        "so changing strategy is choosing or editing a skill, not changing code. Blank means no "
+        "strategy: the agent tools are still there, with nothing telling him how to use them.",
+        default="divide-and-conquer",
         group="context",
-        minimum=2,
-        maximum=20,
-        unit="rounds",
+        kind="text",
     ),
-    Tunable(
-        key="builder_rounds",
-        env="KITH_BUILDER_ROUNDS",
-        label="Rounds a builder gets",
-        help="How long a worker sent to change something may work before it has to hand back "
-        "its patch. Larger than a scout's, and for a reason rather than generosity: a scout "
-        "stops when it knows the answer, and a builder is not finished until the edit is "
-        "actually made — reading four files and then writing three is most of the budget "
-        "before it starts. The last third is kept for writing. Too small and patches come back "
-        "half-applied, which is worse than none at all.",
-        # 16 until 2026-09-27. On a large repository that was all orientation: eleven builders on
-        # sadeef-v2 spent 17 to 41 calls reading and one of them wrote anything.
-        default=30,
-        group="context",
-        minimum=4,
-        maximum=40,
-        unit="rounds",
-    ),
+    # `subtask_rounds` and `builder_rounds` stood here: the round caps of the stripped-down
+    # workers that agents replaced on 2026-10-20. An agent is a whole session and gets a session's
+    # rounds. Stored values for them are ignored like any other unknown key.
     Tunable(
         key="scout_model",
         env="KITH_SCOUT_MODEL",
-        label="Model a scout uses",
-        help="Which model goes and looks things up, when it should not be the one he thinks "
-        "with. Blank means the same model as everything else. A scout greps, reads and "
-        "reports — instruction-following rather than judgement — so a smaller model is "
-        "usually the right trade, and six scouts in one round is six streams of whatever is "
-        'named here. A workflow asks for it per agent with model="fast".',
+        label="Fast model for agents",
+        help="The model an agent runs on when it is started with model=\"fast\" — for reading, "
+        "searching and reporting, where a smaller model is usually the right trade. Blank means "
+        "the same model as everything else. (Kept under its old key, from when the only agents "
+        "that used it were scouts.)",
         default="",
         group="context",
         kind="text",
@@ -275,12 +256,10 @@ TUNABLES: tuple[Tunable, ...] = (
     Tunable(
         key="strong_model",
         env="KITH_STRONG_MODEL",
-        label="Model a verifier uses",
-        help="Which model checks work against what was asked, when that should be a stronger "
-        "one than he thinks with. Blank means the same model as everything else. Checking a "
-        "change against a spec is the job a cheap model does worst — measured: one that builds "
-        "competently still certified three of five requested fields as complete — so verifiers "
-        'use this by default, and a workflow can ask for it on any agent with model="strong".',
+        label="Strong model for agents",
+        help="The model an agent runs on when it is started with model=\"strong\" — for "
+        "checking work against what was asked, or for the hardest part of a split. Blank means "
+        "the same model as everything else.",
         default="",
         group="context",
         kind="text",

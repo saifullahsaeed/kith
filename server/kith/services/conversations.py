@@ -78,6 +78,14 @@ class Conversation:
     #: Blocked on an answer from you. The more actionable of the two: working needs nothing from
     #: you, waiting needs only you.
     waiting: bool = False
+    #: When this conversation is an agent: the session that started it, its name there, and its
+    #: lifecycle. See `services/agents`.
+    parent_id: str | None = None
+    agent_name: str = ""
+    agent_state: str = ""
+    #: For a session with agents under it: how many are open, and how many are busy right now.
+    agents: int = 0
+    agents_working: int = 0
 
     def public(self) -> dict:
         return {
@@ -92,6 +100,11 @@ class Conversation:
             "projectId": self.project_id,
             "working": self.working,
             "waiting": self.waiting,
+            "parentId": self.parent_id,
+            "agentName": self.agent_name,
+            "agentState": self.agent_state,
+            "agents": self.agents,
+            "agentsWorking": self.agents_working,
         }
 
 
@@ -124,7 +137,7 @@ def get(agent_db: Path, conversation_id: str) -> dict:
     return _to_public(row)
 
 
-def recent(agent_db: Path, limit: int = 50) -> list[dict]:
+def recent(agent_db: Path, limit: int = 50, *, chats_only: bool = False) -> list[dict]:
     """Newest first, each row carrying where its conversation was left.
 
     A row written before there was a column for that has it read out of its transcript here,
@@ -132,7 +145,7 @@ def recent(agent_db: Path, limit: int = 50) -> list[dict]:
     upgrade from opening a hundred and fifty files, and keeps the cost on the list that
     actually asked — and it is the last line of each file, not the whole of it.
     """
-    rows = repo.conversations.recent(agent_db, limit)
+    rows = repo.conversations.recent(agent_db, limit, chats_only=chats_only)
     # Which of these are working right now.
     #
     # `working` has been on the public shape all along and nothing ever set it: it was read from
@@ -143,9 +156,11 @@ def recent(agent_db: Path, limit: int = 50) -> list[dict]:
     live = set(live_turns.live())
     # And which are blocked on you, which is the one worth crossing the room for.
     blocked = set(questions.waiting())
+    under = _agents_under(agent_db, live)
     for row in rows:
         row["working"] = str(row.get("id") or "") in live
         row["waiting"] = str(row.get("id") or "") in blocked
+        row["agents"], row["agents_working"] = under.get(str(row.get("id") or ""), (0, 0))
         if row.get("last_said") or not int(row.get("messages") or 0):
             continue
         said = _last_said(transcript_path(str(row.get("id") or "")))
@@ -153,6 +168,28 @@ def recent(agent_db: Path, limit: int = 50) -> list[dict]:
             row["last_said"] = said
             repo.conversations.set_last_said(agent_db, str(row["id"]), said)
     return [_to_public(row) for row in rows]
+
+
+def _agents_under(agent_db: Path, live: set[str]) -> dict[str, tuple[int, int]]:
+    """For every session with open agents beneath it: how many, and how many are busy.
+
+    One read of every agent row rather than a walk per listed conversation — the list is fetched
+    on every turn change, and a conductor's tree can be deep.
+    """
+    rows = repo.conversations.agents_in(agent_db, ("working", "waiting", "done", "stopped"))
+    parent = {str(one["id"]): str(one.get("parent_id") or "") for one in rows}
+    counts: dict[str, list[int]] = {}
+    for one in rows:
+        busy = str(one["id"]) in live or one.get("agent_state") in ("working", "waiting")
+        seen: set[str] = set()
+        above = parent.get(str(one["id"]), "")
+        while above and above not in seen:
+            seen.add(above)
+            tally = counts.setdefault(above, [0, 0])
+            tally[0] += 1
+            tally[1] += 1 if busy else 0
+            above = parent.get(above, "")
+    return {key: (value[0], value[1]) for key, value in counts.items()}
 
 
 def session_id(agent_db: Path, conversation_id: str) -> str:
@@ -565,6 +602,10 @@ def timeline(conversation_id: str) -> list[dict]:
                 "parts": [{"kind": "text", "text": entry.get("content") or ""}],
                 "at": entry.get("at") or "",
             }
+            # Who said it, when it was another session of an agent tree rather than the person or
+            # the harness: `{id, name, kind}`. The interface labels the message with it.
+            if isinstance(entry.get("from"), dict):
+                current["from"] = entry["from"]
             out.append(current)
         elif kind == "reasoning":
             assistant()["parts"].append({"kind": "reasoning", "text": entry.get("text") or ""})
@@ -972,6 +1013,11 @@ def _to_public(row: dict) -> dict:
         project_id=int(row["project_id"]) if row.get("project_id") else None,
         working=bool(row.get("working")),
         waiting=bool(row.get("waiting")),
+        parent_id=str(row["parent_id"]) if row.get("parent_id") else None,
+        agent_name=str(row.get("agent_name") or ""),
+        agent_state=str(row.get("agent_state") or ""),
+        agents=int(row.get("agents") or 0),
+        agents_working=int(row.get("agents_working") or 0),
     ).public()
 
 

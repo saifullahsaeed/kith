@@ -798,8 +798,8 @@ def _with_project_tools(command: str, folder: Path) -> str:
     """``command``, run with the project's own tools ahead of whatever is on `PATH`.
 
     `ruff check .` in a backend whose ruff lives in `backend/venv` answered "ruff: command not
-    found" from a workflow's copy (2026-10-01), where `HOME` is not yours and nothing your shell
-    profile adds to `PATH` is there. The project's own version is also the right one to check it
+    found" from an agent's sandboxed copy (2026-10-01), where `HOME` was not yours and nothing your
+    shell profile adds to `PATH` was there. The project's own version is also the right one to check it
     with anywhere. Set inside the command rather than in the environment, because a login shell's
     `path_helper` reorders an inherited `PATH`.
     """
@@ -844,27 +844,15 @@ def check_code(path: str = ".") -> dict:
         probe = probe.parent
     target = found or target
 
-    from kith.infra import confinement
-
     for marker, command, label in _CHECKERS:
         if not (target / marker).is_file():
             continue
         argv: list[str] = ["bash", "-lc", _with_project_tools(command, target)]
-        env: dict[str, str] | None = None
-        # A worker's copy runs its check inside the copy's boundary: a project's build is
-        # arbitrary code, and a builder's is code a model just wrote.
-        try:
-            boxed = confinement.in_copy(argv)
-        except confinement.ConfinementError as exc:
-            return {"ran": "", "checker": label, "problems": str(exc)}
-        if boxed is not None:
-            argv, env = boxed
         proc = subprocess.run(
             argv,
             capture_output=True,
             cwd=str(target),
             timeout=_EXEC_TIMEOUT,
-            env=env,
         )
         out = (proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")).strip()
         return {

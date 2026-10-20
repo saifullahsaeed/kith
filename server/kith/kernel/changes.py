@@ -65,6 +65,9 @@ KINDS = (
     "plugin_call",
     # Something he asked you to look at — see `services/showing`.
     "showing",
+    # An agent tree moved: an agent started, reported, asked, stopped or closed, or mail was
+    # delivered — see `services/agents`. The conversation is the session it happened in.
+    "agents",
 )
 
 

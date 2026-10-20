@@ -19,7 +19,6 @@ from kith.config import (
     ollama_host,
 )
 from kith.domain import tooling
-from kith.domain.workflows import asks_for_workflow
 from kith.infra import permissions
 from kith.infra.db import repositories as repo
 from kith.kernel import changes, clock, live_turns, session_context, stopping
@@ -28,7 +27,7 @@ from kith.schemas import (
     AnswerSchema,
     ChatRequestSchema,
 )
-from kith.services import conversations, history, host_costs, questions, steering
+from kith.services import agents, conversations, history, host_costs, questions, steering
 from kith.services.activity import describe_call, feed, short_args
 from kith.services.agent_loop import _images_from, stream_agent, without_image
 from kith.services.turn import report
@@ -81,7 +80,9 @@ def _stop(conversation_id: str) -> bool:
     was_running = stopping.stop(conversation_id)
     # Now nothing that wakes up can get past its next check, so it is safe to wake it.
     questions.release(conversation_id)
-    permissions.release_waiting()
+    # And an agent parked on a question to its handler, which is the same wait by another road.
+    agents.release(conversation_id)
+    permissions.release_waiting(conversation_id)
     # A turn parked on a plugin surface is not reading the stop switch either, so stopping it
     # has to reach in and wake it — the same reason the two lines above exist.
     _release_plugin_calls(conversation_id)
@@ -151,7 +152,7 @@ def fold_now(conversation_id: str):
         ollama_host(),
         _tool_block_chars(),
         force=True,
-        framing=framing(config),
+        framing=framing(config, conversation_id),
         schemas=tools.host(AGENT_DB_PATH).schemas(),
     )
     if brief is None:
@@ -337,6 +338,8 @@ def steer_turn(conversation_id: str):
     said = str(body.get("message") or body.get("content") or "").strip()
     if not said:
         return jsonify({"error": "nothing to say"}), 400
+    if agents.is_agent(conversation_id):
+        return jsonify({"error": "This conversation is an agent. Talk to the chat that started it."}), 409
     if live_turns.current(conversation_id) is None:
         # Not an error. The window asks, finds nothing running, and posts it as a new message —
         # which is the same thing the person meant, one round later.
@@ -454,16 +457,6 @@ def _watching(unattended: bool):
         yield
 
 
-def _workflow_permission(conversation_id: str, opening: str) -> str:
-    """Why this turn may start a workflow: "asked", "mode", or "" for not at all."""
-    if asks_for_workflow(opening):
-        return "asked"
-    try:
-        return "mode" if repo.conversations.workflow_mode_of(AGENT_DB_PATH, conversation_id) else ""
-    except Exception:
-        return ""
-
-
 def begin_turn(
     conversation_id: str,
     config,
@@ -538,6 +531,7 @@ def begin_turn(
         Now the turn runs here, on its own, and the response below is only a reader. What a
         disconnect costs you is the live view, not the turn.
         """
+        failed = ""
         try:
             # Bound for the whole turn, so a tool that acts on a project records that this
             # session is the one working on it. Starting a project here and having nothing
@@ -553,10 +547,9 @@ def begin_turn(
                 session_context.working_in(conversation_id),
                 session_context.arriving_from(sent_from),
                 _watching(unattended),
-                # The opening message asking for one, or the person having turned workflow mode
-                # on for this chat. A turn the scheduler opens starts with the scheduler's words,
-                # so only the mode can let one of those start a workflow.
-                session_context.may_run_workflows(_workflow_permission(conversation_id, opening)),
+                # An agent works in its own worktree, and every path in the turn lands there. A
+                # no-op for a chat. See `services/agents.pinned`.
+                agents.pinned(conversation_id),
             ):
                 # Reading the transcript and building the prompt happen *here*, not on the
                 # request path, because building it can fold — and a fold is a summarisation
@@ -622,10 +615,13 @@ def begin_turn(
                     tool_host=tool_host,
                 ):
                     live_turns.publish(live, line)
+                    if line.startswith('{"type": "error"'):
+                        failed = str(json.loads(line).get("message") or "the turn failed")
         except Exception as exc:
             # Broad on purpose: this thread is the only one running the turn, and no reader can
             # see an exception raised here — an uncaught one would leave every watcher waiting
             # for an end that never comes.
+            failed = str(exc)
             live_turns.publish(live, json.dumps({"type": "error", "message": str(exc)}) + "\n")
         finally:
             _disarm(conversation_id, stop_switch)
@@ -644,6 +640,13 @@ def begin_turn(
             live_turns.finish(live)  # releases every reader, now and later
             if unread:
                 _send_unread_steer(conversation_id, unread)
+            else:
+                # Mail that arrived after the last round took it, and — in an agent — the report
+                # to its handler. After `finish`, so a delivery here sees no turn running.
+                try:
+                    agents.turn_ended(conversation_id, stopped=stop_switch.is_set(), failed=failed)
+                except Exception:
+                    traceback.print_exc()
 
     # `copy_context().run` rather than a bare Thread target: everything else this request
     # established in ContextVars — the project, the turn's scratch notes, whether this is
@@ -741,11 +744,15 @@ def _deliver_steer(conversation_id: str) -> str:
     queued, so the queue emptying is a change to something being displayed.
     """
     said = steering.take(conversation_id)
-    if not said:
-        return ""
-    conversations.record(AGENT_DB_PATH, conversation_id, "user", said)
-    changes.publish("steer", conversation=conversation_id)
-    return said
+    parts = []
+    if said:
+        conversations.record(AGENT_DB_PATH, conversation_id, "user", said)
+        changes.publish("steer", conversation=conversation_id)
+        parts.append(said)
+    # And mail from the agent tree — a handler's instruction, an agent's report or question — on
+    # the same boundary, recorded by `agents.take` as it is taken.
+    parts.extend(str(mail["content"]) for mail in agents.take(conversation_id))
+    return "\n\n".join(parts)
 
 
 def _send_unread_steer(conversation_id: str, said: str) -> None:
@@ -774,6 +781,42 @@ def _send_unread_steer(conversation_id: str, said: str) -> None:
             pass
     except Exception:
         traceback.print_exc()
+
+
+def start_from_mail(conversation_id: str) -> bool:
+    """Start a turn in a conversation from the mail waiting for it. The agent tree's door.
+
+    Called by `agents.deliver`, holding that conversation's lock and having seen no turn running,
+    so taking the mail and registering the turn happen before anyone else can look.
+
+    **In a fresh context**, not the caller's. The caller is usually a tool call in another session
+    — a handler starting an agent, an agent reporting — and `begin_turn` carries every ContextVar
+    of whoever calls it onto the new turn's thread: the caller's worktree pin, its turn notes, its
+    unattended flag. A child turn inheriting its handler's worktree would write in it.
+    """
+    mail = agents.take(conversation_id)
+    if not mail:
+        return False
+    latest = mail[-1]
+
+    def go():
+        return begin_turn(
+            conversation_id,
+            _config_for(conversation_id),
+            lambda: _history_for_turn(conversation_id, latest),
+            str(latest["content"]),
+        )
+
+    contextvars.Context().run(go)
+    return True
+
+
+def _config_for(conversation_id: str):
+    """The install's config, on the model an agent was started with when it was given one."""
+    found = agents.row(conversation_id) or {}
+    model = agents.model_for(str(found.get("agent_model") or "")) if found.get("parent_id") else ""
+    base = default_config()
+    return merge_overrides(base, {"model": model}) if model else base
 
 
 def _tool_block_chars() -> int:
@@ -1145,6 +1188,10 @@ class _MindFeed:
 def chat(payload):
     config = merge_overrides(default_config(), payload.get("config") or {})
     client_history = payload.get("messages") or []
+    if agents.is_agent(str(payload.get("conversationId") or "").strip()):
+        # An agent's only voice in is its handler. The interface does not offer a box here; this is
+        # what a client that tried anyway is told.
+        return jsonify({"error": "This conversation is an agent. Talk to the chat that started it."}), 409
 
     # Which conversation this belongs to. Opened on the first message rather than when the
     # window opens, so idly launching the app does not litter the history with empties.

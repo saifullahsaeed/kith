@@ -20,6 +20,7 @@ from kith.domain.tooling import ToolHost
 from kith.infra import permissions
 from kith.services import touched, tuning
 from kith.tools import (  # noqa: F401 - imported for their registration side effect
+    agents,
     aliases,
     asking,
     browser,
@@ -37,9 +38,6 @@ from kith.tools import (  # noqa: F401 - imported for their registration side ef
     tasks,
     time,
     web,
-    workers,
-    workflow,
-    workflow_steps,
 )
 from kith.tools.aliases import suggest
 from kith.tools.registry import all_tools, get, names, schemas

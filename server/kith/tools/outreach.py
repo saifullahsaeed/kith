@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.infra.db import repositories as repo
+from kith.kernel import session_context
+from kith.services import agents
 from kith.tools.params import STR
 from kith.tools.registry import tool
 
@@ -31,4 +33,8 @@ def _reach_out(path: Path, a: dict) -> dict:
     required=("message",),
 )
 def reach_out(path: Path, args: dict):
+    here = session_context.current()
+    if here and agents.is_agent(here):
+        # An agent does not reach the person — its handler does, if it thinks it is worth it.
+        return agents.note_up(here, str(args.get("message") or ""))
     return _reach_out(path, args)

@@ -351,24 +351,45 @@ def _bent_into_the_copy(absolute: Path) -> Path:
     Anything outside the original is returned untouched. A worker reading `~/Downloads/spec.pdf`
     is doing something legitimate that has nothing to do with its copy.
     """
-    source, copy = session_context.isolated_mirror()
-    if not source or not copy:
+    sources, copy = session_context.isolated_mirror()
+    if not sources or not copy:
         return absolute
     try:
         here = os.path.realpath(absolute)
-        original = os.path.realpath(source).rstrip(os.sep)
     except OSError:
         # A path that cannot be settled is a path we cannot prove is inside the original, and
         # the safe answer is the one that does not silently move a write somewhere else.
         return absolute
 
-    for mine, theirs in ((here, original), (here.casefold(), original.casefold())):
-        if mine == theirs:
-            return Path(copy)
-        if mine.startswith(theirs + os.sep):
-            # Sliced off `here` rather than recomputed from the folded pair, so what lands in
-            # the copy keeps the spelling the caller used for everything below the root.
-            return Path(copy) / here[len(theirs) + 1 :]
+    # Already in the copy: left alone. Without this a copy that lives *inside* the repository it
+    # copies — Kith's own data folder is inside its own checkout — would have its own paths bent
+    # into a copy of itself.
+    try:
+        mine_root = os.path.realpath(copy).rstrip(os.sep)
+    except OSError:
+        mine_root = str(copy).rstrip(os.sep)
+    if here == mine_root or here.startswith(mine_root + os.sep):
+        return absolute
+
+    # The most specific source first: a handler's worktree may sit inside the repository it is a
+    # worktree of, and a path in it is about the handler's copy, not the repository's same-named
+    # folder.
+    settled = []
+    for source in sources:
+        try:
+            settled.append(os.path.realpath(source).rstrip(os.sep))
+        except OSError:
+            continue
+    for original in sorted(settled, key=len, reverse=True):
+        if not original:
+            continue
+        for mine, theirs in ((here, original), (here.casefold(), original.casefold())):
+            if mine == theirs:
+                return Path(copy)
+            if mine.startswith(theirs + os.sep):
+                # Sliced off `here` rather than recomputed from the folded pair, so what lands in
+                # the copy keeps the spelling the caller used for everything below the root.
+                return Path(copy) / here[len(theirs) + 1 :]
     return absolute
 
 

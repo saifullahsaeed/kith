@@ -1,82 +1,54 @@
-"""A private copy of the repository for one worker to change things in.
+"""An agent's own checkout of the repository: a git worktree on a branch of its own.
 
-A worker that can edit files is only safe — and only *parallel* — if it is not editing the
-same files as everything else. `git worktree` is the mechanism: a second checkout of the same
-repository, with its own working tree and its own index, sharing one object store. Two
-workers in two worktrees share nothing but the objects they both read.
+An agent that can edit files is only safe — and only *parallel* — if it is not editing the same
+files as everything else. `git worktree` is the mechanism: a second checkout of the same
+repository, with its own working tree and its own index, sharing one object store and one set of
+refs. Two agents in two worktrees share nothing but the objects they both read.
 
-**Its own index is the part that is easy to miss and load-bearing.** A linked worktree keeps
-its index at ``.git/worktrees/<name>/index``, not in the main one — so `git add -A` in here,
-which is how untracked files get into a diff at all, cannot disturb a commit someone is
-deliberately building toward in the real tree. Without that this whole approach would be
-unusable: the only way to see a new file in a diff would be to stage it in the repository the
-worker is supposed to be isolated from.
+**On a branch, because agents nest and work flows back up by merging.** An agent commits on its
+branch; whoever started it merges that branch into its own checkout with ordinary git. An agent
+that starts agents of its own opens their worktrees from *its* worktree, so their branches start
+from its branch — the tree of agents is a tree of branches, and the conductor's checkout is where
+it all finally lands. (The workers this replaced used detached copies and handed back patches,
+and nothing about a patch survived the copy being deleted.)
 
-**Seeded from the working tree, not from HEAD.** ``git stash create`` writes a commit object
-for whatever is currently uncommitted and returns its sha *without touching the stash ref, the
-index, or the working tree* — so it is a read as far as the real repository is concerned. The
-worktree is checked out at that commit, which means a worker sees the code as it is right now
-rather than as it was at the last commit. The alternative was a worker reporting a diff
-against a tree nobody has, that will not apply.
+**Started from the last commit, not from the working tree.** A branch is a line of commits, and
+uncommitted changes in the handler's checkout are not on it. Carrying them in by hand would put
+them on the agent's branch as the agent's own work, and merging back would then collide with the
+very same uncommitted changes still sitting in the handler's checkout. So a handler commits what
+its agents need first — the strategy says so, and `start_agents` says so when there is anything
+uncommitted.
 
-Untracked files are not carried by ``stash create``, and one directory has to be exempted from
-that: ``.kith``. It is where Kith keeps the notes it writes for itself — a convention file, a
-task's state, the plan a worker is supposed to follow — and it is gitignored by convention in
-every project. So git would never carry it, and the result is a main agent writing a brief its
-own worker cannot open.
-
-That is not hypothetical. On the first real use of this, the agent wrote `CONVENTION.md` to
-`.kith/work/`, told the builder to read it, and the builder spent its entire round budget
-hunting for a file that was not there and produced no patch at all. It diagnosed the cause
-itself from `.gitignore`.
-
-So :func:`_carry_notes` copies it in, and :func:`_carry_untracked` copies the untracked source
-files git would list — the ones written this session and not committed yet, which are exactly
-the ones a builder is told to extend. Copied by hand rather than with ``--include-untracked``,
-which writes an object for every untracked file in the tree, including whatever large thing a
-stale ignore file lets through. The dependency folders the project's checks need are cloned in
-last (:func:`_carry_dependencies`).
-
-**Detached, always.** A worktree on a branch takes that branch — git refuses to check the
-same branch out twice, so a worker opened on `master` would make the real checkout fail. A
-detached head belongs to nobody.
+What git does not track and an agent still needs is carried: `.kith` (the notes Kith writes for
+itself, gitignored by convention), environment files, and the dependency folders the project's
+checks need — all ignored, so none of them can end up on the branch.
 """
 
 from __future__ import annotations
 
-import os
+import re
 import shutil
 import threading
-import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from .base import WorkspaceError
 from .git import _git, _repo_root, has_git
-from .paths import base_dir, internal
+from .paths import internal
 
-#: Where the copies live: beside the databases in `paths.internal`, never inside the repository
-#: being copied.
+#: Where the worktrees live: beside the databases in `paths.internal`, never inside the
+#: repository being copied.
 #:
-#: The first version of this put them under the workspace root and a test caught it, which is
-#: worth recording because the reasoning looked sound. The workspace is not the project, so a
-#: copy of ~/Kith/myapp under ~/Kith/.kith is outside it — *unless the workspace root is itself
-#: the repository*, which `git.ensure_repo` will happily make it. Then every worker's copy is a
-#: full checkout nested inside the tree it copied, walked by `glob`, matched by `grep`, picked
-#: up by the project's own build, and listed by `git status` (only `.kith/scratch/` is in
-#: `_GITIGNORE`, not `.kith/`).
-#:
-#: `internal()` has no such edge: it is beside the databases and has nothing to do with where
-#: the work happens, which is the same argument its own docstring makes about transcripts.
-WORKTREE_DIR = "workers"
+#: The first version of the workers' copies put them under the workspace root and a test caught
+#: it, which is worth recording because the reasoning looked sound. The workspace is not the
+#: project, so a copy of ~/Kith/myapp under ~/Kith/.kith is outside it — *unless the workspace
+#: root is itself the repository*, which `git.ensure_repo` will happily make it. Then every copy
+#: is a full checkout nested inside the tree it copied, walked by `glob`, matched by `grep`, and
+#: picked up by the project's own build.
+WORKTREE_DIR = "agents"
 
-#: How long an abandoned copy is kept before `prune` may remove it. Generous, because the
-#: thing it is protecting against is deleting work: a worker whose turn died still has its
-#: edits in here, and its worker row still points at them. A day means a person who comes
-#: back the next morning still has yesterday's, and a machine that has been running for a
-#: month is not accumulating a hundred checkouts of the same repository.
-KEEP_SECONDS = 24 * 60 * 60
-
-#: Worktree operations are bookkeeping in front of a worker's whole run, so a slow one should
+#: Worktree operations are bookkeeping in front of an agent's whole run, so a slow one should
 #: fail fast rather than stall it. Longer than the checkpoint's 20s because `worktree add`
 #: writes a full checkout and a large repository legitimately takes a while.
 _TIMEOUT = 60
@@ -84,18 +56,16 @@ _TIMEOUT = 60
 
 #: Held while a copy is being made, and only then.
 #:
-#: Making one is not the read-only operation it looks like. ``git stash create`` runs against
-#: the *source* repository and refreshes its index, so it takes `.git/index.lock`; `worktree
-#: add` then writes the shared `.git/worktrees` registry. Two builders started together — which
-#: is the whole point of a workflow's `parallel()` — hit both at once, and one of them dies with
-#: "could not write index" before it has read a single file.
+#: Making one is not the read-only operation it looks like: `worktree add` writes the shared
+#: `.git/worktrees` registry and creates a ref. Several agents started together — which is the
+#: whole point of `start_agents` — hit both at once, and one of them dies with "could not write
+#: index" before it has read a single file.
 #:
 #: Found in use on 2026-09-15: builder 2 won the race, builder 1 died at startup, and the agent
 #: that sent them diagnosed it from the lock files and retried. It should not have had to.
 #:
 #: Serialising creation costs nothing worth measuring. A copy takes well under a second; the
-#: work afterwards takes minutes, and that is the part that stays parallel. The lock is released
-#: before `_run_worker` streams a single token.
+#: work afterwards takes minutes, and that is the part that stays parallel.
 _making = threading.Lock()
 
 
@@ -103,60 +73,114 @@ def _home() -> Path:
     return internal() / WORKTREE_DIR
 
 
-def open_for(worker_id: str, folder: Path | str | None = None) -> Path | None:
-    """A private checkout for ``worker_id``, or None when there cannot be one.
+@dataclass(frozen=True)
+class Opened:
+    """A worktree made for one agent."""
 
-    ``folder`` is where the work is — the project's folder, by default the working base. The
-    copy is of the repository *that folder* is in, which is not always a repository of its own:
-    every project made under the workspace is a folder of the one repository the workspace is.
-    See :func:`base_in` for where in the copy that folder then is.
+    #: The worktree's root.
+    copy: Path
+    #: Where in it the work is: the project's folder when the project is a folder of a larger
+    #: repository, the root otherwise. What the agent's relative paths resolve against.
+    folder: Path
+    #: The branch it is on, which nobody else has checked out.
+    branch: str
+    #: The commit the branch started from — what "ahead" is measured against.
+    base: str
+    #: The checkout it was made from: the person's, or the handler's own worktree.
+    source: Path
 
-    None rather than an exception for the two ordinary reasons — git is not installed, or the
-    work is not happening in a repository at all — because both are conditions a caller has to
-    handle anyway and neither is a fault. The caller decides what a worker without isolation
-    is allowed to do; this only reports that it could not be given one.
+
+def open_branch(agent_id: str, folder: Path | str, name: str = "") -> Opened | None:
+    """A worktree on a new branch for one agent, started from ``folder``'s last commit.
+
+    ``folder`` is where the session starting the agent is working — the conductor's project, or an
+    agent's own worktree — and the new branch starts at that checkout's HEAD, so an agent's agents
+    branch from the agent's branch. ``name`` only flavours the branch name; ``agent_id`` keeps it
+    unique.
+
+    None when there cannot be one — git is not installed, or the folder is not in a repository,
+    or the repository has no commit yet — because those are ordinary situations the caller has to
+    handle anyway (the agent shares the handler's folder instead). A failure of git itself is an
+    error: "it could not be isolated, so it edited your files instead" must never happen quietly.
     """
     if not has_git():
         return None
-    work = _settled(Path(folder) if folder else base_dir())
+    work = _settled(Path(folder))
     source = _repo_root(work)
     if source is None:
         return None
+    head = _git("rev-parse", "--verify", "-q", "HEAD", cwd=source, timeout=_TIMEOUT)
+    base = head.output.strip().splitlines()[0].strip() if head.exit_code == 0 and head.output.strip() else ""
+    if not base:
+        return None
 
-    where = _home() / str(worker_id)
-    if where.exists():
-        # A worker being resumed already has its copy, and its edits are in it. Handing back
-        # the existing one is the whole point of keeping worktrees as long as workers.
-        return where
-
+    where = _home() / str(agent_id)
+    branch = branch_for(name, agent_id)
     with _making:
-        # Re-checked inside the lock. Two threads can both find it missing above, and the
-        # second would otherwise ask git to register a worktree that now exists.
-        if where.exists():
-            return where
         where.parent.mkdir(parents=True, exist_ok=True)
+        made = _git("worktree", "add", "-b", branch, str(where), base, cwd=source, timeout=_TIMEOUT)
+        if made.exit_code != 0:
+            raise WorkspaceError(f"Could not open a worktree for this agent: {made.output.strip()[:300]}")
+        _carry_notes(source, where, work)
+        _carry_environment(source, where)
+        _carry_dependencies(source, where)
+    return Opened(copy=where, folder=base_in(where, work, source), branch=branch, base=base, source=source)
 
-        # The uncommitted state as a commit, with no side effect on the repository it came from.
-        # Empty output means there was nothing uncommitted, and HEAD is then the same tree.
-        seeded = _git("stash", "create", cwd=source, timeout=_TIMEOUT).output.strip()
-        start = seeded.splitlines()[0].strip() if seeded else "HEAD"
 
-        made = _git("worktree", "add", "--detach", str(where), start, cwd=source, timeout=_TIMEOUT)
-        if made.exit_code == 0:
-            _carry_notes(source, where, work)
-            _carry_untracked(source, where)
-            _carry_environment(source, where)
-            _baseline(where)
-            # After the baseline, and it would not matter if it were before: these are ignored
-            # in the source, so `add -A` never stages them and they can never reach a diff.
-            _carry_dependencies(source, where)
+def branch_for(name: str, agent_id: str) -> str:
+    """``kith/<name>-<6 hex>`` — readable in `git branch`, and unique whatever the name is."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "agent").lower()).strip("-")[:40] or "agent"
+    suffix = re.sub(r"[^a-z0-9]", "", str(agent_id).lower())[-6:] or uuid.uuid4().hex[:6]
+    return f"kith/{slug}-{suffix}"
 
-    if made.exit_code != 0:
-        # Left as a failure rather than a silent fall back to the real tree. "He could not be
-        # isolated, so he edited your files instead" is the one outcome this module exists to
-        # make impossible.
-        raise WorkspaceError(f"Could not open a private copy to work in: {made.output.strip()[:300]}")
-    return where
+
+def uncommitted(folder: Path | str) -> list[str]:
+    """The paths with uncommitted changes in ``folder``'s checkout — what an agent started from
+    here would not see. Empty when clean or not a repository."""
+    root = _repo_root(_settled(Path(folder)))
+    if root is None:
+        return []
+    listed = _git("status", "--porcelain", "-uall", cwd=root, timeout=_TIMEOUT)
+    if listed.exit_code != 0:
+        return []
+    return [line[3:].strip() for line in listed.output.splitlines() if line.strip()]
+
+
+def status(copy: Path, base: str) -> dict:
+    """Where an agent's branch stands: commits since it started, and what is uncommitted."""
+    ahead = 0
+    if base:
+        counted = _git("rev-list", "--count", f"{base}..HEAD", cwd=copy, timeout=_TIMEOUT)
+        if counted.exit_code == 0 and counted.output.strip().isdigit():
+            ahead = int(counted.output.strip())
+    return {"ahead": ahead, "uncommitted": uncommitted(copy)}
+
+
+def commit_leftovers(copy: Path, message: str) -> list[str]:
+    """Commit whatever the agent left uncommitted in its worktree. Returns the paths committed.
+
+    Run when an agent reports. Its branch is what its handler merges, and a change sitting
+    uncommitted in a worktree is a change the merge cannot see — the same failure as the workers'
+    "edited files, empty patch", one level up. Committed under a message that says it was left
+    behind, so the history does not pretend the agent meant it.
+    """
+    left = uncommitted(copy)
+    if not left:
+        return []
+    _git("add", "-A", cwd=copy, timeout=_TIMEOUT)
+    done = _git("commit", "-q", "--no-verify", "-m", message, cwd=copy, timeout=_TIMEOUT)
+    return left if done.exit_code == 0 else []
+
+
+def merged(branch: str, into: Path | str) -> bool:
+    """Whether every commit on ``branch`` is already in ``into``'s checked-out HEAD."""
+    root = _repo_root(_settled(Path(into)))
+    if root is None or not branch:
+        return False
+    exists = _git("rev-parse", "--verify", "-q", branch, cwd=root, timeout=_TIMEOUT)
+    if exists.exit_code != 0:
+        return True  # nothing left to merge from a branch that is gone
+    return _git("merge-base", "--is-ancestor", branch, "HEAD", cwd=root, timeout=_TIMEOUT).exit_code == 0
 
 
 #: What is under `.kith` but is not a note. Skipped when carrying it into a worker's copy.
@@ -198,7 +222,7 @@ def _within(source: Path, work: Path) -> Path | None:
         return None
 
 
-def base_in(copy: Path, folder: Path | str) -> Path:
+def base_in(copy: Path, folder: Path | str, source: Path | None = None) -> Path:
     """Where ``folder`` is inside ``copy``: the folder a worker's relative paths should land in.
 
     The copy's root when the project is its own repository. A project that is a folder of a
@@ -207,7 +231,7 @@ def base_in(copy: Path, folder: Path | str) -> Path:
     brief and not the workspace's. Falls back to the root when the folder is not in the copy.
     """
     work = _settled(Path(folder))
-    source = _repo_root(work)
+    source = source or _repo_root(work)
     inside = _within(source, work) if source is not None else None
     if not inside or inside == Path("."):
         return copy
@@ -282,13 +306,10 @@ _LARGEST_NOTE = 1_000_000
 def _not_a_note(directory: str, names: list[str]) -> set[str]:
     """What `copytree` should skip in one directory of `.kith`.
 
-    Build output anywhere; a workflow's own run folder (``scratch/workflows``), which holds the
-    patches of the very run that is opening this copy; and any file too big to be a note.
+    Build output anywhere, and any file too big to be a note.
     """
     skipped = {name for name in names if name in _NOT_NOTES}
     here = Path(directory)
-    if here.name == "scratch":
-        skipped.add("workflows")
     for name in names:
         try:
             if (here / name).is_file() and (here / name).stat().st_size > _LARGEST_NOTE:
@@ -296,39 +317,6 @@ def _not_a_note(directory: str, names: list[str]) -> set[str]:
         except OSError:
             skipped.add(name)
     return skipped
-
-
-def _carry_untracked(source: Path, copy: Path) -> None:
-    """Copy in the source files git is not tracking yet, because `stash create` will not.
-
-    The files a main agent wrote an hour ago and has not committed are the ones a builder is
-    most often told to extend, and a copy seeded from `stash create` alone does not have them —
-    the builder is sent to edit a file that is not there. Only what git would *show* as
-    untracked (`--exclude-standard`), so nothing the project ignores is carried, and nothing
-    under `.kith`, which :func:`_carry_notes` has already handled with its own rules.
-
-    Carried before the baseline, so they are part of what the worker was handed and never come
-    back in its diff unless it changes them. Never raises, for the reason `_carry_notes` gives.
-    """
-    try:
-        listed = _git("ls-files", "--others", "--exclude-standard", "-z", cwd=source, timeout=_TIMEOUT)
-        if listed.exit_code != 0:
-            return
-        for name in listed.output.split("\0"):
-            name = name.strip()
-            if not name or name == ".kith" or name.startswith(".kith/"):
-                continue
-            origin = source / name
-            try:
-                if not origin.is_file() or origin.is_symlink() or origin.stat().st_size > _LARGEST_UNTRACKED:
-                    continue
-                target = copy / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(origin, target)
-            except OSError:
-                continue
-    except Exception:
-        pass
 
 
 #: The largest environment file carried into a copy. A `.env` is a few dozen lines.
@@ -384,10 +372,6 @@ def _carry_environment(source: Path, copy: Path) -> None:
     except Exception:
         pass
 
-
-#: The largest untracked file carried into a copy. A source file somebody is writing is well
-#: under this; past it, it is generated output that happens not to be ignored.
-_LARGEST_UNTRACKED = 2_000_000
 
 #: The folders a project's own checks and tests run on, carried into every copy.
 #:
@@ -453,236 +437,35 @@ def clone(origin: Path, target: Path) -> bool:
         return False
 
 
-def _stage_everything(worktree: Path) -> None:
-    """Stage the copy as it stands, every `.kith` included even where the project ignores it.
+def close(worktree: Path, branch: str = "") -> None:
+    """Remove one agent's worktree, its branch, and the bookkeeping git keeps for it.
 
-    Bare ``add -A`` first — no pathspec, so an ignored path is skipped silently instead of
-    failing the whole add (see :func:`diff_in` for the builders that cost). Then each `.kith`
-    again with ``-f``, because a note the worker writes into an ignored `.kith/scratch/` is
-    still the worker's work, and a check script it was told to write there came back as nothing.
+    ``--force`` because a worktree may still have changes in it — closing is the decision to let
+    them go, taken by `close_agents` only after checking the branch was merged or being told to
+    force it. The branch is deleted with ``-D`` for the same reason.
 
-    **Each one, not the root's.** Only `<root>/.kith` used to be forced, and a project that is a
-    folder of the repository keeps its `.kith` one level down. Four builders wrote 54 screens
-    into `ai-personal-finance/.kith/screens/` and every patch came back empty; the run's merge
-    failed and the copies holding the screens were deleted with it (2026-09-30). Build output
-    under a `.kith` stays out, as it does when the notes are carried in (:data:`_NOT_NOTES`).
-    """
-    _git("add", "-A", cwd=worktree, timeout=_TIMEOUT)
-    folders = _notes_in(worktree)
-    if not folders:
-        return
-    _git("add", "-A", "-f", "--", *folders, cwd=worktree, timeout=_TIMEOUT)
-    # Then the build output taken back out. Not with `:(exclude,glob)` pathspecs on the add:
-    # measured on git 2.50, `**/dist/**` or `**/venv/**` beside a forced add of an ignored folder
-    # makes the whole add stage nothing, exit 0 — the empty patch this function exists to end.
-    output = [
-        str(one.relative_to(worktree)) for folder in folders for one in _build_output(worktree / folder)
-    ]
-    if output:
-        _git("reset", "-q", "--", *output, cwd=worktree, timeout=_TIMEOUT)
+    Never raises: tidying up must not turn finished work into an error.
 
-
-def _build_output(notes: Path) -> list[Path]:
-    """The folders under one `.kith` that are not notes — build output and a workflow's own runs —
-    found without walking into any of them."""
-    found: list[Path] = []
-    for here, folders, _ in os.walk(notes):
-        keep = []
-        for name in folders:
-            if name in _NOT_NOTES or (name == "workflows" and Path(here).name == "scratch"):
-                found.append(Path(here) / name)
-            else:
-                keep.append(name)
-        folders[:] = keep
-    return found
-
-
-def _notes_in(worktree: Path) -> list[str]:
-    """Every `.kith` folder in the copy that git is ignoring, relative to the copy's root.
-
-    Asked of git (``--others --ignored --directory``), which names an ignored folder without
-    walking into it, rather than found by walking the tree — a copy carries `node_modules`.
-    """
-    found = {".kith"} if (worktree / ".kith").is_dir() else set()
-    try:
-        listed = _git(
-            "ls-files",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--directory",
-            "-z",
-            cwd=worktree,
-            timeout=_TIMEOUT,
-        )
-    except Exception:
-        return sorted(found)
-    if listed.exit_code == 0:
-        for name in listed.output.split("\0"):
-            parts = Path(name.strip().rstrip("/")).parts
-            if ".kith" in parts:
-                found.add(str(Path(*parts[: parts.index(".kith") + 1])))
-    return sorted(found)
-
-
-def _baseline(worktree: Path) -> None:
-    """Record the copy as it was handed over, so its diff is only what the worker did.
-
-    The copy is the seeded tree plus notes carried in by hand, and those notes are not the
-    worker's work. The diff used to keep them out by excluding `.kith` wholesale — which also
-    threw away every file a worker *wrote* there. A builder asked for a design mockup in
-    `.kith/screens/` wrote it, edited it four times, and came back "changed nothing"; so did one
-    asked for a check script in `.kith/scratch/`.
-
-    So the handed-over state is committed inside the copy — a detached commit in the copy's own
-    history, invisible to every branch of the real repository — and :func:`diff_in` diffs against
-    it. Carried notes are in the baseline and never come back; whatever the worker adds or
-    changes, anywhere, does. Also called again after earlier patches are applied into a copy
-    (:func:`apply_in`), for the same reason.
-
-    Never raises: a copy without a baseline diffs against its seed, which is the old behaviour.
-    """
-    try:
-        _stage_everything(worktree)
-        tree = _git("write-tree", cwd=worktree, timeout=_TIMEOUT).output.strip()
-        if not tree:
-            return
-        made = _git(
-            "commit-tree",
-            tree,
-            "-p",
-            "HEAD",
-            "-m",
-            "what the worker was handed",
-            cwd=worktree,
-            timeout=_TIMEOUT,
-        )
-        commit = made.output.strip().splitlines()[-1].strip() if made.exit_code == 0 else ""
-        if commit:
-            _git("reset", "-q", "--soft", commit, cwd=worktree, timeout=_TIMEOUT)
-    except Exception:
-        pass
-
-
-def apply_in(worktree: Path, patches: list[str]) -> str:
-    """Apply earlier workers' patches inside a copy, then re-baseline. Returns "" or what failed.
-
-    For a workflow step that has to see what earlier builders made — an integration step, or a
-    review. Without this every agent starts from the original tree, and a reviewer sent to read
-    `discover.py` finds a file that exists only as a patch in a folder it was never told about.
-
-    Re-baselined afterwards, so the new worker's own diff is only its own work and the patches
-    stay independent: applied in order, they stack.
-    """
-    for number, patch in enumerate(patches, start=1):
-        if not patch.strip():
-            continue
-        holder = worktree.parent / f".{worktree.name}.incoming-{number}.patch"
-        try:
-            holder.write_text(patch if patch.endswith("\n") else patch + "\n", encoding="utf-8")
-            done = _git("apply", "--whitespace=nowarn", str(holder), cwd=worktree, timeout=_TIMEOUT)
-        finally:
-            holder.unlink(missing_ok=True)
-        if done.exit_code != 0:
-            return f"patch {number} of {len(patches)} did not apply: {done.output.strip()[:300]}"
-    _baseline(worktree)
-    return ""
-
-
-def merge_in(worktree: Path, patches: list[str]) -> list[str]:
-    """Apply several patches into one copy, each on its own. One entry per patch: "" or why not.
-
-    Unlike :func:`apply_in` this does not stop at the first refusal and does not re-baseline:
-    it is how a workflow puts its builders' work together, so the answer it owes is *which*
-    patches fit, and the diff taken afterwards is the whole of what did. A patch that does not
-    apply is left out entirely — `git apply` is atomic per patch — rather than half applied.
-    """
-    outcome: list[str] = []
-    for number, patch in enumerate(patches, start=1):
-        if not patch.strip():
-            outcome.append("")
-            continue
-        holder = worktree.parent / f".{worktree.name}.merging-{number}.patch"
-        try:
-            holder.write_text(patch if patch.endswith("\n") else patch + "\n", encoding="utf-8")
-            done = _git("apply", "--whitespace=nowarn", str(holder), cwd=worktree, timeout=_TIMEOUT)
-        except OSError as exc:
-            outcome.append(f"could not be written out to apply: {exc}")
-            continue
-        finally:
-            holder.unlink(missing_ok=True)
-        outcome.append("" if done.exit_code == 0 else (done.output.strip()[:300] or "git apply refused it"))
-    return outcome
-
-
-def diff_in(worktree: Path) -> str:
-    """Everything the worker changed in its copy, as one patch that will apply to the real tree.
-
-    Staged first, into the worktree's own index, because that is the only way an untracked
-    file — a file the worker *created*, which is most of what a builder does — appears in a
-    diff at all. See the module docstring on why that staging is safe.
-
-    ``--binary`` so an image or a compiled fixture survives the round trip, and no ``--stat``
-    or colour: the reader is `git apply`, and after it a language model. Both want the patch.
-
-    Diffed against the copy's baseline (:func:`_baseline`), not its seed. The notes carried into
-    `.kith` are in that baseline, so they never come back as a patch — a project that tracks
-    `.kith` would otherwise get a diff writing its own notes back over itself — while a file the
-    worker writes under `.kith` does come back. That used to be excluded wholesale, which lost a
-    design mockup and a check script in the first real workflow.
-
-    **The add takes no pathspec, and that is the fix for a bug that made every builder look
-    broken.** It was ``add -A -- . ':(exclude).kith'``, and naming `.` explicitly makes git
-    refuse an ignored path that matches it: with `.kith` copied in *and* gitignored — which is
-    the normal case — git printed "the following paths are ignored", exited 1, and this returned
-    "" on the exit code. Three builders in a row did the work correctly, had it staged, and were
-    reported as having changed nothing. Bare ``add -A`` skips ignored paths silently and stages
-    exactly the same bytes; measured on those three worktrees, 5,843 either way.
-
-    The exit code is no longer fatal either. `add` warns about all sorts of things, and turning
-    an advisory into "this worker produced nothing" is the worst available reading — an empty
-    diff below is the honest answer, and it is empty only when nothing is really there.
-    """
-    _stage_everything(worktree)
-    return _git("diff", "--cached", "--binary", cwd=worktree, timeout=_TIMEOUT).output
-
-
-def close(worktree: Path) -> None:
-    """Remove one copy and the administrative files git keeps for it.
-
-    ``--force`` because the copy is always dirty by the time this runs — that is what it was
-    for — and git otherwise refuses to remove a worktree with changes in it. The refusal is a
-    good default for a person at a terminal and wrong here: the diff has already been taken,
-    and the alternative to removing it is leaving a full checkout on disk forever.
-
-    Never raises. This runs in the teardown of a worker that has already produced its report,
-    and a failure to tidy up must not turn a finished piece of work into an error.
-
-    **Refuses anything that is not one of the copies.** It ends in `rmtree`, and on 2026-09-28 a
-    caller handed it ``Path("")`` — a builder whose copy had been stubbed to "" — which is the
-    current directory: it deleted the whole server folder, source, virtualenv and data, from
-    under a test run. So the path must be absolute and must sit directly inside the copies'
-    own folder (:func:`_home`), or nothing happens at all.
+    **Refuses anything that is not one of the worktrees.** It ends in `rmtree`, and on 2026-09-28
+    a caller handed the workers' version of this ``Path("")`` — which is the current directory: it
+    deleted the whole server folder, source, virtualenv and data, from under a test run. So the
+    path must be absolute and must sit directly inside the worktrees' own folder (:func:`_home`),
+    or nothing happens at all.
     """
     if not _is_a_copy(worktree):
         return
-    source = source_of(worktree) or _repo_root(base_dir())
+    source = source_of(worktree)
     try:
         if source is not None:
             _git("worktree", "remove", "--force", str(worktree), cwd=source, timeout=_TIMEOUT)
         if worktree.exists():
             shutil.rmtree(worktree, ignore_errors=True)
-        # What its commands were given to write in, and the boundary they ran under. Both named
-        # from the copy, which has just been proven to be one.
-        from kith import settings
-        from kith.infra import confinement
-
-        shutil.rmtree(confinement.scratch_for(worktree), ignore_errors=True)
-        (Path(settings.DATA_DIR) / confinement.PROFILES / f"copy-{worktree.name}.sb").unlink(missing_ok=True)
         if source is not None:
             # Without this git keeps `.git/worktrees/<name>` and still believes the checkout
-            # exists, so re-using the same worker id later fails with "already registered".
+            # exists, and a branch it believes is checked out cannot be deleted.
             _git("worktree", "prune", cwd=source, timeout=_TIMEOUT)
+            if branch:
+                _git("branch", "-D", branch, cwd=source, timeout=_TIMEOUT)
     except Exception:
         pass
 
@@ -701,30 +484,3 @@ def _is_a_copy(worktree: Path) -> bool:
         return worktree.resolve().parent == home and worktree.parent.resolve() == home
     except (OSError, ValueError):
         return False
-
-
-def prune(keep_seconds: int = KEEP_SECONDS) -> list[str]:
-    """Remove copies nothing is coming back for. Returns the worker ids that lost theirs.
-
-    The counterpart to workers outliving their turn: a worktree is kept as long as the worker
-    that owns it can still be followed up, and a worker whose conversation was abandoned never
-    says it is finished. Age is the only honest signal left, so age is what this uses.
-
-    Ids rather than a count, because the directory name *is* the worker id and the caller has a
-    row to mark. A worktree removed while its row still says `reported` is a `follow_up` that
-    looks available, is offered, and then edits a copy of the repository that no longer exists.
-    """
-    home = _home()
-    if not home.is_dir():
-        return []
-    cutoff = time.time() - max(0, int(keep_seconds))
-    gone: list[str] = []
-    for candidate in home.iterdir():
-        try:
-            if candidate.stat().st_mtime > cutoff:
-                continue
-        except OSError:
-            continue
-        close(candidate)
-        gone.append(candidate.name)
-    return gone

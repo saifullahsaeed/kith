@@ -55,12 +55,17 @@ def get(path: Path, conversation_id: str) -> dict | None:
         return as_dict(row) if row else None
 
 
-def recent(path: Path, limit: int = 50) -> list[dict]:
-    """Newest first — the order a sidebar wants and the only order anyone scrolls."""
+def recent(path: Path, limit: int = 50, *, chats_only: bool = False) -> list[dict]:
+    """Newest first — the order a sidebar wants and the only order anyone scrolls.
+
+    `chats_only` leaves out agents: a conductor with a dozen of them would otherwise push every
+    other chat off the list, and they are reached through the conversation that started them.
+    """
     with session(path) as db:
-        rows = db.scalars(
-            select(Conversation).order_by(Conversation.updated_at.desc()).limit(max(1, limit))
-        ).all()
+        query = select(Conversation)
+        if chats_only:
+            query = query.where(Conversation.parent_id.is_(None))
+        rows = db.scalars(query.order_by(Conversation.updated_at.desc()).limit(max(1, limit))).all()
         return [as_dict(row) for row in rows]
 
 
@@ -148,20 +153,59 @@ def project_of(path: Path, conversation_id: str) -> int | None:
         return int(row.project_id) if row is not None and row.project_id else None
 
 
-def workflow_mode_of(path: Path, conversation_id: str) -> bool:
-    """Whether workflow mode is on in this conversation. False for one that does not exist."""
-    if not conversation_id:
-        return False
-    with session(path) as db:
-        row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
-        return bool(row and row.workflow_mode)
+# --------------------------------------------------------------------------- #
+# Agents: a conversation started by another conversation
+# --------------------------------------------------------------------------- #
+#
+# The tree is one column. An agent is an ordinary conversation in every other respect — its own
+# transcript, its own turns, its own everything that is keyed by conversation — and `parent_id`
+# is the only thing that says somebody else started it. See `services/agents`.
+
+#: The columns an agent's row carries beyond an ordinary conversation's.
+AGENT_FIELDS = (
+    "parent_id",
+    "agent_name",
+    "agent_state",
+    "agent_model",
+    "agent_worktree",
+    "agent_folder",
+    "agent_branch",
+    "agent_base",
+    "agent_source",
+)
 
 
-def set_workflow_mode(path: Path, conversation_id: str, on: bool) -> bool:
-    """Turn workflow mode on or off. True when the conversation exists."""
+def set_agent(path: Path, conversation_id: str, **fields) -> bool:
+    """Write any of :data:`AGENT_FIELDS` on one row. True when the conversation exists."""
+    unknown = set(fields) - set(AGENT_FIELDS)
+    if unknown:
+        raise ValueError(f"not an agent field: {', '.join(sorted(unknown))}")
     with session(path) as db:
-        row = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
+        row = db.get(Conversation, conversation_id)
         if row is None:
             return False
-        row.workflow_mode = 1 if on else 0
+        for key, value in fields.items():
+            setattr(row, key, value)
         return True
+
+
+def children(path: Path, parent_id: str) -> list[dict]:
+    """The agents one conversation started, oldest first — the order they were sent out."""
+    if not parent_id:
+        return []
+    with session(path) as db:
+        rows = db.scalars(
+            select(Conversation).where(Conversation.parent_id == parent_id).order_by(Conversation.created_at)
+        ).all()
+        return [as_dict(row) for row in rows]
+
+
+def agents_in(path: Path, states: tuple[str, ...]) -> list[dict]:
+    """Every agent, across every tree, whose lifecycle is one of `states`."""
+    with session(path) as db:
+        rows = db.scalars(
+            select(Conversation).where(
+                Conversation.parent_id.is_not(None), Conversation.agent_state.in_(list(states))
+            )
+        ).all()
+        return [as_dict(row) for row in rows]

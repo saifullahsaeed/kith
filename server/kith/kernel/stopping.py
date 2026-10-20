@@ -80,17 +80,3 @@ def stop(conversation_id: str) -> bool:
     if event is not None:
         event.set()
     return event is not None
-
-
-def asked_to_stop(conversation_id: str) -> bool:
-    """Has the turn in this conversation been asked to stop?
-
-    The read for code that is *inside* a turn rather than driving one — a sub-agent between its
-    rounds, a long tool between its steps. Answers False for a conversation with no turn and for
-    no conversation at all, which is the honest answer in a test or a script: nothing has been
-    asked to stop, because nothing was asked to start.
-    """
-    if not conversation_id:
-        return False
-    event = current(conversation_id)
-    return event is not None and event.is_set()

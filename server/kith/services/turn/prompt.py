@@ -36,7 +36,7 @@ from pathlib import Path
 from kith.config import model_capabilities, ollama_host
 from kith.domain import present
 from kith.infra import workspace as sandbox
-from kith.services import conversations, history, memory_context, project_context, touched
+from kith.services import agents, conversations, history, memory_context, project_context, touched
 from kith.settings import AGENT_DB_PATH
 
 #: What a conversation is for.
@@ -137,7 +137,7 @@ def _build_messages(
     persona = (config.system or "").strip()
     if persona:
         # Byte-identical on every request Kith ever makes. Nothing else may join it.
-        out.append({"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()})
+        out.append({"role": "system", "content": f"{persona}\n\n{directive_for(conversation_id)}".strip()})
     # Fold the older turns of a long conversation into a running brief before replaying them,
     # so the prompt stops growing without bound. The brief sits here deliberately — after the
     # cached persona, before the recent turns — so it never disturbs the stable prefix, and it
@@ -149,7 +149,7 @@ def _build_messages(
         conversation_id,
         ollama_host(),
         tool_chars=tool_chars,
-        framing=framing(config),
+        framing=framing(config, conversation_id),
         schemas=schemas,
     )
     if fresh is not None and conversation_id:
@@ -198,15 +198,30 @@ def as_sent(
     out = []
     persona = (config.system or "").strip()
     if persona:
-        out.append({"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()})
+        out.append({"role": "system", "content": f"{persona}\n\n{directive_for(conversation_id)}".strip()})
 
     folded, pending = history.fold_dry(
-        messages, config, conversation_id, tool_chars=tool_chars, framing=framing(config), schemas=schemas
+        messages,
+        config,
+        conversation_id,
+        tool_chars=tool_chars,
+        framing=framing(config, conversation_id),
+        schemas=schemas,
     )
     return _assemble(out, folded, conversation_id), pending
 
 
-def framing(config) -> Callable[[list[dict]], list[dict]]:
+def directive_for(conversation_id: str) -> str:
+    """What follows the persona in the system message: `CHAT_DIRECTIVE` for a chat the person is
+    in, and for an agent the framing that names its handler instead (`agents.directive`).
+
+    After `config.system`, never inside it, so the cached head stays byte-identical across every
+    session — the person's chat and all of its agents read the same persona from the cache.
+    """
+    return agents.directive(conversation_id) or CHAT_DIRECTIVE
+
+
+def framing(config, conversation_id: str = "") -> Callable[[list[dict]], list[dict]]:
     """How a fold frames the part of the history it summarises: the persona in front, and every
     message replayed exactly as `_assemble` replays it.
 
@@ -215,7 +230,9 @@ def framing(config) -> Callable[[list[dict]], list[dict]]:
     full. Built here because this module is the one that knows what the head is.
     """
     persona = (config.system or "").strip()
-    head = [{"role": "system", "content": f"{persona}\n\n{CHAT_DIRECTIVE}".strip()}] if persona else []
+    head = (
+        [{"role": "system", "content": f"{persona}\n\n{directive_for(conversation_id)}".strip()}] if persona else []
+    )
     return lambda part: [*head, *_replayed(part)]
 
 
@@ -707,6 +724,11 @@ def _present_state(conversation_id: str = "", _sizes: dict | None = None, *, abo
             trimmable=True,
         )
     )
+
+    # The agents this session started, and where each one is. Essential when there are any: a
+    # handler that cannot see its agents asks them how they are doing, or starts a second one
+    # for work already out — and it is a few lines.
+    candidates.append(present.Block("agents", agents.agents_block(conversation_id), tier=present.ESSENTIAL))
 
     kept = present.allocate(candidates, PRESENT_BUDGET)
     # Reported out rather than measured by the caller, because only this function knows which of

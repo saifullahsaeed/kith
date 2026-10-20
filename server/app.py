@@ -15,18 +15,6 @@ See ``docs/startup.md`` for why waitress, why sixteen threads, and why never ``d
 from __future__ import annotations
 
 import os
-import sys
-
-# A workflow script, not the server. The packaged app has no separate Python to run a script
-# with, so it runs a second copy of itself: `kith-server --run-workflow kith_workflow.py
-# script.py`. Handed over before anything of Kith's is imported — the script is confined and
-# must not open databases, start threads, or bind a port on the way in. See `tools/workflow`.
-if len(sys.argv) > 2 and sys.argv[1] == "--run-workflow":
-    import runpy
-
-    sys.argv = sys.argv[2:]
-    runpy.run_path(sys.argv[0], run_name="__main__")
-    sys.exit(0)
 
 from kith import create_app
 

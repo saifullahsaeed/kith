@@ -77,6 +77,33 @@ def _start_background() -> None:
     from kith.api.routes.chat import continue_conversation
 
     scheduler.start(continue_conversation)
+    _resume_agents()
+
+
+def _resume_agents() -> None:
+    """Pick up the agent trees the last process left: resume agents that were working, deliver
+    every report and question that was in flight. See `services/agents.recover`.
+
+    A few seconds late, on its own thread: MCP servers are still connecting, and a resumed agent
+    whose first turn is built before they arrive works that turn without their tools.
+    """
+    import threading
+
+    from kith.services import agents
+
+    def later():
+        try:
+            handed = agents.recover()
+            if handed:
+                print(f"[kith] agents: resumed {handed} session(s) after the restart")
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
+
+    timer = threading.Timer(8.0, later)
+    timer.daemon = True
+    timer.start()
 
 
 def _init_storage() -> None:
@@ -134,6 +161,13 @@ def create_app() -> APIFlask:
     CORS(app, resources={r"/api/*": {"origins": _ALLOWED_ORIGINS}})
 
     app.register_blueprint(api, url_prefix="/api")
+
+    # How the agent tree starts and stops turns. A service may not import a route, so it is told —
+    # the same way the scheduler is told how to wake a conversation.
+    from kith.api.routes.chat import _stop, start_from_mail
+    from kith.services import agents
+
+    agents.install(start_from_mail, _stop)
 
     # Every API call needs the shared secret from here on. CORS stops a page reading the
     # reply, not sending the request, and every process running as you is on loopback too.

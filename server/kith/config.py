@@ -60,7 +60,8 @@ def default_config() -> Config:
         # the region llm.caching treats as the stable head, so anything appended here is cached
         # across requests rather than re-billed on each one. It also has to be stable text — a
         # count or a timestamp would move the seam and invalidate the persona in front of it.
-        system=settings.SYSTEM_PROMPT_OVERRIDE or (load_persona() + skills.index()),
+        # The agent strategy last, and whole — see `skills.strategy`.
+        system=settings.SYSTEM_PROMPT_OVERRIDE or (load_persona() + skills.index() + skills.strategy()),
         think=_bool_setting("KITH_THINK", stored, "think", _DEFAULT_THINK),
         effort=_str_setting("KITH_EFFORT", stored, "effort", ""),
         base_url=_str_setting("KITH_BASE_URL", stored, "base_url", "").rstrip("/"),

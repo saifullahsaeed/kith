@@ -238,9 +238,28 @@ class Conversation(Base):
     #: The model `provider_order` ranks the hosts of. An order is only meaningful for the model
     #: it was worked out for; blank on rows older than the column.
     provider_model: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    #: Whether he may start workflows here without the `/workflow` prefix. Off by default: a
-    #: fan-out of agents is spend the person turns on, per chat.
+    #: Retired with the workflow system (2026-10-20) and left in the schema, unwritten.
     workflow_mode: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: The conversation that started this one, when this one is an agent. None for a chat the
+    #: person opened — which is every conversation that can be a conductor. See migration v53
+    #: and `services/agents`.
+    parent_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: What its handler calls it. Unique among a handler's open agents; how `message_agents`
+    #: addresses it.
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: The lifecycle that has to survive a restart: working, waiting, done, stopped, closed.
+    #: What is live this second (a turn running, a question open) is still read from memory.
+    agent_state: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: The model it runs on — an alias (main, strong, fast) or an id. Blank means the install's.
+    agent_model: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: Its own git worktree, where in it the work is, the branch, the commit it started from, and
+    #: the folders it is a copy of (one per line: the person's checkout, then each handler's
+    #: worktree down the chain). All blank for an agent that shares its handler's folder.
+    agent_worktree: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    agent_folder: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    agent_branch: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    agent_base: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    agent_source: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class TurnLog(Base):
@@ -380,6 +399,29 @@ class Worker(Base):
     #: Which project this belongs to, when it belongs to one. See migration v47 — nullable
     #: because work outside any project is a real thing.
     project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class AgentMail(Base):
+    """One thing said between two sessions of an agent tree. See migration v53.
+
+    The only channel between a handler and its agents. Persisted rather than queued in memory
+    because the point of an agent being a session is that it outlives the process: a report
+    that arrived while Kith was restarting is a report, not a lost thread.
+
+    ``delivered_at`` is set when the recipient's turn takes it — written into its transcript as
+    a message — and not before.
+    """
+
+    __tablename__ = "agent_mail"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    to_id: Mapped[str] = mapped_column(Text, nullable=False)
+    from_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: task / message (downward), report / question / note (upward).
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered_at: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class HostCost(Base):

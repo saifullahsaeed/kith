@@ -10,17 +10,12 @@ Claude Code's answer, copied here: the instructions for a folder come with the f
 open under it. Every `CLAUDE.md` and `AGENTS.md` between the repository's top and the file, top
 first, each shown once.
 
-**Once per what** is the whole design question, and it has two answers:
-
-* **The conversation** remembers across turns, because its history replays old tool results
-  until a fold — re-attaching a 15k-character root on every turn would be a second copy each
-  time. So an attached file is recorded in the conversation's file ledger (`touched.shown`)
-  exactly as a read of it would be, and a file the ledger already holds at its current version
-  is not attached again. Edit one and it changes version, and the next read brings it back.
-* **A workflow agent** remembers for its own run only. It runs under its parent's conversation
-  id, so the ledger would answer for the parent — an agent would skip the rules because the
-  conversation had read them, and the conversation would skip them because an agent had. Its
-  turn notes are its own.
+**Once per conversation.** Its history replays old tool results until a fold — re-attaching a
+15k-character root on every turn would be a second copy each time. So an attached file is
+recorded in the conversation's file ledger (`touched.shown`) exactly as a read of it would be,
+and a file the ledger already holds at its current version is not attached again. Edit one and it
+changes version, and the next read brings it back. An agent is a conversation of its own, so it
+has a ledger of its own and is shown the rules it has not seen, whatever its handler has read.
 
 Capped twice, because some of these files are enormous (sadeef's largest is 67k characters): each
 file to :data:`FILE_CHARS`, cut at a line and said so, and each result to :data:`RESULT_CHARS`,
@@ -95,7 +90,6 @@ def attach(agent_db: Path, wanted: list[str]) -> str:
 
 
 def _attach(agent_db: Path, wanted: list[str]) -> str:
-    in_agent = bool(session_context.agent())
     shown_now: set[str] = session_context.turn_notes().setdefault(_SHOWN, set())
     targets = [Path(workspace.resolve(one)) for one in wanted if str(one or "").strip()]
     asked = {_real(one) for one in targets}
@@ -116,13 +110,12 @@ def _attach(agent_db: Path, wanted: list[str]) -> str:
                 # The same rules under the other name — a CLAUDE.md that is a copy of the
                 # AGENTS.md beside it. Recorded as seen, so a later turn does not mistake it for
                 # something new once its twin has been skipped as already known.
-                if not in_agent:
-                    touched.shown(agent_db, str(found))
+                touched.shown(agent_db, str(found))
                 continue
             contents.add(digest)
             if real in asked:
                 continue  # it is the file being read — already in the result
-            if not in_agent and touched.has_seen(agent_db, str(found)):
+            if touched.has_seen(agent_db, str(found)):
                 continue
             due.append(found)
     if not due:
@@ -143,8 +136,7 @@ def _attach(agent_db: Path, wanted: list[str]) -> str:
         blocks.append(f"===== {_named(found)} =====\n{text}")
         if extent:
             blocks[-1] += f"\n… (lines {extent} shown — read `{found}` for the rest)"
-        if not in_agent:
-            touched.shown(agent_db, str(found), extent)
+        touched.shown(agent_db, str(found), extent)
 
     head = (
         "[Rules for this part of the code — the CLAUDE.md / AGENTS.md files between the "

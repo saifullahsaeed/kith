@@ -19,7 +19,6 @@ import pytest
 from kith import settings
 from kith.services import icons
 from kith.tools.design import find_icons
-from kith.tools.workers import GIVEN
 
 #: The SVG elements the board's parser keeps (`ui/src/lib/design/parse.ts`). An icon made of
 #: anything else would render in the checker and vanish on the board.
@@ -89,10 +88,6 @@ class TestTheTool:
     def test_a_size_is_kept_sensible(self, tmp_path: Path):
         svg = find_icons(tmp_path, {"names": ["bell"], "size": 900})["icons"][0]["svg"]
         assert 'width="64"' in svg
-
-    def test_a_builder_has_it_too(self):
-        # A worker asked to implement a screen draws its own icons if it cannot look them up.
-        assert "find_icons" in GIVEN
 
 
 @pytest.fixture

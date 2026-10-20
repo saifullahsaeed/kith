@@ -47,10 +47,6 @@ datas = [
     # dead pointer for everyone who did not install it themselves. `running-a-project` is in
     # here for the other reason — see `settings.BUNDLED_SKILLS_DIR` for both.
     (str(HERE / "skills"), "skills"),
-    # The helper a workflow script runs inside. Copied into each run folder and read by a
-    # second copy of this binary started with `--run-workflow`, so it has to be a file on disk —
-    # a module in the kith package would exist only as bytecode inside the archive.
-    (str(HERE / "workflow"), "workflow"),
     # The interface. Served by this process, so KITH_UI_DIST points here at startup.
     (str(UI_DIST), "ui"),
     # What every previous release shipped as a persona fragment or a bundled skill. It is how

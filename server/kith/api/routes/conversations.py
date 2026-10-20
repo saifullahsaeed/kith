@@ -19,7 +19,9 @@ def list_conversations():
         limit = 50
     return jsonify(
         {
-            "conversations": conversations.recent(AGENT_DB_PATH, limit),
+            # The person's chats. Agents are reached through the chat that started them —
+            # `GET /conversations/<id>/agents` — rather than crowding this list.
+            "conversations": conversations.recent(AGENT_DB_PATH, limit, chats_only=True),
             "storage": conversations.storage(),
         }
     )

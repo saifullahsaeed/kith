@@ -23,13 +23,10 @@ from kith import tools
 #: one is never made. Listed rather than inferred, because "would he think of this unprompted"
 #: is a judgement and the list is where that judgement is written down.
 #:
-#: `run_workflow` is deliberately not here. It runs only when the person's message asks for it,
-#: so it is reached for by being named in that message, never by being suggested.
+#: `start_agents` is deliberately not here. What puts it in front of him is the agent strategy,
+#: which rides whole in every session's prompt — a stronger pointer than any tool description.
 MUST_BE_SUGGESTED = {
     "plan_work": "the board tools it replaces a dozen calls of",
-    # In workflow mode he decides when to send agents, so something has to put them in front of
-    # him: `run_workflow` points here for step-by-step work.
-    "add_agents": "run_workflow, for work steered as it goes",
 }
 
 

@@ -256,7 +256,7 @@ class TestTheFlagGoesUpBeforeTheWaitsAreReleased:
         seen: list[bool] = []
         event = route._arm(conversation)
         monkeypatch.setattr(route.questions, "release", lambda _id: seen.append(event.is_set()))
-        monkeypatch.setattr(route.permissions, "release_waiting", lambda: None)
+        monkeypatch.setattr(route.permissions, "release_waiting", lambda *_: None)
 
         route._stop(conversation)
 
@@ -267,7 +267,7 @@ class TestTheFlagGoesUpBeforeTheWaitsAreReleased:
 
     def test_it_still_reports_whether_there_was_a_turn(self, conversation, monkeypatch):
         monkeypatch.setattr(route.questions, "release", lambda _id: None)
-        monkeypatch.setattr(route.permissions, "release_waiting", lambda: None)
+        monkeypatch.setattr(route.permissions, "release_waiting", lambda *_: None)
 
         assert route._stop(conversation) is False
         route._arm(conversation)

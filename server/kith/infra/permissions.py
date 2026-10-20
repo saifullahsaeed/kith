@@ -256,6 +256,8 @@ class Request:
     #: command approved through a caller that supplies one was stored under the purpose text
     #: and never matched the check's signature again, so "always allow" silently did nothing.
     signature: str = ""
+    #: The conversation whose turn is waiting on this, so stopping one turn releases only its own.
+    conversation: str = ""
     at: float = field(default_factory=time.time)
     #: Set by `approve` or `deny`. The tool call that raised this request is parked on it.
     #: Only ever `.set()`, never reassigned — this dataclass is frozen, and the verdict itself
@@ -746,7 +748,14 @@ def _refuse(kind: Kind, what: str, why: str, signature: str, purpose: str = "") 
     global _next_id
     with _state:
         _next_id += 1
-        request = Request(id=f"p{_next_id}", kind=kind, what=what, why=purpose or why, signature=signature)
+        request = Request(
+            id=f"p{_next_id}",
+            kind=kind,
+            what=what,
+            why=purpose or why,
+            signature=signature,
+            conversation=session_context.current(),
+        )
         _pending[request.id] = request
         while len(_pending) > MAX_PENDING:
             evicted = _pending.pop(next(iter(_pending)))
@@ -931,11 +940,20 @@ def require_command(command: str, root: Path, purpose: str = "") -> None:
         _wait_for(decision)
 
 
-def release_waiting() -> None:
-    """Stop waiting on every open request, without allowing any. Called when a turn is stopped —
-    a turn parked on a permission is not reading the stop switch."""
+def release_waiting(conversation_id: str = "") -> None:
+    """Stop waiting on open requests, without allowing any. Called when a turn is stopped — a turn
+    parked on a permission is not reading the stop switch.
+
+    Only that conversation's, when one is named. It used to be every request in the app, which was
+    harmless with one turn running and is not with a tree of agents: stopping any one of them
+    denied whatever the others were waiting on.
+    """
     with _state:
-        waiting = list(_pending.values())
+        waiting = [
+            request
+            for request in _pending.values()
+            if not conversation_id or request.conversation in ("", conversation_id)
+        ]
         for request in waiting:
             _remember_verdict(request.id, False)
     # Woken outside the lock: each `set()` releases a thread that will immediately want it.
@@ -1137,36 +1155,28 @@ def _inside_linked_project(resolved: Path) -> bool:
 
 
 def _inside_pinned_worktree(resolved: Path) -> bool:
-    """Is this inside the private copy of the repository a worker was pinned to?
+    """Is this inside the worktree an agent's turn is pinned to?
 
     Kept apart from :func:`_inside_linked_project` rather than folded into it, because two
     things that both mean "he may write here" are still two things. A linked project is a
     standing grant a person made in the interface and can take back there; this is a grant
     that exists for the length of one `contextvars` scope, over a folder the code created
-    itself moments ago.
+    itself for the agent running in it.
 
-    **Why a worker needs one at all.** A worktree is not the linked folder, so without this
-    every write a worker makes lands here as an anonymous out-of-folder path and raises a
-    prompt. That prompt would be raised of an empty room: a worker has no `ask` and no
-    `reach_out` by construction (`tools/workers.WITHHELD`), and nobody is watching a
-    scratchpad — so in ask-mode the turn that sent the worker would block on a tool call that
-    never returns, which is indistinguishable from a hang.
+    **Why an agent needs one at all.** A worktree is not the linked folder, so without this
+    every write an agent makes lands here as an anonymous out-of-folder path and raises a
+    prompt about a folder under Kith's own data that the person has never seen — for every file
+    of every agent.
 
-    The grant is narrower than the one above it, not wider. It covers one directory, for one
-    worker, for as long as that worker is running, and the sensitivity check in `check_path`
-    is applied before this is consulted — so a worktree that somehow contains a credential
-    file is still gated on that file.
+    The grant is narrower than the one above it, not wider. It covers one directory, for as long
+    as the turn is pinned there, and the sensitivity check in `check_path` is applied before this
+    is consulted — so a worktree that somehow contains a credential file is still gated on it.
     """
     pinned = session_context.isolated_copy()
     if not pinned:
         return False
     try:
-        from kith.infra import confinement
-
-        # The copy, and the scratch folder beside it that its commands are given as a home —
-        # where a check script it ran leaves the screenshots it is meant to open.
-        copy = _resolve(Path(pinned))
-        return _inside(resolved, copy) or _inside(resolved, _resolve(confinement.scratch_for(copy)))
+        return _inside(resolved, _resolve(Path(pinned)))
     except OSError:
         # Same posture as `linked_project_roots`: a permission check must not fail because a
         # path lookup did, and "not in the worktree" is the answer that gates rather than grants.

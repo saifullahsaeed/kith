@@ -7,6 +7,7 @@ where nothing tells you what a call will read or write.
 
 from kith.infra.db.repositories import (
     activity,
+    agent_mail,
     checkpoints,
     conversations,
     host_costs,
@@ -19,11 +20,11 @@ from kith.infra.db.repositories import (
     sources,
     tasks,
     touches,
-    workers,
 )
 
 __all__ = [
     "activity",
+    "agent_mail",
     "checkpoints",
     "conversations",
     "host_costs",
@@ -36,5 +37,4 @@ __all__ = [
     "sources",
     "tasks",
     "touches",
-    "workers",
 ]

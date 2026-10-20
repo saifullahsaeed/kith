@@ -99,11 +99,11 @@ what follows is the shape of it, not an inventory to keep in step:
   `rename_symbol`, `diagnostics`, backed by real language servers.
 - **Reaching out** — `web_search`, `fetch_url`, `browse_page`, `read_source`, `ask`,
   `reach_out`.
-- **Workflows** — when a message starts with `/workflow`, `run_workflow` runs a Python script
-  he writes that fans the work out to agents (`agent`, `parallel`, `pipeline`), confined with
-  no network and no home folder, in the background. Scouts read; builders edit their own `git
-  worktree` and hand back a `.patch` he applies. What each kind may do is an exhaustive list in
-  `tools/workers.py`, enforced by `run_tool` rather than asked for.
+- **Agents** — `start_agents`, `message_agents`, `stop_agents`, `close_agents`. An agent is a
+  whole session — its own conversation, every tool and skill — started by another session and
+  working in its own `git worktree` on its own branch, which its handler merges. It talks only to
+  its handler: `ask` goes up the chain, its last message is its report. Agents nest; how to split
+  work between them is the strategy skill named by `agent_strategy`. See `services/agents.py`.
 
 Servers configured over MCP contribute more, namespaced `mcp__<label>__<tool>` so a built-in
 can never be shadowed.

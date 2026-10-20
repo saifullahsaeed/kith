@@ -105,8 +105,6 @@ class Feed:
         tokens: dict | None = None,
         tool: str | None = None,
         args: dict | None = None,
-        errand: dict | None = None,
-        workflow: dict | None = None,
         conversation: str = "",
     ) -> None:
         """Push one line onto the live Mind feed.
@@ -115,17 +113,6 @@ class Feed:
         interface can show a per-request count as a quiet figure on the line instead of
         another sentence in the stream. Feed items are a flat {kind, text, at} shape and
         older readers ignore a key they don't know, so this stays additive.
-
-        ``errand`` marks a line as belonging to a sub-agent rather than to the turn itself —
-        ``{id, state, objective}``, where the id is what lets three scouts sent in the same
-        round be told apart. It is the one thing in the feed that has *no* second copy in the
-        chat thread: a worker's searching is discarded by design, so if it is not here it is
-        nowhere. The panel counts these out of its round count, because they are not the
-        turn's rounds.
-
-        ``workflow`` marks a line as a workflow run's own state — ``{run, state, ...}`` — which the
-        Work panel folds into one header per run, with that run's agents (``errand`` lines that
-        carry the same ``run``) under it.
 
         ``conversation`` is which session the line belongs to, and it is what lets the Mind
         panel show *this* session's work instead of everything at once. Absent on the global
@@ -143,10 +130,6 @@ class Feed:
             item["tool"] = tool
         if args:
             item["args"] = args
-        if errand:
-            item["errand"] = errand
-        if workflow:
-            item["workflow"] = workflow
         if conversation:
             item["conversation"] = conversation
         with self._state_lock:

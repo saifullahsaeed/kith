@@ -18,7 +18,7 @@ from collections.abc import Callable
 from kith.engine.run import processes
 from kith.infra.db import repositories as repo
 from kith.kernel import clock, session_context
-from kith.services import conversations, local_time, workflows
+from kith.services import conversations, local_time
 from kith.services.activity import feed
 from kith.settings import AGENT_DB_PATH
 
@@ -64,12 +64,7 @@ def wake_finished(resume: Resume) -> list[str]:
     `_continue` now sits in the same file as `_continue`.
     """
     woken: list[str] = []
-    # Workflow runs are the same question from a different table: something this conversation
-    # started has come back. Merged so a chat whose shell job and workflow both finished in one
-    # tick hears about both in one turn, not two replies talking past each other.
     finished = processes.finished_since_last_look()
-    for conversation_id, notes in workflows.finished_since_last_look().items():
-        finished.setdefault(conversation_id, []).extend(notes)
     for conversation_id, notes in finished.items():
         woken.append(conversation_id)
         # Same wrapping as `fire_due`, and it was missing here — which mattered more, because

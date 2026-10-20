@@ -126,25 +126,16 @@ class TestHowLongItIsRemembered:
 
         assert str(repo / "AGENTS.md") in [row["path"] for row in touched.seen(db, "conv1")]
 
-    def test_an_agent_is_shown_them_even_when_its_conversation_has_them(self, db, repo):
-        # An agent runs under its parent's conversation id. What the parent read is not in the
-        # agent's context, so the parent's ledger must not decide what the agent is shown.
+    def test_an_agent_is_shown_them_even_when_its_handler_has_them(self, db, repo):
+        # An agent is a conversation of its own, so its handler's ledger does not decide what it
+        # is shown — and what it is shown is recorded as its own.
         with session_context.a_turn(), session_context.working_in("conv1"):
             _read(db, repo / "docs" / "notes.md")
-        with (
-            session_context.a_turn(),
-            session_context.working_in("conv1"),
-            session_context.as_agent("builder"),
-        ):
+        with session_context.a_turn(), session_context.working_in("agent1"):
             out = _read(db, repo / "docs" / "notes.md")
 
         assert "ROOT AGENTS RULES" in out
-
-    def test_what_an_agent_was_shown_is_not_recorded_as_the_conversations(self, db, repo):
-        with session_context.a_turn(), session_context.working_in("conv1"), session_context.as_agent("scout"):
-            _read(db, repo / "docs" / "notes.md")
-
-        assert str(repo / "AGENTS.md") not in [row["path"] for row in touched.seen(db, "conv1")]
+        assert str(repo / "AGENTS.md") in [row["path"] for row in touched.seen(db, "agent1")]
 
 
 class TestSize:

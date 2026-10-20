@@ -429,8 +429,51 @@ INDEX_BUDGET_CHARS = 6_000
 
 
 def index() -> str:
-    """The skills section of the system prompt: names and descriptions, nothing else."""
-    return render_index(installed(), first=_bundled_names())
+    """The skills section of the system prompt: names and descriptions, nothing else.
+
+    The active agent strategy is left out: its whole text is already in the prompt (see
+    :func:`strategy`), and listing it as something to `read_skill` would invite reading it twice.
+    """
+    leading = _strategy_name()
+    return render_index([one for one in installed() if one.name != leading], first=_bundled_names())
+
+
+def _strategy_name() -> str:
+    from kith.services import tuning
+
+    try:
+        return str(tuning.value("agent_strategy") or "").strip()
+    except Exception:
+        return ""
+
+
+def strategy() -> str:
+    """The active agent strategy, whole, as it rides at the end of `config.system` — or "".
+
+    Not behind `read_skill` like every other skill, and that is the point of it. How to split a
+    task between agents is decided at the first step of every task, by every session in a tree,
+    and a skill that has to be remembered to be read is a skill that is not read — measured
+    across this codebase's own history more than once. So the chosen one is in the prompt, the
+    same for every session and stable between turns, which keeps it inside the cached head.
+
+    Which one is a setting (`agent_strategy`), so trying a different strategy is writing a skill
+    and choosing it.
+    """
+    name = _strategy_name()
+    if not name:
+        return ""
+    for skill in installed():
+        if skill.name != name:
+            continue
+        try:
+            _, body = split_frontmatter((skill.path / MANIFEST).read_text(errors="replace"))
+        except OSError:
+            return ""
+        body = body.strip()
+        if not body:
+            return ""
+        return f"\n\n## How you work with agents (strategy: {name})\n\n{body}\n"
+    return ""
 
 
 def _bundled_names() -> set[str]:

@@ -143,13 +143,10 @@ board because it is incomplete — repair it only where evidence shows what is w
 ## Notice when the parts could run at once
 
 A task whose checklist is the same kind of work in several places — four packages, six call
-sites, three screens — is the shape a workflow is for, and **this is the moment to notice it**,
-while you are planning the task rather than later, one file at a time. Your context says whether
-you may run one here: workflow mode is on, or their message asked with `/workflow`. If you may,
-run the saved workflow that fits instead of walking the list — `build-feature` with the parts as
-`args`, `migrate-sites` for one change repeated — and apply the merged patch it hands back. If you
-may not, say so: "this splits into four independent parts; send it as a `/workflow` request, or
-turn on workflow mode, and I'll fan it out." Then carry on with the work yourself unless they do.
+sites, three screens — or that has parts in different corners of the code, is the shape agents are
+for, and **this is the moment to notice it**, while you are planning the task rather than later,
+one file at a time. Follow your agent strategy: settle and commit the shared seams, then
+`start_agents` with one part each, and merge what they report. A task that does not split, you do.
 
 ## Working one through
 
@@ -262,10 +259,9 @@ warning about, one level up.
 |---|---|
 | Work needs to survive this sitting | `plan_work` — the next 2–5 tasks, with checklists |
 | B cannot start until A is done | A gets the higher priority, or B stays in `planning` with the blocker written |
-| A change to build, in workflow mode | `add_agents` — a builder, then a verifier `after` it; add the next step when they report |
-| Same decided change across many files | `run_workflow(name="migrate-sites")` when allowed; otherwise say it splits |
-| A decided change across several independent places | `run_workflow(name="build-feature")` when allowed |
-| About to call a change done | `run_workflow(name="review-changes")` when allowed |
+| Work that splits into independent parts | Commit the seams, then `start_agents` — one part each; merge their branches as they report |
+| An agent's report is wrong or short | `message_agents` — send it back; it keeps what it learned |
+| The whole task is merged and working | `close_agents(["all"])` — once, at the end |
 | Blocked | `ask` in chat — never a column |
 | Others work on this repo | `publish(direction="check")` before trusting `.kith/` |
 | The work is finished | Green suite first, then `ask`: commit / commit and publish / leave it |
@@ -284,7 +280,9 @@ warning about, one level up.
 - **Closing on a passing build.** It proves the thing compiles, not that it does what was asked.
 - **Evidencing a close on top of a red suite.** The failures come first; nothing below them counts.
 - **Tidying up.** Deleting a branch, pruning a worktree, clearing a folder — none of that follows
-  from finishing, and the cost of being wrong is work that existed in one place.
+  from finishing, and the cost of being wrong is work that existed in one place. The one
+  exception is your own agents: `close_agents` at the end of the task, which refuses unmerged
+  branches.
 - **Handing over the work and the decision.** "Ready for closure" is the first; what to commit and
   publish is the second, and it is one word for them if you offer the options.
 

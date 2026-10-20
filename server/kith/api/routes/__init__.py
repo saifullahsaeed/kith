@@ -11,6 +11,7 @@ from __future__ import annotations
 from kith.api.blueprint import api
 from kith.api.routes import (  # noqa: F401 - imported for registration
     activity,
+    agents,
     brain,
     chat,
     checkpoints,
@@ -36,7 +37,6 @@ from kith.api.routes import (  # noqa: F401 - imported for registration
     tasks,
     tuning,
     updates,
-    workflows,
     workspace,
 )
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kith.kernel import session_context
-from kith.services import questions
+from kith.services import agents, questions
 from kith.tools.registry import tool
 
 _QUESTIONS = {
@@ -87,4 +87,8 @@ def ask(path: Path, args: dict):
         # A turn with no conversation has nowhere to draw the card, so waiting would hang on
         # something nobody could ever answer.
         return {"ok": False, "error": "There is nobody to ask here — answer with what you have."}
+    if agents.is_agent(conversation_id):
+        # An agent's person is its handler. The question goes up one link, and the answer comes
+        # back from there — from what the handler knows, or from further up if it has to ask.
+        return agents.ask_up(conversation_id, args.get("questions") or [])
     return questions.ask(conversation_id, args.get("questions") or [])

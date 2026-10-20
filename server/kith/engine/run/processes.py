@@ -154,16 +154,16 @@ class Processes:
         conversation to run its suite was refused and pointed at a process belonging to a chat it
         cannot see. Two conversations are two pieces of work and may each have a `run-tests`.
 
-        Falls back to a name match in any conversation when there is no session to narrow by — a
-        script, a test, the desktop shell stopping things on the way out. Narrowing to nothing there
-        would make those callers unable to reach anything.
+        Falls back to a name match in any conversation only when there is no session to narrow by —
+        a script, a test, the desktop shell stopping things on the way out. Narrowing to nothing
+        there would make those callers unable to reach anything. Inside a session it never falls
+        back: an agent's `stop_process("dev-server")` used to find its handler's dev server when it
+        had none of its own, and stop it.
         """
         wanted = _clean_name(name)
         chat = _current_conversation() if conversation_id is None else conversation_id
         if chat:
-            mine = self._running.get(_key(chat, wanted))
-            if mine is not None:
-                return mine
+            return self._running.get(_key(chat, wanted))
         return next((one for one in self._running.values() if one.name == wanted), None)
 
     def mine(self, conversation_id: str | None = None) -> list[Background]:

@@ -978,6 +978,48 @@ def _migrations():
         )
         conn.execute("UPDATE conversations SET provider_order = '' WHERE provider_order != ''")
 
+    def v53_agent_sessions(conn):
+        """Agents are conversations now, linked to the one that started them.
+
+        Every sub-agent before this lived inside one tool call of its parent, under the parent's
+        conversation id, with a transcript only as a file in a run folder — so nothing about it
+        survived a restart and everything keyed by conversation (the stop switch, the browser,
+        the spill folder, the host pin) was shared with the parent and trampled. A row of its own
+        gives it all of those, and a parent column is the whole of the tree.
+
+        `agent_mail` is the one channel between the sessions of a tree, persisted so a report or
+        a question in flight when the process dies is still there when it comes back.
+        """
+        held = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
+        for column, ddl in (
+            ("parent_id", "TEXT"),
+            ("agent_name", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_state", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_model", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_worktree", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_folder", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_branch", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_base", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_source", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if column not in held:
+                conn.execute(f"ALTER TABLE conversations ADD COLUMN {column} {ddl}")
+        conn.execute("CREATE INDEX IF NOT EXISTS conversations_parent ON conversations(parent_id)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_mail (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                to_id        TEXT NOT NULL,
+                from_id      TEXT NOT NULL DEFAULT '',
+                kind         TEXT NOT NULL,
+                body         TEXT NOT NULL DEFAULT '',
+                created_at   TEXT NOT NULL,
+                delivered_at TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS agent_mail_waiting ON agent_mail(to_id, delivered_at)")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -1031,6 +1073,7 @@ def _migrations():
         v50_conversation_hosts_are_per_model,
         v51_conversation_workflow_mode,
         v52_what_each_host_charged,
+        v53_agent_sessions,
     ]
 
 

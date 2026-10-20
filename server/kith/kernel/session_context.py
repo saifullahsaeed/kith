@@ -151,31 +151,6 @@ def nobody_watching() -> Iterator[None]:
         _unattended.reset(token)
 
 
-#: The kind of workflow agent this work belongs to — "scout", "builder", "verifier" — or "" for
-#: the conversation itself.
-#:
-#: An agent runs under its parent's conversation id (so the persona it shares is a cache read),
-#: which makes `current` unable to tell the two apart. Most readers do not need to. The ones that
-#: remember things *per conversation* across turns do: what an agent was shown is not something
-#: the conversation has seen, and the other way round.
-_agent: ContextVar[str] = ContextVar("kith_agent", default="")
-
-
-def agent() -> str:
-    """The kind of workflow agent doing this work, or "" when it is the conversation itself."""
-    return _agent.get()
-
-
-@contextmanager
-def as_agent(kind: str) -> Iterator[None]:
-    """Run a block as one workflow agent's work."""
-    token = _agent.set(str(kind or "agent"))
-    try:
-        yield
-    finally:
-        _agent.reset(token)
-
-
 @contextmanager
 def working_on(project_id: int | None) -> Iterator[None]:
     """Run a block as work on one project, whatever the conversation says.
@@ -193,23 +168,25 @@ def working_on(project_id: int | None) -> Iterator[None]:
         _project.reset(token)
 
 
-#: The copy this context is pinned to, and the folder it is a copy *of*: ``(source, copy)``.
-#: Empty strings for everything that is not a worker running in its own checkout.
+#: The copy this context is pinned to, the folders it is a copy *of*, and where in it the work
+#: is: ``(sources, copy, base)``. Empty for everything that is not an agent in its own worktree.
 #:
-#: **Both halves, and the second one is not decoration.** The first version stored only the
-#: copy, and a builder wrote straight into the real repository anyway — because the agent that
-#: sent it put the project's absolute path in the objective (its own tool description asks for
-#: "any paths you have"), the worker called `write_file` with that absolute path, and
+#: **The sources are not decoration.** The first version stored only the copy, and an agent
+#: wrote straight into the real repository anyway — because the session that sent it put the
+#: project's absolute path in the task, the agent called `write_file` with that path, and
 #: `paths.resolve` honours an absolute path as given without ever consulting `base_dir`. The
 #: pin was set, correct, and never consulted. Knowing what the copy is a copy *of* is what lets
 #: `resolve` recognise such a path and bend it into the copy.
 #:
-#: **And a third: where in the copy the work is.** A copy is always of a whole repository, and
-#: the project is not always the whole repository — every project made under the workspace is a
-#: folder of the one repository the workspace is. Pinning relative paths to the copy's root sent
-#: a builder told to read `.kith/design/brief.md` to the workspace's `.kith`, not the project's,
-#: and the workflow had to tell it to go and find its own project first.
-_isolated: ContextVar[tuple[str, str, str]] = ContextVar("kith_isolated_base", default=("", "", ""))
+#: **Several, because agents nest.** An agent's agent has its own worktree of the same
+#: repository, and the task it was handed may name paths in the person's checkout *or* in its
+#: handler's worktree — both are the same files, seen from a different checkout, and both must
+#: land in this one.
+#:
+#: **And where in the copy the work is.** A copy is always of a whole repository, and the
+#: project is not always the whole repository — every project made under the workspace is a
+#: folder of the one repository the workspace is.
+_isolated: ContextVar[tuple[tuple[str, ...], str, str]] = ContextVar("kith_isolated_base", default=((), "", ""))
 
 
 def isolated_base() -> str:
@@ -225,24 +202,24 @@ def isolated_base() -> str:
 
 
 def isolated_copy() -> str:
-    """The root of the pinned copy, or "". What a worker may write in and its commands run inside.
+    """The root of the pinned copy, or "". The worktree an agent's turn runs in.
 
     Separate from :func:`isolated_base` because the boundary is the whole copy, not the project's
-    folder within it: a patch may touch a file beside the project, and the copy is all its own.
+    folder within it: a commit may touch a file beside the project, and the copy is all its own.
     """
     return _isolated.get()[1]
 
 
-def isolated_mirror() -> tuple[str, str]:
-    """``(source, copy)`` for a pinned context, or ``("", "")``.
+def isolated_mirror() -> tuple[tuple[str, ...], str]:
+    """``(sources, copy)`` for a pinned context, or ``((), "")``.
 
     Separate from :func:`isolated_base` because the two questions have different callers and
     different answers when only one folder is known. `permissions` asks "may he write here",
     which is about the copy alone; `paths.resolve` asks "is this path really about the copy",
-    which cannot be answered without the original.
+    which cannot be answered without the originals.
     """
-    source, copy, _ = _isolated.get()
-    return source, copy
+    sources, copy, _ = _isolated.get()
+    return sources, copy
 
 
 #: Where the request came from, when it came from a terminal. Informational only.
@@ -291,33 +268,33 @@ def arriving_from(directory: str | None) -> Iterator[None]:
 
 @contextmanager
 def working_from(
-    directory: str | None, mirror_of: str | None = None, base: str | None = None
+    directory: str | None, mirror_of: str | tuple[str, ...] | list[str] | None = None, base: str | None = None
 ) -> Iterator[None]:
     """Run a block with every relative path anchored in ``directory``.
 
     The third of the three, and the only one that names a folder outright. ``working_in``
     says which conversation, ``working_on`` says which project, and both of those are
     *questions* that `paths.base_dir` answers by going and looking something up. This is the
-    answer handed over directly, for the case where there is nothing to look up: a worker
-    editing inside its own `git worktree` is not on a different project and not in a
-    different conversation — it is the same work, in a copy of the same folder.
+    answer handed over directly, for the case where there is nothing to look up: an agent
+    working inside its own `git worktree` is in a copy of its handler's folder, not somewhere
+    else.
 
-    That is what makes worker isolation one variable rather than a parameter on fifty-nine
-    handlers. Every path in the application goes through `paths.resolve` → `paths.base_dir`,
-    so a worker thread that runs in a ``copy_context()`` with this set reads and writes its
-    copy through every existing tool, and no tool knows it moved.
+    That is what makes an agent's isolation one variable rather than a parameter on every
+    handler. Every path in the application goes through `paths.resolve` → `paths.base_dir`, so a
+    turn that runs with this set reads and writes its worktree through every existing tool, and
+    no tool knows it moved.
 
-    **It grants permission as well as location, and that is deliberate.** `permissions`
-    reads this too (see ``_inside_linked_project``), because a folder he may write in is
-    exactly what a worktree has to be: a worker has no `ask`, and nobody is watching a
-    scratchpad, so a permission prompt raised in here would be asked of an empty room while
-    the turn that sent it waits on a tool call that never returns. Pinning a context to a
-    folder is therefore a decision only the code that *made* that folder may take — which is
-    why this takes a path and not a name, and why nothing reachable by a tool calls it.
+    **It grants permission as well as location, and that is deliberate.** `permissions` reads
+    this too (see ``_inside_pinned_worktree``): the worktree is a folder Kith made for this
+    agent, and asking the person whether it may write in it would be asking about a folder they
+    have never seen. Pinning a context to a folder is therefore a decision only the code that
+    *made* that folder may take — which is why this takes a path and not a name, and why nothing
+    reachable by a tool calls it.
 
-    ``mirror_of`` is the folder ``directory`` is a copy of. Optional only so that a test can
-    pin a plain folder; a real worktree must always pass it, because without it an absolute
-    path into the original is honoured as written and the isolation is silently not there.
+    ``mirror_of`` is the folder — or folders — ``directory`` is a copy of. Optional only so that
+    a test can pin a plain folder; a real worktree must always pass it, because without it an
+    absolute path into the original is honoured as written and the isolation is silently not
+    there.
 
     ``base`` is where relative paths land, when that is a folder inside ``directory`` rather than
     ``directory`` itself — the project's folder in a copy of the repository it is part of.
@@ -329,47 +306,11 @@ def working_from(
     if not text:
         yield
         return
-    token = _isolated.set((str(mirror_of or "").strip(), text, str(base or "").strip()))
+    if isinstance(mirror_of, str):
+        mirror_of = [mirror_of]
+    sources = tuple(dict.fromkeys(str(one).strip() for one in (mirror_of or ()) if str(one or "").strip()))
+    token = _isolated.set((sources, text, str(base or "").strip()))
     try:
         yield
     finally:
         _isolated.reset(token)
-
-
-#: Why this turn may start a workflow, if it may: "asked" when the opening message started with
-#: `/workflow`, "mode" when workflow mode is on for the conversation, "" when neither. Read by
-#: `run_workflow`, which refuses on "", and by the ambient block, which tells him which it is.
-_workflows: ContextVar[str] = ContextVar("kith_workflows_allowed", default="")
-
-
-def workflows_allowed() -> bool:
-    """May this turn start a workflow — was it asked for, or is workflow mode on here?
-
-    A fact about the turn rather than a parameter, for the same reason as :func:`unattended`: a
-    tool handler is called as ``run(path, args)``, and the one handler that cares cannot be
-    handed anything. False in a test and in a script — the honest default, because only a person
-    typing the prefix or turning the mode on can truthfully claim otherwise.
-    """
-    return bool(_workflows.get())
-
-
-def workflow_permission() -> str:
-    """``"asked"``, ``"mode"`` or ``""`` — see :data:`_workflows`."""
-    return _workflows.get()
-
-
-@contextmanager
-def may_run_workflows(reason: str | bool) -> Iterator[None]:
-    """Run a block as a turn that may start workflows, for ``reason`` ("asked" or "mode").
-
-    ``True`` is read as "asked", so a caller that only knows yes or no still works.
-    """
-    why = "asked" if reason is True else (reason or "")
-    if not why:
-        yield
-        return
-    token = _workflows.set(str(why))
-    try:
-        yield
-    finally:
-        _workflows.reset(token)
