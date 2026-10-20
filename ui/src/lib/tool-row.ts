@@ -386,14 +386,40 @@ export function digestOf(name: string, args: Args, wrapped: unknown): string {
       const missing = icons.length - found;
       return [plural(found, "icon"), missing ? `${missing} missing` : ""].filter(Boolean).join(" · ");
     }
-    case "run_workflow": {
-      const phases = Array.isArray(r.phases) ? r.phases.map(String) : [];
-      return phases.join(" → ");
+    /* The agent tools answer per agent, and the row names the agents already — so the digest is
+     * only the part that varies: how many it could not do, and why when there is one reason. */
+    case "start_agents": {
+      const each = Array.isArray(r.agents) ? (r.agents as unknown[]).filter(isObj) : [];
+      const failed = each.filter((one) => typeof one.error === "string");
+      const started = each.length - failed.length;
+      if (!each.length) return "";
+      if (failed.length === 1 && !started) return short(failed[0]!.error);
+      return [started ? `${started} started` : "", failed.length ? `${failed.length} refused` : ""]
+        .filter(Boolean)
+        .join(" · ");
     }
-    case "add_agents": {
-      const labels = Array.isArray(r.agents) ? r.agents.map(String) : [];
-      const step = typeof r.step === "number" ? `Step ${r.step}` : "";
-      return [step, labels.join(", ")].filter(Boolean).join(" · ");
+    case "message_agents": {
+      const each = Array.isArray(r.messages) ? (r.messages as unknown[]).filter(isObj) : [];
+      const failed = each.filter((one) => typeof one.error === "string");
+      if (failed.length === 1 && each.length === 1) return short(failed[0]!.error);
+      if (failed.length) return `${failed.length} not delivered`;
+      // One message: what it did on arrival — answered a question, steered, or woke it.
+      return each.length === 1 ? short(each[0]!.delivered) : each.length ? plural(each.length, "message") : "";
+    }
+    case "stop_agents": {
+      const stopped = Array.isArray(r.stopped) ? r.stopped.length : 0;
+      const unknown = Array.isArray(r.unknown) ? r.unknown.length : 0;
+      return [stopped ? `${stopped} stopped` : "none running", unknown ? `${unknown} unknown` : ""]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    case "close_agents": {
+      const closed = Array.isArray(r.closed) ? r.closed.length : 0;
+      const refused = Array.isArray(r.refused) ? (r.refused as unknown[]).filter(isObj) : [];
+      if (refused.length === 1 && !closed) return short(refused[0]!.why);
+      return [closed ? `${closed} closed` : "", refused.length ? `${refused.length} refused` : ""]
+        .filter(Boolean)
+        .join(" · ");
     }
     default:
       return generic(value);

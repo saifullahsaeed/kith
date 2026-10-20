@@ -18,11 +18,12 @@
 import { useState, type FC, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Clock, FileCode2, Globe, Repeat } from "lucide-react";
+import { ArrowUpRight, Clock, FileCode2, GitBranch, Globe, Repeat } from "lucide-react";
 
 import { CodeBlock } from "@/components/files";
 import { useMedia } from "@/components/files/media";
 import { useFileViewer } from "@/lib/files";
+import { useOpenConversation } from "@/lib/open-conversation";
 import { useProjectRoot } from "@/lib/project-root";
 import { shortPath } from "@/lib/tool-language";
 import { diffStat, splitDiff } from "@/lib/tool-row";
@@ -706,3 +707,74 @@ export const SearchDownCard: FC<{ note: string }> = ({ note }) => (
     {note}
   </p>
 );
+
+/**
+ * The agents a `start_agents` call started: each one's name — a way into its conversation — its
+ * branch, and the opening of the task it was given, or why it could not be started.
+ *
+ * The row above already names them; this is for what the row cannot carry. A task is the whole
+ * brief, often a page long, and printing it as the call's arguments (JSON, every agent's in one
+ * blob) was the reason this card exists: two lines of each is enough to tell them apart, and the
+ * rest is the first message in the agent's own conversation, one click away.
+ */
+export const StartedAgentsCard: FC<{ args: Args; value: Obj }> = ({ args, value }) => {
+  const open = useOpenConversation();
+  const started = Array.isArray(value.agents) ? (value.agents as unknown[]).filter(isObj) : [];
+  const asked = Array.isArray(args.agents) ? (args.agents as unknown[]).filter(isObj) : [];
+  const taskOf = (name: string) => s(asked.find((one) => s(one.name) === name)?.task);
+  if (!started.length) return null;
+  return (
+    <Card className="gap-1.5">
+      {started.map((one, i) => {
+        const name = s(one.name);
+        const id = s(one.id);
+        const error = typeof one.error === "string" ? one.error : "";
+        const task = taskOf(name);
+        return (
+          <div key={`${name}-${i}`} className="flex flex-col gap-0.5 text-xs">
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                aria-hidden
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  error ? "bg-destructive/70" : "bg-teal-500 dark:bg-teal-400",
+                )}
+              />
+              {id && !error ? (
+                <button
+                  type="button"
+                  onClick={() => open(id)}
+                  title={`Open ${name}'s conversation`}
+                  className="text-foreground flex min-w-0 cursor-pointer items-center gap-1 font-medium hover:underline"
+                >
+                  <span className="truncate">{name}</span>
+                  <ArrowUpRight className="size-3 shrink-0 opacity-60" aria-hidden />
+                </button>
+              ) : (
+                <span className="text-foreground truncate font-medium">{name}</span>
+              )}
+              {one.branch ? (
+                <span className="text-muted-foreground flex min-w-0 items-center gap-1 font-mono text-[11px]">
+                  <GitBranch className="size-3 shrink-0" aria-hidden />
+                  <span className="truncate">{s(one.branch)}</span>
+                </span>
+              ) : one.workspace === "shared" ? (
+                <span className="text-muted-foreground text-[11px]">in this folder</span>
+              ) : null}
+            </div>
+            {error ? (
+              <p className="text-destructive/90 ps-3.5 text-[11px] leading-snug">{error}</p>
+            ) : task ? (
+              <p className="text-muted-foreground line-clamp-2 ps-3.5 text-[11px] leading-snug">{task}</p>
+            ) : null}
+          </div>
+        );
+      })}
+      {typeof value.note === "string" && value.note ? (
+        <p className="text-muted-foreground border-border/60 border-t pt-1.5 text-[11px] leading-snug">
+          {value.note}
+        </p>
+      ) : null}
+    </Card>
+  );
+};

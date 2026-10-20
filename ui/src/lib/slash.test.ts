@@ -2,8 +2,8 @@
  * The `/` sheet and what a command means, as pure functions of the first line and the caret.
  *
  * Every bug the library popover had was a disagreement between the box and a copy of its state
- * somewhere else — the reopen after a pick, the reopen after Escape, the eaten space after
- * `/workflow`. These pin the rules that leave nothing to disagree about.
+ * somewhere else — the reopen after a pick, the reopen after Escape, the eaten space after a
+ * prefix. These pin the rules that leave nothing to disagree about.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -23,7 +23,7 @@ const COMMANDS: SlashCommand[] = [
   { name: "fold", kind: "action", description: "Summarise the older turns" },
   { name: "stop", kind: "action", description: "Stop the turn" },
   { name: "design", kind: "prefix", description: "Mock up screens" },
-  { name: "workflow", kind: "prefix", description: "Split into agents" },
+  { name: "worktree-notes", kind: "prefix", description: "Write notes for a worktree" },
   { name: "docx", kind: "prefix", description: "Work with Word documents" },
   { name: "code-refactor", kind: "prefix", description: "Refactor code" },
 ];
@@ -39,8 +39,8 @@ describe("when the sheet is open", () => {
   });
 
   it("is closed once the word is finished and the caret has moved past it", () => {
-    expect(slashWord("/workflow ", 10)).toBeNull();
-    expect(slashWord("/workflow build it", 18)).toBeNull();
+    expect(slashWord("/design ", 8)).toBeNull();
+    expect(slashWord("/design a login", 15)).toBeNull();
   });
 
   it("is closed for a slash anywhere but the start — a path, an and/or", () => {
@@ -56,12 +56,12 @@ describe("when the sheet is open", () => {
 
 describe("what it offers", () => {
   it("puts names that start with the word first, then names that contain it", () => {
-    expect(matchCommands(COMMANDS, "o").map((one) => one.name)).toEqual(["fold", "stop", "workflow", "docx", "code-refactor"]);
+    expect(matchCommands(COMMANDS, "o").map((one) => one.name)).toEqual(["fold", "stop", "worktree-notes", "docx", "code-refactor"]);
     expect(matchCommands(COMMANDS, "d").map((one) => one.name)).toEqual(["design", "docx", "fold", "code-refactor"]);
   });
 
-  it("does not search descriptions — 'wor' is /workflow, not every skill that says 'Work'", () => {
-    expect(matchCommands(COMMANDS, "wor").map((one) => one.name)).toEqual(["workflow"]);
+  it("does not search descriptions — 'wor' is /worktree-notes, not every skill that says 'Work'", () => {
+    expect(matchCommands(COMMANDS, "wor").map((one) => one.name)).toEqual(["worktree-notes"]);
   });
 
   it("offers everything for a bare slash, and nothing for a word nothing matches", () => {
@@ -72,14 +72,14 @@ describe("what it offers", () => {
 
 describe("taking a command", () => {
   it("finishes a prefix with the space its request goes after, caret past it", () => {
-    expect(completeWord("/wor", named("workflow"))).toEqual({ text: "/workflow ", replaced: 4, caret: 10 });
+    expect(completeWord("/des", named("design"))).toEqual({ text: "/design ", replaced: 4, caret: 8 });
   });
 
   it("keeps what was already written after the word, and does not double its space", () => {
-    const done = completeWord("/wor build the devices screen", named("workflow"));
-    expect(done).toEqual({ text: "/workflow", replaced: 4, caret: 10 });
-    const line = done.text + "/wor build the devices screen".slice(done.replaced);
-    expect(line).toBe("/workflow build the devices screen");
+    const done = completeWord("/des the devices screen", named("design"));
+    expect(done).toEqual({ text: "/design", replaced: 4, caret: 8 });
+    const line = done.text + "/des the devices screen".slice(done.replaced);
+    expect(line).toBe("/design the devices screen");
   });
 
   it("leaves an action as the whole word, with no space", () => {
@@ -90,7 +90,7 @@ describe("taking a command", () => {
 describe("a command at the start of a message", () => {
   it("is found only as a whole word", () => {
     expect(leadingCommand("/fold", COMMANDS)?.command.name).toBe("fold");
-    expect(leadingCommand("/workflow build it", COMMANDS)?.rest).toBe("build it");
+    expect(leadingCommand("/design a login", COMMANDS)?.rest).toBe("a login");
     expect(leadingCommand("/folder", COMMANDS)).toBeNull();
     expect(leadingCommand("please /fold", COMMANDS)).toBeNull();
   });
@@ -108,7 +108,7 @@ describe("what he is sent", () => {
     );
   });
 
-  it("leaves /workflow, unknown words and ordinary text exactly as typed", () => {
+  it("leaves unknown words and ordinary text exactly as typed — /workflow among them, now gone", () => {
     expect(expandCommand("/workflow build it")).toBe("/workflow build it");
     expect(expandCommand("/nope hi")).toBe("/nope hi");
     expect(expandCommand("hello /design")).toBe("hello /design");
@@ -118,17 +118,16 @@ describe("what he is sent", () => {
 describe("the chip on a sent message", () => {
   it("reads the word as typed and the spelled-out text a reload brings back as the same chip", () => {
     rememberSkills(["code-refactor"]);
-    expect(commandChip("/code-refactor the adapter")).toEqual({ label: "/code-refactor", tone: "command", rest: "the adapter" });
+    expect(commandChip("/code-refactor the adapter")).toEqual({ label: "/code-refactor", rest: "the adapter" });
     expect(commandChip(expandCommand("/code-refactor the adapter"))).toEqual({
       label: "/code-refactor",
-      tone: "command",
       rest: "the adapter",
     });
-    expect(commandChip(DESIGN_PROMPT + "a login")).toEqual({ label: "/design", tone: "command", rest: "a login" });
+    expect(commandChip(DESIGN_PROMPT + "a login")).toEqual({ label: "/design", rest: "a login" });
   });
 
-  it("keeps /workflow its own tone, and leaves ordinary text alone", () => {
-    expect(commandChip("/workflow build it")).toEqual({ label: "/workflow", tone: "workflow", rest: "build it" });
+  it("leaves ordinary text alone — and an old /workflow message reads as the words it was", () => {
+    expect(commandChip("/workflow build it")).toBeNull();
     expect(commandChip("/usr/local is full")).toBeNull();
     expect(commandChip("hello")).toBeNull();
   });

@@ -18,7 +18,8 @@ export interface ActivityStatus {
 export interface ActivityItem {
   /** Every kind the server emits, and no more. `reflect`, `curious` and `consolidate` were
    *  here until the scheduled inner life was removed; `start` and `breakout` went with the
-   *  self-directed loop. */
+   *  self-directed loop; `errand` and `workflow` went with workflows — an agent is a whole
+   *  conversation now, and its work is in its own transcript rather than on this feed. */
   kind:
     | "reply"
     | "tool"
@@ -28,57 +29,12 @@ export interface ActivityItem {
     | "error"
     | "status"
     | "tokens"
-    | "retrying"
-    /** One of a workflow's agents at work — see `errand` below. */
-    | "errand"
-    /** A workflow run's own state — see `workflow` below. */
-    | "workflow";
+    | "retrying";
   text: string;
   at: string;
   tokens?: { round: number; uncached: number; cached: number; out: number };
   tool?: string;
   args?: Record<string, string>;
-  /** Present on `errand` lines: which of a workflow's agents this is, and where it has got to.
-   *  `running` opens one, `step` is a tool call inside it, `done` closes it. The id is what
-   *  keeps six agents running at once from reading as one confused list. */
-  errand?: {
-    id: string;
-    state: "running" | "step" | "done";
-    objective: string;
-    /** `scout` reads, `builder` edits in its own copy of the repository. Absent on lines from
-     *  before roles existed, which read as a scout — the safer of the two to be wrong about. */
-    role?: string;
-    /** The workflow run that sent it. */
-    run?: string;
-    /** On `running`: the whole prompt, the phase it started in, and the labels of the earlier
-     *  builders whose patches it was started on top of. */
-    prompt?: string;
-    phase?: string;
-    after?: string[];
-    /** On `done`: what it cost, how many tool calls, the start of its report, its patch file
-     *  and the outcome line, and whether it failed. */
-    cost?: number;
-    calls?: number;
-    report?: string;
-    patch?: string;
-    outcome?: string;
-    failed?: boolean;
-  };
-  /** Present on `workflow` lines: a run's own state. `started` carries the plan, `phase` and
-   *  `log` are the script's progress, and `finished` / `failed` / `stopped` end it. `step`
-   *  reopens an ended run for one more step (`add_agents`), with the whole plan so far. */
-  workflow?: {
-    run: string;
-    state: "started" | "step" | "phase" | "log" | "finished" | "failed" | "stopped";
-    name?: string;
-    description?: string;
-    phases?: string[];
-    folder?: string;
-    /** On the closing line: how long it ran, what its agents cost, and how many there were. */
-    seconds?: number;
-    cost?: number;
-    agents?: number;
-  };
   /** Which session this line belongs to. Absent on the genuinely global lines — a status
    *  change — which every session shows, because they are about the machine rather than
    *  about one piece of work. */

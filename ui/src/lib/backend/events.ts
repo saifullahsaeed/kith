@@ -57,7 +57,10 @@ export type ChangeKind =
   | "plugin_state"
   | "plugin_call"
   // Something he asked you to look at — see `services/showing` and `show_canvas`.
-  | "showing";
+  | "showing"
+  // An agent tree moved: one started, reported, asked, stopped or closed, or mail was delivered.
+  // `conversation` is the session it happened in, which is not necessarily the tree's root.
+  | "agents";
 
 export interface Change {
   kind: ChangeKind;

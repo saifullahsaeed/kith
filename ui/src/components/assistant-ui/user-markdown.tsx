@@ -27,35 +27,14 @@ export const UserMarkdownText: FC = () => {
   // word that reads like a typo, nor as the paragraph `/design` and skills are spelled out into.
   const chip = commandChip(said);
   const text = chip ? chip.rest : said;
-  const workflow = chip?.tone === "workflow";
   return (
     <div className="kith-user-markdown">
-      {chip && !workflow ? (
+      {chip ? (
         <span
           className="bg-kith/15 text-kith mb-1.5 inline-flex h-5 items-center rounded-md px-2 font-mono text-[11px] font-semibold"
           title="Sent with a command"
         >
           {chip.label}
-        </span>
-      ) : null}
-      {workflow ? (
-        <span
-          className="mb-1.5 inline-flex h-5 items-center gap-[5px] rounded-md bg-teal-400/15 px-2 font-mono text-[11px] font-semibold text-teal-700 dark:text-teal-400"
-          title="Sent as a workflow: he may split this into agents that run in the background"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.4}
-            strokeLinecap="round"
-            aria-hidden
-            className="size-[11px] shrink-0"
-          >
-            <circle cx="12" cy="12" r="2" />
-            <path d="M16.24 7.76a6 6 0 1 0 .01 8.48M19.07 4.93a10 10 0 1 0 .01 14.14" />
-          </svg>
-          /workflow
         </span>
       ) : null}
       <ReactMarkdown

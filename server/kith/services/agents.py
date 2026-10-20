@@ -606,7 +606,9 @@ def stop(handler_id: str, names: list[str]) -> dict:
 
 def _halt(conversation_id: str) -> None:
     found = row(conversation_id)
-    if not found or found.get("agent_state") == CLOSED:
+    if not found or found.get("agent_state") in (CLOSED, DONE):
+        # A finished agent has nothing to stop, and marking it stopped would hide that it
+        # finished — "stop everything" is not "forget what already reported".
         return
     repo.conversations.set_agent(AGENT_DB_PATH, conversation_id, agent_state=STOPPED)
     release(conversation_id)

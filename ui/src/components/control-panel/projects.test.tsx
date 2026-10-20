@@ -76,6 +76,11 @@ const chats: ConversationSummary[] = [
     projectId: 1,
     working: false,
     waiting: false,
+    parentId: null,
+    agentName: "",
+    agentState: "",
+    agents: 0,
+    agentsWorking: 0,
   },
 ];
 

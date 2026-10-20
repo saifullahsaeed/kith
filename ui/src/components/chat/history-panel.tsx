@@ -8,16 +8,14 @@ import {
 import { ChevronRight, Plus, Search, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import {
-  fetchAllWorkflows,
-  permissionHolder,
-  runningWorkflows,
-} from "@/components/shell/chat-states";
+import { agentCount, permissionHolder } from "@/components/shell/chat-states";
+import { AgentDot } from "@/components/chat/agent-tree";
 import { ItemMenu } from "@/components/ui/item-menu";
 import { useConfirm } from "@/components/ui/confirm";
 import { usePrompt } from "@/components/ui/prompt";
 import {
   deleteConversation,
+  fetchAgentTree,
   fetchConversations,
   fetchLiveTurns,
   renameConversation,
@@ -28,13 +26,20 @@ import {
 } from "@/lib/backend";
 import { fetchProjects, type Project } from "@/lib/backend/brain";
 import { fetchOpenQuestion } from "@/lib/backend/questions";
+import {
+  AGENT_INDENT,
+  AGENT_WORD,
+  agentLook,
+  countAgents,
+  flattenAgents,
+  useAgentTree,
+} from "@/lib/agents";
 import { dayLabel, time } from "@/lib/dates";
 import { keys } from "@/lib/query-keys";
 import { useDraftedTabs } from "@/lib/drafts";
 import { openOnHost } from "@/lib/files";
 import { pathForTab } from "@/lib/router";
 import { cn } from "@/lib/utils";
-import { useActivity } from "@/hooks/use-activity";
 import { Layer, useLayer } from "@/hooks/use-layer";
 import { usePermissions } from "@/hooks/use-permissions";
 
@@ -52,8 +57,8 @@ const PROJECTS_SHOWN = 4;
  *
  * `KITH_MUTED` is the amber of a reason line: his colour with a little of the text colour and a
  * quarter of the muted one in it, so a sentence in it can be read rather than only noticed — it
- * resolves to #DCB47A against the design's #D8B77A. `TEAL` is the workflow colour the same
- * way: Tailwind's teal-400 is a shade more electric than the design's #4CC9B8, and a quarter of
+ * resolves to #DCB47A against the design's #D8B77A. `TEAL` is the agents' colour the same way:
+ * Tailwind's teal-400 is a shade more electric than the design's #4CC9B8, and a quarter of
  * the muted grey brings it to #4CC7B3. Both are mixed in oklab, where a near-grey barely moves
  * the hue, and both from tokens rather than hexes: light mode gets a darker amber from its own
  * `--kith`, and a teal-600 that reads on white. */
@@ -86,9 +91,13 @@ const BREATHE = "animate-[kith-breathe_2.4s_ease-in-out_infinite]";
  *   when there is something, in amber, because it is the one thing on the rail that is blocked
  *   on the person reading it (KIT principle 4: what needs the person rises).
  * - **Projects** — the few you are in. The open one lists its conversations indented, each with
- *   the state it is in *right now* as its second line: a workflow's phase in teal, a question in
- *   amber, "Working" in green, and otherwise his last word, muted.
+ *   the state it is in *right now* as its second line: a question in amber, "Working" in green,
+ *   and otherwise his last word, muted.
  * - **Chats** — everything not in a project, one line each: what it is, and when it last moved.
+ *
+ * A chat that started agents carries them under its row: a quiet count that folds out into the
+ * tree — each agent a conversation of its own, opened like any other. Agents are never rows of
+ * their own here, because you never talk to one; they are listed under the chat you do talk to.
  *
  * Grouped by project. It was flat first — seventeen hundred rows reading "hi · 2 msg · 2:28 AM"
  * with nothing saying which day any belonged to — then grouped by day, which fixed the scanning
@@ -146,6 +155,11 @@ export function HistoryPanel({
   // what would be open anyway, so the one you are working in stays open as you move between
   // conversations without a toggle you never pressed being remembered as a preference.
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
+  // Which chats' agent trees you folded in or out, by hand. Not the XOR the groups use: a tree
+  // you opened in order to click one of its agents is a tree that would *default* open the moment
+  // that agent is in front of you, and the XOR then folded it shut under your cursor.
+  const [agentsToggled, setAgentsToggled] = useState<Map<string, boolean>>(() => new Map());
+  const showAgents = useAgentTree((state) => state.show);
   const confirm = useConfirm();
   const navigate = useNavigate();
 
@@ -171,6 +185,20 @@ export function HistoryPanel({
     () => void cache.invalidateQueries({ queryKey: ["conversations"] }),
     [cache],
   );
+
+  /* Which chat the conversation in front of you belongs under.
+   *
+   * Itself, nearly always. But an agent is never in this list — you do not talk to one — so when
+   * you are reading an agent, the chat to keep open (its project, its fold of agents) is the one
+   * at the top of its tree, which only the tree can say. Asked only when the active conversation is
+   * not a row here, which is the only time the answer is not already known. */
+  const listed = items.some((one) => one.id === activeId);
+  const { data: activeTree } = useQuery({
+    queryKey: keys.agentTree(activeId),
+    queryFn: () => fetchAgentTree(activeId),
+    enabled: Boolean(activeId) && !isPending && !listed,
+  });
+  const home = listed ? activeId : (activeTree?.root ?? activeId);
 
   /* Searching the transcripts themselves.
    *
@@ -263,7 +291,7 @@ export function HistoryPanel({
     // Always include the one you are in, even when it is not recent enough to make the cut —
     // a panel that hides the project you are working in is worse than one that shows five.
     const holding = all.find((group) =>
-      group.items.some((one) => one.id === activeId),
+      group.items.some((one) => one.id === home),
     );
     const top = all.slice(0, PROJECTS_SHOWN);
     if (holding && !top.includes(holding)) top.push(holding);
@@ -275,7 +303,7 @@ export function HistoryPanel({
       chats: loose,
       ordered: [...top, ...(loose ? [loose] : [])],
     };
-  }, [groups, projects, activeId]);
+  }, [groups, projects, home]);
 
   /* Open by default: the project you are in, and the project you just started a chat in.
    *
@@ -291,19 +319,28 @@ export function HistoryPanel({
 
   const openByDefault = useMemo(() => {
     const holding = ordered.find((group) =>
-      group.items.some((one) => one.id === activeId),
+      group.items.some((one) => one.id === home),
     );
     const started =
       startedIn === null
         ? undefined
         : ordered.find((group) => group.projectId === startedIn);
     return new Set([holding?.key, started?.key].filter(Boolean) as string[]);
-  }, [ordered, activeId, startedIn]);
+  }, [ordered, home, startedIn]);
 
   // XOR against the default: no effect syncing state to props, and nothing to go stale when the
   // active conversation moves to another project.
   const isOpen = (group: Group) =>
     openByDefault.has(group.key) !== toggled.has(group.key);
+  /** Whether a chat's agents are folded out: the tree you are reading inside, unless you closed
+   *  it, and any other you opened. */
+  const agentsOpen = (id: string) => agentsToggled.get(id) ?? (id === home && home !== activeId);
+  const toggleAgents = (id: string) =>
+    setAgentsToggled((current) => {
+      const next = new Map(current);
+      next.set(id, !agentsOpen(id));
+      return next;
+    });
 
   /* How far each *open* project has got: tasks done of the tasks not dropped — the "6/13" the
    * session bar shows.
@@ -339,26 +376,14 @@ export function HistoryPanel({
   /* ── What each conversation is doing ───────────────────────────────────
    *
    * Read from the same three sources, through the same functions, as the tab strip and the
-   * presence pill (`shell/chat-states.ts`), so the rail cannot say "Survey running" while the tab
-   * says nothing. A live turn is `/api/chat/live`, a parked question is `waiting` on the list row,
-   * and a workflow is the server's board with the live feed laid over it. The board query is the
-   * workspace's own, same key and options — one request between them; it is the workspace that
-   * re-reads it when a run changes state. */
+   * presence pill (`shell/chat-states.ts`), so the rail cannot say "2 agents working" while the
+   * tab says nothing. A live turn is `/api/chat/live`, and a parked question and the agents busy
+   * under a chat are both on the list row. */
   const { pending } = usePermissions();
-  const { activity } = useActivity();
   const { data: liveIds = [] } = useQuery({
     queryKey: keys.liveTurns(),
     queryFn: fetchLiveTurns,
   });
-  const { data: board = [] } = useQuery({
-    queryKey: keys.workflows(""),
-    queryFn: fetchAllWorkflows,
-    staleTime: 30_000,
-  });
-  const flows = useMemo(
-    () => runningWorkflows(board, activity),
-    [board, activity],
-  );
   const live = useMemo(
     () =>
       new Set([
@@ -402,16 +427,15 @@ export function HistoryPanel({
   /** What a conversation is doing right now, in the ranking `chatState` uses for its tab.
    *
    * What needs you first — a question, then a permission — because those are the only states
-   * that stop without you. Then a live turn, the thing happening this second. Then a workflow,
-   * which runs in the background after the turn that started it has ended. */
+   * that stop without you. Then a live turn, the thing happening this second. Then its agents,
+   * which carry on in the background after the turn that started them has ended. */
   const stateOf = (item: ConversationSummary): RowState => {
     if (item.waiting)
       return { kind: "waiting", question: questionOf.get(item.id) ?? "" };
     if (holder === item.id && pending[0])
       return { kind: "permission", request: pending[0] };
     if (live.has(item.id)) return { kind: "working" };
-    const flow = flows.get(item.id);
-    if (flow) return { kind: "workflow", phase: flow.phase };
+    if (item.agentsWorking > 0) return { kind: "agents", count: item.agentsWorking };
     if (drafting.has(item.id)) return { kind: "draft" };
     return { kind: "idle" };
   };
@@ -443,6 +467,9 @@ export function HistoryPanel({
               onSelect: () => startIn(group.projectId),
             },
           ]
+        : []),
+      ...(item.agents > 0
+        ? [{ label: "Show its agents", onSelect: () => showAgents(item.id) }]
         : []),
       {
         label: "Reveal transcript",
@@ -674,6 +701,16 @@ export function HistoryPanel({
                             active={item.id === activeId}
                             onClick={() => onOpen(item.id)}
                           />
+                          {item.agents > 0 ? (
+                            <AgentsUnder
+                              item={item}
+                              indent={PROJECT_ROW_INDENT}
+                              open={agentsOpen(item.id)}
+                              onToggle={() => toggleAgents(item.id)}
+                              activeId={activeId}
+                              onOpen={onOpen}
+                            />
+                          ) : null}
                         </li>
                       ))}
                     </ul>
@@ -711,6 +748,16 @@ export function HistoryPanel({
                           active={item.id === activeId}
                           onClick={() => onOpen(item.id)}
                         />
+                        {item.agents > 0 ? (
+                          <AgentsUnder
+                            item={item}
+                            indent={CHAT_ROW_INDENT}
+                            open={agentsOpen(item.id)}
+                            onToggle={() => toggleAgents(item.id)}
+                            activeId={activeId}
+                            onOpen={onOpen}
+                          />
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -1100,7 +1147,7 @@ type RowState =
   | { kind: "waiting"; question: string }
   | { kind: "permission"; request: PermissionRequest }
   | { kind: "working" }
-  | { kind: "workflow"; phase: string }
+  | { kind: "agents"; count: number }
   | { kind: "draft" }
   | { kind: "idle" };
 
@@ -1108,7 +1155,7 @@ type RowState =
  *
  * The draft ring is hollow and still against the others' solid breathing, which is the whole of
  * how it reads as a different kind of fact: amber is "waiting on you", green is "running", teal
- * is a workflow, and something you typed and did not send is none of those. */
+ * is agents at work under it, and something you typed and did not send is none of those. */
 function dotFor(state: RowState): { look: string; title: string } {
   switch (state.kind) {
     case "waiting":
@@ -1120,10 +1167,10 @@ function dotFor(state: RowState): { look: string; title: string } {
         look: cn("bg-roam", BREATHE),
         title: "Still working in this conversation",
       };
-    case "workflow":
+    case "agents":
       return {
         look: cn(TEAL_DOT, BREATHE),
-        title: "A workflow is running here",
+        title: `${agentCount(state.count)} working under this chat`,
       };
     case "draft":
       return {
@@ -1155,8 +1202,9 @@ function StateDot({
 /** A project row's second line: its present tense, and the colour that tense is said in.
  *
  * His last word is the default — where the conversation was left — and any live state replaces
- * it, because "Survey running" or the question he is waiting on is what you need from the row
- * more than what he said last. */
+ * it, because the question he is waiting on is what you need from the row more than what he said
+ * last. Agents working under it do not: the fold beneath the row already counts them, and saying
+ * it twice would cost the row the one line that says where the conversation itself was left. */
 function statusLine(
   item: ConversationSummary,
   state: RowState,
@@ -1173,13 +1221,6 @@ function statusLine(
       return { text: permissionLine(state.request), tone: KITH_MUTED };
     case "working":
       return { text: "Working", tone: "text-roam" };
-    case "workflow":
-      return {
-        text: state.phase
-          ? `Workflow · ${state.phase} running`
-          : "Workflow running",
-        tone: TEAL,
-      };
     default:
       return { text: item.lastSaid, tone: FAINT };
   }
@@ -1273,6 +1314,145 @@ function ChatRow({
         </span>
       </button>
     </ItemMenu>
+  );
+}
+
+/* ── Agents under a chat ──────────────────────────────────────────────── */
+
+/** Where a row's text starts, so the fold under it lines up with it: a loose chat's title, and a
+ *  project chat's state dot. */
+const CHAT_ROW_INDENT = 8;
+const PROJECT_ROW_INDENT = 28;
+
+/**
+ * The agents a chat started, folded under its row: "3 agents · 2 working", and the tree when
+ * opened.
+ *
+ * Under the row rather than as rows, because an agent is not a conversation you have — you never
+ * type into one — but it is one you will want to read, and the chat that started it is where you
+ * will look. The count comes with the listing; the tree is asked for only when it is opened, and
+ * kept current by the `agents` change like every other tree.
+ *
+ * Exported for its test.
+ */
+export function AgentsUnder({
+  item,
+  indent,
+  open,
+  onToggle,
+  activeId,
+  onOpen,
+}: {
+  item: ConversationSummary;
+  indent: number;
+  open: boolean;
+  onToggle: () => void;
+  activeId: string;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        title={open ? "Fold its agents away" : "Show the agents this chat started"}
+        className={cn(
+          ROW,
+          "hover:bg-accent/40 hover:text-foreground items-center gap-1.5 py-0.5 pr-2 text-[11px]",
+          FAINT,
+        )}
+        style={{ paddingInlineStart: indent }}
+      >
+        <ChevronRight
+          className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")}
+          aria-hidden
+        />
+        <span className="truncate tabular-nums">
+          {agentCount(item.agents)}
+          {item.agentsWorking > 0 ? (
+            <>
+              {" · "}
+              <span className={TEAL}>{item.agentsWorking} working</span>
+            </>
+          ) : null}
+        </span>
+      </button>
+      {open ? (
+        <AgentList root={item.id} indent={indent} activeId={activeId} onOpen={onOpen} />
+      ) : null}
+    </div>
+  );
+}
+
+/** The tree itself: one row per agent, stepped in by depth. Closed ones wait behind a toggle —
+ *  they are finished and merged, and a list of every agent ever is not what the fold is for. */
+function AgentList({
+  root,
+  indent,
+  activeId,
+  onOpen,
+}: {
+  root: string;
+  indent: number;
+  activeId: string;
+  onOpen: (id: string) => void;
+}) {
+  const [closed, setClosed] = useState(false);
+  const { data, isPending } = useQuery({
+    queryKey: keys.agentTree(root),
+    queryFn: () => fetchAgentTree(root),
+  });
+  const nodes = data?.agents ?? [];
+  const rows = flattenAgents(nodes, closed);
+  const hidden = countAgents(nodes).closed;
+  const start = indent + 12;
+  if (isPending) return null;
+  return (
+    <ul aria-label="Its agents" className="flex flex-col gap-px pb-1">
+      {rows.map(({ node, depth }) => {
+        const look = agentLook(node);
+        const active = node.id === activeId;
+        return (
+          <li key={node.id}>
+            <button
+              type="button"
+              onClick={() => onOpen(node.id)}
+              aria-current={active ? "page" : undefined}
+              title={`${node.name} — ${AGENT_WORD[look]}`}
+              className={cn(
+                ROW,
+                "items-start gap-2 py-1 pr-2",
+                active ? "bg-accent text-foreground" : "text-foreground/80 hover:bg-accent/50",
+                look === "closed" && !active && "opacity-60",
+              )}
+              style={{ paddingInlineStart: start + depth * AGENT_INDENT }}
+            >
+              <AgentDot look={look} className="mt-[6px]" />
+              <span className="flex min-w-0 flex-1 flex-col gap-px">
+                <span className="truncate text-[12.5px]">{node.name}</span>
+                {node.lastSaid ? (
+                  <span className={cn("truncate text-[11px]", FAINT)}>{node.lastSaid}</span>
+                ) : null}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+      {hidden ? (
+        <li>
+          <button
+            type="button"
+            onClick={() => setClosed((was) => !was)}
+            aria-pressed={closed}
+            className={cn(ROW, "hover:text-foreground py-0.5 pr-2 text-[11px]", FAINT)}
+            style={{ paddingInlineStart: start }}
+          >
+            {closed ? "Hide closed" : `Show ${hidden} closed`}
+          </button>
+        </li>
+      ) : null}
+    </ul>
   );
 }
 

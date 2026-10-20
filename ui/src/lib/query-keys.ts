@@ -77,11 +77,10 @@ export const keys = {
   question: (conversationId: string) => ["question", conversationId] as const,
   /** Long-running work started from this conversation. */
   processes: (conversationId: string) => ["processes", conversationId] as const,
-  /** Workflow runs and their agents, from the server's board. Refetched when a run or agent
-   *  changes state on the feed — see `useRuns` — rather than on a change kind of its own. */
-  workflows: (conversationId: string) => ["workflows", conversationId] as const,
-  /** Whether he may start workflows in this chat without the `/workflow` prefix. */
-  workflowMode: (conversationId: string) => ["workflow-mode", conversationId] as const,
+  /** The agents under one conversation, nested, with the chain above it — `GET …/agents`. Keyed by
+   *  the conversation asked about, because the answer is that conversation's subtree: the sidebar
+   *  asks about a root, an agent's own page about itself. */
+  agentTree: (conversationId: string) => ["agentTree", conversationId] as const,
   /** One conversation's stored messages — what opening it needs. */
   conversation: (id: string) => ["conversation", id] as const,
   /** Standing jobs only. The Work panel is open the whole time and needs nothing else. */
@@ -162,6 +161,10 @@ export const STALE_ON: Record<ChangeKind, Stale[]> = {
      * them, confidently, for the rest of the session. Scoped for the same reason the transcript
      * is — this is a per-conversation report and one chat's turn does not restate another's. */
     { scoped: ["context"] },
+    /* A turn starting or ending in an agent is that agent going live or quiet, which its tree
+     * draws as a dot — and the tree is asked about from the root and from every agent's own page,
+     * so no one conversation id names every copy. Whole family: there are a handful at most. */
+    ["agentTree"],
   ],
   // Tasks are on the board, in the detail panel and in the working-on card — and a deliverable is
   // a task change, so a project's Outputs tab goes stale with them.
@@ -192,4 +195,9 @@ export const STALE_ON: Record<ChangeKind, Stale[]> = {
   // And only what is being asked of one. Narrow on purpose: a call opening and closing is the
   // most frequent event in this subsystem, and it must not drag the skills list behind it.
   plugin_call: [["plugins", "calls"]],
+  /* An agent started, reported, asked, stopped or closed, or mail reached one. Every tree, because
+   * the change names the session it happened in and a tree is cached under whichever conversation
+   * asked for it — the root's sidebar row, an agent's breadcrumbs, the title bar's dialog. And the
+   * list, because each chat row carries how many agents are open and working under it. */
+  agents: [["agentTree"], ["conversations"]],
 };

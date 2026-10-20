@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Maximize2, Minimize2, Plus, X, type LucideIcon } from "lucide-react";
 
 import { fetchWorkingOn } from "@/components/assistant-ui/working-on";
 import { fetchProcesses } from "@/components/chat/background-tasks";
-import { fetchRunBoard } from "@/components/chat/workflows";
 import { useLayout } from "@/components/shell/layout/store";
 import { tabKey, type TabRef } from "@/components/shell/layout/tree";
 import { fetchConversation, fetchLiveTurns } from "@/lib/backend";
@@ -130,8 +129,8 @@ function slotOf(key: string): Slot | null {
  *  so it can never be confused with one. */
 const BROWSING = "@browser";
 
-/** What is live in a tab: a workflow (teal, its colour everywhere), or him working (green). */
-type Live = "workflow" | "working" | null;
+/** What is live in a tab: him working (green), or nothing. */
+type Live = "working" | null;
 
 type Tab = {
   id: string;
@@ -497,16 +496,11 @@ function LiveRow({
   conversationId,
   ...row
 }: RowProps & { conversationId: string }) {
-  const cache = useQueryClient();
   const navigate = useNavigate();
   const showBoard = useBoardOverlay((state) => state.show);
 
   // Every one of these is a key something else on screen already holds — the Activity cards, the
   // header, the pane — so the row adds a subscriber to each, not a request.
-  const { data: board = [] } = useQuery({
-    queryKey: keys.workflows(conversationId),
-    queryFn: () => fetchRunBoard(conversationId),
-  });
   const { data: liveTurns = [] } = useQuery({ queryKey: keys.liveTurns(), queryFn: fetchLiveTurns });
   const { data: processes = [] } = useQuery({
     queryKey: keys.processes(conversationId),
@@ -524,10 +518,8 @@ function LiveRow({
     enabled: false,
   });
 
-  /* Two things only the live feed says. A run or an agent changing state, so the dot on Activity
-   * follows a workflow even while the Activity tab — whose cards otherwise re-read the board —
-   * is not the one mounted. And whether the turn in flight is driving the browser: a browser call
-   * lights Browser until that turn ends. */
+  /* The one thing only the live feed says: whether the turn in flight is driving a tab. A browser
+   * call lights Browser, and a plugin's command lights that plugin's tab, until the turn ends. */
   const [using, setUsing] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(
     () =>
@@ -535,9 +527,6 @@ function LiveRow({
         if (event.type !== "activity") return;
         const item = event.data as ActivityItem;
         if (item.conversation !== conversationId) return;
-        if (item.kind === "workflow" || (item.kind === "errand" && item.errand?.state !== "step")) {
-          void cache.invalidateQueries({ queryKey: keys.workflows(conversationId) });
-        }
         // Which tabs the turn in flight is using: a call to `plugin__<id>__…` lights that plugin's
         // tab until the turn ends, and a `browser` call lights the Browser's.
         const plugin =
@@ -549,15 +538,11 @@ function LiveRow({
         if (plugin) setUsing((was) => (was.has(plugin) ? was : new Set([...was, plugin])));
         if (item.kind === "done") setUsing((was) => (was.size ? new Set() : was));
       }),
-    [cache, conversationId],
+    [conversationId],
   );
 
   const turnLive = liveTurns.includes(conversationId);
-  const activity: Live = board.some((one) => one.state === "running")
-    ? "workflow"
-    : turnLive || processes.some((one) => one.alive)
-      ? "working"
-      : null;
+  const activity: Live = turnLive || processes.some((one) => one.alive) ? "working" : null;
 
   const canvas: OpenBoard | null = task
     ? { taskId: task.id, projectId: null, title: task.goal }
@@ -659,11 +644,8 @@ function TabRow({ tabs, more, onCloseTab, shown, expanded, onPick, onExpand, onC
               {tab.live ? (
                 <span
                   role="img"
-                  aria-label={tab.live === "workflow" ? "a workflow is running" : "live"}
-                  className={cn(
-                    "size-1.5 shrink-0 rounded-full",
-                    tab.live === "workflow" ? "bg-teal-600 dark:bg-teal-400" : "bg-roam",
-                  )}
+                  aria-label="live"
+                  className="bg-roam size-1.5 shrink-0 rounded-full"
                 />
               ) : null}
             </button>

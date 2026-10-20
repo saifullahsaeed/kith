@@ -87,11 +87,25 @@ describe("the one fact on each row", () => {
     expect(digestOf("run_tests", {}, ok({ status: "running", for: "20s" }))).toBe("still running · 20s");
   });
 
-  it("says which step of a workflow was sent, and to whom", () => {
-    expect(digestOf("add_agents", {}, ok({ run: "wf-1", step: 2, agents: ["check", "fix"] }))).toBe(
-      "Step 2 · check, fix",
+  it("names the agents he started, and says how many could not be", () => {
+    const args = { agents: [{ name: "api", task: "…" }, { name: "web", task: "…" }] };
+    expect(describeCall("start_agents", args)).toMatchObject({ verb: "started agents", subject: "api, web" });
+    expect(
+      digestOf("start_agents", args, ok({ agents: [{ name: "api", id: "a1" }, { name: "web", error: "taken" }] })),
+    ).toBe("1 started · 1 refused");
+    expect(digestOf("start_agents", args, ok({ agents: [{ name: "web", error: "no repository here" }] }))).toBe(
+      "no repository here",
     );
-    expect(describeCall("add_agents", {}).verb).toBe("sent agents");
+  });
+
+  it("names who he messaged, and reads 'all' as every agent rather than as a name", () => {
+    const messaged = describeCall("message_agents", { messages: [{ agent: "api", text: "go on" }] });
+    expect(messaged).toMatchObject({ verb: "messaged", subject: "api", doing: "messaging" });
+    expect(describeCall("stop_agents", { agents: ["all"] }).subject).toBe("every agent");
+    expect(describeCall("close_agents", { agents: ["api"] }).subject).toBe("api");
+    expect(digestOf("close_agents", {}, ok({ closed: [], refused: [{ agent: "api", why: "not merged" }] }))).toBe(
+      "not merged",
+    );
   });
 
   it("reads a background process", () => {

@@ -41,9 +41,9 @@ import { SLASH_REFRESH, SlashToken } from "./slash-token";
  * Not a compromise — the two halves answer different problems. Serialising a long document on
  * every character is wasted work, and that is what the debounce is for. But two things read the
  * store's text *synchronously*, and a value that lags by even one keystroke breaks them: the send
- * button reads the store rather than the editor, and so does the workflow edge on the box. Both
- * matter in short documents, so writing immediately while the document is small costs nothing
- * and keeps them exact.
+ * button reads the store rather than the editor, and so does the steer-or-send choice beside it.
+ * Both matter in short documents, so writing immediately while the document is small costs
+ * nothing and keeps them exact.
  */
 const IMMEDIATE_BELOW = 4_000;
 const DEBOUNCE_MS = 120;

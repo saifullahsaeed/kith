@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { clock, type Presence } from "@/components/shell/chat-states";
+import { agentCount, clock, type Presence } from "@/components/shell/chat-states";
 import { cn } from "@/lib/utils";
 
 /** The little breathing light that stands in for Kith. Amber when he's awake
@@ -31,11 +31,12 @@ export function PresenceOrb({
  * It replaces an orb, the word "here", and two counters beside it — one for turns running in
  * other chats and one for unsent text — because the tabs and the conversation list now carry both
  * of those per chat, where they can be clicked. What is left is the one sentence nothing else
- * says: whether he is with you, working (and for how long), running workflows, or waiting on you.
+ * says: whether he is with you, working (and for how long), has agents working, or is waiting on
+ * you.
  *
- * The colour is the meaning, as everywhere else: green is working, teal is workflows, amber is
- * him and anything that needs you. The dot stays amber for workflows because it is still *him*
- * doing the waiting; only the words turn teal.
+ * The colour is the meaning, as everywhere else: green is working, teal is agents, amber is him
+ * and anything that needs you. The dot stays amber for agents because it is still *him* doing the
+ * waiting — on them; only the words turn teal.
  */
 export function PresencePill({
   presence,
@@ -50,7 +51,7 @@ export function PresencePill({
   const tone =
     presence.kind === "working"
       ? "border-roam/30 bg-roam/10"
-      : presence.kind === "workflow"
+      : presence.kind === "agents"
         ? "border-teal-500/30 bg-teal-500/10 dark:border-teal-400/30 dark:bg-teal-400/10"
         : presence.kind === "waiting"
           ? "border-kith/35 bg-kith/10"
@@ -59,8 +60,8 @@ export function PresencePill({
   const words =
     presence.kind === "working"
       ? `working · ${clock(now - presence.since)}`
-      : presence.kind === "workflow"
-        ? `${presence.count} workflow${presence.count === 1 ? "" : "s"} running`
+      : presence.kind === "agents"
+        ? `${agentCount(presence.count)} working`
         : presence.kind === "waiting"
           ? "waiting on you"
           : "here";
@@ -68,8 +69,8 @@ export function PresencePill({
   const label =
     presence.kind === "waiting"
       ? `Kith is waiting on you in ${presence.chats} chat${presence.chats === 1 ? "" : "s"}`
-      : presence.kind === "workflow"
-        ? `Kith has ${words}${onClick ? " — open its agent map" : ""}`
+      : presence.kind === "agents"
+        ? `Kith has ${words}${onClick ? " — show them" : ""}`
         : presence.kind === "working"
           ? `Kith is ${words}`
           : "Kith is here";
@@ -98,7 +99,7 @@ export function PresencePill({
           "whitespace-nowrap tabular-nums",
           presence.kind === "working"
             ? "text-roam"
-            : presence.kind === "workflow"
+            : presence.kind === "agents"
               ? "text-teal-600 dark:text-teal-400"
               : presence.kind === "waiting"
                 ? "text-kith"

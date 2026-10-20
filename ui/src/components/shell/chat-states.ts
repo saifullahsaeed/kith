@@ -1,4 +1,4 @@
-import type { ActivityItem } from "@/lib/backend/activity";
+import type { ConversationSummary } from "@/lib/backend";
 import type { TabState } from "@/components/shell/layout/layout-view";
 
 /**
@@ -6,93 +6,26 @@ import type { TabState } from "@/components/shell/layout/layout-view";
  *
  * Three facts arrive from three places and none of them knows about the others: which chats have a
  * turn running (`/api/chat/live`), which are blocked on a question (`waiting` on the conversation
- * list), and which have a workflow going (the workflow board, with the live feed laid over it).
- * This module ranks them, so the tab strip, the rail and the presence pill cannot disagree about
- * what a chat is doing — they all read the same answer.
+ * list), and which have agents working under them (`agentsWorking` on the same list). This module
+ * ranks them, so the tab strip, the rail and the presence pill cannot disagree about what a chat is
+ * doing — they all read the same answer.
  *
- * Pure on purpose. The ranking is the part that is easy to get subtly wrong (a finished workflow
- * resurrected by an older feed line, a permission pinned on the wrong chat), and a function of
- * plain data is one that can be tested without mounting the window.
+ * Pure on purpose. The ranking is the part that is easy to get subtly wrong (a permission pinned on
+ * the wrong chat, a pill pointing at a chat that is not running anything), and a function of plain
+ * data is one that can be tested without mounting the window.
  */
-
-/** A workflow the board or the feed says is still going, as the tab needs it. */
-export interface RunningWorkflow {
-  run: string;
-  conversation: string;
-  name: string;
-  /** The phase it is in, as the script named it ("Survey"). Empty before the first phase line. */
-  phase: string;
-}
-
-/** A run as `GET /api/workflows` lists it — only the fields this module reads. */
-export interface BoardRunLite {
-  run: string;
-  conversation?: string;
-  name?: string;
-  phase?: string;
-  state: string;
-}
-
-/** Every run on the server, for every conversation. Empty on any failure: a tab without its
- *  workflow word is a smaller loss than a window that will not draw. */
-export async function fetchAllWorkflows(): Promise<BoardRunLite[]> {
-  try {
-    const response = await fetch("/api/workflows");
-    if (!response.ok) return [];
-    const body = (await response.json()) as { runs?: BoardRunLite[] } | null;
-    return body?.runs ?? [];
-  } catch {
-    return [];
-  }
-}
-
-const ENDED = new Set(["finished", "failed", "stopped"]);
 
 /**
- * The running workflow of each conversation, keyed by conversation id.
+ * How many agents are busy under each of the person's chats, keyed by that chat's id.
  *
- * The board is the record and the feed is the heartbeat — the same split `workflows.tsx` makes for
- * the Work panel. The board survives the feed's ring rolling over; the feed carries a run that
- * started a moment ago, before the board has been re-read. Either one saying a run has ended is
- * final: the feed's lines are oldest first and a stale `started` must not bring a finished run
- * back to life.
+ * Only roots: the listing holds the person's chats and nothing else, and the count on each is for
+ * its whole tree, however deep. That is the right grain for a tab and for the pill — "this chat has
+ * two agents working somewhere under it" — and the tree itself is a click away.
  */
-export function runningWorkflows(
-  board: BoardRunLite[],
-  lines: ActivityItem[],
-): Map<string, RunningWorkflow> {
-  const runs = new Map<string, RunningWorkflow & { ended: boolean }>();
-  for (const one of board) {
-    runs.set(one.run, {
-      run: one.run,
-      conversation: one.conversation ?? "",
-      name: one.name ?? "workflow",
-      phase: one.phase ?? "",
-      ended: ENDED.has(one.state),
-    });
-  }
-  for (const line of lines) {
-    const mark = line.workflow;
-    if (!mark) continue;
-    const found = runs.get(mark.run) ?? {
-      run: mark.run,
-      conversation: line.conversation ?? "",
-      name: mark.name ?? "workflow",
-      phase: "",
-      ended: false,
-    };
-    if (!found.conversation && line.conversation) found.conversation = line.conversation;
-    if (mark.state === "started" && mark.name) found.name = mark.name;
-    else if (mark.state === "phase") found.phase = line.text;
-    else if (ENDED.has(mark.state)) found.ended = true;
-    runs.set(mark.run, found);
-  }
-  const byChat = new Map<string, RunningWorkflow>();
-  for (const { ended, ...run } of runs.values()) {
-    if (ended || !run.conversation) continue;
-    byChat.set(run.conversation, run);
-  }
-  return byChat;
+export function agentsWorking(chats: readonly ConversationSummary[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const chat of chats) if (chat.agentsWorking > 0) out.set(chat.id, chat.agentsWorking);
+  return out;
 }
 
 /**
@@ -119,7 +52,8 @@ export interface ChatFacts {
   waiting: ReadonlySet<string>;
   /** The chat a pending permission is pinned on — see `permissionHolder`. */
   asking: string | null;
-  workflows: ReadonlyMap<string, RunningWorkflow>;
+  /** Busy agents under each of the person's chats — see `agentsWorking`. */
+  agents: ReadonlyMap<string, number>;
 }
 
 /**
@@ -127,8 +61,8 @@ export interface ChatFacts {
  * background.
  *
  * Needing you outranks working because it is the only one of the three that stops without you.
- * A live turn outranks its chat's workflow because the turn is the thing happening in front of
- * you; the workflow is still on the Activity tab.
+ * A live turn outranks its chat's agents because the turn is the thing happening in front of you,
+ * and it is usually the conductor reading what they sent back.
  */
 export function chatState(id: string, facts: ChatFacts): TabState | undefined {
   if (!id) return undefined;
@@ -139,13 +73,9 @@ export function chatState(id: string, facts: ChatFacts): TabState | undefined {
     return { tone: "needs", tag: "Needs yes", said: "He needs your yes to carry on" };
   }
   if (facts.live.has(id)) return { tone: "working", tag: "Working", said: "He is working here" };
-  const flow = facts.workflows.get(id);
-  if (flow) {
-    return {
-      tone: "workflow",
-      tag: flow.phase || "Workflow",
-      said: `Workflow ${flow.name}${flow.phase ? ` — ${flow.phase}` : ""} running`,
-    };
+  const busy = facts.agents.get(id) ?? 0;
+  if (busy) {
+    return { tone: "agents", tag: agentCount(busy), said: `${agentCount(busy)} working under this chat` };
   }
   return undefined;
 }
@@ -154,31 +84,42 @@ export function chatState(id: string, facts: ChatFacts): TabState | undefined {
 export type Presence =
   | { kind: "waiting"; chats: number; target: string }
   | { kind: "working"; since: number }
-  | { kind: "workflow"; count: number; target: string }
+  /** Agents busy under a chat. `root` is the chat whose tree the pill opens; `target` is that chat
+   *  when it is not the one in front of you, and empty when it is. */
+  | { kind: "agents"; count: number; root: string; target: string }
   | { kind: "here" };
 
 /**
  * Kith's state in one pill, led by the chat in front of you.
  *
  * The chat you are looking at speaks first — if it is asking, he is waiting on you; if its turn is
- * live, he is working, with the clock. Otherwise the window-wide facts: workflows carrying on in
- * the background, then anything elsewhere that needs you. `target` is the chat the pill would take
- * you to, which is empty when that is where you already are.
+ * live, he is working, with the clock; if agents are busy anywhere in its tree, it says how many.
+ * Otherwise the window-wide facts: agents carrying on under another chat, then anything elsewhere
+ * that needs you. `target` is the chat the pill would take you to, which is empty when that is
+ * where you already are.
+ *
+ * `root` is the person's chat at the top of the one in front of you — itself, unless you are
+ * reading one of its agents, which the listing does not hold and so cannot be asked about.
  */
 export function presenceFor(
   current: string,
   facts: ChatFacts,
   since: number | undefined,
+  root: string = current,
 ): Presence {
   const needing = new Set(facts.waiting);
   if (facts.asking) needing.add(facts.asking);
   const here = current ? chatState(current, facts) : undefined;
   if (here?.tone === "needs") return { kind: "waiting", chats: needing.size, target: "" };
   if (here?.tone === "working") return { kind: "working", since: since ?? Date.now() };
-  if (facts.workflows.size) {
-    const mine = current && facts.workflows.has(current);
-    const first = facts.workflows.keys().next().value ?? "";
-    return { kind: "workflow", count: facts.workflows.size, target: mine ? "" : first };
+  const mine = root ? (facts.agents.get(root) ?? 0) : 0;
+  if (mine) return { kind: "agents", count: mine, root, target: "" };
+  if (facts.agents.size) {
+    // Elsewhere: every busy agent in the window, and the first chat they work under as where to go.
+    let count = 0;
+    for (const busy of facts.agents.values()) count += busy;
+    const first = facts.agents.keys().next().value ?? "";
+    return { kind: "agents", count, root: first, target: first };
   }
   if (needing.size) {
     const first = needing.values().next().value ?? "";
@@ -194,4 +135,9 @@ export function clock(ms: number): string {
   const minutes = Math.floor((total % 3600) / 60);
   const seconds = String(total % 60).padStart(2, "0");
   return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
+}
+
+/** "1 agent", "3 agents". */
+export function agentCount(count: number): string {
+  return `${count} agent${count === 1 ? "" : "s"}`;
 }

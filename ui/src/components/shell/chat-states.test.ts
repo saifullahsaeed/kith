@@ -1,62 +1,45 @@
 import { describe, expect, it } from "vitest";
 
-import type { ActivityItem } from "@/lib/backend/activity";
+import type { ConversationSummary } from "@/lib/backend";
 
 import {
+  agentsWorking,
   chatState,
   clock,
   permissionHolder,
   presenceFor,
-  runningWorkflows,
   type ChatFacts,
 } from "./chat-states";
 
-function line(run: string, state: string, text = "", conversation = "c1"): ActivityItem {
+function facts(over: Partial<ChatFacts> = {}): ChatFacts {
+  return { live: new Set(), waiting: new Set(), asking: null, agents: new Map(), ...over };
+}
+
+function chat(id: string, agents = 0, working = 0): ConversationSummary {
   return {
-    kind: "workflow",
-    text,
-    at: "2026-09-26T00:00:00Z",
-    conversation,
-    workflow: { run, state: state as NonNullable<ActivityItem["workflow"]>["state"], name: "devices-screen" },
+    id,
+    title: id,
+    sessionId: "",
+    createdAt: "",
+    updatedAt: "",
+    messages: 1,
+    lastSaid: "",
+    transcript: "",
+    projectId: null,
+    working: false,
+    waiting: false,
+    parentId: null,
+    agentName: "",
+    agentState: "",
+    agents,
+    agentsWorking: working,
   };
 }
 
-function facts(over: Partial<ChatFacts> = {}): ChatFacts {
-  return { live: new Set(), waiting: new Set(), asking: null, workflows: new Map(), ...over };
-}
-
-describe("which workflows are running", () => {
-  it("takes the board's running runs, keyed by their conversation", () => {
-    const got = runningWorkflows(
-      [
-        { run: "wf-1", conversation: "c1", name: "devices-screen", phase: "Survey", state: "running" },
-        { run: "wf-2", conversation: "c2", state: "finished" },
-      ],
-      [],
-    );
-    expect([...got.keys()]).toEqual(["c1"]);
-    expect(got.get("c1")?.phase).toBe("Survey");
-  });
-
-  it("shows a run the feed has seen start before the board has been re-read", () => {
-    const got = runningWorkflows([], [line("wf-1", "started"), line("wf-1", "phase", "Build")]);
-    expect(got.get("c1")).toMatchObject({ run: "wf-1", phase: "Build", name: "devices-screen" });
-  });
-
-  it("does not bring a finished run back to life from an older feed line", () => {
-    const got = runningWorkflows(
-      [{ run: "wf-1", conversation: "c1", state: "finished" }],
-      [line("wf-1", "started"), line("wf-1", "phase", "Survey")],
-    );
-    expect(got.size).toBe(0);
-  });
-
-  it("drops a run the feed has seen end", () => {
-    const got = runningWorkflows(
-      [{ run: "wf-1", conversation: "c1", state: "running" }],
-      [line("wf-1", "stopped")],
-    );
-    expect(got.size).toBe(0);
+describe("which chats have agents working", () => {
+  it("takes the listing's own count, and only where something is busy", () => {
+    const got = agentsWorking([chat("c1", 3, 2), chat("c2", 2, 0), chat("c3")]);
+    expect([...got.entries()]).toEqual([["c1", 2]]);
   });
 });
 
@@ -75,13 +58,13 @@ describe("whose permission request it is", () => {
 });
 
 describe("a chat's state", () => {
-  const flows = new Map([["c1", { run: "wf-1", conversation: "c1", name: "devices-screen", phase: "Survey" }]]);
+  const busy = new Map([["c1", 2]]);
 
-  it("ranks needing you over working over a workflow", () => {
-    expect(chatState("c1", facts({ waiting: new Set(["c1"]), live: new Set(["c1"]), workflows: flows }))?.tag).toBe("Asking");
+  it("ranks needing you over working over agents working under it", () => {
+    expect(chatState("c1", facts({ waiting: new Set(["c1"]), live: new Set(["c1"]), agents: busy }))?.tag).toBe("Asking");
     expect(chatState("c1", facts({ asking: "c1", live: new Set(["c1"]) }))?.tag).toBe("Needs yes");
-    expect(chatState("c1", facts({ live: new Set(["c1"]), workflows: flows }))?.tone).toBe("working");
-    expect(chatState("c1", facts({ workflows: flows }))).toMatchObject({ tone: "workflow", tag: "Survey" });
+    expect(chatState("c1", facts({ live: new Set(["c1"]), agents: busy }))?.tone).toBe("working");
+    expect(chatState("c1", facts({ agents: busy }))).toMatchObject({ tone: "agents", tag: "2 agents" });
   });
 
   it("has nothing to say about a draft or an idle chat", () => {
@@ -103,12 +86,40 @@ describe("the presence pill", () => {
     });
   });
 
-  it("counts workflows ahead of a question elsewhere, and points at where they run", () => {
-    const flows = new Map([["c2", { run: "wf-1", conversation: "c2", name: "x", phase: "" }]]);
-    expect(presenceFor("c1", facts({ workflows: flows, waiting: new Set(["c3"]) }), undefined)).toEqual({
-      kind: "workflow",
-      count: 1,
+  it("counts the agents under the chat in front of you, reached through its root from an agent", () => {
+    const busy = new Map([["c1", 2]]);
+    expect(presenceFor("c1", facts({ agents: busy }), undefined)).toEqual({
+      kind: "agents",
+      count: 2,
+      root: "c1",
+      target: "",
+    });
+    // Reading one of c1's agents: the listing does not hold it, so its root speaks for it.
+    expect(presenceFor("agent-7", facts({ agents: busy }), undefined, "c1")).toEqual({
+      kind: "agents",
+      count: 2,
+      root: "c1",
+      target: "",
+    });
+  });
+
+  it("counts agents elsewhere ahead of a question elsewhere, and points at where they work", () => {
+    const busy = new Map([
+      ["c2", 1],
+      ["c4", 2],
+    ]);
+    expect(presenceFor("c1", facts({ agents: busy, waiting: new Set(["c3"]) }), undefined)).toEqual({
+      kind: "agents",
+      count: 3,
+      root: "c2",
       target: "c2",
+    });
+  });
+
+  it("lets the chat's own live turn speak before its agents", () => {
+    expect(presenceFor("c1", facts({ live: new Set(["c1"]), agents: new Map([["c1", 3]]) }), 9)).toEqual({
+      kind: "working",
+      since: 9,
     });
   });
 

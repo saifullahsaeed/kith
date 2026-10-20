@@ -3,6 +3,7 @@ import type { ThreadMessageLike } from "@assistant-ui/react";
 import { TURN_TIMING } from "@/lib/backend/adapter";
 import { USAGE_PART, type ContextLedger, type StoredTurn } from "@/lib/backend";
 import { servedBy } from "@/lib/served-by";
+import { SENT_BY, withoutHeading } from "@/lib/agents";
 
 /**
  * A stored conversation, rebuilt as the thread saw it.
@@ -50,11 +51,18 @@ export function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
     let model: string | undefined;
     let provider: string | undefined;
     let lastRoundAt = "";
+    /* Mail from another session: who sent it rides in the metadata, and the bracketed heading the
+     * server wrote for the model comes off the text, because the label drawn from `from` says it.
+     * Only the first text part has one — it is the start of the message. */
+    const from = turn.role !== "assistant" && turn.from ? turn.from : undefined;
+    let headed = Boolean(from);
     for (const part of turn.parts) {
-      if (part.kind === "text") content.push({ type: "text", text: part.text });
-      else if (part.kind === "reasoning")
+      if (part.kind === "text") {
+        content.push({ type: "text", text: headed ? withoutHeading(part.text) : part.text });
+        headed = false;
+      } else if (part.kind === "reasoning") {
         content.push({ type: "reasoning", text: part.text });
-      else if (part.kind === "tool") {
+      } else if (part.kind === "tool") {
         content.push({
           type: "tool-call",
           // The backend resets its own tool-call ids to c1 at the start of every turn, so the
@@ -136,6 +144,7 @@ export function toThreadMessages(timeline: StoredTurn[]): ThreadMessageLike[] {
         ...(timed
           ? { metadata: { custom: { [TURN_TIMING]: { startedAt: at.getTime(), endedAt: ended.getTime() } } } }
           : {}),
+        ...(from ? { metadata: { custom: { [SENT_BY]: from } } } : {}),
       });
     }
   }

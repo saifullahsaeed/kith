@@ -36,10 +36,15 @@ const NONE = "none";
 export function SessionBar({
   conversationId,
   projectId,
+  agent = "",
   onProject,
 }: {
   conversationId: string;
   projectId: number | null;
+  /** The agent's name, when this conversation is one. It is its title here — the listing that
+   *  titles the rest does not hold agents — and it has no project picker: an agent works in its
+   *  handler's project, which was set for it when it was started. */
+  agent?: string;
   onProject: (projectId: number | null) => void;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -71,7 +76,7 @@ export function SessionBar({
   // mid-conversation, so the list a picker was opened with goes stale within a turn.
   useEffect(load, [load, conversationId, projectId]);
 
-  const title = useConversationTitle(conversationId);
+  const title = useConversationTitle(conversationId) || agent;
   const task = useWorkingTask(conversationId);
 
   /* ⌘F opens the find bar, and takes the key off the browser to do it.
@@ -145,7 +150,7 @@ export function SessionBar({
 
   return (
     <div className="border-border/80 flex h-11 shrink-0 items-center gap-2.5 border-b px-5">
-      {projectId && conversationId ? (
+      {agent && !projectId ? null : projectId && conversationId ? (
         // Locked, not merely disabled: this isn't "you could, but not right now" — a
         // conversation is stuck with the first project it picks for the rest of its life,
         // so there is nothing here to click at all. A dropdown that silently refuses every
@@ -197,9 +202,11 @@ export function SessionBar({
           />
         </span>
       )}
-      <span className="text-muted-foreground/45 shrink-0" aria-hidden>
-        /
-      </span>
+      {agent && !projectId ? null : (
+        <span className="text-muted-foreground/45 shrink-0" aria-hidden>
+          /
+        </span>
+      )}
       <span className="text-foreground min-w-0 truncate text-[13px] font-semibold" title={title}>
         {title || "New chat"}
       </span>

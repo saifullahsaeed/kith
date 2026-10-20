@@ -180,7 +180,9 @@ def _agents_under(agent_db: Path, live: set[str]) -> dict[str, tuple[int, int]]:
     parent = {str(one["id"]): str(one.get("parent_id") or "") for one in rows}
     counts: dict[str, list[int]] = {}
     for one in rows:
-        busy = str(one["id"]) in live or one.get("agent_state") in ("working", "waiting")
+        # Working means a turn running or about to — not waiting on its own agents, which are
+        # counted themselves. Counting both would show a parent and its child as two at work.
+        busy = str(one["id"]) in live or one.get("agent_state") == "working"
         seen: set[str] = set()
         above = parent.get(str(one["id"]), "")
         while above and above not in seen:

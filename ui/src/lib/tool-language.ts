@@ -22,8 +22,8 @@ import {
   Globe,
   Heart,
   ListChecks,
+  Network,
   NotebookPen,
-  Radar,
   Puzzle,
   Search,
   Send,
@@ -69,9 +69,10 @@ export const GROUP: Record<string, WorkKind> = {
   search: { icon: Search, tone: "text-sky-400/70", noun: "searches", one: "search" },
   tools: { icon: Wrench, tone: "text-muted-foreground/70", noun: "tools", one: "tool" },
   skills: { icon: Puzzle, tone: "text-kith/80", noun: "skills", one: "skill" },
-  // Its own kind rather than another "tool". One of these is a whole fan-out of agents working
-  // somewhere you cannot see, and folding it into "7 tools" would hide the part worth knowing.
-  workflow: { icon: Radar, tone: "text-teal-400/80", noun: "workflows", one: "workflow" },
+  // Its own kind rather than another "tool". Each of these starts, steers or ends whole
+  // conversations running beside this one, and folding it into "7 tools" would hide the part worth
+  // knowing. Teal, the colour agents wear everywhere else.
+  agents: { icon: Network, tone: "text-teal-400/80", noun: "calls to agents", one: "call to agents" },
 };
 
 /**
@@ -181,11 +182,12 @@ export const TOOL: Record<string, { verb: string; of?: string; group: keyof type
   read_skill: { verb: "opened the skill", of: "name", group: "skills" },
   plugin_state: { verb: "read what the plugin is holding", of: "plugin", group: "skills" },
   plan_work: { verb: "laid out the next tasks", group: "tasks" },
-  // a fan-out of agents, in the background
-  run_workflow: { verb: "started a workflow", group: "workflow" },
-  add_agents: { verb: "sent agents", group: "workflow" },
-  check_workflow: { verb: "checked on the workflow", of: "run", group: "workflow" },
-  stop_workflow: { verb: "stopped the workflow", of: "run", group: "workflow" },
+  // agents: whole conversations he starts and talks to. The subjects of the first two are inside
+  // each list item (`agents[].name`, `messages[].agent`), so `describeCall` names them itself.
+  start_agents: { verb: "started agents", group: "agents" },
+  message_agents: { verb: "messaged", group: "agents" },
+  stop_agents: { verb: "stopped", of: "agents", group: "agents" },
+  close_agents: { verb: "closed", of: "agents", group: "agents" },
 };
 
 /** What each plural argument used to be called, for reading back old tool calls. */
@@ -273,6 +275,7 @@ const PRESENT: Record<string, string> = {
   typed: "typing", pressed: "pressing", scrolled: "scrolling", resized: "resizing",
   "re-read": "re-reading", "re-shelved": "re-shelving", went: "going", reloaded: "reloading",
   switched: "switching", closed: "closing", waited: "waiting", is: "", "set up": "setting up",
+  messaged: "messaging",
 };
 
 function presentOf(verb: string): string {
@@ -383,6 +386,26 @@ export function describeCall(
       ),
     ];
     subject = subjectOf(files, root, true);
+  }
+  // The agent tools take a list of objects, and the names are a field inside each — so the row
+  // reads "started agents api, web" rather than nothing. `["all"]` is the tools' word for every
+  // open agent, which reads as a name if left alone.
+  if (name === "start_agents" || name === "message_agents") {
+    const list = (name === "start_agents" ? args?.agents : args?.messages) as unknown;
+    const field = name === "start_agents" ? "name" : "agent";
+    if (Array.isArray(list)) {
+      const names = list
+        .map((one) => (one && typeof one === "object" ? (one as Record<string, unknown>)[field] : undefined))
+        .filter((one): one is string => typeof one === "string" && one.trim() !== "");
+      subject = subjectOf([...new Set(names)]);
+    }
+  }
+  if (
+    (name === "stop_agents" || name === "close_agents") &&
+    Array.isArray(args?.agents) &&
+    args.agents.some((one) => String(one).toLowerCase() === "all")
+  ) {
+    subject = "every agent";
   }
   const verb = entry?.verb ?? fallbackVerb(name);
   return {

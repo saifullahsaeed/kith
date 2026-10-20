@@ -7,11 +7,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeader, NewTabButton } from "@/components/shell/app-header";
 import {
+  agentsWorking,
   chatState,
-  fetchAllWorkflows,
   permissionHolder,
   presenceFor,
-  runningWorkflows,
   type ChatFacts,
 } from "@/components/shell/chat-states";
 import { WorkspaceFileViewer } from "@/components/files/workspace-file-viewer";
@@ -21,7 +20,7 @@ import { Sidebar, useSidebar } from "@/components/shell/sidebar";
 import { withCompanions } from "@/components/shell/companions";
 import { useHostEffects } from "@/components/shell/use-host-effects";
 
-import { AgentMapHost } from "@/components/chat/agent-map";
+import { AgentTreeHost } from "@/components/chat/agent-tree";
 import { ChatPane } from "@/components/chat/chat-pane";
 import { WorkPanel } from "@/components/chat/work-panel";
 import { HistoryPanel } from "@/components/chat/history-panel";
@@ -29,7 +28,8 @@ import { LayoutView } from "@/components/shell/layout/layout-view";
 import { useLayout } from "@/components/shell/layout/store";
 import { surfaceFor } from "@/components/shell/layout/surfaces";
 import { useCanAttach } from "@/lib/active-composer";
-import { useAgentMap } from "@/lib/agent-map";
+import { useAgentTree } from "@/lib/agents";
+import { OpenConversation } from "@/lib/open-conversation";
 import { useDrafts, useDraftedTabs } from "@/lib/drafts";
 import {
   BOUND,
@@ -40,7 +40,6 @@ import {
 } from "@/components/shell/layout/tree";
 import { DropZone } from "@/components/shell/drop-zone";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
-import { useActivity } from "@/hooks/use-activity";
 import { useMessages } from "@/hooks/use-messages";
 import { usePermissions } from "@/hooks/use-permissions";
 import { setPluginSurfaces } from "@/lib/plugin-index";
@@ -54,10 +53,12 @@ import {
   pathForTask,
 } from "@/lib/router";
 import {
+  fetchAgentTree,
   fetchConversation,
   fetchConversations,
   fetchLiveTurns,
   fetchPluginSurfaces,
+  type ConversationDetail,
   type ServerConfig,
 } from "@/lib/backend";
 
@@ -91,11 +92,6 @@ const InboxPanel = lazy(() =>
  * a panel that was also closed — so the app forgot what you were doing every time it
  * reloaded, which is the one thing a window is supposed to be good at. */
 const LAST_CONVERSATION = "kith-conversation";
-
-/** The workflow board for every conversation at once, for the tabs. Under `workflows` so a blanket
- *  invalidation of that prefix reaches it, and not `keys.workflows("")` — that is the Work panel's
- *  key for a chat with no conversation yet, which must stay empty rather than share this list. */
-const EVERY_WORKFLOW = [...keys.workflows(""), "every conversation"] as const;
 
 /** How many conversations to know the titles of. Generous, because the cost is one query the
  *  sidebar is running anyway, and a tab whose name is missing is a tab you cannot identify. */
@@ -311,7 +307,6 @@ export function Workspace({
    * for why this is the renderer's job and the dead end it closes. */
   useHostEffects(conversationId, openSurface);
 
-  const activity = useActivity();
   const inbox = useMessages();
 
   /* A route names what you are looking at; the layout decides where it goes.
@@ -488,10 +483,7 @@ export function Workspace({
                   binding: the panel that can fold a transcript now acts on the conversation its
                   tab names, so a click elsewhere cannot re-aim it. The fallback covers a tab
                   stored before surfaces could be bound. */}
-              <WorkPanel
-                activity={activity}
-                conversationId={ref.conversationId ?? conversationId}
-              />
+              <WorkPanel conversationId={ref.conversationId ?? conversationId} />
             </ErrorBoundary>
           );
 
@@ -539,7 +531,6 @@ export function Workspace({
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      activity,
       closeTab,
       config,
       conversationId,
@@ -624,50 +615,51 @@ export function Workspace({
     queryFn: async () => (await fetchConversations(TITLE_LIMIT)).conversations,
     staleTime: 30_000,
   });
+  const cache = useQueryClient();
   const titleForTab = useCallback(
     (ref: TabRef) => {
       // Any tab that names a conversation, not only a chat — `tabTitle` decides what to do
       // with it, and a bound Work tab wants the same string a chat tab would get.
       if (!ref.conversationId) return undefined;
-      return known.find((one) => one.id === ref.conversationId)?.title;
+      const listed = known.find((one) => one.id === ref.conversationId)?.title;
+      if (listed) return listed;
+      /* An agent's tab. The listing holds the person's chats only, so an agent is named from its
+       * own record, which its pane fetched to open it — by its agent name, the word its handler
+       * uses for it and the one the sidebar and the breadcrumbs show. */
+      const own = cache.getQueryData<ConversationDetail>(keys.conversation(ref.conversationId));
+      return own?.agentName || own?.title || undefined;
     },
-    [known],
+    [cache, known],
   );
 
-  /* What every chat is doing, for its tab and for the presence pill: working, waiting on you,
-   * or running a workflow. Three sources, one ranking — see `chat-states.ts`.
+  /* What every chat is doing, for its tab and for the presence pill: working, waiting on you, or
+   * agents working under it. Three facts, one ranking — see `chat-states.ts`.
    *
-   * Workflows are read from the server's board for *every* conversation, and the live feed is
-   * laid over it so a run that just started, or a phase that just began, shows at once. The
-   * board is re-read when the feed's newest workflow line changes: its identity rather than a
-   * count of such lines, because the feed is a ring and a count can stand still while it turns. */
-  const cache = useQueryClient();
+   * All three ride on requests the window makes anyway: live turns, and the conversation list,
+   * whose rows carry `waiting` and, since agents, how many are busy under each chat. That count is
+   * kept current by the `agents` and `turn` changes, which invalidate the list. */
   const { pending } = usePermissions();
-  const { data: board = [] } = useQuery({
-    queryKey: EVERY_WORKFLOW,
-    queryFn: fetchAllWorkflows,
-    staleTime: 30_000,
-  });
-  const lastFlow = useMemo(() => {
-    for (let at = activity.activity.length - 1; at >= 0; at -= 1) {
-      const line = activity.activity[at];
-      if (line?.workflow) return `${line.at}|${line.workflow.run}|${line.workflow.state}`;
-    }
-    return "";
-  }, [activity.activity]);
-  useEffect(() => {
-    if (lastFlow) void cache.invalidateQueries({ queryKey: EVERY_WORKFLOW });
-  }, [cache, lastFlow]);
-
   const facts = useMemo<ChatFacts>(() => {
     const waiting = new Set(known.filter((one) => one.waiting).map((one) => one.id));
     return {
       live: new Set(live),
       waiting,
       asking: permissionHolder(pending.length, live, waiting),
-      workflows: runningWorkflows(board, activity.activity),
+      agents: agentsWorking(known),
     };
-  }, [activity.activity, board, known, live, pending.length]);
+  }, [known, live, pending.length]);
+
+  /* The person's chat at the top of the one in front of you. Itself, unless you are reading one of
+   * its agents — then the tree says, because the listing that counts agents per chat does not hold
+   * agents and so cannot be asked about one. Fetched only for an agent, which is the only time the
+   * answer is not already known. */
+  const focusedIsAgent = Boolean(focusedDetail?.parentId);
+  const { data: focusedTree } = useQuery({
+    queryKey: keys.agentTree(conversationId),
+    queryFn: () => fetchAgentTree(conversationId),
+    enabled: focusedIsAgent,
+  });
+  const focusedRoot = focusedIsAgent ? (focusedTree?.root ?? "") : conversationId;
   const stateForTab = useCallback(
     (ref: TabRef) =>
       ref.surface === "chat" ? chatState(ref.conversationId ?? "", facts) : undefined,
@@ -689,8 +681,8 @@ export function Workspace({
       return same ? was : next;
     });
   }, [live]);
-  const presence = presenceFor(conversationId, facts, started[conversationId]);
-  const showAgentMap = useAgentMap((s) => s.show);
+  const presence = presenceFor(conversationId, facts, started[conversationId], focusedRoot);
+  const showAgents = useAgentTree((s) => s.show);
 
   /** Whether the chat in front of you has its companion column open — any tab of it. */
   const companionOpen = conversationId
@@ -708,8 +700,12 @@ export function Workspace({
   return (
     <TooltipProvider>
       {/* No runtime provider here any more. There is one per chat pane, inside `ChatPane`,
-          which is what lets two conversations stream at once. */}
-      <>
+          which is what lets two conversations stream at once.
+
+          What every pane does get from here is the way to open another conversation: a report
+          names its agent, an agent's page names its chain, and those links are deep inside a
+          message with no other route to `openConversation`. See `lib/open-conversation`. */}
+      <OpenConversation.Provider value={openConversation}>
         <div className="relative flex h-dvh flex-col overflow-hidden text-foreground">
           {/* Ambient wash — leans green while he works, amber while he's here. `fixed inset-0`
               because `.kith-ambient` no longer carries its own positioning, and this one really is
@@ -735,9 +731,9 @@ export function Workspace({
            * window, so it lives here — above the panes, outside anything that unmounts when you
            * look somewhere else. */}
           <BoardOverlay />
-          {/* The agent map, for the same reason: it is asked for from the title bar, the Work
-              panel and the thread, and belongs to none of them. */}
-          <AgentMapHost />
+          {/* The agent tree, for the same reason: it is asked for from the title bar and the
+              sidebar, and belongs to neither. */}
+          <AgentTreeHost onOpen={openConversation} />
           <div className="relative z-10 flex min-h-0 flex-1 flex-col">
             <AppHeader
               sidebarOpen={sidebar.open}
@@ -747,14 +743,13 @@ export function Workspace({
               tabsSlot={setTabSlot}
               presence={presence}
               onPresence={
-                /* The pill goes where it is talking about. A workflow opens its agent map — in
-                   the chat running it, which is this one or, taken there first, another. A chat
+                /* The pill goes where it is talking about. Agents open their tree — the tree of the
+                   chat they work under, which is this one or, taken there first, another. A chat
                    that needs you is opened. A turn working here is a status, not a destination. */
-                presence.kind === "workflow"
+                presence.kind === "agents"
                   ? () => {
-                      const home = presence.target || conversationId;
                       if (presence.target) openConversation(presence.target);
-                      if (home) showAgentMap(home);
+                      if (presence.root) showAgents(presence.root);
                     }
                   : "target" in presence && presence.target
                     ? () => openConversation(presence.target)
@@ -917,7 +912,7 @@ export function Workspace({
             it the viewer asked the global workspace root and got "there's no
             .kith/work/task-76.md" for a file that was never missing. */}
         <WorkspaceFileViewer projectId={projectId} />
-      </>
+      </OpenConversation.Provider>
     </TooltipProvider>
   );
 }

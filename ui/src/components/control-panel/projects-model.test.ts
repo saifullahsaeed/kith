@@ -59,6 +59,11 @@ function chat(projectId: number, updatedAt: string, title = "a chat"): Conversat
     projectId,
     working: false,
     waiting: false,
+    parentId: null,
+    agentName: "",
+    agentState: "",
+    agents: 0,
+    agentsWorking: 0,
   };
 }
 

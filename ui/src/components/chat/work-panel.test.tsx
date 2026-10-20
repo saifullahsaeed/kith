@@ -9,19 +9,16 @@
  * five sections compete for height.
  */
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { render, screen } from "@/test/render";
 import { WorkPanel } from "./work-panel";
-import type { ActivityItem } from "@/lib/backend/activity";
-
-const quiet = { status: null, activity: [] as ActivityItem[], refresh: vi.fn() };
 
 /** Mounted the way the shell mounts it — a section inside reaches for `useNavigate`. */
 const panel = () =>
   render(
     <MemoryRouter>
-      <WorkPanel activity={quiet} conversationId="c-1" />
+      <WorkPanel conversationId="c-1" />
     </MemoryRouter>,
   );
 

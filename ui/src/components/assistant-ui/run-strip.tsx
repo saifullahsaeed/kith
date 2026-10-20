@@ -54,7 +54,6 @@ import { cn } from "@/lib/utils";
 import { useTicking } from "@/lib/use-ticking";
 
 import { Spin } from "./spin";
-import { WorkflowCards, useStartedWorkflows, useWorkflowRun } from "./workflow-in-turn";
 
 export type PartComponents = MessagePrimitive.PartByIndex.Props["components"];
 
@@ -351,17 +350,10 @@ export function RunStrip({
   const [asked, setAsked] = useState<boolean | null>(null);
   const expanded = asked ?? (turn && (running || isLast));
 
-  /* Workflows are counted apart from the rest so the count can stay live: a workflow he started
-   * is still running long after the turn that started it has finished, and the one-line summary
-   * is where you would look for that. */
-  const workflows = facts.names.filter((name) => name === "run_workflow" || name === "add_agents").length;
-  /* And an `ask` is said as what it was — questions — rather than as the "message" its tool group
+  /* An `ask` is said as what it was — questions — rather than as the "message" its tool group
    * counts it as: "1 message" in a run he spent waiting on your answer reads as something he sent. */
-  const run = summariseRun(
-    facts.names.filter((name) => name !== "run_workflow" && name !== "add_agents" && name !== "ask"),
-  );
+  const run = summariseRun(facts.names.filter((name) => name !== "ask"));
   const questions = facts.asked ? `asked ${facts.asked} question${facts.asked === 1 ? "" : "s"}` : "";
-  const started = useStartedWorkflows(allCalls);
   const steps = turn ? (usage?.rounds?.length ?? 0) : 0;
   const worked =
     turn && timing?.endedAt && timing.startedAt ? formatWorked(timing.endedAt - timing.startedAt) : "";
@@ -436,15 +428,11 @@ export function RunStrip({
             {clock}
           </span>
         ) : null}
-        {detail || workflows ? (
+        {detail ? (
           <>
             <span className="text-muted-foreground/75 shrink-0">·</span>
             <span className="text-muted-foreground flex min-w-0 items-center gap-[0.35em] truncate">
-              {detail ? <span className="truncate">{detail}</span> : null}
-              {detail && workflows ? <span>·</span> : null}
-              {workflows ? (
-                <WorkflowCount count={workflows} run={started[0]?.run ?? ""} />
-              ) : null}
+              <span className="truncate">{detail}</span>
             </span>
           </>
         ) : null}
@@ -474,8 +462,6 @@ export function RunStrip({
                 live={running && index === beats.length - 1}
                 components={components}
               />
-              {/* The workflow a beat started, at the beat's own level, outside its fold. */}
-              <WorkflowCards calls={beat.calls} />
             </div>
           ))}
           {running && usage ? (
@@ -486,19 +472,6 @@ export function RunStrip({
         </div>
       ) : null}
     </section>
-  );
-}
-
-/** "1 workflow" in the summary — teal, with its spinner, for as long as the run is going. */
-function WorkflowCount({ count, run }: { count: number; run: string }) {
-  const live = useWorkflowRun(run)?.state === "running";
-  const text = `${count} ${count === 1 ? "workflow" : "workflows"}`;
-  if (!live) return <span className="text-muted-foreground shrink-0">{text}</span>;
-  return (
-    <span className="flex shrink-0 items-center gap-1.5 text-teal-700 dark:text-teal-400" aria-label={`${text}, still running`}>
-      <Spin tone="teal" className="size-2.5" />
-      {text}
-    </span>
   );
 }
 

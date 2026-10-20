@@ -9,8 +9,8 @@ import { rememberSkills, type SlashCommand } from "@/lib/slash";
  * The `/` commands, and the line that says what one did.
  *
  * Two kinds, and the difference is worth keeping straight. `/fold` and `/stop` *do* something
- * to the conversation and report back — they never become a message. `/workflow`, `/design` and
- * a skill are the start of a request rather than the whole of one, so they stay in the box as a
+ * to the conversation and report back — they never become a message. `/design` and a skill are
+ * the start of a request rather than the whole of one, so they stay in the box as a
  * word, with the cursor after it: "use the running-a-project skill" on its own is not an
  * instruction, and sending it immediately would make him guess what for. What those words mean
  * is spelled out when the message is sent — see `expandCommand` in `lib/slash.ts`.
@@ -92,14 +92,6 @@ export function useSlashCommands(conversationId?: string) {
         name: "design",
         kind: "prefix",
         description: "Mock up a few options as screens I can compare on the canvas",
-      },
-      /* The opt-in for a fan-out. The word travels as part of the message — the transcript keeps
-       * it and the server reads it — so it is the whole mechanism: a message starting `/workflow`
-       * lets him write a workflow script for it, and without it `run_workflow` refuses. */
-      {
-        name: "workflow",
-        kind: "prefix",
-        description: "Have him split this into agents that run in parallel, in the background",
       },
       ...skills.map(
         (skill): SlashCommand => ({

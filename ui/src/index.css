@@ -511,13 +511,6 @@
   color: var(--kith);
   background: color-mix(in oklch, var(--kith) 15%, transparent);
 }
-.kith-composer-doc .kith-slash-token[data-tone="workflow"] {
-  color: var(--color-teal-600);
-  background: color-mix(in oklch, var(--color-teal-400) 15%, transparent);
-}
-.dark .kith-composer-doc .kith-slash-token[data-tone="workflow"] {
-  color: var(--color-teal-400);
-}
 
 .kith-composer-doc h1,
 .kith-composer-doc h2,
@@ -900,7 +893,7 @@
   padding-left: 10px;
 }
 
-/* A state dot that breathes: the tab of a chat that is working, running a workflow or waiting
+/* A state dot that breathes: the tab of a chat that is working, has agents working or is waiting
  * on you, and the dot in the presence pill. The same keyframes as the orb's halo, applied to the
  * dot itself. Kept under reduced motion for the reason the note above gives — it is the signal,
  * not decoration. The duration is set per use (`animation-duration`), the default is the orb's. */

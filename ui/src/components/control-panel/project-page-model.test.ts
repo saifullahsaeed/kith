@@ -72,6 +72,11 @@ const chat = (over: Partial<ConversationSummary>): ConversationSummary => ({
   projectId: 16,
   working: false,
   waiting: false,
+  parentId: null,
+  agentName: "",
+  agentState: "",
+  agents: 0,
+  agentsWorking: 0,
   ...over,
 });
 

@@ -60,10 +60,10 @@ import {
 /** What a tab is doing, in the one word it has room for.
  *
  *  `working` is a live turn (green), `needs` is waiting on the person — a question or a
- *  permission (amber), `workflow` is a workflow running in that chat (teal). Handed in by the
- *  caller like `markFor`, so this module still never learns what a surface holds. */
+ *  permission (amber), `agents` is agents busy under that chat (teal). Handed in by the caller
+ *  like `markFor`, so this module still never learns what a surface holds. */
 export interface TabState {
-  tone: "working" | "needs" | "workflow";
+  tone: "working" | "needs" | "agents";
   /** The tag drawn on the tab, in sentence case — the tab sets it in capitals. */
   tag: string;
   /** The longer sentence, for the tooltip. */
@@ -690,18 +690,18 @@ const PLACEMENT_CHOICES: { mode: PlacementMode; label: string; icon: LucideIcon 
 ];
 
 /** The colour each state wears — as a dot, and as the ink of its tag. One meaning each, the same
- *  as everywhere else in the app: green is working, amber is waiting on you, teal is workflows.
- *  Teal is spelled from the palette because workflows have no token of their own; the light
- *  theme takes a darker step so a 10px tag stays legible on paper. */
+ *  as everywhere else in the app: green is working, amber is waiting on you, teal is agents.
+ *  Teal is spelled from the palette because agents have no token of their own; the light theme
+ *  takes a darker step so a 10px tag stays legible on paper. */
 const STATE_DOT: Record<TabState["tone"], string> = {
   working: "bg-roam",
   needs: "bg-kith",
-  workflow: "bg-teal-500 dark:bg-teal-400",
+  agents: "bg-teal-500 dark:bg-teal-400",
 };
 const STATE_INK: Record<TabState["tone"], string> = {
   working: "text-roam",
   needs: "text-kith",
-  workflow: "text-teal-600 dark:text-teal-400",
+  agents: "text-teal-600 dark:text-teal-400",
 };
 
 function TabButton({
@@ -724,7 +724,7 @@ function TabButton({
   title: string;
   /** What this tab is holding that its name cannot say. `"draft"` is unsent text. */
   mark: "draft" | undefined;
-  /** What it is doing — working, waiting on you, running a workflow. */
+  /** What it is doing — working, waiting on you, agents busy under it. */
   state: TabState | undefined;
   /** `bar` is the title bar's tab — full height, a fixed width, a state dot; `strip` is a
    *  pane's own, which keeps its icon because several panes' tabs have to be told apart. */
@@ -915,7 +915,7 @@ function TabButton({
       )}
       <span className={cn("truncate", inBar && "min-w-0 flex-1")}>{title}</span>
       {drafted ? <span className="sr-only">— unsent text</span> : null}
-      {/* The state in a word — WORKING, ASKING, NEEDS YES, or the phase a workflow is in.
+      {/* The state in a word — WORKING, ASKING, NEEDS YES, or how many agents are busy under it.
           Hidden while the close button is showing over it in the title bar, which takes this
           slot rather than a slot of its own: a tab at rest spends no width on a button. */}
       {state ? (

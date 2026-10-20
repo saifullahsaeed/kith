@@ -2,13 +2,13 @@ import { cn } from "@/lib/utils";
 
 /**
  * The ring spinner every live thing in the thread uses — a turn working, a call running, a
- * workflow going, a reconnect.
+ * reconnect.
  *
  * One component because the design draws one: a two-pixel ring in a faint tint of its colour
  * with the leading quarter in the full colour. `LoaderIcon` spinning is a different glyph (eight
  * spokes), and three different spinners on one screen read as three different kinds of waiting.
- * The colour is the caller's, by meaning: green for him working, teal inside a workflow, amber
- * for something that could still go wrong.
+ * The colour is the caller's, by meaning: green for him working, teal for agents, amber for
+ * something that could still go wrong.
  */
 export function Spin({
   className,

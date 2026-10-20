@@ -11,7 +11,7 @@ import { formatBytes } from "@/lib/bytes";
 import { useThreadRuntime } from "@assistant-ui/react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BookOpenText, Check, Copy, Frame, Network, Radar } from "lucide-react";
+import { BookOpenText, Check, Copy, Frame } from "lucide-react";
 
 import { PluginOutcome, splitPluginTool } from "@/components/assistant-ui/plugin-outcome";
 import {
@@ -29,6 +29,7 @@ import {
   ScheduledCard,
   SchedulesCard,
   SearchDownCard,
+  StartedAgentsCard,
   SymbolsCard,
   TestsCard,
   WroteCard,
@@ -38,8 +39,6 @@ import { describeCall, shortPath } from "@/lib/tool-language";
 import { useProjectRoot } from "@/lib/project-root";
 import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/files";
-import { useAgentMap } from "@/lib/agent-map";
-import { useConversationId } from "@/lib/conversation";
 import { useMedia } from "@/components/files/media";
 import { copyText, useFileViewer } from "@/lib/files";
 import { cn } from "@/lib/utils";
@@ -323,75 +322,6 @@ function looksLikeSkill(value: Record<string, unknown>): boolean {
     Array.isArray(value.resources)
   );
 }
-
-/** A workflow he started — the result of `run_workflow`.
- *
- *  Not a result in the usual sense: the run happens after this turn ends, and what it finds comes
- *  back in the turn it wakes. So the card says what was *started* — the name and the plan — and
- *  keeps the script one click away, because the script is the plan written down, and reading it
- *  is how you check he split the work the way you would have. Live progress is in the Work panel.
- */
-function looksLikeWorkflow(value: Record<string, unknown>): boolean {
-  return typeof value.run === "string";
-}
-
-const WorkflowStarted: FC<{ value: Record<string, unknown>; script: string }> = ({ value, script }) => {
-  const [open, setOpen] = useState(false);
-  const conversation = useConversationId();
-  const showMap = useAgentMap((s) => s.show);
-  const phases = Array.isArray(value.phases) ? (value.phases as unknown[]).map(String) : [];
-  const sent = Array.isArray(value.agents) ? (value.agents as unknown[]).map(String) : [];
-
-  return (
-    <div className="flex flex-col gap-2 rounded-lg p-2.5 ring-1 ring-border/60">
-      <div className="flex items-center gap-1.5">
-        <Radar className="size-3.5 shrink-0 text-teal-400/80" />
-        <span className="text-sm font-medium text-foreground">{String(value.name ?? "workflow")}</span>
-        <span className="text-muted-foreground/60 font-mono text-[10px]">{String(value.run)}</span>
-      </div>
-      {phases.length ? (
-        <ol className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-          {phases.map((phase, i) => (
-            <li key={`${phase}-${i}`} className="flex items-center gap-1">
-              {i ? <span className="text-muted-foreground/40">→</span> : null}
-              {phase}
-            </li>
-          ))}
-        </ol>
-      ) : null}
-      {sent.length ? (
-        <p className="text-[11px] text-muted-foreground">
-          {typeof value.step === "number" ? `Step ${value.step}: ` : ""}
-          {sent.join(", ")}
-        </p>
-      ) : null}
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Runs in the background. He picks the result up in a new turn when it finishes.
-      </p>
-      <button
-        type="button"
-        onClick={() => showMap(conversation, String(value.run))}
-        className="text-kith hover:text-kith/80 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] font-medium"
-      >
-        <Network className="size-3.5" aria-hidden />
-        Open the agent map
-      </button>
-      {script ? (
-        <div className="flex flex-col gap-1">
-          <button
-            type="button"
-            onClick={() => setOpen((was) => !was)}
-            aria-expanded={open}
-            className="text-muted-foreground hover:text-foreground w-fit cursor-pointer text-left text-[11px]"
-          >
-            {open ? "Hide the script" : "Show the script"}
-          </button>
-          {open ? <CodeBlock code={script} language="python" label="workflow" /> : null}
-        </div>
-      ) : null}
-    </div>
-  );
-};
 
 const Skill: FC<{ value: Record<string, unknown> }> = ({ value }) => {
   const open = useFileViewer((s) => s.open);
@@ -1362,6 +1292,8 @@ function keyedCard(name: string, args: Args, result: unknown): ReactNode | null 
       return object ? <SymbolsCard value={object} /> : null;
     case "plan_work":
       return object && Array.isArray(object.tasks) ? <PlanCard value={object} /> : null;
+    case "start_agents":
+      return object && Array.isArray(object.agents) ? <StartedAgentsCard args={args} value={object} /> : null;
     case "checklist":
     case "add_checklist_item":
     case "check_item":
@@ -1477,17 +1409,6 @@ export const ToolResultBody: FC<{ name: string; args: Args; result: unknown }> =
     ) {
       const r = result as { path?: string; outline?: string };
       return <Outline text={String(r.outline ?? "")} path={String(r.path ?? args.path ?? "")} />;
-    }
-
-    if (
-      (name === "run_workflow" || name === "add_agents") &&
-      result &&
-      typeof result === "object" &&
-      looksLikeWorkflow(result as Record<string, unknown>)
-    ) {
-      return (
-        <WorkflowStarted value={result as Record<string, unknown>} script={String(args.script ?? "")} />
-      );
     }
 
     // Same reasoning as `outline` just above: `repo_map`'s shape is unique to it.
@@ -1702,8 +1623,9 @@ const SUPERSEDED_BY_RESULT: Record<string, Set<string>> = {
   write_file: new Set(["content"]),
   //: Every edit's old and new text, as JSON — the diff below is the same change, readable.
   edit_files: new Set(["edits"]),
-  //: The card below has the script behind "Show the script".
-  run_workflow: new Set(["script"]),
+  //: Every agent's whole brief, as one blob of JSON. The card below names each agent with the
+  //: opening of its task, and the rest is the first message of its own conversation.
+  start_agents: new Set(["agents"]),
   //: A conventions document, often pages long; the card says what changed.
   update_design_system: new Set(["conventions"]),
   //: The terminal card below prints the command with its own copy button.

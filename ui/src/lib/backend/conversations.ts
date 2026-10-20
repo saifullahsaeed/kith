@@ -25,6 +25,79 @@ export interface ConversationSummary {
   /** It is blocked on an answer from you. The more actionable of the two: working needs nothing
    *  from you, waiting needs only you — see `questions.waiting()`. */
   waiting: boolean;
+  /** The conversation that started this one, when it is an agent — its *handler*. Null for a chat
+   *  the person opened. The listing only ever returns those; an agent's own record, opened by id,
+   *  is how a pane learns it is showing one and must not offer a composer. */
+  parentId: string | null;
+  /** What its handler calls it — `""` for the person's own chats. */
+  agentName: string;
+  /** Where an agent is in its life: `working`, `waiting` (on agents of its own), `done`, `stopped`
+   *  or `closed`. `""` for a chat that is not an agent. */
+  agentState: AgentState;
+  /** Open agents anywhere under this conversation, and how many of those are busy this second.
+   *  Counted by the server on the listing, so a sidebar row can say "3 agents · 2 working"
+   *  without fetching the tree it summarises. Zero on a conversation opened by id. */
+  agents: number;
+  agentsWorking: number;
+}
+
+/** An agent's lifecycle, as `services/agents` writes it. `""` on a conversation that is not one. */
+export type AgentState = "" | "working" | "waiting" | "done" | "stopped" | "closed";
+
+/** One agent in a tree, with its own agents nested under it. Closed ones are included. */
+export interface AgentNode {
+  id: string;
+  name: string;
+  state: AgentState;
+  /** A turn is live in it right now — the same fact `working` is on a chat. */
+  working: boolean;
+  /** It asked its handler something and is parked on the answer. Not you: an agent's questions
+   *  go one link up the chain, and only the conductor's reach the person. */
+  asking: boolean;
+  model: string;
+  /** The branch its worktree is on, or `""` when it shares its handler's folder. */
+  branch: string;
+  worktree: string;
+  folder: string;
+  lastSaid: string;
+  createdAt: string;
+  updatedAt: string;
+  agents: AgentNode[];
+}
+
+/** One link of the chain from the conductor down to a conversation. */
+export interface AgentLink {
+  id: string;
+  /** `"conductor"` for the person's own chat at the top; the agent name below it. */
+  name: string;
+  state: AgentState;
+}
+
+export interface AgentTree {
+  /** The agents under the conversation asked about — not the whole tree unless that was the root. */
+  agents: AgentNode[];
+  /** The person's chat at the top of this conversation's tree: itself, when it is not an agent. */
+  root: string;
+  /** From the conductor down to the conversation asked about, inclusive. */
+  chain: AgentLink[];
+}
+
+/** The agents under a conversation, nested, and the chain above it. */
+export async function fetchAgentTree(id: string): Promise<AgentTree> {
+  const response = await fetch(`/api/conversations/${encodeURIComponent(id)}/agents`);
+  if (!response.ok) throw new Error(`could not read the agents (${response.status})`);
+  const body = (await response.json()) as Partial<AgentTree> | null;
+  return { agents: body?.agents ?? [], root: body?.root ?? id, chain: body?.chain ?? [] };
+}
+
+/** Stop every agent under a conversation. They stay resumable: their handler can message them. */
+export async function stopAgents(id: string): Promise<string[]> {
+  const response = await fetch(`/api/conversations/${encodeURIComponent(id)}/agents/stop`, {
+    method: "POST",
+  });
+  if (!response.ok) throw new Error(`could not stop the agents (${response.status})`);
+  const body = (await response.json()) as { stopped?: string[] } | null;
+  return body?.stopped ?? [];
 }
 
 /** One conversation, opened. Its metadata plus everything needed to render it back.
@@ -111,6 +184,24 @@ export interface StoredTurn {
    * `X-Kith-Turn` of the stream it owns is how it drops the copy rather than rendering both.
    */
   turn?: string;
+  /**
+   * Who sent this, when it was not the person.
+   *
+   * Agents talk to each other by mail, and mail lands in a transcript as an ordinary turn: from a
+   * handler as `user` (the handler is that agent's person), from an agent below as `system`, and
+   * after a restart from Kith itself. Without this the thread drew all of it as something *you*
+   * said — editable, in your bubble — which in an agent's conversation is every message in it.
+   * `kind` is `task` or `message` from a handler; `report`, `question` or `note` from an agent;
+   * `resume` from Kith, whose `id` is `""`. The text still opens with the server's bracketed
+   * heading; `toThreadMessages` takes it off, because the label drawn from this says it.
+   */
+  from?: TurnSender;
+}
+
+export interface TurnSender {
+  id: string;
+  name: string;
+  kind: string;
 }
 
 /** One page of a conversation, newest last.

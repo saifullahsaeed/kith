@@ -13,8 +13,7 @@ const key = new PluginKey("kith-slash-token");
  * A recognised command at the start of the message, drawn as a token.
  *
  * A decoration, not a mark or a node: the document stays plain text, so the markdown the store
- * holds is exactly what was typed, and deleting a letter of `/workflow` simply stops it being
- * one. Teal for `/workflow`, as it is everywhere; the Kith accent for the rest.
+ * holds is exactly what was typed, and deleting a letter of `/design` simply stops it being one.
  */
 export const SlashToken = Extension.create<{ commands: () => readonly SlashCommand[] }>({
   name: "slashToken",
@@ -34,10 +33,7 @@ export const SlashToken = Extension.create<{ commands: () => readonly SlashComma
             const found = line.match(/^\/(\S+)(?=\s|$)/);
             if (!found || !commands().some((one) => one.name === found[1])) return null;
             return DecorationSet.create(state.doc, [
-              Decoration.inline(1, 1 + found[0].length, {
-                class: "kith-slash-token",
-                "data-tone": found[1] === "workflow" ? "workflow" : "command",
-              }),
+              Decoration.inline(1, 1 + found[0].length, { class: "kith-slash-token" }),
             ]);
           },
         },

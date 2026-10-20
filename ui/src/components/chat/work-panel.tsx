@@ -3,13 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { WorkingOn } from "@/components/assistant-ui/working-on";
 import { BackgroundTasks } from "@/components/chat/background-tasks";
 import { StandingWork } from "@/components/chat/standing-work";
-import { Workflows } from "@/components/chat/workflows";
 import { fetchConversation } from "@/lib/backend";
 import { ProjectRootProvider } from "@/lib/project-root";
 import { keys } from "@/lib/query-keys";
-import type { useActivity } from "@/hooks/use-activity";
-
-type Activity = ReturnType<typeof useActivity>;
 
 /**
  * What chat cannot tell you, beside the chat — the companion column's Activity tab.
@@ -20,8 +16,6 @@ type Activity = ReturnType<typeof useActivity>;
  *
  * Gone, and what is left is the things a conversation genuinely cannot say, each as a card:
  *
- * * **what a workflow's agents are doing** — the one tool feed that is not a second copy, because
- *   a run outlives the turn that started it and its agents' searching reaches the thread nowhere;
  * * **what he is working on**, and how far through its checklist;
  * * **what is running in the background** while he does something else, and what will start on
  *   its own;
@@ -34,15 +28,13 @@ type Activity = ReturnType<typeof useActivity>;
  * answered no question the cards above it leave open, so it went with the redesign.
  */
 export function WorkPanel({
-  activity,
   conversationId = "",
 }: {
-  activity: Activity;
   /** Which conversation is on screen. The sections about one conversation take it; background tasks
    *  and the lifetime token count are about the machine. */
   conversationId?: string;
 }) {
-  /* The project this conversation is in, so an agent's steps read `webapp/app.py` rather than the
+  /* The project this conversation is in, so a path in a card reads `webapp/app.py` rather than the
    * forty characters of home folder in front of it.
    *
    * The panel sits *beside* the chat, not inside it, so the provider `ChatPane` sets up is not
@@ -71,10 +63,6 @@ export function WorkPanel({
           {/* The cards, 14px apart inside a 14px margin. `peer` so the line under it can say so
               when every card has nothing to show and the list renders empty. */}
           <div className="peer mx-auto flex w-full max-w-295 flex-col gap-3.5 p-3.5 empty:hidden">
-            {/* The workflows first: while one is running it *is* what is happening — the turn that
-                started it has ended and the thread says nothing more until it reports. */}
-            <Workflows lines={activity.activity} conversationId={conversationId} />
-
             {/* What he is on right now, and how far through it. */}
             <WorkingOn conversationId={conversationId} />
 
@@ -88,8 +76,8 @@ export function WorkPanel({
 
           </div>
           <p className="hidden px-6 py-10 text-center text-[12px] leading-relaxed text-muted-foreground peer-empty:block">
-            Nothing is going on here right now. A workflow, the task he is on, and anything he leaves
-            running show up in this tab while they last.
+            Nothing is going on here right now. The task he is on, and anything he leaves running,
+            show up in this tab while they last.
           </p>
         </div>
       </div>

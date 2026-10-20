@@ -7,6 +7,7 @@ import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-s
 import { AskPrompt } from "@/components/assistant-ui/ask-prompt";
 import { RichComposerInput } from "@/components/assistant-ui/composer-input/rich-input";
 import { UserMarkdownText } from "@/components/assistant-ui/user-markdown";
+import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { useSlashCommands } from "@/components/assistant-ui/slash-commands";
 import { PermissionPrompt } from "@/components/assistant-ui/permission-prompt";
 import { TurnFooterStats, latestUsage } from "@/components/assistant-ui/turn-usage";
@@ -21,7 +22,6 @@ import {
   ContextRing,
   ModelChip,
   ThinkingChip,
-  WorkflowModeChip,
 } from "@/components/assistant-ui/composer-bar";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -39,7 +39,9 @@ import { STEER_PART } from "@/lib/backend/adapter";
 import type { ContextLedger } from "@/lib/backend/types";
 import { KIND_CODE, kindOf, kindsFromCode, planTurn } from "@/lib/turn-plan";
 import { expandCommand } from "@/lib/slash";
-import { splitWorkflowPrefix } from "@/lib/workflow-prefix";
+import { senderLabel, sentBy } from "@/lib/agents";
+import type { TurnSender } from "@/lib/backend";
+import { useOpenConversation } from "@/lib/open-conversation";
 import { cn } from "@/lib/utils";
 import {
   ActionBarPrimitive,
@@ -62,18 +64,24 @@ import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ClipboardCheck,
   Clock3,
   CopyIcon,
   CornerDownRight,
+  MessageCircleQuestion,
   MicIcon,
+  Network,
   PencilIcon,
+  Power,
   Plus,
   Reply,
   RefreshCwIcon,
   RotateCcw,
   SquareIcon,
+  StickyNote,
   XIcon,
   BellRing,
+  type LucideIcon,
 } from "lucide-react";
 import {
   createContext,
@@ -86,6 +94,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useSyncExternalStore,
+  type ReactNode,
 } from "react";
 
 /* Re-exported: the Work panel reads the same figure, from here, and has always imported it from
@@ -111,28 +120,47 @@ export type ThreadProps = {
   /** Which conversation is on screen, for the things that have to ask the server about *this*
    *  one — currently the question he is waiting on. */
   conversationId?: string | undefined;
+  /**
+   * Drawn where the composer would be, for a conversation the person does not talk in — an
+   * agent's, which answers only to the conversation that started it.
+   *
+   * Present, it takes away every way to send as well as the box: editing a message, retrying a
+   * turn, the follow-up chips, steering. The server refuses all of them with a 409 for an agent,
+   * and a control that is only ever refused is a control that should not be on screen.
+   */
+  readOnly?: ReactNode;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
 
+/** Whether this thread can be written to. Read by the action bars, which are deep inside each
+ *  message and have no other way to learn that the pane above them is an agent's. */
+const ReadOnlyContext = createContext(false);
+
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
 const isNewChatView = (s: AssistantState) =>
   s.thread.messages.length === 0 && (!s.thread.isLoading || s.threads.isLoading);
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, conversationId = "" }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, conversationId = "", readOnly }) => {
   const isEmpty = useAuiState(isNewChatView);
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} conversationId={conversationId} />
+      <ReadOnlyContext.Provider value={Boolean(readOnly)}>
+        <ThreadRoot isEmpty={isEmpty} conversationId={conversationId} readOnly={readOnly} />
+      </ReadOnlyContext.Provider>
     </ThreadComponentsContext.Provider>
   );
 };
 
-const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty, conversationId }) => {
+const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string; readOnly?: ReactNode }> = ({
+  isEmpty,
+  conversationId,
+  readOnly,
+}) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
 
   return (
@@ -152,8 +180,9 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
       }}
     >
       {/* Global on purpose — it listens on `document`, not on anything inside this subtree, so
-          it only has to be mounted once regardless of where the selection happens. */}
-      <SelectionQuoteToolbar />
+          it only has to be mounted once regardless of where the selection happens. Not in a
+          read-only thread: "Reply" quotes into a composer that is not there. */}
+      {readOnly ? null : <SelectionQuoteToolbar />}
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         // Off by default the moment `turnAnchor` is "top" — which silently also killed "if
@@ -210,17 +239,32 @@ const ThreadRoot: FC<{ isEmpty: boolean; conversationId: string }> = ({ isEmpty,
             )}
           >
             <div className="mx-auto flex w-full max-w-(--composer-max-width) flex-col gap-2">
-              <ThreadFollowupSuggestions />
-              <AskPrompt conversationId={conversationId} />
-              {/* What you have said to the running turn that it has not read yet. Sits between
-                  the thread and the composer because that is where it is in time: after
-                  everything that has happened, before the next thing you type. */}
-              <PendingSteer conversationId={conversationId} />
-              <PermissionPrompt />
-              <Composer conversationId={conversationId} />
-              <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-                <ThreadSuggestions />
-              </AuiIf>
+              {readOnly ? (
+                <>
+                  {/* A permission is the one thing an agent can need from the person directly: its
+                      turn runs commands like any other, and the gate it hits waits for a yes from
+                      whoever is looking — which may well be someone looking here. */}
+                  <PermissionPrompt />
+                  <div className="relative">
+                    <ThreadScrollToBottom />
+                    {readOnly}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <ThreadFollowupSuggestions />
+                  <AskPrompt conversationId={conversationId} />
+                  {/* What you have said to the running turn that it has not read yet. Sits between
+                      the thread and the composer because that is where it is in time: after
+                      everything that has happened, before the next thing you type. */}
+                  <PendingSteer conversationId={conversationId} />
+                  <PermissionPrompt />
+                  <Composer conversationId={conversationId} />
+                  <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
+                    <ThreadSuggestions />
+                  </AuiIf>
+                </>
+              )}
             </div>
           </ThreadPrimitive.ViewportFooter>
         </div>
@@ -253,8 +297,92 @@ const ThreadMessage: FC = () => {
  * So it is drawn as what it is: centred, quiet, no avatar, no actions, nothing to edit. Narrower
  * than a message and lighter than one, because it is stage direction rather than dialogue — the
  * reason the next thing happened, not a thing anybody said.
+ *
+ * Mail from an agent arrives the same way — a `system` turn that wakes its handler — but it *is* a
+ * thing somebody said, so a message carrying a sender is drawn as that instead (`MailMessage`).
  */
-const SystemMessage: FC = () => (
+const SystemMessage: FC = () => {
+  const from = useSender();
+  return from ? <MailMessage from={from} /> : <WokenMessage />;
+};
+
+/** Who sent the message being rendered, when it came from another session — see `SENT_BY`. A
+ *  string through the selector so a streamed chunk elsewhere in the thread does not re-render it. */
+function useSender(): TurnSender | undefined {
+  const encoded = useAuiState((s) => {
+    const from = sentBy(s.message.metadata?.custom);
+    return from ? JSON.stringify(from) : "";
+  });
+  return useMemo(() => (encoded ? (JSON.parse(encoded) as TurnSender) : undefined), [encoded]);
+}
+
+/** The glyph for each kind of mail, so a column of them reads at a glance. */
+const MAIL_GLYPH: Record<string, LucideIcon> = {
+  report: ClipboardCheck,
+  question: MessageCircleQuestion,
+  note: StickyNote,
+  resume: Power,
+};
+
+/**
+ * Who sent a message, said as a label — "Report from api", "api is asking" — with the name a link
+ * into that session's own conversation. Kith, after a restart, is nobody's conversation, so its
+ * label is only words.
+ */
+const SenderLabel: FC<{ from: TurnSender; className?: string }> = ({ from, className }) => {
+  const open = useOpenConversation();
+  const said = senderLabel(from);
+  const Glyph = MAIL_GLYPH[from.kind] ?? Network;
+  return (
+    <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
+      <Glyph className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">
+        {said.before}
+        {said.name && from.id ? (
+          <button
+            type="button"
+            onClick={() => open(from.id)}
+            title={`Open ${said.name}'s conversation`}
+            className="cursor-pointer font-semibold underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+          >
+            {said.name}
+          </button>
+        ) : said.name ? (
+          <span className="font-semibold">{said.name}</span>
+        ) : null}
+        {said.after}
+      </span>
+    </span>
+  );
+};
+
+/**
+ * Mail from one of this conversation's agents — its report, its question, a note on the way — or
+ * Kith's word that it restarted and picked the work back up.
+ *
+ * The same place in the thread as a woken turn and the same reason for being there: it is why the
+ * next thing happened. But it is somebody's words rather than the harness's, often a whole report,
+ * so it is a solid card that renders markdown rather than a dashed line of stage direction, and it
+ * says who wrote it in teal, the colour agents wear everywhere else.
+ */
+const MailMessage: FC<{ from: TurnSender }> = ({ from }) => (
+  <MessagePrimitive.Root
+    className="aui-system-message mx-auto w-full max-w-[40rem] py-1"
+    data-from={from.kind}
+  >
+    <div className="border-border bg-card/60 rounded-xl border px-3.5 py-2.5 text-[13px] leading-relaxed wrap-break-word">
+      <SenderLabel
+        from={from}
+        className="mb-1.5 text-[11px] text-teal-700 dark:text-teal-400"
+      />
+      <div className="text-foreground/90 [&_.aui-md]:text-[13px]">
+        <MessagePrimitive.Parts components={{ Text: MarkdownText }} />
+      </div>
+    </div>
+  </MessagePrimitive.Root>
+);
+
+const WokenMessage: FC = () => (
   <MessagePrimitive.Root className="aui-system-message mx-auto w-full max-w-[34rem] py-1">
     {/* `wrap-break-word` because a finished process's last output is quoted here verbatim, and a
         pytest node id is one 120-character word: with nothing to break on, it made this box
@@ -402,8 +530,6 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
   const composer = useComposerRuntime();
   const running = useAuiState((s) => s.thread.isRunning);
   const empty = useAuiState((s) => s.composer.isEmpty && s.composer.attachments.length === 0);
-  // A message that opens with `/workflow` may fan out into agents, and the box says so.
-  const workflow = useAuiState((s) => splitWorkflowPrefix(s.composer.text).workflow);
   /* Escape stops the turn — from the box you type in, and only from there.
    *
    * Taken on the way *down*, because the editor claims Escape for itself: ProseMirror marks it
@@ -440,9 +566,7 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
           "bg-card relative flex w-full flex-col rounded-2xl border transition-[border-color,box-shadow]",
           running
             ? "border-roam/30 focus-within:border-roam/50"
-            : workflow
-              ? "border-teal-400/40 focus-within:border-teal-400/60"
-              : "border-input focus-within:border-foreground/25",
+            : "border-input focus-within:border-foreground/25",
         )}
       >
         <div className="flex flex-col gap-2 px-2.5 pt-2.5 empty:hidden">
@@ -468,34 +592,12 @@ const Composer: FC<{ conversationId: string }> = ({ conversationId }) => {
           </div>
         <ComposerAction conversationId={conversationId} afterFold={reading} />
       </div>
-      {workflow ? (
-        <p className="text-muted-foreground flex items-center gap-2 px-1 text-xs">
-          <WorkflowMark className="size-3 text-teal-700 dark:text-teal-400" />
-          This message may fan out: he writes a script, agents run in the background
-        </p>
-      ) : null}
       {/* A command has no reply to appear in, so it says what it did here. Without this,
           `/fold` was indistinguishable from a keystroke that did nothing. */}
       {note ? <p className="text-muted-foreground/80 px-1 text-[11px]">{note}</p> : null}
     </ComposerPrimitive.Root>
   );
 };
-
-/** The `/workflow` mark: a small radar, the same glyph the chip on a sent message wears. */
-export const WorkflowMark: FC<{ className?: string }> = ({ className }) => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={2.4}
-    strokeLinecap="round"
-    aria-hidden
-    className={cn("shrink-0", className)}
-  >
-    <circle cx="12" cy="12" r="2" />
-    <path d="M16.24 7.76a6 6 0 1 0 .01 8.48M19.07 4.93a10 10 0 1 0 .01 14.14" />
-  </svg>
-);
 
 /**
  * A ⌘⏎ message, held until the turn ends.
@@ -702,9 +804,6 @@ const ComposerAction: FC<{
       <ThinkingChip />
       <AccessChip />
       <ModelChip />
-      {/* Workflow *mode*, a setting like the three beside it — not a status. That a workflow is
-          running is the title bar's pill, and a finished run's map is on its card in the thread. */}
-      <WorkflowModeChip />
       <div className="min-w-2 flex-1" />
       <AuiIf condition={(s) => s.thread.capabilities.dictation}>
         <AuiIf condition={(s) => s.composer.dictation == null}>
@@ -880,6 +979,7 @@ const AssistantActionBar: FC = () => {
   const { checkpoints, reload, turnOffset } = useCheckpoints();
   const renderedIndex = useAuiState((s) => s.message.index);
   const confirm = useConfirm();
+  const readOnly = useContext(ReadOnlyContext);
 
   // `s.message.index` counts the *rendered* messages, and the thread mounts only the tail of a
   // long conversation — so it is an absolute turn index only when nothing has been windowed
@@ -930,11 +1030,14 @@ const AssistantActionBar: FC = () => {
           <RotateCcw />
         </TooltipIconButton>
       ) : null}
-      <ActionBarPrimitive.Reload asChild>
-        <TooltipIconButton tooltip="Retry this turn" className={footerButton}>
-          <RefreshCwIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Reload>
+      {/* Retrying sends the turn again, which in an agent's conversation is the server's 409. */}
+      {readOnly ? null : (
+        <ActionBarPrimitive.Reload asChild>
+          <TooltipIconButton tooltip="Retry this turn" className={footerButton}>
+            <RefreshCwIcon />
+          </TooltipIconButton>
+        </ActionBarPrimitive.Reload>
+      )}
     </ActionBarPrimitive.Root>
   );
 };
@@ -984,6 +1087,8 @@ const CopyMessage: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  const from = useSender();
+  if (from) return <SentMessage from={from} />;
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
@@ -1013,7 +1118,37 @@ const UserMessage: FC = () => {
   );
 };
 
+/**
+ * A message on the person's side of the thread that the person did not write.
+ *
+ * In an agent's conversation that is every one of them: its handler is its person, so the task it
+ * was given and everything its handler says to it afterwards arrive as `user` turns. Drawn in the
+ * person's bubble they read as yours — and offered the edit pencil, which would post as you to a
+ * conversation that only takes words from its handler. So it keeps the side (it is the other half
+ * of the dialogue) and loses the voice: a bordered card rather than your filled bubble, a label
+ * saying who wrote it, and no actions.
+ */
+const SentMessage: FC<{ from: TurnSender }> = ({ from }) => (
+  <MessagePrimitive.Root
+    data-slot="aui_user-message-root"
+    data-role="user"
+    data-from={from.kind}
+    className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-1.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+  >
+    <SenderLabel
+      from={from}
+      className="text-muted-foreground col-start-2 justify-self-end text-[11px]"
+    />
+    <div className="border-border bg-card/60 text-foreground col-start-2 max-w-[600px] min-w-0 rounded-[16px_16px_4px_16px] border px-3.5 py-2.5 text-[14px] leading-[1.5] wrap-break-word empty:hidden">
+      <MessagePrimitive.Parts components={{ Text: UserMarkdownText }} />
+    </div>
+  </MessagePrimitive.Root>
+);
+
 const UserActionBar: FC = () => {
+  // Editing re-sends from here, and nothing may be sent into a conversation that is not yours.
+  const readOnly = useContext(ReadOnlyContext);
+  if (readOnly) return null;
   return (
     <ActionBarPrimitive.Root
       hideWhenRunning

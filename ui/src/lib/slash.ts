@@ -8,20 +8,18 @@
  * It used to be the library's trigger popover, which *ran* a command when you picked it — and
  * running meant rewriting the whole box behind the editor's back (`/design` replaced what you had
  * typed with a paragraph of instructions), with a caret the popover never heard about. So it
- * reopened after every pick, reopened after Escape on the next keystroke, ate the space after
- * `/workflow` (which un-made the prefix), took Tab to mean "run the highlighted command", and
- * opened an empty sheet over `look at /usr/local`. Everything here is a pure function of the
+ * reopened after every pick, reopened after Escape on the next keystroke, ate the space after a
+ * prefix command, took Tab to mean "run the highlighted command", and opened an empty sheet over
+ * `look at /usr/local`. Everything here is a pure function of the
  * first line and the caret, so none of that has anywhere to live.
  *
  * Two kinds:
  * - `action` commands (`/fold`, `/stop`) are the whole message and do something now.
- * - `prefix` commands (`/workflow`, `/design`, a skill) start a request; the rest of the
- *   message is the request. `/design` and skills are spelled out for him when the message is
- *   sent (`expandCommand`); `/workflow` travels as it is, because the server reads it.
+ * - `prefix` commands (`/design`, a skill) start a request; the rest of the message is the
+ *   request. Both are spelled out for him when the message is sent (`expandCommand`).
  */
 
 import { DESIGN_PROMPT } from "@/lib/commands";
-import { splitWorkflowPrefix } from "@/lib/workflow-prefix";
 
 export type SlashKind = "action" | "prefix";
 
@@ -35,8 +33,8 @@ export interface SlashCommand {
 
 /** The slash word the caret is in, without its `/` — or null when there is no sheet to show.
  *
- *  Only at the very start of the message. A command is always the first word (the server reads
- *  `/workflow` there and nowhere else), and anywhere else a `/` is a path or an "and/or". */
+ *  Only at the very start of the message. A command is always the first word, and anywhere else
+ *  a `/` is a path or an "and/or". */
 export function slashWord(firstLine: string, caret: number | null): string | null {
   if (caret === null || !firstLine.startsWith("/")) return null;
   const token = firstLine.match(/^\/\S*/)?.[0] ?? "/";
@@ -109,19 +107,15 @@ export function expandCommand(text: string): string {
 
 /** The token a sent message opened with, so its bubble can draw it the way the box did — from the
  *  word as typed, or from the spelled-out text a transcript read back from the server holds. */
-export function commandChip(
-  text: string,
-): { label: string; tone: "workflow" | "command"; rest: string } | null {
-  const workflow = splitWorkflowPrefix(text);
-  if (workflow.workflow) return { label: "/workflow", tone: "workflow", rest: workflow.rest };
+export function commandChip(text: string): { label: string; rest: string } | null {
   if (text.startsWith(DESIGN_PROMPT)) {
-    return { label: "/design", tone: "command", rest: text.slice(DESIGN_PROMPT.length) };
+    return { label: "/design", rest: text.slice(DESIGN_PROMPT.length) };
   }
   const spelled = text.match(SKILL_SPELLED);
-  if (spelled) return { label: `/${spelled[1]}`, tone: "command", rest: text.slice(spelled[0].length) };
+  if (spelled) return { label: `/${spelled[1]}`, rest: text.slice(spelled[0].length) };
   const typed = text.match(/^\/(\S+)(?:\s+|$)/);
   if (typed && (typed[1] === "design" || knownSkills.has(typed[1]))) {
-    return { label: `/${typed[1]}`, tone: "command", rest: text.slice(typed[0].length) };
+    return { label: `/${typed[1]}`, rest: text.slice(typed[0].length) };
   }
   return null;
 }

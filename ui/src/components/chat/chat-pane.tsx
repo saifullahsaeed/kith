@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AssistantRuntimeProvider,
   useAuiState,
@@ -13,6 +13,7 @@ import { CheckpointsProvider } from "@/components/assistant-ui/checkpoints-conte
 import { ConversationProvider } from "@/lib/conversation";
 import { ProjectRootProvider } from "@/lib/project-root";
 import { SessionBar } from "@/components/chat/session-bar";
+import { AgentFooter } from "@/components/chat/agent-footer";
 import { ThreadSkeleton } from "@/components/chat/thread-skeleton";
 import { ErrorBoundary } from "@/components/shell/error-boundary";
 import { useLayout } from "@/components/shell/layout/store";
@@ -605,15 +606,30 @@ export function ChatPane({
     };
   }, [id, loading, resumed]);
 
+  /* Whether this conversation is an agent's — which only its own record can say, because the
+   * listing holds the person's chats and nothing else. A cache read and never a fetch: `load` fills
+   * this key on its way past, and an observer that could fetch would refetch the whole page of
+   * transcript on every turn's invalidation to learn a field that never changes. */
+  const { data: stored } = useQuery({
+    queryKey: keys.conversation(id),
+    queryFn: () => fetchConversation(id),
+    enabled: false,
+  });
+  const agent = stored?.parentId ? stored.agentName || stored.title : "";
+
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <ClaimTheDrop active={active} />
+      {/* An agent's pane has no composer, so it neither takes a dropped file nor keeps a draft:
+          either would put words into a box nobody can see, for a conversation that would refuse
+          them. */}
+      {agent ? null : <ClaimTheDrop active={active} />}
       <PublishToTheWorkPanel active={active} />
-      <KeepTheDraft uid={uid} conversationId={id} projectId={projectId} />
+      {agent ? null : <KeepTheDraft uid={uid} conversationId={id} projectId={projectId} />}
       <div ref={root} className="relative flex h-full min-h-0 flex-col">
         <SessionBar
           conversationId={id}
           projectId={projectId}
+          agent={agent}
           onProject={(next) => {
             setProjectId(next);
             if (!idRef.current) pendingProject.current = next;
@@ -676,7 +692,10 @@ export function ChatPane({
                   effect attaches once, and the skeleton is just something drawn on top until
                   there is something better to look at. */}
                 <div className="relative min-h-0 flex-1">
-                  <Thread conversationId={id} />
+                  <Thread
+                    conversationId={id}
+                    readOnly={agent ? <AgentFooter conversationId={id} name={agent} /> : undefined}
+                  />
                   {loading ? (
                     <div className="bg-background absolute inset-0 z-20">
                       <ThreadSkeleton />
