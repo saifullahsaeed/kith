@@ -47,6 +47,47 @@ export function flattenAgents(nodes: readonly AgentNode[], closed = false, depth
   return out;
 }
 
+/** The tree as the map draws it: closed agents (and so their subtrees) left out unless asked for. */
+export function prunedAgents(nodes: readonly AgentNode[], closed = false): AgentNode[] {
+  return nodes
+    .filter((node) => closed || node.state !== "closed")
+    .map((node) => ({ ...node, agents: prunedAgents(node.agents ?? [], closed) }));
+}
+
+/** One agent anywhere in a tree, by id. */
+export function findAgent(nodes: readonly AgentNode[], id: string): AgentNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const below = findAgent(node.agents ?? [], id);
+    if (below) return below;
+  }
+  return null;
+}
+
+/**
+ * How long an agent has been at it, as the map shows it: from when it was started to now while it
+ * is busy, and to the last thing it did once it is not. Wall time, not turn time — "23m" means it
+ * has been going for 23 minutes, which is the question a glance at the map is asking.
+ */
+export function agentTook(node: Pick<AgentNode, "createdAt" | "updatedAt" | "state" | "working" | "asking">, now: number): string {
+  const started = Date.parse(node.createdAt);
+  if (Number.isNaN(started)) return "";
+  const busy = ["live", "asking", "waiting"].includes(agentLook(node));
+  const ended = busy ? now : Date.parse(node.updatedAt);
+  const seconds = Math.max(0, Math.round(((Number.isNaN(ended) ? now : ended) - started) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** `446512` → `446.5k`, `1234567` → `1.2M`: a token count at a glance. */
+export function tokensWord(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+  return String(count);
+}
+
 /** Open, busy and closed agents anywhere in a tree. */
 export function countAgents(nodes: readonly AgentNode[]): {
   open: number;

@@ -62,7 +62,30 @@ export interface AgentNode {
   lastSaid: string;
   createdAt: string;
   updatedAt: string;
+  /** Running totals for the agent map: tokens processed (prompt and response, every round),
+   *  dollars, seconds spent in turns, the context its last round carried, and that round's model. */
+  tokens: number;
+  costUsd: number;
+  seconds: number;
+  contextTokens: number;
+  modelUsed: string;
+  /** What it was started with — its first message from its handler. */
+  task: string;
   agents: AgentNode[];
+}
+
+/** The session a tree is drawn from — the map's first node. */
+export interface AgentTreeSelf {
+  id: string;
+  title: string;
+  /** `"conductor"` for the person's chat; the agent's own name for an agent. */
+  name: string;
+  working: boolean;
+  tokens: number;
+  costUsd: number;
+  seconds: number;
+  contextTokens: number;
+  modelUsed: string;
 }
 
 /** One link of the chain from the conductor down to a conversation. */
@@ -74,6 +97,8 @@ export interface AgentLink {
 }
 
 export interface AgentTree {
+  /** The conversation asked about, as the node its agents hang from. */
+  self: AgentTreeSelf | null;
   /** The agents under the conversation asked about — not the whole tree unless that was the root. */
   agents: AgentNode[];
   /** The person's chat at the top of this conversation's tree: itself, when it is not an agent. */
@@ -87,7 +112,12 @@ export async function fetchAgentTree(id: string): Promise<AgentTree> {
   const response = await fetch(`/api/conversations/${encodeURIComponent(id)}/agents`);
   if (!response.ok) throw new Error(`could not read the agents (${response.status})`);
   const body = (await response.json()) as Partial<AgentTree> | null;
-  return { agents: body?.agents ?? [], root: body?.root ?? id, chain: body?.chain ?? [] };
+  return {
+    self: body?.self ?? null,
+    agents: body?.agents ?? [],
+    root: body?.root ?? id,
+    chain: body?.chain ?? [],
+  };
 }
 
 /** Stop every agent under a conversation. They stay resumable: their handler can message them. */

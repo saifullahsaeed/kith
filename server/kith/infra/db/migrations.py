@@ -1020,6 +1020,25 @@ def _migrations():
         )
         conn.execute("CREATE INDEX IF NOT EXISTS agent_mail_waiting ON agent_mail(to_id, delivered_at)")
 
+    def v54_session_usage(conn):
+        """Running totals per conversation: tokens, dollars, seconds, last context, last model.
+
+        For the agent map, which shows each agent's figures beside its name. The rounds were
+        already counted — in the transcript, round by round, and in `turn_log`, which has no
+        conversation column — so a map of twenty agents would have read twenty transcripts on
+        every redraw. A few numbers on the row they belong to cost one update per round.
+        """
+        held = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
+        for column, ddl in (
+            ("tokens_total", "INTEGER NOT NULL DEFAULT 0"),
+            ("cost_usd", "REAL NOT NULL DEFAULT 0"),
+            ("turn_seconds", "REAL NOT NULL DEFAULT 0"),
+            ("context_used", "INTEGER NOT NULL DEFAULT 0"),
+            ("model_used", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if column not in held:
+                conn.execute(f"ALTER TABLE conversations ADD COLUMN {column} {ddl}")
+
     return [
         v1_brain,
         v2_custom_tools,
@@ -1074,6 +1093,7 @@ def _migrations():
         v51_conversation_workflow_mode,
         v52_what_each_host_charged,
         v53_agent_sessions,
+        v54_session_usage,
     ]
 
 

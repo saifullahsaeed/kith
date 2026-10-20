@@ -1077,6 +1077,20 @@ class _MindFeed:
             self.tokens_in += int(stats.get("promptTokens") or 0)
             self.tokens_out += out
             self.tokens_uncached += fresh
+            # And onto the conversation's own running totals, which is what the agent map shows
+            # beside each agent. Per round rather than per turn, so a long turn's figures move
+            # while you watch it.
+            try:
+                repo.conversations.add_usage(
+                    AGENT_DB_PATH,
+                    self.conversation_id,
+                    tokens=int(stats.get("promptTokens") or 0) + out,
+                    cost=float(stats.get("costUsd") or 0.0),
+                    context=int((self.context or {}).get("used") or 0) or None,
+                    model=str(stats.get("model") or ""),
+                )
+            except Exception:
+                pass
             self._publish(
                 "tokens",
                 f"{fresh + out:,} tokens",
@@ -1123,6 +1137,12 @@ class _MindFeed:
     def finish(self) -> None:
         self._publish("done", "turn complete")
         outcome = f"error: {self.error}" if self.error else (self.said.strip()[:280] or "answered")
+        try:
+            repo.conversations.add_usage(
+                AGENT_DB_PATH, self.conversation_id, seconds=time.monotonic() - self.started
+            )
+        except Exception:
+            pass
         try:
             repo.messages.add_turn_log(
                 AGENT_DB_PATH,

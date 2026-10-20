@@ -260,6 +260,15 @@ class Conversation(Base):
     agent_branch: Mapped[str] = mapped_column(Text, nullable=False, default="")
     agent_base: Mapped[str] = mapped_column(Text, nullable=False, default="")
     agent_source: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: What this session has used, kept as running totals so the agent map can show every agent's
+    #: figures without reading its transcript: tokens processed (prompt and response, every
+    #: round), dollars, seconds spent in turns, the context its last round carried, and the model
+    #: that round ran on. See migration v54.
+    tokens_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    turn_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    context_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    model_used: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
 class TurnLog(Base):

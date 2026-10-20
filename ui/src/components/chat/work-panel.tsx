@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { WorkingOn } from "@/components/assistant-ui/working-on";
+import { AgentsCard } from "@/components/chat/agents-card";
 import { BackgroundTasks } from "@/components/chat/background-tasks";
 import { StandingWork } from "@/components/chat/standing-work";
 import { fetchConversation } from "@/lib/backend";
@@ -17,6 +18,7 @@ import { keys } from "@/lib/query-keys";
  * Gone, and what is left is the things a conversation genuinely cannot say, each as a card:
  *
  * * **what he is working on**, and how far through its checklist;
+ * * **the agents** in this chat's tree, as a map;
  * * **what is running in the background** while he does something else, and what will start on
  *   its own;
  * * **what is in his head**, by group, with the button that shrinks it.
@@ -65,6 +67,9 @@ export function WorkPanel({
           <div className="peer mx-auto flex w-full max-w-295 flex-col gap-3.5 p-3.5 empty:hidden">
             {/* What he is on right now, and how far through it. */}
             <WorkingOn conversationId={conversationId} />
+
+            {/* The agents this chat's tree has, as a map. Nothing when there are none. */}
+            <AgentsCard conversationId={conversationId} />
 
             {/* What is running while he does something else. Renders nothing when there is
                 nothing — a header over an empty list is furniture. */}

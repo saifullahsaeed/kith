@@ -5,6 +5,7 @@ from __future__ import annotations
 from flask import jsonify
 
 from kith.api.blueprint import api
+from kith.kernel import live_turns
 from kith.services import agents
 
 
@@ -19,8 +20,17 @@ from kith.services import agents
     ),
 )
 def agent_tree(conversation_id: str):
+    me = agents.row(conversation_id) or {}
     return jsonify(
         {
+            # The session itself, for the node the map draws its agents from.
+            "self": {
+                "id": conversation_id,
+                "title": str(me.get("title") or ""),
+                "name": agents.label(me) if me else "",
+                "working": live_turns.current(conversation_id) is not None,
+                **(agents.usage(me) if me else {}),
+            },
             "agents": agents.tree(conversation_id),
             "root": agents.root_of(conversation_id),
             "chain": [

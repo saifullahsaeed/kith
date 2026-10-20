@@ -33,6 +33,12 @@ function agent(name: string, over: Partial<AgentNode> = {}, agents: AgentNode[] 
     lastSaid: "",
     createdAt: "",
     updatedAt: "",
+    tokens: 0,
+    costUsd: 0,
+    seconds: 0,
+    contextTokens: 0,
+    modelUsed: "",
+    task: "",
     agents,
     ...over,
   };

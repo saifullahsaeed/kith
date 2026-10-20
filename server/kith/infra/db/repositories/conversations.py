@@ -189,6 +189,32 @@ def set_agent(path: Path, conversation_id: str, **fields) -> bool:
         return True
 
 
+def add_usage(
+    path: Path,
+    conversation_id: str,
+    *,
+    tokens: int = 0,
+    cost: float = 0.0,
+    seconds: float = 0.0,
+    context: int | None = None,
+    model: str = "",
+) -> None:
+    """Add one round's (or one turn's) usage to a conversation's running totals."""
+    if not conversation_id:
+        return
+    with session(path) as db:
+        row = db.get(Conversation, conversation_id)
+        if row is None:
+            return
+        row.tokens_total = int(row.tokens_total or 0) + max(0, int(tokens))
+        row.cost_usd = float(row.cost_usd or 0.0) + max(0.0, float(cost))
+        row.turn_seconds = float(row.turn_seconds or 0.0) + max(0.0, float(seconds))
+        if context is not None:
+            row.context_used = max(0, int(context))
+        if model:
+            row.model_used = model
+
+
 def children(path: Path, parent_id: str) -> list[dict]:
     """The agents one conversation started, oldest first — the order they were sent out."""
     if not parent_id:

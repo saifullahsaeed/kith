@@ -449,6 +449,18 @@ class TestWhatItIsTold:
         assert "“api”, started by conductor" in framed and agent["branch"] in framed
         assert prompt.directive_for(chat) == prompt.CHAT_DIRECTIVE
 
+    def test_the_map_carries_each_agent_s_figures_and_task(self, db, started, client):
+        chat, agent = started
+        repo.conversations.add_usage(db, agent["id"], tokens=446_512, cost=0.73, context=120_000, model="m/one")
+        repo.conversations.add_usage(db, agent["id"], tokens=1_000, seconds=12.5)
+        repo.conversations.add_usage(db, chat, context=522_600, model="m/conductor")
+        body = client.get(f"/api/conversations/{chat}/agents").get_json()
+        node = body["agents"][0]
+        assert node["tokens"] == 447_512 and node["costUsd"] == 0.73 and node["seconds"] == 12.5
+        assert node["contextTokens"] == 120_000 and node["modelUsed"] == "m/one"
+        assert node["task"] == "build the api"
+        assert body["self"]["contextTokens"] == 522_600 and body["self"]["name"] == "conductor"
+
     def test_a_handler_sees_its_agents(self, started):
         chat, _ = started
         block = agents.agents_block(chat)

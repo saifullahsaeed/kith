@@ -49,6 +49,16 @@ def take(path: Path, to_id: str) -> list[dict]:
         return [as_dict(row) for row in rows]
 
 
+def delivered(path: Path, to_id: str, *, kind: str = "", limit: int = 20) -> list[dict]:
+    """Mail a conversation has been handed, oldest first — optionally only one kind."""
+    with session(path) as db:
+        query = select(AgentMail).where(AgentMail.to_id == to_id, AgentMail.delivered_at.is_not(None))
+        if kind:
+            query = query.where(AgentMail.kind == kind)
+        rows = db.scalars(query.order_by(AgentMail.id).limit(max(1, limit))).all()
+        return [as_dict(row) for row in rows]
+
+
 def addressees(path: Path) -> list[str]:
     """Every conversation with mail it has not been handed yet."""
     with session(path) as db:

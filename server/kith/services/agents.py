@@ -171,10 +171,30 @@ def tree(conversation_id: str) -> list[dict]:
                 "lastSaid": child.get("last_said") or "",
                 "createdAt": child.get("created_at") or "",
                 "updatedAt": child.get("updated_at") or "",
+                **usage(child),
+                "task": _task_of(child_id),
                 "agents": tree(child_id),
             }
         )
     return out
+
+
+def usage(found: dict) -> dict:
+    """A session's running totals, as the agent map shows them."""
+    return {
+        "tokens": int(found.get("tokens_total") or 0),
+        "costUsd": round(float(found.get("cost_usd") or 0.0), 4),
+        "seconds": round(float(found.get("turn_seconds") or 0.0), 1),
+        "contextTokens": int(found.get("context_used") or 0),
+        "modelUsed": str(found.get("model_used") or ""),
+    }
+
+
+def _task_of(conversation_id: str) -> str:
+    """What an agent was started with — its first message from its handler."""
+    for mail in repo.agent_mail.delivered(AGENT_DB_PATH, conversation_id, kind="task", limit=1):
+        return str(mail.get("body") or "")
+    return ""
 
 
 # --------------------------------------------------------------------------- #
