@@ -27,6 +27,7 @@ import requests
 from kith.domain import connection
 from kith.domain.chat import Config, Routing
 from kith.domain.enums import REASONING_EFFORTS
+from kith.kernel import session_context, stopping
 from kith.llm import budget, caching
 
 #: What share of ``max_tokens`` each effort level hands to thinking, from OpenRouter's own
@@ -256,6 +257,49 @@ def _reasoning_options(config: Config) -> dict[str, Any]:
     return {"reasoning": {"enabled": bool(config.think)}}
 
 
+#: How long a request waits for the network to come back before calling the model unreachable.
+#:
+#: Waking from sleep, the request a turn was about to send goes out before the Wi-Fi has
+#: reconnected, and fails on name resolution in hundredths of a second. The round's own retry
+#: (`agent_loop._send_round`, three attempts a second or two apart) was used up within about three
+#: seconds, well inside the time a Mac takes to rejoin its network, and the turn ended on "Could
+#: not reach the cloud model" — twice on 2026-10-15, 38 and 56 seconds after a wake. A request
+#: that never reached anyone is safe to send again however long it waits, so it waits.
+_NETWORK_PATIENCE_SECONDS = 90.0
+
+#: The failures that mean "this machine has no network", as opposed to the provider being slow or
+#: the connection dropping after the request went out — only these are waited out.
+_NO_NETWORK = re.compile(
+    r"nameresolutionerror|failed to resolve|name or service not known|nodename nor servname"
+    r"|temporary failure in name resolution|network is unreachable|no route to host",
+    re.I,
+)
+
+
+def _post(url: str, payload: dict, headers: dict) -> requests.Response:
+    """`requests.post` for a streamed model request, waiting out a network that is not back yet.
+
+    Gives up at `_NETWORK_PATIENCE_SECONDS`, or as soon as the turn it belongs to is stopped.
+    """
+    deadline = time.monotonic() + _NETWORK_PATIENCE_SECONDS
+    pause = 1.0
+    while True:
+        try:
+            # (connect, read): the read timeout is the gap between streamed chunks — a
+            # stalled/rate-limited connection aborts instead of hanging the loop forever.
+            return requests.post(url, json=payload, headers=headers, stream=True, timeout=(10, 90))
+        except requests.exceptions.ConnectionError as exc:
+            switch = stopping.current(session_context.current())
+            if (
+                not _NO_NETWORK.search(str(exc))
+                or time.monotonic() + pause > deadline
+                or (switch is not None and switch.is_set())
+            ):
+                raise
+            time.sleep(pause)
+            pause = min(pause * 2, 5.0)
+
+
 def stream_once(
     messages: list[dict[str, Any]],
     config: Config,
@@ -344,9 +388,7 @@ def stream_once(
 
     started = time.time()
     try:
-        # (connect, read): the read timeout is the gap between streamed chunks — a
-        # stalled/rate-limited connection aborts instead of hanging the loop forever.
-        response = requests.post(url, json=payload, headers=headers, stream=True, timeout=(10, 90))
+        response = _post(url, payload, headers)
     except requests.exceptions.RequestException as exc:
         yield {"type": "error", "message": f"Could not reach the cloud model at {url}: {exc}"}
         return
@@ -387,7 +429,7 @@ def stream_once(
         response.close()
         payload.pop("reasoning")
         try:
-            response = requests.post(url, json=payload, headers=headers, stream=True, timeout=(10, 90))
+            response = _post(url, payload, headers)
         except requests.exceptions.RequestException as exc:
             yield {"type": "error", "message": f"Could not reach the cloud model at {url}: {exc}"}
             return

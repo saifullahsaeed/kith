@@ -78,17 +78,24 @@ function lastTurn(timeline: StoredTurn[]): string {
  * the stored copy of that turn for as long as the pane lived, which is the original bug with the
  * sign flipped.
  */
-async function* hold<T>(
+async function* hold<T, R>(
   turnId: string,
-  stream: AsyncGenerator<T>,
-  claim: (turnId: string) => void,
-): AsyncGenerator<T> {
+  stream: AsyncGenerator<T, R>,
+  claim: (turnId: string, readToEnd?: boolean) => void,
+): AsyncGenerator<T, R> {
   claim(turnId);
+  let end: R | undefined;
   try {
-    yield* stream;
+    end = yield* stream;
+    return end;
   } finally {
-    claim("");
+    claim("", !isCutShort(end));
   }
+}
+
+/** A stream that says it lost the end of its turn — see `TurnEnd` in the adapter. */
+function isCutShort(end: unknown): boolean {
+  return typeof end === "object" && end !== null && (end as { complete?: unknown }).complete === false;
 }
 
 /**
@@ -200,9 +207,20 @@ export function ChatPane({
    *  wrong order left it set, and the next turn was then skipped instead of attached to. An id is
    *  compared rather than consumed, so a stale one is simply an id that no longer matches. */
   const lastRead = useRef("");
+  /** `load(true)`, reachable from `claim`, which is declared before it. */
+  const reload = useRef<() => void>(() => {});
   /** Take or release the claim. One function so the two ways in — a turn this pane started, and
-   *  one it attached to — cannot drift into meaning different things. */
-  const claim = useCallback((turnId: string) => {
+   *  one it attached to — cannot drift into meaning different things.
+   *
+   *  `readToEnd` is false when the stream dropped and the turn ended before it could be rejoined:
+   *  the screen stops short of the end, so the turn is not marked read and the stored copy is
+   *  fetched — after the run has let go, so the page lands on a thread that is no longer running. */
+  const claim = useCallback((turnId: string, readToEnd = true) => {
+    if (!turnId && !readToEnd) {
+      owned.current = "";
+      setTimeout(() => reload.current(), 0);
+      return;
+    }
     // Letting go is also the moment this pane can say it read that turn to the end.
     if (!turnId) {
       lastRead.current = owned.current;
@@ -445,6 +463,10 @@ export function ChatPane({
   useEffect(() => {
     void load();
   }, [load, id]);
+
+  useEffect(() => {
+    reload.current = () => void load(true);
+  }, [load]);
 
   /* And again whenever a turn starts or ends in this conversation.
    *

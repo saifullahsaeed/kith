@@ -28,6 +28,10 @@ export interface TurnUsage {
    *  end the whole turn; it now costs a pause, and a pause with nothing in it looks exactly
    *  like the hang it is recovering from. */
   retrying?: { attempt: number; message: string };
+  /** Set while the window is getting back to this turn after its own connection dropped — the
+   *  laptop woke, or the browser restarted its network service. Not the turn's trouble: it is
+   *  still running on the server, and this says so rather than "Didn't finish". */
+  rejoining?: { attempt: number };
   /** A tool call whose arguments are still streaming. A `write_file` of a page arrives over
    *  something like a minute, and until now that minute showed nothing at all — so watching a
    *  file be written was indistinguishable from watching a turn hang. Present only while it is
@@ -165,6 +169,19 @@ export function TurnStatus({ usage }: { usage: TurnUsage }) {
    * nothing from you, but it is the one that can fail), blue for making room, green for writing —
    * green is "he is working right now", and writing a file is exactly that. */
   const pill = "flex w-fit max-w-full items-center gap-2 rounded-lg border px-3 py-1.5 text-xs select-none";
+  if (usage.rejoining) {
+    return (
+      <div
+        data-slot="kith_turn-status"
+        className={cn(pill, "border-kith/30 bg-kith-soft/50")}
+        title="This window lost its connection — the laptop slept, or the network changed. The turn kept running on the server, and the window is catching up with it."
+      >
+        <Spin tone="kith" className="size-3" />
+        <span className="text-kith font-semibold">Reconnecting</span>
+        <span className="text-muted-foreground truncate">— he is still working</span>
+      </div>
+    );
+  }
   if (usage.retrying) {
     return (
       <div

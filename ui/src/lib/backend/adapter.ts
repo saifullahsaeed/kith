@@ -94,6 +94,55 @@ function pause(ms: number, signal?: AbortSignal): Promise<boolean> {
 }
 
 /**
+ * How long a window keeps trying to get back to a turn whose stream dropped.
+ *
+ * A dropped stream is not a failed turn. The turn runs on the server and never learns that a
+ * reader went away; `live_turns` keeps everything it has said, and `/attach` hands it back. What
+ * drops the stream is this machine: waking from sleep, or Chromium restarting its network service,
+ * both of which cancel every request the window has open with "network error" and nothing else.
+ * On 2026-10-21 that happened twice in an hour, and both times the window showed "Didn't finish"
+ * over a turn that was still working — and the next message, sent into what looked like an idle
+ * chat, started a second turn on top of the first.
+ *
+ * Rejoining is not the retry `RETRIES` forbids. That one would send the request again and do the
+ * work twice; this reads the same turn's output again and skips what was already shown. About a
+ * minute in all: localhost answers as soon as the machine is awake, so the long tail is only for a
+ * server that is restarting.
+ */
+const REJOIN_DELAYS = [300, 700, 1500, 3000, 5000, 8000, 8000, 8000, 8000, 8000, 8000];
+
+/** The turn's own failure, said by the server — as opposed to the connection to it dropping. */
+class TurnFailed extends Error {}
+
+/** How a turn's stream ended, as far as the window that read it can tell. */
+export interface TurnEnd {
+  /** False when the connection dropped and the turn had ended by the time the window got back. What
+   *  is on screen then stops short of the end, and the stored copy is the one to show. */
+  complete: boolean;
+}
+
+/** One attempt at finding the turn again: its stream, `"over"` when it has ended (or another turn
+ *  has started) since, or null when the server did not answer. */
+async function attachAgain(
+  conversationId: string,
+  turnId: string,
+  signal?: AbortSignal,
+): Promise<Response | "over" | null> {
+  const response = await fetch(`/api/chat/${conversationId}/attach`, signal ? { signal } : undefined).catch(
+    () => null,
+  );
+  if (!response) return null;
+  if (response.status === 204) return "over";
+  if (!response.ok || !response.body) return null;
+  const now = response.headers.get("X-Kith-Turn") ?? "";
+  if (turnId && now && now !== turnId) {
+    void response.body.cancel().catch(() => {});
+    return "over";
+  }
+  return response;
+}
+
+/**
  * An assistant-ui adapter that streams from the Kith server.
  *
  * Pieces are kept in arrival order rather than grouped by kind. A turn is a loop —
@@ -142,8 +191,11 @@ export function createBackendAdapter(conversation?: {
    * the same question once the turn exists: the pane owns a stream, and the stored copy of that
    * stream's turn is not its to render. `""` on the way out, from a `finally`, so a turn that
    * throws or is abandoned releases its claim exactly like one that ends.
+   *
+   * `readToEnd` is false on the way out when the stream dropped and the turn finished before the
+   * window got back to it: the screen stops short, so the stored copy has to be fetched.
    */
-  onTurn?: (turnId: string) => void;
+  onTurn?: (turnId: string, readToEnd?: boolean) => void;
 }): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
@@ -262,10 +314,11 @@ export function createBackendAdapter(conversation?: {
        * it ends — an abort, a thrown chunk, a pane closing — and a claim released only on the
        * happy path is a claim that outlives its stream and silently hides the stored turn. */
       conversation?.onTurn?.(response.headers.get("X-Kith-Turn") ?? "");
+      let end: TurnEnd | undefined;
       try {
-        yield* readTurn(response, conversation, startedAt);
+        end = yield* readTurn(response, conversation, startedAt, { signal: abortSignal });
       } finally {
-        conversation?.onTurn?.("");
+        conversation?.onTurn?.("", end?.complete !== false);
       }
     },
   };
@@ -285,7 +338,9 @@ async function* readTurn(
   conversation?: { get: () => string; set: (id: string) => void } | undefined,
   /** When this window sent the turn; absent for a turn it rejoined — see `TURN_TIMING`. */
   startedAt?: number,
-): AsyncGenerator<ChatModelRunResult> {
+  /** What finding the turn again needs if its stream drops — see `REJOIN_DELAYS`. */
+  again?: { conversationId?: string; signal?: AbortSignal },
+): AsyncGenerator<ChatModelRunResult, TurnEnd> {
     /** The turn's timing, riding on every update so the first one already carries the start. */
     const timed = (endedAt?: number): ChatModelRunResult["metadata"] =>
       startedAt === undefined
@@ -337,6 +392,8 @@ let retrying: { attempt: number; message: string } | undefined;
 /** How many rounds were sent again over the whole turn. Never cleared — see `retried` in
  *  TurnUsage for why the live one above is not enough on its own. */
 let retried = 0;
+    /** Set while the window is finding its way back to this turn after the stream dropped. */
+    let rejoining: { attempt: number } | undefined;
 
     /** Append to the piece being written, or start a new one when the channel
      *  changed — which is what keeps consecutive deltas from each becoming a part. */
@@ -381,7 +438,7 @@ let retried = 0;
       // Last, so it reads as the message's footer and stays put as rounds arrive.
       // `folded` joins the gate: a fold before the first round is exactly the case where
       // there is nothing else to render and the person is staring at an empty message.
-      if (rounds.length > 0 || context || folded || retrying || retried || writing) {
+      if (rounds.length > 0 || context || folded || retrying || retried || writing || rejoining) {
         const usage: TurnUsage = {
           rounds,
           context,
@@ -391,6 +448,7 @@ let retried = 0;
           retrying,
           writing,
           retried,
+          ...(rejoining ? { rejoining } : {}),
           ...(costUsd !== undefined ? { costUsd } : {}),
           ...(model ? { model } : {}),
           ...(provider ? { provider } : {}),
@@ -400,92 +458,139 @@ let retried = 0;
       return parts;
     };
 
+    /** Which turn this is, so a rejoin can tell it from one started since. */
+    const turnId = response.headers.get("X-Kith-Turn") ?? "";
+    /** Lines of the turn's own output handled so far. `/attach` replays the turn from its first
+     *  line, in the same order this stream carried it, so a rejoined stream skips exactly this
+     *  many and carries on. */
+    let seen = 0;
+    let source = response;
+    let skip = 0;
     try {
       // The start, straight away: nothing else may arrive for the length of a whole first round.
       if (startedAt !== undefined) yield update(snapshot());
-      for await (const event of readEvents(response)) {
-        if (event.type === "error") throw new Error(event.message);
+      for (;;) {
+        try {
+          for await (const event of readEvents(source)) {
+            // Not part of the turn's output: the chat request says it first, `/attach` never does.
+            if (event.type === "conversation") {
+              conversation?.set(event.id);
+              continue;
+            }
+            if (skip > 0) {
+              skip -= 1;
+              continue;
+            }
+            seen += 1;
+            if (event.type === "error") throw new TurnFailed(event.message);
 
-        if (event.type === "conversation") {
-          conversation?.set(event.id);
-          continue;
-        }
+            if (event.type === "retrying") {
+              retrying = { attempt: event.attempt, message: event.message };
+              retried += 1;
+              yield update(snapshot());
+              continue;
+            }
+            if (event.type === "writing") {
+              retrying = undefined;
+              writing = { name: event.name, chars: event.chars, ...(event.path ? { path: event.path } : {}) };
+              yield update(snapshot());
+              continue;
+            }
+            // Anything else arriving means the round got through.
+            retrying = undefined;
+            // And anything that is not more of the same write means the write is over — the
+            // completed `tool_call` row says it better, with its result.
+            writing = undefined;
 
-        if (event.type === "retrying") {
-          retrying = { attempt: event.attempt, message: event.message };
-          retried += 1;
-          yield update(snapshot());
-          continue;
-        }
-        if (event.type === "writing") {
-          retrying = undefined;
-          writing = { name: event.name, chars: event.chars, ...(event.path ? { path: event.path } : {}) };
-          yield update(snapshot());
-          continue;
-        }
-        // Anything else arriving means the round got through.
-        retrying = undefined;
-        // And anything that is not more of the same write means the write is over — the
-        // completed `tool_call` row says it better, with its result.
-        writing = undefined;
+            if (event.type === "delta") {
+              append(event.role === "reasoning" ? "reasoning" : "text", event.text);
+            } else if (event.type === "tool_call") {
+              const tool: ToolPart = { id: event.id, name: event.name, args: event.arguments };
+              toolById.set(event.id, tool);
+              pieces.push({ kind: "tool", tool });
+            } else if (event.type === "tool_result") {
+              const tool = toolById.get(event.id);
+              if (tool) tool.result = event.result;
+            } else if (event.type === "stats") {
+              // One of these lands per model request, so the total grows a round at a
+              // time and the footer counts up while he works.
+              const stats = event.stats;
+              rounds.push({
+                uncached: Number(stats.uncachedTokens ?? 0) || 0,
+                cached: Number(stats.cachedTokens ?? 0) || 0,
+                out: Number(stats.responseTokens ?? 0) || 0,
+              });
+              if (typeof stats.costUsd === "number" && Number.isFinite(stats.costUsd)) {
+                costUsd = (costUsd ?? 0) + stats.costUsd;
+              }
+              if (typeof stats.model === "string" && stats.model) model = stats.model;
+              if (typeof stats.provider === "string" && stats.provider) {
+                provider = servedBy(stats.provider, stats.serviceTier);
+              }
+            } else if (event.type === "context") {
+              // `context` is replaced rather than accumulated: this is a reading of the window
+              // as it stands, not a thing that happened, so the last one is the only one still
+              // true. `baseline` is the opposite on purpose — set once, from the first reading,
+              // since that is the one that predates anything this turn did.
+              if (!baseline) baseline = event.context;
+              context = event.context;
+            } else if (event.type === "steered") {
+              pieces.push({ kind: "steered", text: event.text });
+            } else if (event.type === "compacting") {
+              // He is folding to make room. Worth showing because it costs a model call and takes
+              // a moment, so an unexplained pause looks like a hang — and when it happens before
+              // the turn starts, that pause is the entire time between hitting send and seeing
+              // anything at all.
+              folded = true;
+              if (event.foldedFrom != null && event.foldedTo != null) {
+                foldedChars = { from: event.foldedFrom, to: event.foldedTo };
+              }
+            } else {
+              continue; // done
+            }
 
-        if (event.type === "delta") {
-          append(event.role === "reasoning" ? "reasoning" : "text", event.text);
-        } else if (event.type === "tool_call") {
-          const tool: ToolPart = { id: event.id, name: event.name, args: event.arguments };
-          toolById.set(event.id, tool);
-          pieces.push({ kind: "tool", tool });
-        } else if (event.type === "tool_result") {
-          const tool = toolById.get(event.id);
-          if (tool) tool.result = event.result;
-        } else if (event.type === "stats") {
-          // One of these lands per model request, so the total grows a round at a
-          // time and the footer counts up while he works.
-          const stats = event.stats;
-          rounds.push({
-            uncached: Number(stats.uncachedTokens ?? 0) || 0,
-            cached: Number(stats.cachedTokens ?? 0) || 0,
-            out: Number(stats.responseTokens ?? 0) || 0,
-          });
-          if (typeof stats.costUsd === "number" && Number.isFinite(stats.costUsd)) {
-            costUsd = (costUsd ?? 0) + stats.costUsd;
+            yield update(snapshot());
           }
-          if (typeof stats.model === "string" && stats.model) model = stats.model;
-          if (typeof stats.provider === "string" && stats.provider) {
-            provider = servedBy(stats.provider, stats.serviceTier);
+          // The server closed the stream, which it does once the turn is over.
+          break;
+        } catch (error) {
+          if (isAbort(error) || error instanceof TurnFailed) throw error;
+          /* The connection dropped; the turn did not. Find it again. */
+          const conversationId = conversation?.get() || again?.conversationId || "";
+          if (!conversationId) throw error;
+          let back: Response | "over" | null = null;
+          for (let attempt = 0; attempt < REJOIN_DELAYS.length && !back; attempt++) {
+            rejoining = { attempt };
+            yield update(snapshot());
+            if (!(await pause(REJOIN_DELAYS[attempt], again?.signal))) return { complete: false };
+            back = await attachAgain(conversationId, turnId, again?.signal);
           }
-        } else if (event.type === "context") {
-          // `context` is replaced rather than accumulated: this is a reading of the window
-          // as it stands, not a thing that happened, so the last one is the only one still
-          // true. `baseline` is the opposite on purpose — set once, from the first reading,
-          // since that is the one that predates anything this turn did.
-          if (!baseline) baseline = event.context;
-          context = event.context;
-        } else if (event.type === "steered") {
-          pieces.push({ kind: "steered", text: event.text });
-        } else if (event.type === "compacting") {
-          // He is folding to make room. Worth showing because it costs a model call and takes
-          // a moment, so an unexplained pause looks like a hang — and when it happens before
-          // the turn starts, that pause is the entire time between hitting send and seeing
-          // anything at all.
-          folded = true;
-          if (event.foldedFrom != null && event.foldedTo != null) {
-            foldedChars = { from: event.foldedFrom, to: event.foldedTo };
+          rejoining = undefined;
+          if (back === "over") {
+            // It ended while the window was away. What is on screen is everything up to the drop;
+            // the pane fetches the stored copy, which has the rest.
+            yield update(snapshot());
+            return { complete: false };
           }
-        } else {
-          continue; // done
+          if (!back) {
+            throw new Error(
+              "Lost the connection to Kith while this turn was running, and could not get it back. " +
+                "It may still be working — reopen the chat to see.",
+            );
+          }
+          source = back;
+          skip = seen;
         }
-
-        yield update(snapshot());
       }
       /* The stream is over: stamp the end, so the strip can say how long he worked. A turn that
        * threw never reaches here and keeps no end — its strip says it did not finish instead. */
       const ended = timed(Date.now());
       if (ended) yield { content: snapshot(), metadata: ended };
-  } catch (error) {
-    if (isAbort(error)) return;
-    throw error;
-  }
+      return { complete: true };
+    } catch (error) {
+      if (isAbort(error)) return { complete: false };
+      throw error;
+    }
 }
 
 /**
@@ -525,7 +630,7 @@ export async function resumeTurn(
     // is about to own *before* it decides what to render, and a first event would put that
     // answer behind the round trip it exists to settle.
     turnId: response.headers.get("X-Kith-Turn") ?? "",
-    stream: readTurn(response),
+    stream: readTurn(response, undefined, undefined, { conversationId }),
     discard: () => void body.cancel().catch(() => {}),
   };
 }

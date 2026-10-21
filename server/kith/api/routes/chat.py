@@ -1238,6 +1238,32 @@ def chat(payload):
     latest_message = next((m for m in reversed(client_history) if m.get("role") == "user"), None)
     latest = (latest_message or {}).get("content", "") or ""
     resumed = bool(conversation_id)
+
+    # A turn already running here is told, rather than raced — the rule `_wake` follows for a
+    # reminder, applied to a message.
+    #
+    # The window steers on its own when it knows a turn is running. It did not know on
+    # 2026-10-21: its stream had dropped when Chromium restarted its network service, so the chat
+    # looked idle, and "wtf" arrived here as a new message. `live_turns.begin` replaced the running
+    # turn's record and `_arm` its stop switch, so the first turn — parked in a thirty-minute
+    # `wait_for_agents` — carried on unseen and unstoppable, due to wake beside the second one in
+    # the same conversation. Whatever a client believes, two turns in one conversation is never
+    # what was meant.
+    #
+    # The reply is the running turn's own stream, from its start, which is what a client that
+    # thought nothing was running needs to be shown.
+    running = live_turns.current(conversation_id) if resumed else None
+    said = latest.strip() if isinstance(latest, str) else ""
+    if running is not None and said and steering.steer(conversation_id, said):
+        changes.publish("steer", conversation=conversation_id)
+        joined = live_turns.read(running)
+
+        def follow():
+            yield json.dumps({"type": "conversation", "id": conversation_id}) + "\n"
+            yield from live_turns.drain(running, joined)
+
+        return _ndjson(follow(), turn=running.id)
+
     if not conversation_id:
         conversation_id = conversations.start(AGENT_DB_PATH, latest)["id"]
     _bind_to_project(conversation_id, payload.get("projectId"))
