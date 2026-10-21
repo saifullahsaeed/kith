@@ -309,9 +309,15 @@ def no_stray_background_threads(monkeypatch):
     Stopping a thread you should never have started is the wrong end of the problem. Nothing
     in the suite asserts the thread exists, so it simply does not start.
     """
+    from kith import app
     from kith.services import scheduler
 
     monkeypatch.setattr(scheduler, "start", lambda resume: None)
+    # The same hazard with an 8-second fuse. `create_app` arms a timer that runs
+    # `agents.recover()`, which fires in whichever test is running eight seconds later in that
+    # worker, against *its* database: seen on 2026-10-21 as an extra agent turn in
+    # `test_an_agent_is_a_conversation`'s whole-loop test, a run in which nothing failed by itself.
+    monkeypatch.setattr(app, "_resume_agents", lambda: None)
     yield
 
 
