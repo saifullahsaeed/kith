@@ -359,7 +359,13 @@ interface Held {
   /** The emulation actually in force, for the same reason `bounds` is kept: `place` runs on
    *  every scroll of the column the pane lives in, and re-asserting a device override is a
    *  relayout of the page inside it. Null means none is set. */
-  emulated: { width: number; height: number; scale: number } | null;
+  emulated: Emulation | null;
+  /** Whether the page has a renderer that can take a device override: set when a document is
+   *  ready, cleared when the renderer dies. See `emulationFor`. */
+  live: boolean;
+  /** The scale the last placement asked for, kept so the override can be set again once there
+   *  is a renderer to set it on. */
+  scale: number;
   /** Sign-in popups this page opened and that are still open — see `watch`. Closed with it. */
   popups: Set<BrowserWindow>;
   /** When a navigation last turned out to be a file download, which this browser refuses. Lets
@@ -509,23 +515,46 @@ function applyBounds(one: Held, next: Placed): void {
  * still the letterboxed rectangle, so the page lays out at the drawn size — exactly the old
  * behaviour — and the status still carries the scale, so nothing claims a size it did not get.
  */
-function applyEmulation(one: Held, scale: number): void {
-  const contents = one.contents.webContents;
-  if (contents.isDestroyed()) return;
-  const wanted = one.viewport
-    ? { width: one.viewport.width, height: one.viewport.height, scale }
-    : null;
-  const now = one.emulated;
-  if (!wanted && !now) return;
-  if (
-    wanted &&
-    now &&
-    now.width === wanted.width &&
-    now.height === wanted.height &&
-    now.scale === wanted.scale
-  ) {
-    return;
+export interface Emulation {
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/**
+ * What to do about the device override, given where a tab stands. Pure, so the rule can be held
+ * to account without Electron.
+ *
+ * **Nothing at all until the page has a renderer.** Electron's `enableDeviceEmulation` reaches for
+ * the main frame's widget without checking it exists, and a tab that has not loaded anything yet —
+ * or whose renderer has died — has none: the call dereferences null and takes the whole app down
+ * with SIGSEGV, no exception to catch. Kith crashed this way at 18:26 and 21:12 on 2026-10-21, both
+ * times in the main process on `WebContents::EnableDeviceEmulation`, and a five-line Electron script
+ * reproduces it: a fresh `WebContentsView`, the call, gone. After a restart every tab is fresh, so
+ * the first `resize` an agent sent was enough. A tab with no renderer keeps its viewport, and the
+ * override goes on when a document is ready (`dom-ready` in `watch`).
+ */
+export function emulationFor(
+  tab: { live: boolean; viewport: { width: number; height: number } | null; emulated: Emulation | null },
+  scale: number,
+): { act: "none" } | { act: "disable" } | { act: "enable"; wanted: Emulation } {
+  if (!tab.live) return { act: "none" };
+  const wanted = tab.viewport ? { width: tab.viewport.width, height: tab.viewport.height, scale } : null;
+  const now = tab.emulated;
+  if (!wanted) return now ? { act: "disable" } : { act: "none" };
+  if (now && now.width === wanted.width && now.height === wanted.height && now.scale === wanted.scale) {
+    return { act: "none" };
   }
+  return { act: "enable", wanted };
+}
+
+function applyEmulation(one: Held, scale: number): void {
+  one.scale = scale;
+  const contents = one.contents.webContents;
+  if (contents.isDestroyed() || contents.isCrashed()) return;
+  const step = emulationFor(one, scale);
+  if (step.act === "none") return;
+  const wanted = step.act === "enable" ? step.wanted : null;
   one.emulated = wanted;
   try {
     if (!wanted) {
@@ -1709,6 +1738,8 @@ function makeTab(browser: Browser, partition: string): Held {
     viewport: null,
     bounds: null,
     emulated: null,
+    live: false,
+    scale: 1,
     popups: new Set(),
     downloaded: 0,
     frame: null,
@@ -1930,6 +1961,19 @@ function watch(one: Held): void {
   // failure of the page before it.
   contents.on("did-navigate", () => {
     one.failure = "";
+  });
+  /* The renderer the device override lives in. A tab has none until its first document, and
+   * calling `enableDeviceEmulation` before then crashes the app — see `emulationFor`. Set again on
+   * every document, not only the first: a navigation can land in a new renderer process, which
+   * starts without the override while `emulated` still says it is there. */
+  contents.on("dom-ready", () => {
+    one.live = true;
+    one.emulated = null;
+    applyEmulation(one, one.scale);
+  });
+  contents.on("render-process-gone", () => {
+    one.live = false;
+    one.emulated = null;
   });
   contents.on("did-start-loading", changed);
   contents.on("did-stop-loading", changed);

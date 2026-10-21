@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { fitted, parseRatio, reachesKith, VIEWPORT_PRESETS } from "./web-views";
+import { emulationFor, fitted, parseRatio, reachesKith, VIEWPORT_PRESETS } from "./web-views";
 
 /**
  * The letterbox, which is the whole of `resize`'s geometry.
@@ -165,5 +165,36 @@ describe("Kith's own server, from inside the pane", () => {
     ]) {
       expect(reachesKith(address, ports), address).toBe(false);
     }
+  });
+});
+
+/**
+ * The device override goes on only once a tab has a renderer to put it on.
+ *
+ * `enableDeviceEmulation` on a tab that has not loaded anything yet dereferences null inside
+ * Electron and takes the whole app down with SIGSEGV — Kith crashed that way twice on 2026-10-21,
+ * the second time 39 seconds after a restart, when the first `resize` reached a fresh tab. There is
+ * no exception to catch, so the only fix is not to make the call.
+ */
+describe("the device override", () => {
+  const phone = { width: 390, height: 844 };
+
+  it("is not set on a tab with no renderer, whatever the viewport", () => {
+    expect(emulationFor({ live: false, viewport: phone, emulated: null }, 1)).toEqual({ act: "none" });
+    expect(emulationFor({ live: false, viewport: null, emulated: { ...phone, scale: 1 } }, 1)).toEqual({ act: "none" });
+  });
+
+  it("is set once there is one", () => {
+    expect(emulationFor({ live: true, viewport: phone, emulated: null }, 0.8)).toEqual({
+      act: "enable",
+      wanted: { ...phone, scale: 0.8 },
+    });
+  });
+
+  it("is not set again when nothing changed, and is taken off when the viewport is", () => {
+    const set = { ...phone, scale: 1 };
+    expect(emulationFor({ live: true, viewport: phone, emulated: set }, 1)).toEqual({ act: "none" });
+    expect(emulationFor({ live: true, viewport: null, emulated: set }, 1)).toEqual({ act: "disable" });
+    expect(emulationFor({ live: true, viewport: null, emulated: null }, 1)).toEqual({ act: "none" });
   });
 });
