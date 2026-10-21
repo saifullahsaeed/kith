@@ -29,7 +29,7 @@ import pytest
 from kith.infra import permissions
 from kith.infra.db import repositories as repo
 from kith.infra.workspace import paths, worktrees
-from kith.kernel import live_turns, session_context
+from kith.kernel import live_turns, session_context, turns
 from kith.services import agents, conversations
 
 
@@ -80,15 +80,16 @@ def no_turns(monkeypatch):
     """Deliveries recorded instead of turns started — the mechanism without the model."""
     started: list[str] = []
 
-    def start(conversation_id: str) -> bool:
-        mail = agents.take(conversation_id)
+    def start(request: turns.Request) -> bool:
+        mail = agents.take(request.conversation_id)
         if not mail:
             return False
-        started.append(conversation_id)
+        started.append(request.conversation_id)
+        # Over as soon as it began, so it never holds a slot.
+        turns.ended(request)
         return True
 
-    monkeypatch.setattr(agents, "_start_turn", start)
-    monkeypatch.setattr(agents, "_stop_turn", lambda conversation_id: True)
+    turns.install(start)
     return started
 
 
@@ -621,7 +622,9 @@ class TestTheWholeLoop:
         monkeypatch.setattr(route, "_tool_block_chars", lambda: 0)
         monkeypatch.setattr(route.tools, "host", lambda *a, **k: SimpleNamespace(schemas=lambda *a, **k: []))
         monkeypatch.setattr(agents, "base_dir", lambda: repo_dir)
-        agents.install(route.start_from_mail, route._stop)
+        from kith.kernel import turns as supervisor
+
+        supervisor.install(route.run_queued)
 
         chat = _chat(db)
         with session_context.working_in(chat):

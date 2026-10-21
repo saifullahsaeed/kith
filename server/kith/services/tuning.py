@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -339,7 +340,7 @@ def _paths() -> list[dict]:
             "label": "His folder",
             "value": str(here),
             "env": "KITH_WORKSPACE",
-            "bytes": _folder_size(here),
+            **_size_of(here),
             "entries": sum(1 for item in here.iterdir() if item.name != workspace.INTERNAL_DIR),
             "open": True,
             # The one folder that is a choice rather than a consequence — and the only one
@@ -352,7 +353,7 @@ def _paths() -> list[dict]:
             "label": "His databases",
             "value": str(settings.DATA_DIR),
             "env": "KITH_DATA_DIR",
-            "bytes": _folder_size(settings.DATA_DIR),
+            **_size_of(settings.DATA_DIR),
             "open": True,
             "note": "Memory, tasks, notes, the flight recorder.",
         },
@@ -370,7 +371,7 @@ def _paths() -> list[dict]:
             "label": "Conversations",
             "value": str(here / workspace.INTERNAL_DIR / "conversations"),
             "env": "",
-            "bytes": _folder_size(here / workspace.INTERNAL_DIR / "conversations"),
+            **_size_of(here / workspace.INTERNAL_DIR / "conversations"),
             "open": True,
             "note": "One readable transcript per conversation, never overwritten.",
         },
@@ -387,6 +388,42 @@ def _paths() -> list[dict]:
             "env": "KITH_UI_DIST",
         },
     ]
+
+
+#: Folder sizes, measured off the request path and kept for a few minutes.
+#:
+#: They used to be measured inside `GET /api/tuning`, by walking every file under the workspace —
+#: which holds project checkouts, `node_modules` and agents' worktrees. Measured 2026-10-21: the
+#: settings page took 2.1–4.6 s to open while every other request answered in under 75 ms. A size
+#: is a nice-to-know beside a path, never worth a wait, so the first open shows the paths without
+#: sizes and starts measuring; the next open has them. The page already leaves out a size it
+#: was not given.
+_SIZES: dict[str, tuple[int, float]] = {}
+_MEASURING: set[str] = set()
+_SIZES_LOCK = threading.Lock()
+_SIZE_FRESH_SECONDS = 300.0
+
+
+def _size_of(path: Path) -> dict:
+    """``{"bytes": n}`` if the folder's size is known, else ``{}`` — and a measurement started if
+    it is unknown or more than a few minutes old."""
+    key = str(path)
+    with _SIZES_LOCK:
+        known = _SIZES.get(key)
+        stale = known is None or time.monotonic() - known[1] > _SIZE_FRESH_SECONDS
+        start = stale and key not in _MEASURING
+        if start:
+            _MEASURING.add(key)
+    if start:
+        threading.Thread(target=_measure, args=(Path(path),), name="kith-folder-size", daemon=True).start()
+    return {"bytes": known[0]} if known else {}
+
+
+def _measure(path: Path) -> None:
+    size = _folder_size(path)
+    with _SIZES_LOCK:
+        _SIZES[str(path)] = (size, time.monotonic())
+        _MEASURING.discard(str(path))
 
 
 def _folder_size(path: Path) -> int:

@@ -27,12 +27,12 @@ conversation.
 
 from __future__ import annotations
 
-import time
+import threading
 
 import pytest
 
 from kith.api.routes import chat as route
-from kith.kernel import live_turns, session_context
+from kith.kernel import live_turns, session_context, turns
 
 
 @pytest.fixture
@@ -58,7 +58,17 @@ def turn(monkeypatch):
 
 
 def _drive(conversation_id: str, trigger: str = "a build finished") -> None:
+    """Wake the conversation and wait for the turn to end.
+
+    `continue_conversation` queues the wake and returns now; it used to run the turn and drain it
+    on the scheduler's thread. The wait it no longer does is done here instead.
+    """
+    turns.install(route.run_queued)
     route.continue_conversation(conversation_id, trigger)
+    live = live_turns.current(conversation_id)
+    if live is not None:
+        for _ in live_turns.watch(live):
+            pass
 
 
 class TestTheSchedulersTurnIsSupervised:
@@ -109,13 +119,30 @@ class TestItIsTheSameDoor:
         assert body.count("live_turns.begin(") == 1
         assert body.count("_Recorder(conversation_id)") == 1
 
-    def test_the_scheduler_still_gets_a_synchronous_call(self, turn):
-        """`wake_finished` and `fire_due` both loop over conversations calling this. Returning
-        the moment the thread started would set every one of them going at once."""
-        started = time.monotonic()
-        _drive("c-1")
-        assert turn.get("messages") is not None, "the turn ran before the call returned"
-        assert time.monotonic() - started < 30
+    def test_the_scheduler_does_not_wait_for_the_turn(self, turn, monkeypatch):
+        """It used to: the wake drained the turn on the scheduler's one timer thread, so a long
+        turn held every other reminder until it ended. `wake_finished` and `fire_due` looping over
+        conversations no longer set them all going at once either — `kernel/turns` holds the ones
+        past the limit."""
+        release = threading.Event()
+
+        def _slow(
+            recorder, messages, config, conversation_id, opening="", *, stop_switch=None, tool_host=None
+        ):
+            release.wait(timeout=10)
+            yield '{"type": "delta", "role": "text", "text": "late"}\n'
+
+        monkeypatch.setattr(route, "_turn", _slow)
+        turns.install(route.run_queued)
+        try:
+            route.continue_conversation("c-slow", "a build finished")
+            assert live_turns.current("c-slow") is not None, "returned with the turn still running"
+        finally:
+            release.set()
+        live = live_turns.current("c-slow")
+        if live is not None:
+            for _ in live_turns.watch(live):
+                pass
 
 
 class TestNobodyIsWatchingIsStillTrue:

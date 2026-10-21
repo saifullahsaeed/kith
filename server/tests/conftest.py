@@ -316,6 +316,20 @@ def no_stray_background_threads(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_leftover_turn_queue():
+    """Every test starts with an empty turn queue and no runner.
+
+    `kernel/turns` is process state like `live_turns`: a request queued by one test, or a runner
+    installed by it, would otherwise be started by whatever the next test submits.
+    """
+    from kith.kernel import turns
+
+    turns.reset()
+    yield
+    turns.reset()
+
+
+@pytest.fixture(autouse=True)
 def isolated_tuning(tmp_path_factory):
     """Every test resolves tunables against its own empty database.
 

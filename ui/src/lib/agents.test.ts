@@ -82,6 +82,13 @@ describe("what an agent is doing", () => {
     expect(agentLook({ state: "closed", working: true, asking: false })).toBe("closed");
     expect(agentLook({ state: "", working: false, asking: false })).toBe("idle");
   });
+
+  it("calls an agent waiting for a turn slot queued, not working", () => {
+    expect(agentLook({ state: "working", working: false, asking: false, queued: true })).toBe("queued");
+    // A running turn wins: queued is only ever the wait before one.
+    expect(agentLook({ state: "working", working: true, asking: false, queued: true })).toBe("live");
+    expect(agentLook({ state: "closed", working: false, asking: false, queued: true })).toBe("closed");
+  });
 });
 
 describe("who sent a message", () => {

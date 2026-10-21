@@ -28,7 +28,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 
-from kith.kernel import changes, session_context
+from kith.kernel import changes, session_context, turns
 
 #: How long a question waits before giving up on being answered.
 _DEADLINE_SECONDS = 15 * 60
@@ -145,7 +145,10 @@ def ask(conversation_id: str, raw: list, deadline: float = _DEADLINE_SECONDS) ->
         previous.answered.set()
 
     try:
-        if not question.answered.wait(timeout=deadline):
+        # A background turn's slot is free while it waits on a person; see `kernel/turns.parked`.
+        with turns.parked():
+            answered = question.answered.wait(timeout=deadline)
+        if not answered:
             return {
                 "ok": True,
                 "answered": False,

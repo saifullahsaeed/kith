@@ -19,9 +19,8 @@ from kith.config import (
     ollama_host,
 )
 from kith.domain import tooling
-from kith.infra import permissions
 from kith.infra.db import repositories as repo
-from kith.kernel import changes, clock, live_turns, session_context, stopping
+from kith.kernel import changes, clock, live_turns, session_context, stopping, turns
 from kith.llm import ledger
 from kith.schemas import (
     AnswerSchema,
@@ -31,6 +30,7 @@ from kith.services import agents, conversations, history, host_costs, questions,
 from kith.services.activity import describe_call, feed, short_args
 from kith.services.agent_loop import _images_from, stream_agent, without_image
 from kith.services.turn import report
+from kith.services.turn import stop as turn_stop
 from kith.services.turn.prompt import _build_messages, _conversation_chars, framing
 from kith.settings import AGENT_DB_PATH
 
@@ -61,32 +61,13 @@ _current = stopping.current
 
 
 def _stop(conversation_id: str) -> bool:
-    """Ask the turn running in a conversation to stop. False if there was none.
-
-    Order matters here, and it used to be the other way round.
-
-    A turn parked on a question is not reading the switch — it is inside a tool call, waiting on
-    an event — so the waits have to be released or Stop does nothing for up to fifteen minutes.
-    But releasing *first* hands the turn back its next round before it has been told to stop:
-    `ask` returns the moment the event is set, the loop appends the result, `_turn` yields it and
-    only then reads the flag. Lose that race and the flag is still unset, so the turn carries
-    on — one more model call, on the full conversation, after the person pressed Stop. Which is
-    what "I stopped it and it started again" is.
-
-    So the flag goes on first and the waits are released after. The window closes rather than
-    merely being small: by the time anything the release woke can reach a check, the flag it
-    reads is already set.
-    """
-    was_running = stopping.stop(conversation_id)
-    # Now nothing that wakes up can get past its next check, so it is safe to wake it.
-    questions.release(conversation_id)
+    """Ask the turn running in a conversation to stop, or drop one waiting for a slot. False if
+    there was neither. The order of things is `services/turn/stop.stop`'s; see there."""
+    stopped = turn_stop.stop(conversation_id)
     # And an agent parked on a question to its handler, which is the same wait by another road.
+    # After the flag, like every other release.
     agents.release(conversation_id)
-    permissions.release_waiting(conversation_id)
-    # A turn parked on a plugin surface is not reading the stop switch either, so stopping it
-    # has to reach in and wake it — the same reason the two lines above exist.
-    _release_plugin_calls(conversation_id)
-    return was_running
+    return stopped
 
 
 @api.get("/chat/<conversation_id>/question")
@@ -298,7 +279,7 @@ def live_conversations():
     segments before converters, so `live` cannot be swallowed as a conversation id — but reading
     the file top to bottom should not require knowing that.
     """
-    return jsonify({"conversations": live_turns.live()})
+    return jsonify({"conversations": live_turns.live(), "queued": turns.queued()})
 
 
 @api.post("/chat/<conversation_id>/stop")
@@ -464,8 +445,12 @@ def begin_turn(
     opening: str = "",
     sent_from: str = "",
     unattended: bool = False,
+    supervised: turns.Request | None = None,
 ):
     """Start a turn, supervised, and return the stream to watch. **The only way one begins.**
+
+    `supervised` is the slot a background turn holds in `kernel/turns`, handed back when the turn
+    is over. None for a turn the person started, which never waits for a slot.
 
     There used to be two. A typed message came through here and got the whole apparatus — a
     live turn the window can follow, a stop switch, a steer queue, the session binding, the
@@ -636,17 +621,24 @@ def begin_turn(
             # Read before `finish` and sent after it: `live_turns.begin` replaces whatever record
             # is there, so starting the next turn before this one has released its readers is the
             # race that leaves a run nobody can watch — see `continue_conversation`.
-            unread = steering.take(conversation_id)
-            live_turns.finish(live)  # releases every reader, now and later
-            if unread:
-                _send_unread_steer(conversation_id, unread)
-            else:
-                # Mail that arrived after the last round took it, and — in an agent — the report
-                # to its handler. After `finish`, so a delivery here sees no turn running.
-                try:
-                    agents.turn_ended(conversation_id, stopped=stop_switch.is_set(), failed=failed)
-                except Exception:
-                    traceback.print_exc()
+            try:
+                unread = steering.take(conversation_id)
+                live_turns.finish(live)  # releases every reader, now and later
+                if unread:
+                    _send_unread_steer(conversation_id, unread)
+                else:
+                    # Mail that arrived after the last round took it, and — in an agent — the
+                    # report to its handler. After `finish`, so a delivery here sees no turn
+                    # running.
+                    try:
+                        agents.turn_ended(conversation_id, stopped=stop_switch.is_set(), failed=failed)
+                    except Exception:
+                        traceback.print_exc()
+            finally:
+                # The slot last, after the report has been posted: the handler it wakes is queued
+                # by then, and freeing the slot is what lets the queue reach it.
+                if supervised is not None:
+                    turns.ended(supervised)
 
     # `copy_context().run` rather than a bare Thread target: everything else this request
     # established in ContextVars — the project, the turn's scratch notes, whether this is
@@ -662,18 +654,43 @@ def begin_turn(
 
 
 def continue_conversation(conversation_id: str, trigger: str) -> None:
-    """Run one turn in `conversation_id`, started by something other than a typed message.
+    """Wake `conversation_id` with `trigger`: a turn started by something other than a typed message.
 
-    The scheduler's door onto `begin_turn`, and now nothing more than that. It used to build the
-    messages and drive `_turn` itself, which is how every turn Kith began on his own came to be
-    unwatchable, unstoppable and unsteerable — see `begin_turn` for how that happened.
+    The scheduler's door, and it no longer waits. It used to run the turn and drain it on the
+    scheduler's one timer thread, which kept the scheduler serial at a price — a long turn held
+    the timer, and nothing else was checked until it ended. The question that was deferred then,
+    how many turns may run at once, has an answer now: `kernel/turns`. This queues the wake there
+    and returns; the turn runs when a slot is free, through `run_queued`.
 
-    Public, and here rather than in `services/scheduler.py`, which used to reach in and import
-    `_build_messages`, `_Recorder` and `_turn` — three *private* functions — out of this
-    module. That was the last upward import in the tree. A reminder firing is not a scheduling
-    concern that happens to need a turn; it is a turn, started differently, and the turn lives
-    here until it moves out of the route entirely.
+    The context is the caller's, copied now, which is what `begin_turn` used to copy when it was
+    called from here directly.
     """
+    turns.submit(
+        turns.Request(
+            conversation_id,
+            lane="wake",
+            kind="wake",
+            text=trigger,
+            context=contextvars.copy_context(),
+        )
+    )
+
+
+def run_queued(request: turns.Request):
+    """Start the background turn `request` asks for. The runner `kernel/turns` is given at boot.
+
+    Returns the live turn, or None when there was nothing to start — the wake was steered into a
+    turn already running, or the mail was taken by one.
+    """
+    if request.kind == "wake":
+        return _wake(request.conversation_id, request.text, request)
+    if request.kind == "mail":
+        return start_from_mail(request.conversation_id, request)
+    return None
+
+
+def _wake(conversation_id: str, trigger: str, supervised: turns.Request | None = None):
+    """Say `trigger` to a conversation: into the turn running there, or as a turn of its own."""
     # A turn already running here is told, rather than raced.
     #
     # Nothing checked. The scheduler called this whenever a reminder came due, so a reminder
@@ -694,7 +711,7 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
     # check and the call — because a reminder that says nothing is worse than one that says it a
     # moment later in a turn of its own.
     if live_turns.current(conversation_id) is not None and steering.steer(conversation_id, trigger):
-        return
+        return None
 
     # `system`, not `user`. This was recorded as a message from the person, and it is not one:
     # nobody typed "One of your reminders just fired". Three things followed from that and all
@@ -706,23 +723,13 @@ def continue_conversation(conversation_id: str, trigger: str) -> None:
     # It is still a turn boundary — `full_messages` and `timeline` both treat `system` the way
     # they treat `user` — which is the part the old shape was really buying.
     conversations.record(AGENT_DB_PATH, conversation_id, "system", trigger)
-    live = begin_turn(
+    return begin_turn(
         conversation_id,
         default_config(),
         lambda: _history_for_turn(conversation_id, {"role": "system", "content": trigger}),
         trigger,
+        supervised=supervised,
     )
-    # Drained rather than left to run, which keeps the scheduler exactly as serial as it was:
-    # `wake_finished` and `fire_due` both loop over conversations calling this, and returning
-    # the moment the thread started would set every one of them going at once. The turn is on
-    # its own thread either way — this waits for it the same way the first reader of a chat
-    # does, through the one watch path, so there is no second way to wait to keep in step.
-    #
-    # It does mean a long turn holds the timer thread, and nothing else is checked until it
-    # ends. That was true before this and is not made worse by it; fixing it is a question
-    # about how many turns may run at once, which is not this change.
-    for _ in live_turns.watch(live):
-        pass
 
 
 def _record_present(conversation_id: str, messages: list[dict]) -> None:
@@ -767,48 +774,56 @@ def _send_unread_steer(conversation_id: str, said: str) -> None:
     readers, and a failure to start the next turn must not be raised into a thread nobody is
     watching. The text is in the transcript either way, so the worst case is that it waits for the
     next thing the person says rather than being lost.
+
+    Something the person typed, so a turn of theirs: started at once, never queued. Not waited
+    for either — it runs on its own thread like any other, and draining it here would hold the
+    finishing turn's thread, and a background turn's slot with it, for the whole of the next turn.
     """
     try:
         conversations.record(AGENT_DB_PATH, conversation_id, "user", said)
         changes.publish("steer", conversation=conversation_id)
-        live = begin_turn(
+        begin_turn(
             conversation_id,
             default_config(),
             lambda: _history_for_turn(conversation_id, {"role": "user", "content": said}),
             said,
         )
-        for _ in live_turns.watch(live):
-            pass
     except Exception:
         traceback.print_exc()
 
 
-def start_from_mail(conversation_id: str) -> bool:
+def start_from_mail(conversation_id: str, supervised: turns.Request | None = None):
     """Start a turn in a conversation from the mail waiting for it. The agent tree's door.
 
-    Called by `agents.deliver`, holding that conversation's lock and having seen no turn running,
-    so taking the mail and registering the turn happen before anyone else can look.
-
-    **In a fresh context**, not the caller's. The caller is usually a tool call in another session
-    — a handler starting an agent, an agent reporting — and `begin_turn` carries every ContextVar
-    of whoever calls it onto the new turn's thread: the caller's worktree pin, its turn notes, its
+    Reached through `kernel/turns`, which runs it inside the request's own context — a fresh one,
+    not the caller's. The caller of `agents.deliver` is usually a tool call in another session — a
+    handler starting an agent, an agent reporting — and `begin_turn` carries every ContextVar of
+    whoever calls it onto the new turn's thread: the caller's worktree pin, its turn notes, its
     unattended flag. A child turn inheriting its handler's worktree would write in it.
+
+    Looks again before starting, because time has passed since the mail was posted: a turn may
+    have started here and taken the mail at a round boundary, or a handler may have stopped this
+    agent while it waited for a slot. Either way there is nothing to start, and the mail that is
+    left waits for whatever reads it next.
     """
+    if live_turns.current(conversation_id) is not None:
+        return None
+    found = agents.row(conversation_id)
+    if found is None or (
+        found.get("parent_id") and found.get("agent_state") in (agents.STOPPED, agents.CLOSED)
+    ):
+        return None
     mail = agents.take(conversation_id)
     if not mail:
-        return False
+        return None
     latest = mail[-1]
-
-    def go():
-        return begin_turn(
-            conversation_id,
-            _config_for(conversation_id),
-            lambda: _history_for_turn(conversation_id, latest),
-            str(latest["content"]),
-        )
-
-    contextvars.Context().run(go)
-    return True
+    return begin_turn(
+        conversation_id,
+        _config_for(conversation_id),
+        lambda: _history_for_turn(conversation_id, latest),
+        str(latest["content"]),
+        supervised=supervised,
+    )
 
 
 def _config_for(conversation_id: str):
@@ -1416,13 +1431,3 @@ def _turn(
     # After the `finally`, so the order the client sees is unchanged: the row is written and
     # the feed is closed, and only then does the stream say it is over.
     yield json.dumps({"type": "done"}) + "\n"
-
-
-def _release_plugin_calls(conversation_id: str) -> None:
-    """Wrapped and lazy: a plugin fault must never be what stops a stop from working."""
-    try:
-        from kith.services.plugins import calls
-
-        calls.release(conversation_id)
-    except Exception:
-        pass

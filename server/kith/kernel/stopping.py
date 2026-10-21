@@ -1,9 +1,9 @@
 """Whether the turn running in a conversation has been asked to stop.
 
 One `threading.Event` per conversation, armed when a turn begins and cleared when it ends.
-The chat route owns *deciding* to stop — that means setting this and then releasing whatever
-the turn is parked on, a question or a permission, which are services and infra and have no
-business in here. What lives here is only the switch itself.
+`services/turn/stop` owns *deciding* to stop — that means setting this and then releasing
+whatever the turn is parked on, a question or a permission, which are services and infra and have
+no business in here. What lives here is only the switch itself.
 
 **In the kernel because everything has to be able to read it and nothing can be handed it.**
 It began as four private functions and a dict inside `api/routes/chat.py`, which was right
@@ -72,7 +72,7 @@ def stop(conversation_id: str) -> bool:
     """Set the switch. False if no turn was running.
 
     Only the flag. Waking whatever the turn is parked on — an unanswered question, a permission
-    prompt — is the caller's, and the order matters: see `api/routes/chat._stop`, which does
+    prompt — is the caller's, and the order matters: see `services/turn/stop.stop`, which does
     this first and releases after, because releasing first hands the turn its next round before
     it has been told to stop.
     """

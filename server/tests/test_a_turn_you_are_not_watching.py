@@ -92,9 +92,17 @@ class TestTheEndpoint:
         try:
             answered = client.get("/api/chat/live")
             assert answered.status_code == 200
-            assert answered.get_json() == {"conversations": ["c-1"]}
+            assert answered.get_json() == {"conversations": ["c-1"], "queued": []}
         finally:
             live_turns.finish(turn)
+
+    def test_it_says_which_are_waiting_for_a_slot(self, client):
+        """Queued is not working: a turn waiting for a slot has no live turn to attach to yet."""
+        from kith.kernel import turns
+
+        turns.install(lambda request: True, limit=lambda: 0)
+        turns.submit(turns.Request("c-2", lane="agents", kind="mail"))
+        assert client.get("/api/chat/live").get_json() == {"conversations": [], "queued": ["c-2"]}
 
     def test_live_is_not_read_as_a_conversation_id(self, client):
         """`/api/chat/live` sits beside `/api/chat/<conversation_id>/…`, so the one thing that could
@@ -308,11 +316,13 @@ class TestTwoTurnsDoNotRaceInOneConversation:
 
     def test_a_wake_steers_a_running_turn_rather_than_starting_one(self, db, monkeypatch):
         from kith.api.routes import chat as route
+        from kith.kernel import turns
         from kith.services import steering
 
         monkeypatch.setattr(route, "AGENT_DB_PATH", db)
         started: list = []
         monkeypatch.setattr(route, "begin_turn", lambda *a, **k: started.append(a) and None)
+        turns.install(route.run_queued)
 
         turn = live_turns.begin("c-race")
         try:
@@ -327,11 +337,12 @@ class TestTwoTurnsDoNotRaceInOneConversation:
 
     def test_a_wake_with_nothing_running_starts_a_turn_as_before(self, db, monkeypatch):
         from kith.api.routes import chat as route
+        from kith.kernel import turns
 
         monkeypatch.setattr(route, "AGENT_DB_PATH", db)
         started: list = []
         monkeypatch.setattr(route, "begin_turn", lambda *a, **k: started.append(a) and None)
-        monkeypatch.setattr(route.live_turns, "watch", lambda live: iter(()))
+        turns.install(route.run_queued)
 
         route.continue_conversation("c-quiet", "One of your reminders just fired.")
         assert len(started) == 1
@@ -339,13 +350,14 @@ class TestTwoTurnsDoNotRaceInOneConversation:
     def test_a_refused_steer_falls_through_to_a_turn(self, db, monkeypatch):
         """A reminder that says nothing is worse than one that says it a moment later."""
         from kith.api.routes import chat as route
+        from kith.kernel import turns
         from kith.services import steering
 
         monkeypatch.setattr(route, "AGENT_DB_PATH", db)
         monkeypatch.setattr(steering, "steer", lambda cid, text: False)
         started: list = []
         monkeypatch.setattr(route, "begin_turn", lambda *a, **k: started.append(a) and None)
-        monkeypatch.setattr(route.live_turns, "watch", lambda live: iter(()))
+        turns.install(route.run_queued)
 
         turn = live_turns.begin("c-full")
         try:

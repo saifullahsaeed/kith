@@ -54,6 +54,9 @@ export interface AgentNode {
   /** It asked its handler something and is parked on the answer. Not you: an agent's questions
    *  go one link up the chain, and only the conductor's reach the person. */
   asking: boolean;
+  /** Its turn is waiting for one of the server's background slots (`kernel/turns`): it has mail to
+   *  read and no turn running yet. Optional because an older server never says. */
+  queued?: boolean;
   model: string;
   /** The branch its worktree is on, or `""` when it shares its handler's folder. */
   branch: string;

@@ -305,3 +305,39 @@ class TestOneWordPerConcept:
         for group in GROUPS:
             text = f"{group.label} {group.blurb}"
             assert not self._GONE.search(text), f"{group.key}: {text!r} describes work that is gone"
+
+
+class TestTheSettingsPageDoesNotWaitForFolderSizes:
+    """`GET /api/tuning` walked the whole workspace to size it, on every load: 2–4.6 s on a real
+    machine. Sizes are measured in the background now and shown from the next open."""
+
+    def test_the_first_snapshot_does_not_walk_the_folders(self, monkeypatch):
+        import threading as _threading
+
+        from kith.services import tuning
+
+        walked = _threading.Event()
+        release = _threading.Event()
+
+        def slow(path):
+            walked.set()
+            release.wait(timeout=5)
+            return 123
+
+        monkeypatch.setattr(tuning, "_SIZES", {})
+        monkeypatch.setattr(tuning, "_MEASURING", set())
+        monkeypatch.setattr(tuning, "_folder_size", slow)
+        try:
+            listed = tuning.snapshot()["paths"]
+            assert all("bytes" not in one for one in listed if one["label"] == "His folder")
+        finally:
+            release.set()
+
+    def test_a_size_once_measured_is_shown(self, monkeypatch, tmp_path):
+        from kith.services import tuning
+
+        monkeypatch.setattr(tuning, "_SIZES", {})
+        monkeypatch.setattr(tuning, "_MEASURING", set())
+        (tmp_path / "a.txt").write_text("hello")
+        tuning._measure(tmp_path)
+        assert tuning._size_of(tmp_path) == {"bytes": 5}

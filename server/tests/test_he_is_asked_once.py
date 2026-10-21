@@ -21,6 +21,7 @@ import itertools
 import pytest
 
 from kith.api.routes import chat as route
+from kith.kernel import turns
 from kith.services import conversations
 
 #: One id per test. The data directory is session-scoped and a transcript is a file, so a shared
@@ -103,9 +104,9 @@ class TestTheNewestMessageIsNotDoubled:
         monkeypatch.setattr(
             route,
             "begin_turn",
-            lambda cid, config, gather, opening="": started.setdefault("messages", gather()) and None,
+            lambda cid, config, gather, opening="", **_: started.setdefault("messages", gather()) and None,
         )
-        monkeypatch.setattr(route.live_turns, "watch", lambda live: iter(()))
+        turns.install(route.run_queued)
 
         route.continue_conversation(conversation_id, "a build finished")
 

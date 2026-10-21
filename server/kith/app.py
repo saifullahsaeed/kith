@@ -20,6 +20,7 @@ from kith import settings
 from kith.api import auth, csp, spa
 from kith.api.routes import api
 from kith.infra.db import config_store, migrations
+from kith.kernel import turns
 from kith.services import embeddings, scheduler, tuning
 
 # The function, not the module: `kith.services.connections` re-exports a ConnectionManager
@@ -162,12 +163,12 @@ def create_app() -> APIFlask:
 
     app.register_blueprint(api, url_prefix="/api")
 
-    # How the agent tree starts and stops turns. A service may not import a route, so it is told —
-    # the same way the scheduler is told how to wake a conversation.
-    from kith.api.routes.chat import _stop, start_from_mail
-    from kith.services import agents
+    # How a background turn is started — a reminder, a finished process, mail in the agent tree —
+    # and how many may run at once. `kernel/turns` queues them; the chat route is the layer that can
+    # run one. The person's own turns never wait for a slot and never come through here.
+    from kith.api.routes.chat import run_queued
 
-    agents.install(start_from_mail, _stop)
+    turns.install(run_queued, limit=lambda: tuning.value("background_turns"))
 
     # Every API call needs the shared secret from here on. CORS stops a page reading the
     # reply, not sending the request, and every process running as you is on loopback too.

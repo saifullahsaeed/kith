@@ -396,6 +396,22 @@ TUNABLES: tuple[Tunable, ...] = (
     # page's "Longest single reply" (`num_predict`). Only the second reached the request; the first
     # was read only when the second was -1. Set to 30,000 on this install while every round was
     # capped at 8,192 — two 16,384-token file writes were cut off under it on 2026-10-01.
+    # Added 2026-10-21 with `kernel/turns`. Before it, every agent turn started the moment its mail
+    # arrived: the first real run had 24 going at once, and a restart resumed them all together.
+    Tunable(
+        key="background_turns",
+        env="KITH_BACKGROUND_TURNS",
+        label="Agent turns at once",
+        help="How many turns he may run at the same time on work you did not just type — agents, "
+        "reminders, finished background jobs. The rest wait their turn; yours never wait. Higher "
+        "finishes a big agent tree sooner and spends faster. A turn waiting on a question or on "
+        "its own agents does not count.",
+        default=4,
+        group="limits",
+        minimum=1,
+        maximum=32,
+        unit="turns",
+    ),
     Tunable(
         key="session_cost_cents",
         env="KITH_SESSION_COST_CENTS",

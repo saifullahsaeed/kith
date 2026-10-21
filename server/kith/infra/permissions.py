@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Literal
 
 from kith import settings
-from kith.kernel import changes, live_turns, session_context
+from kith.kernel import changes, live_turns, session_context, turns
 
 #: How each request was answered, by id. Separate from `Request` because that is frozen —
 #: it describes what he wanted, which does not change, and the verdict is a different fact.
@@ -874,8 +874,11 @@ def _wait_for(decision: Decision) -> None:
     _tell_them(request)
 
     # Deliberately outside the lock: this blocks for up to fifteen minutes and the thread that
-    # ends the wait is the one in `approve`, which needs the lock to do it.
-    if not request.settled.wait(timeout=_DEADLINE_SECONDS):
+    # ends the wait is the one in `approve`, which needs the lock to do it. And parked: a
+    # background turn's slot is free while it waits on a person (see `kernel/turns.parked`).
+    with turns.parked():
+        settled = request.settled.wait(timeout=_DEADLINE_SECONDS)
+    if not settled:
         raise Denied(decision)
     with _state:
         # Read and dropped together: this is the only reader of its own verdict, and leaving it

@@ -18,9 +18,11 @@ running — the hook steering uses — or as the opening of a new turn when the 
 Mail is persisted, so a report in flight when the process dies is delivered when it comes back
 (:func:`recover`).
 
-The turn machinery itself lives in the chat route; this module is handed the two things it needs
-from there by :func:`install` — start a turn from a conversation's mail, stop a conversation's
-turn — the way the scheduler is handed `continue_conversation`. A service may not import a route.
+A turn opened by mail is a background turn: it is submitted to `kernel/turns`, and runs when a
+slot is free. The turn machinery itself is the chat route's, which `kernel/turns` is handed at boot;
+nothing here reaches up to it. A turn waiting on its agents or its handler gives its slot back while
+it waits (`turns.parked`), or a full house of waiting handlers would hold every slot their agents
+need.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,8 +38,9 @@ from kith.infra.db import repositories as repo
 from kith.infra.workspace import worktrees
 from kith.infra.workspace.base import WorkspaceError
 from kith.infra.workspace.paths import base_dir, root
-from kith.kernel import changes, live_turns, session_context, stopping
+from kith.kernel import changes, live_turns, session_context, stopping, turns
 from kith.services import conversations, steering, tuning
+from kith.services.turn import stop as turn_stop
 from kith.settings import AGENT_DB_PATH
 
 #: The lifecycle an agent's row carries, which is what has to survive a restart.
@@ -61,18 +64,6 @@ RESTART_NOTE = (
     "is intact up to the last step that finished — anything after it did not happen. Check where "
     "things stand (your worktree, `git status`) and carry on from there."
 )
-
-#: Set by :func:`install`. Start a turn in a conversation from its waiting mail (True when one
-#: started), and stop the turn running in a conversation.
-_start_turn: Callable[[str], bool] | None = None
-_stop_turn: Callable[[str], bool] | None = None
-
-
-def install(start_turn: Callable[[str], bool], stop_turn: Callable[[str], bool]) -> None:
-    """Hand this module the two things it needs from the turn machinery. Called at boot."""
-    global _start_turn, _stop_turn
-    _start_turn, _stop_turn = start_turn, stop_turn
-
 
 # --------------------------------------------------------------------------- #
 # Reading the tree
@@ -164,6 +155,7 @@ def tree(conversation_id: str) -> list[dict]:
                 "name": child.get("agent_name") or "",
                 "state": child.get("agent_state") or "",
                 "working": live_turns.current(child_id) is not None,
+                "queued": turns.is_queued(child_id),
                 "asking": asking(child_id),
                 "model": child.get("agent_model") or "",
                 "branch": child.get("agent_branch") or "",
@@ -402,11 +394,14 @@ def post(to_id: str, from_id: str, kind: str, body: str) -> str:
 
 
 def deliver(conversation_id: str) -> str:
-    """Hand a session its mail. Returns ``live``, ``started``, ``held``, ``nothing`` or ``gone``.
+    """Hand a session its mail. Returns ``live``, ``started``, ``queued``, ``held``, ``nothing`` or
+    ``gone``.
 
     ``live``: a turn is running, and takes the mail at its next round boundary (or, if it is
     ending, at :func:`turn_ended`). ``held``: a stopped or closed agent keeps its mail until it is
-    resumed. Otherwise a turn starts with the mail as its opening.
+    resumed. Otherwise a turn opens with the mail — now (``started``), or when a slot frees
+    (``queued``). Mail for an agent waits in the agents' lane; mail for the person's own chat — a
+    report reaching the conductor — in the wakes' lane, ahead of it.
     """
     found = row(conversation_id)
     if found is None:
@@ -418,11 +413,10 @@ def deliver(conversation_id: str) -> str:
             return "live"
         if not repo.agent_mail.waiting(AGENT_DB_PATH, conversation_id):
             return "nothing"
-        if _start_turn is None:
-            return "nothing"
         if found.get("parent_id") and found.get("agent_state") != WORKING:
             repo.conversations.set_agent(AGENT_DB_PATH, conversation_id, agent_state=WORKING)
-        return "started" if _start_turn(conversation_id) else "nothing"
+        lane = "agents" if found.get("parent_id") else "wake"
+        return turns.submit(turns.Request(conversation_id, lane=lane, kind="mail"))
 
 
 def take(conversation_id: str) -> list[dict]:
@@ -510,26 +504,31 @@ def wait_for(conversation_id: str, minutes: float = 20) -> dict:
     deadline = time.monotonic() + limit
     switch = stopping.current(conversation_id)
     arrived = _event(conversation_id)
-    while True:
-        arrived.clear()
-        mail = repo.agent_mail.waiting(AGENT_DB_PATH, conversation_id)
-        if mail:
-            return {"ok": True, "arrived": _summary(mail)}
-        if steering.waiting(conversation_id):
-            return {"ok": True, "note": "Your person said something — it is next."}
-        if switch is not None and switch.is_set():
-            return {"ok": True, "note": "Stopped."}
-        if not _busy_below(conversation_id):
-            return {"ok": True, "note": "None of your agents is working any more, and nothing new has arrived."}
-        left = deadline - time.monotonic()
-        if left <= 0:
-            still = [label(one) for one in children(conversation_id) if busy(one)]
-            return {
-                "ok": True,
-                "note": f"Nothing yet after {round(limit / 60)} min. Still working: {', '.join(still)}. "
-                "Wait again, or message one if it has been quiet too long.",
-            }
-        arrived.wait(timeout=min(_RECHECK_SECONDS, left))
+    # Its slot is free while it waits: the agents it is waiting for may be the ones queued for it.
+    with turns.parked():
+        while True:
+            arrived.clear()
+            mail = repo.agent_mail.waiting(AGENT_DB_PATH, conversation_id)
+            if mail:
+                return {"ok": True, "arrived": _summary(mail)}
+            if steering.waiting(conversation_id):
+                return {"ok": True, "note": "Your person said something — it is next."}
+            if switch is not None and switch.is_set():
+                return {"ok": True, "note": "Stopped."}
+            if not _busy_below(conversation_id):
+                return {
+                    "ok": True,
+                    "note": "None of your agents is working any more, and nothing new has arrived.",
+                }
+            left = deadline - time.monotonic()
+            if left <= 0:
+                still = [label(one) for one in children(conversation_id) if busy(one)]
+                return {
+                    "ok": True,
+                    "note": f"Nothing yet after {round(limit / 60)} min. Still working: {', '.join(still)}. "
+                    "Wait again, or message one if it has been quiet too long.",
+                }
+            arrived.wait(timeout=min(_RECHECK_SECONDS, left))
 
 
 def _summary(mail: list[dict]) -> str:
@@ -553,7 +552,7 @@ def turn_ended(conversation_id: str, *, stopped: bool = False, failed: str = "")
 
     Called after the turn has released its readers, so a delivery here sees no turn running.
     """
-    if deliver(conversation_id) in ("started", "live"):
+    if deliver(conversation_id) in ("started", "queued", "live"):
         return
     found = row(conversation_id)
     if not found or not found.get("parent_id"):
@@ -644,7 +643,10 @@ def ask_up(conversation_id: str, questions: list) -> dict:
     changes.publish("agents", conversation_id)
     try:
         post(handler_id, conversation_id, "question", text)
-        if not asked.event.wait(timeout=ASK_WAIT_SECONDS):
+        # Its slot is free while it waits: the handler that has to answer may be queued for one.
+        with turns.parked():
+            answered = asked.event.wait(timeout=ASK_WAIT_SECONDS)
+        if not answered:
             return {
                 "ok": True,
                 "answered": False,
@@ -730,6 +732,7 @@ def message(handler_id: str, name: str, text: str) -> dict:
         "delivered": {
             "live": "it is working — it gets this at its next step",
             "started": "it was idle — this started it again",
+            "queued": "it was idle — it starts again when a turn slot frees",
         }.get(how, how),
     }
 
@@ -767,11 +770,13 @@ def _halt(conversation_id: str) -> None:
         # finished — "stop everything" is not "forget what already reported".
         return
     repo.conversations.set_agent(AGENT_DB_PATH, conversation_id, agent_state=STOPPED)
-    release(conversation_id)
     if live_turns.current(conversation_id) is not None:
         _quiet.add(conversation_id)
-        if _stop_turn is not None:
-            _stop_turn(conversation_id)
+    # The flag first, a turn still waiting for a slot dropped, and only then its own waits woken —
+    # the order `turn_stop.stop` explains. The mail a dropped turn would have opened stays in the
+    # mailbox, held while the agent is stopped.
+    turn_stop.stop(conversation_id)
+    release(conversation_id)
 
 
 def close(handler_id: str, names: list[str], *, force: bool = False) -> dict:
@@ -858,6 +863,9 @@ def forget(conversation_id: str) -> None:
 def recover() -> int:
     """After a restart: resume every agent that was working, and deliver everything undelivered.
 
+    Every one of them is queued rather than started, so a tree that was busy when the process died
+    comes back a few turns at a time instead of all at once.
+
     Returns how many sessions were handed something.
     """
     for found in repo.conversations.agents_in(AGENT_DB_PATH, (WORKING,)):
@@ -866,7 +874,7 @@ def recover() -> int:
             repo.agent_mail.post(AGENT_DB_PATH, conversation_id, "", "resume", RESTART_NOTE)
     handed = 0
     for conversation_id in repo.agent_mail.addressees(AGENT_DB_PATH):
-        if deliver(conversation_id) in ("started", "live"):
+        if deliver(conversation_id) in ("started", "queued", "live"):
             handed += 1
     return handed
 
@@ -928,6 +936,8 @@ def agents_block(conversation_id: str) -> str:
             state = "waiting for your answer"
         elif live_turns.current(child_id) is not None:
             state = "working"
+        elif turns.is_queued(child_id):
+            state = "queued — it starts when a turn slot frees"
         else:
             state = {
                 WORKING: "working",

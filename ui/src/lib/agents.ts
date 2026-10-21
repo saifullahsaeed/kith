@@ -69,16 +69,19 @@ export function findAgent(nodes: readonly AgentNode[], id: string): AgentNode | 
  * is busy, and to the last thing it did once it is not. Wall time, not turn time — "23m" means it
  * has been going for 23 minutes, which is the question a glance at the map is asking.
  */
-export function agentTook(node: Pick<AgentNode, "createdAt" | "updatedAt" | "state" | "working" | "asking">, now: number): string {
+export function agentTook(
+  node: Pick<AgentNode, "createdAt" | "updatedAt" | "state" | "working" | "asking" | "queued">,
+  now: number,
+): string {
   const started = Date.parse(node.createdAt);
   if (Number.isNaN(started)) return "";
   const ended = busyLook(agentLook(node)) ? now : Date.parse(node.updatedAt);
   return durationWord(((Number.isNaN(ended) ? now : ended) - started) / 1000);
 }
 
-/** Still at it, as far as a clock is concerned: running, or parked on someone else's work. */
+/** Still at it, as far as a clock is concerned: running, queued to run, or parked on someone else's work. */
 function busyLook(look: AgentLook): boolean {
-  return look === "live" || look === "asking" || look === "waiting";
+  return look === "live" || look === "queued" || look === "asking" || look === "waiting";
 }
 
 /** `23m 26s`, `1h 4m` — the map's way of saying a duration. */
@@ -115,6 +118,8 @@ export interface AgentSummary {
   /** Agents in each state, anywhere in the tree. `idle` is not a state an agent is ever in, so it
    *  is not counted. */
   working: number;
+  /** Waiting for a turn slot on the server — busy, but not running yet. */
+  queued: number;
   waiting: number;
   asking: number;
   done: number;
@@ -127,11 +132,22 @@ export interface AgentSummary {
 }
 
 export function summarizeAgents(nodes: readonly AgentNode[]): AgentSummary {
-  const out: AgentSummary = { working: 0, waiting: 0, asking: 0, done: 0, stopped: 0, closed: 0, tokens: 0, askingNames: [] };
+  const out: AgentSummary = {
+    working: 0,
+    queued: 0,
+    waiting: 0,
+    asking: 0,
+    done: 0,
+    stopped: 0,
+    closed: 0,
+    tokens: 0,
+    askingNames: [],
+  };
   for (const { node } of flattenAgents(nodes, true)) {
     out.tokens += node.tokens || 0;
     const look = agentLook(node);
     if (look === "live") out.working += 1;
+    else if (look === "queued") out.queued += 1;
     else if (look === "asking") {
       out.asking += 1;
       out.askingNames.push(node.name);
@@ -175,15 +191,18 @@ export function countAgents(nodes: readonly AgentNode[]): {
  *
  * `live` is a turn running — or about to: an agent whose state says working with no turn yet has
  * mail on its way in, and calling it idle for the second before its turn starts would make a
- * freshly started agent blink. `asking` is parked on a question to its handler; it is still busy,
- * but on its handler rather than on you, which is why it is not amber.
+ * freshly started agent blink. `queued` is the same agent when the server says the wait is for a
+ * turn slot rather than a second — a big tree runs a few agents at a time, and the rest would
+ * otherwise all look busy at once. `asking` is parked on a question to its handler; it is still
+ * busy, but on its handler rather than on you, which is why it is not amber.
  */
-export type AgentLook = "live" | "asking" | "waiting" | "done" | "stopped" | "closed" | "idle";
+export type AgentLook = "live" | "queued" | "asking" | "waiting" | "done" | "stopped" | "closed" | "idle";
 
-export function agentLook(node: Pick<AgentNode, "state" | "working" | "asking">): AgentLook {
+export function agentLook(node: Pick<AgentNode, "state" | "working" | "asking" | "queued">): AgentLook {
   if (node.state === "closed") return "closed";
   if (node.working) return "live";
   if (node.asking) return "asking";
+  if (node.queued) return "queued";
   if (node.state === "working") return "live";
   if (node.state === "waiting") return "waiting";
   if (node.state === "stopped") return "stopped";
@@ -194,6 +213,7 @@ export function agentLook(node: Pick<AgentNode, "state" | "working" | "asking">)
 /** The same, as words — for a tooltip, a dialog row, a screen reader. */
 export const AGENT_WORD: Record<AgentLook, string> = {
   live: "working",
+  queued: "queued for a turn slot",
   asking: "asking its handler",
   waiting: "waiting on its own agents",
   done: "done",
@@ -208,6 +228,8 @@ export const AGENT_WORD: Record<AgentLook, string> = {
  *  faint because it cannot. Never amber: nothing an agent waits on is you. */
 export const AGENT_DOT: Record<AgentLook, string> = {
   live: "bg-roam animate-[kith-breathe_2.4s_ease-in-out_infinite]",
+  // Hollow green: next to run, not running. Still, because nothing is happening in it yet.
+  queued: "border border-roam",
   asking: "bg-teal-500 dark:bg-teal-400 animate-[kith-breathe_2.4s_ease-in-out_infinite]",
   waiting: "bg-teal-500/70 dark:bg-teal-400/70",
   done: "bg-muted-foreground/60",

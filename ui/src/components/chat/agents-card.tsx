@@ -39,13 +39,14 @@ export function AgentsCard({ conversationId }: { conversationId: string }) {
   const nodes = tree?.agents ?? [];
   const sum = summarizeAgents(nodes);
   // A second hand only while the duration is still counting up; once nothing is busy it is fixed.
-  const now = useNow(sum.working + sum.asking + sum.waiting ? 1000 : 60_000);
+  const now = useNow(sum.working + sum.queued + sum.asking + sum.waiting ? 1000 : 60_000);
   if (!root || !nodes.length) return null;
 
   const figures: { look: AgentLook; count: number; word: string; title?: string; always?: boolean }[] = [
     // Working is always said — "0 working" is the answer to the question the card is for. The rest
     // only when there is one: "0 asking" beside every quiet tree is a line of noise.
     { look: "live", count: sum.working, word: "working", always: true },
+    { look: "queued", count: sum.queued, word: "queued", title: "Waiting for a free turn slot" },
     { look: "waiting", count: sum.waiting, word: "waiting on agents", title: "Waiting on agents of their own" },
     { look: "asking", count: sum.asking, word: "asking", title: "Parked on a question to their handler" },
     { look: "done", count: sum.done, word: "done" },
