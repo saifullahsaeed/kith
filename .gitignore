@@ -28,6 +28,8 @@ desktop/resources/*.png
 __pycache__/
 *.py[cod]
 .ruff_cache/
+# Vite's pre-bundled dependencies, written wherever a dev server was started from.
+.vite/
 .pytest_cache/
 .mypy_cache/
 .DS_Store
