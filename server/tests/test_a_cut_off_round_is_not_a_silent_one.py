@@ -321,3 +321,42 @@ class TestTheSilentCaseIsUnchanged:
 
         assert len(calls) == 2
         assert "empty response" in next(e for e in events if e["type"] == "error")["message"]
+
+
+def _vanished() -> dict:
+    """The 2026-10-13 rounds on `google/gemini-4-argon`: the whole ceiling generated, none of it
+    thinking, none of it delivered — a `write_file` too big to finish, dropped whole."""
+    return {
+        "content": "",
+        "tool_calls": [],
+        "stats": {"responseTokens": 9_102, "reasoningTokens": 0, "finishReason": "length"},
+    }
+
+
+class TestACallThatNeverArrivedIsNotCalledReasoning:
+    def test_it_is_told_what_happened_and_goes_again_once(self, db: Path, monkeypatch):
+        fake, calls = _rounds(_vanished(), {"content": "in parts", "tool_calls": [], "stats": {}})
+        events = _run(fake, monkeypatch, db)
+
+        assert len(calls) == 2
+        assert not [e for e in events if e["type"] == "error"]
+        told = next(e for e in events if e["type"] == "directive")["text"]
+        assert "never arrived" in told
+        assert "in parts" in told
+
+    def test_twice_ends_the_turn_without_blaming_reasoning(self, db: Path, monkeypatch):
+        fake, calls = _rounds(_vanished())
+        events = _run(fake, monkeypatch, db)
+
+        assert len(calls) == 2, "one retry with the explanation, not a loop"
+        message = next(e for e in events if e["type"] == "error")["message"]
+        assert "never arrived" in message
+        assert "reasoning" not in message
+        assert "Longest single reply" in message
+
+    def test_a_round_that_really_was_all_reasoning_is_still_called_that(self, db: Path, monkeypatch):
+        fake, calls = _rounds(_truncated())
+        events = _run(fake, monkeypatch, db)
+
+        assert len(calls) == 1
+        assert "spent all of it reasoning" in next(e for e in events if e["type"] == "error")["message"]

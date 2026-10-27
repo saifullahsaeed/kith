@@ -173,7 +173,31 @@ def _gave_up(event: dict, attempts: int, since: float) -> str:
     return f"{message}\n\n(tried {attempts} times{waited} before giving up)"
 
 
-def _cut_off(config: Config) -> str:
+def _spent_on_output(stats: dict | None) -> bool:
+    """Did a round that ran out of room spend it on something other than thinking?
+
+    The provider bills what it generated, delivered or not, and reports the thinking share of it
+    separately. A round whose output was mostly not thinking and yet came back with no content
+    and no call was writing a tool call — and Gemini, which sends a call whole rather than
+    streaming its arguments, drops one that hits the ceiling mid-way. Nothing reaches us, so
+    `_unfinished` never sees a half-written call to answer.
+
+    Measured 2026-10-13, `google/gemini-4-argon`, a 12-screen UI suite written one screen per
+    `write_file`: two rounds of 9,102 and 9,103 output tokens, 106s and 112s, $0.15 between them,
+    OpenRouter's own record of both `native_tokens_reasoning: 0` and `tokens_completion: 0`. The
+    old message said they "spent all of it reasoning".
+    """
+    stats = stats or {}
+    produced = int(stats.get("responseTokens") or 0)
+    return produced > 0 and int(stats.get("reasoningTokens") or 0) * 2 < produced
+
+
+def _ceiling_words(config: Config) -> str:
+    ceiling = openai_compat.output_ceiling(config)
+    return f"its {ceiling:,}-token output ceiling" if ceiling else "the provider's own output limit"
+
+
+def _cut_off(config: Config, stats: dict | None = None) -> str:
     """A round that ran out of output tokens before it said anything, named as that.
 
     Two things this has to get right, because the message it replaces got both wrong. It must
@@ -181,20 +205,41 @@ def _cut_off(config: Config) -> str:
     when every model would have done the same with 410 tokens to answer in. And it must
     name the setting that caused it, in the words the settings screen uses, because that is the
     only thing the person can act on.
+
+    And it must say what the tokens were spent on. "Spent all of it reasoning" was written for
+    the first failure and then said of every one after it, including two where the provider's
+    own record shows no reasoning at all — see `_spent_on_output`.
     """
-    ceiling = openai_compat.output_ceiling(config)
     thinking = openai_compat.thinking_budget(config)
-    where = f"its {ceiling:,}-token output ceiling" if ceiling else "the provider's own output limit"
     room = (
         f" — {thinking:,} of it reserved for thinking, {config.num_predict:,} for the reply"
         if thinking
         else ""
     )
-    return (
-        f"{config.model} was cut off before it said anything: the round hit {where}{room}, "
-        "and spent all of it reasoning. Nothing earlier in this turn was lost. Raise 'Longest "
-        "single reply', or think less hard, and ask again."
+    spent = (
+        "and spent it writing something that never arrived — almost always one tool call too "
+        "big to finish in a single round, which the provider throws away whole. Asked to write "
+        "it in parts and it ran out again."
+        if _spent_on_output(stats)
+        else "and spent all of it reasoning."
     )
+    return (
+        f"{config.model} was cut off before it said anything: the round hit "
+        f"{_ceiling_words(config)}{room}, {spent} Nothing earlier in this turn was lost. Raise "
+        "'Longest single reply', or think less hard, and ask again."
+    )
+
+
+#: Spent once when a round used its whole ceiling on output that never arrived, and the turn is
+#: going again. Unlike a repeat of the same request, this one is different: it tells him what
+#: happened to the call he cannot see was lost, which is the one fact that changes what he does.
+_VANISHED_CALL_DIRECTIVE = (
+    "(Your last response used all of {where} writing a tool call, and the call never arrived — "
+    "it was too big to finish in one round, so it was lost whole: nothing was done and nothing "
+    "was written. Sending it again will be cut off in the same place. Make it smaller: write a "
+    "big file in parts (write_file the first part, then add the rest with edit_files), or split "
+    "it across several files. Nothing earlier in this turn was lost.)"
+)
 
 
 #: Tools that change what is on disk. A call repeated after one of these ran is asking about
@@ -455,8 +500,7 @@ def _cut_call(config: Config, ran_out: bool) -> str:
             "Not run — this call's arguments were not valid JSON, so nothing was done. Send it "
             "again with well-formed arguments."
         )
-    ceiling = openai_compat.output_ceiling(config)
-    where = f"its {ceiling:,}-token output ceiling" if ceiling else "the provider's output limit"
+    where = _ceiling_words(config)
     return (
         f"Not run — this call was cut off. The response hit {where} before the call's arguments "
         "were complete, so nothing was done and nothing was written. The same call sent again "
@@ -962,6 +1006,9 @@ def _run_turn(
     #: Rounds that came back with nothing in them, in a row. See
     #: `_EMPTY_ROUNDS_BEFORE_GIVING_UP`.
     empty_rounds = 0
+    #: Rounds in a row that spent their whole ceiling on a call that never arrived. See
+    #: `_spent_on_output`; one is answered with what happened, a second ends the turn.
+    vanished_calls = 0
     #: Whether the next request must call a tool, because the last one tried to and the provider
     #: could not parse what it wrote. One round only. See `_MALFORMED_CALL`.
     constrain_next = False
@@ -1140,7 +1187,17 @@ def _run_turn(
             # ceiling thinking had a 7,782-of-8,192-token claim on. See `llm.openai_compat`
             # `REASONING_SHARE` for the arithmetic that produced it.
             if (stats or {}).get("finishReason") == "length":
-                yield {"type": "error", "message": _cut_off(round_config)}
+                # Not when the tokens went on a call, though: that round was not silent, it was
+                # mid-way through something too big, and the request that follows is a different
+                # one — it now says so. Once; the same oversized call twice is the model not
+                # having been able to split it, and the person is the one who can raise the cap.
+                if _spent_on_output(stats) and vanished_calls == 0:
+                    vanished_calls += 1
+                    yield _directive(
+                        convo, _VANISHED_CALL_DIRECTIVE.format(where=_ceiling_words(round_config))
+                    )
+                    continue
+                yield {"type": "error", "message": _cut_off(round_config, stats)}
                 return
 
             # Nor when it was a call the provider could not parse: the model was not silent, it
@@ -1159,6 +1216,7 @@ def _run_turn(
         # Reset here and not at the top of the round: the question this counter asks is "is this
         # model answering at all?", and a round has only answered once its response is in hand.
         empty_rounds = 0
+        vanished_calls = 0
 
         if not tool_calls:
             # He is finished talking, so the turn is over.
