@@ -9,7 +9,8 @@
     "v0.5.1",
     "v0.5.2",
     "v0.6.0",
-    "v0.7.0"
+    "v0.7.0",
+    "v0.7.1"
   ],
   "paths": {
     "persona/00-who.md": [
@@ -43,6 +44,7 @@
       "fcc24ef26b05a89584df60ce696b0b228e5cd5bb86780bc3e3cd6243641e84de"
     ],
     "persona/30-how-you-read.md": [
+      "26dae4a06b68bb368247ea807893a23401f8d1a3f9f682876e251f483362f17e",
       "4987917128070dc0a69f5bee857050f5d3265abd42dd4c0d2fd0f08d0643d141",
       "636cb7ba369d12f6b5ff6f1ef1ffa401f143723dbbd1f91ed4871e8d0526b261",
       "bcf4d9b523cdc87dea8cc61386f2b8f91bad8cbfd530ad80825c81f24e0bf8ce",
@@ -68,6 +70,7 @@
       "b80d243a045038e55969dac9fd71962a1db3f4d9c5c8005123404f0388fe5a93"
     ],
     "skills/designing-a-screen/SKILL.md": [
+      "52908dbe8e08f3e4a4e8b5964444c5fa4048bf4323ff41e542602ce120d0dbeb",
       "f3d0a72ab445e202eaaf06ac0a9e40fdb0741a87af8a3d22c04e7daa50562ebc"
     ],
     "skills/designing-a-screen/icons/LICENSE": [
@@ -77,6 +80,7 @@
       "4ba1f3cf25bc5e37a09a21500ac98168d43a2b6ca58fd7b4e0baa2875c64a6ad"
     ],
     "skills/designing-a-screen/scripts/check_design.py": [
+      "4d6fa076fedabf6107b6fef653ec71e802db6fc128792108393fda084dfd3070",
       "accdd6f03a7a54eb8d8f3d1672f3a5d6f0445a4116fedf338c5aa032907c9cdf"
     ],
     "skills/drawing-a-canvas/SKILL.md": [
@@ -87,12 +91,14 @@
       "f4085d422b516348544af809eea1ec39f4341298ba567cd15a219ebc94be3286"
     ],
     "skills/driving-a-browser/SKILL.md": [
+      "3c7f16eae5b4e16e6e8cf4a0aa29f835807850c167952cc02447eceef279c80a",
       "d48b364ea7369312aa1833e2a3886440d966af24a1eb2719b7f734c38a4cf627"
     ],
     "skills/running-a-project/SKILL.md": [
       "01e502bc6c08f1d30d006daa7e18696e1799a49b51e5c05b062cdddf0bede347",
       "39428ead7b5c9a14dd6ac7c60be67a4dc53ed94c7ed874c1be50738d579f1b9d",
-      "c7374fd56dd2d6e2ebd0a87ed83c524d0176d337a3f2987ee484f409a4506ed9"
+      "c7374fd56dd2d6e2ebd0a87ed83c524d0176d337a3f2987ee484f409a4506ed9",
+      "f201481cb97fdcfc781412354ff9aa6c16e4793282f33c95e62b6e137fb36181"
     ],
     "skills/sending-workers/SKILL.md": [
       "85095ac0fd9e9a046c490111eca91ffe978180f8559d4a52162b7e41b7669da5"
