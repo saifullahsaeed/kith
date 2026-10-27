@@ -439,6 +439,9 @@ class TestWaiting:
         later.start()
         began = time.monotonic()
         answer = agents.wait_for(chat, minutes=1)
+        # The wait ends when the mail is posted, before the timer's `post` has finished
+        # delivering it; left running, that ran on into the next test's database.
+        later.join(timeout=5)
         assert answer == {"ok": True, "arrived": "report from api — it is below."}
         assert time.monotonic() - began < 5
 

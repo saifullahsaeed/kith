@@ -23,6 +23,16 @@ def _asked(text: str = "Which way?") -> list[dict]:
     return [{"question": text, "options": ["Left", {"label": "Right", "description": "the other one"}]}]
 
 
+def _offered(conversation_id: str) -> dict:
+    """The question once the asking thread has put it up. A fixed sleep was a race: on a loaded
+    runner the thread had not reached `ask` 0.2s after it started (seen 2026-10-27 in CI)."""
+    deadline = time.monotonic() + 5
+    while (found := questions.open_question(conversation_id)) is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert found is not None, "nothing was ever on offer to answer"
+    return found
+
+
 class TestItWaits:
     def test_the_call_does_not_return_until_it_is_answered(self):
         got: list[dict] = []
@@ -53,9 +63,8 @@ class TestItWaits:
             target=lambda: got.append(questions.ask("c2", _asked(), deadline=5)), daemon=True
         )
         thread.start()
-        time.sleep(0.2)
 
-        questions.answer(questions.open_question("c2")["id"], [{"chosen": ["Left"], "text": "but cheaper"}])
+        questions.answer(_offered("c2")["id"], [{"chosen": ["Left"], "text": "but cheaper"}])
         thread.join(timeout=5)
 
         assert got[0]["answers"][0] == {"chosen": ["Left"], "text": "but cheaper", "skipped": False}
@@ -68,9 +77,8 @@ class TestItWaits:
             target=lambda: got.append(questions.ask("c3", _asked(), deadline=5)), daemon=True
         )
         thread.start()
-        time.sleep(0.2)
 
-        questions.answer(questions.open_question("c3")["id"], [{"skipped": True}])
+        questions.answer(_offered("c3")["id"], [{"skipped": True}])
         thread.join(timeout=5)
 
         assert got[0]["answered"] is True
