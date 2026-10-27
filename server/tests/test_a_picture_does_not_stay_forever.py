@@ -119,8 +119,8 @@ class TestAPictureIsSetDownOnceItHasBeenSeen:
         assert not _carries_image(convo[0])
 
     def test_running_it_twice_changes_nothing_the_second_time(self):
-        """It rewrites history, and every rewrite costs the cache from that point on. Doing
-        it once per picture is affordable; doing it every round would not be."""
+        """It rewrites history, and every rewrite costs the cache from that point on. It runs on
+        every round, which is affordable only because it rewrites once per picture."""
         tuning.apply({"keep_images": 1})
         convo = [looked_at("/a.jpg"), looked_at("/b.jpg")]
         _compact_images(convo)
@@ -272,3 +272,63 @@ class TestAnOldWriteLetsGoOfTheFile:
         from kith.domain.tuning import for_key
 
         assert for_key("keep_full_tool_results").coerce(0) == 1
+
+
+class TestEveryRequestCarriesOnlyTheNewest:
+    """The setting was only obeyed when the window was short of room.
+
+    `_compact_images` ran inside `_make_room`'s shaving branch, which a million-token window
+    never reaches, and since every picture is replayed as it was sent (`conversations.
+    full_messages`) nothing else took one out. Measured 2026-10-21 on the Though School
+    conversation: 63 screenshots, 18.3MB of base64, sent again on every round of every turn
+    — 90% of a 20MB request the meter called 58k tokens, because a picture is costed flat.
+    OpenRouter's edge pauses for seconds at a time ingesting a body that size, urllib3 sends the
+    body under the 10s *connect* timeout, and four turns in a row died with "The write operation
+    timed out" after 9-11 attempts each.
+    """
+
+    def roomy(self, convo: list[dict]):
+        from kith.domain.chat import Config
+        from kith.llm import ledger
+        from kith.llm.budget import ContextBudget
+        from kith.services import agent_loop
+
+        events = agent_loop._make_room(
+            convo,
+            [],
+            ContextBudget(window=1_000_000),
+            take_reading=lambda: ledger.take(convo, [], window=1_000_000),
+            config=Config(model="m", num_ctx=0, num_predict=0, system="", think=False, context_window=1_000_000),
+            host="",
+        )
+        while True:
+            try:
+                next(events)
+            except StopIteration:
+                return
+
+    def history(self, pictures: int) -> list[dict]:
+        convo: list[dict] = [{"role": "system", "content": "persona"}]
+        for n in range(pictures):
+            convo.append({"role": "user", "content": f"look at page {n}"})
+            convo.append(looked_at(f"/p{n}.jpg"))
+            convo.append({"role": "assistant", "content": f"page {n} looks fine"})
+        return convo
+
+    def test_a_conversation_with_room_to_spare_still_sends_only_the_newest(self):
+        tuning.apply({"keep_images": 2, "fold_at_tokens": 1_000_000})
+        convo = self.history(6)
+        self.roomy(convo)
+        assert sum(_carries_image(m) for m in convo) == 2
+        assert _carries_image(convo[-2]) and _carries_image(convo[-5])
+
+    def test_the_next_turn_sends_the_same_bytes_this_one_ended_on(self):
+        """Why setting a picture down on every round does not cost the cache across turns: the
+        replay hands back every picture whole, and the same rule over the same pictures lands on
+        the same messages the turn before ended with."""
+        tuning.apply({"keep_images": 2, "fold_at_tokens": 1_000_000})
+        ended = self.history(6)
+        self.roomy(ended)
+        replayed = [*self.history(6), {"role": "user", "content": "next"}]
+        self.roomy(replayed)
+        assert [json.dumps(m) for m in replayed[: len(ended)]] == [json.dumps(m) for m in ended]

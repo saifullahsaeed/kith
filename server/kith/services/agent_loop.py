@@ -669,9 +669,10 @@ def _make_room(
     1. **Fold** the middle into a summary. Costs one model call, happens at most `_MAX_FOLDS`
        times, and produces a *new stable prefix* — the round after a fold is byte-identical to
        the fold, so caching resumes immediately.
-    2. **Shave** — stub old tool results, drop seen images, strip bulky call arguments. Lossy,
-       and it rewrites the middle of the history every time it runs, so the prefix cache dies
-       with it.
+    2. **Shave** — stub old tool results, strip bulky call arguments. Lossy, and it rewrites the
+       middle of the history every time it runs, so the prefix cache dies with it.
+
+    Seen pictures are not one of the moves: they are set down on every round, pressure or not.
     3. **Drop** whole exchanges. Guaranteed to free room and guaranteed to break the cache,
        which is exactly why it is last.
 
@@ -691,6 +692,20 @@ def _make_room(
     40-round turn would remove shell and every file tool for the remaining 37 and leave him
     structurally unable to do what he was asked. Trim the history; leave the capability alone.
     """
+    # Only the newest `keep_images` pictures travel as pixels, on every round. This sat in the
+    # shaving branch below, which a million-token window never reaches, and every picture is
+    # replayed as it was sent — so nothing ever took one out. On 2026-10-21 one conversation
+    # carried 63 screenshots, 18.3MB of base64 and 90% of every request's bytes, which the meter
+    # showed as 58k tokens because a picture is costed flat. OpenRouter's edge pauses for seconds
+    # ingesting a body that size, urllib3 sends the body under the 10s *connect* timeout, and four
+    # turns in a row died on "The write operation timed out" after 9-11 attempts each.
+    #
+    # Unlike shaving this does not cost the cache. It is idempotent, so it only rewrites a message
+    # when a new picture pushes the oldest kept one out — a picture a round or two back, not the
+    # head of the history. And across turns it lands on the same bytes: the replay hands every
+    # picture back whole, and the same rule over the same pictures sets down the same ones the
+    # turn before did.
+    _compact_images(convo)
     book = take_reading()
 
     # The whole request, in tokens at this turn's calibrated ratio — the ledger's own total, so
@@ -732,7 +747,6 @@ def _make_room(
             # message early in the history and re-billing everything after it uncached (measured
             # Oct 4 on gpt-6.1-sol: $0.011 a round cached, $0.22 a round at each break).
             _compact_tool_history(convo, offload, window=config.context_window)
-            _compact_images(convo)
             _compact_call_arguments(convo)
         book = take_reading()
 
