@@ -342,6 +342,11 @@ class TestALongPollWaitsLongerEachTimeInsteadOfEveryTwentySeconds:
         monkeypatch.setattr(testing, "_next_wait", lambda elapsed: called.append(elapsed) or 999)
 
         result = testing.run(".", wait=0.01)
+        if result.get("status") == "running":
+            # A wait this short is one 0.3s poll, and a loaded machine has not finished starting
+            # pytest by then: seen on the macos-15 release runner on 2026-10-27. Re-attaching,
+            # also with an explicit wait, asks the same question of the schedule.
+            result = testing.run(".", wait=30)
 
         assert called == [], f"the schedule ran even though an explicit wait was given: {called!r}"
         assert result.get("ok") is True
