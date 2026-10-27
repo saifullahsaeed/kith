@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import shutil
 import sys
+import threading
+import time
+import warnings
 from pathlib import Path
 
 import pytest
@@ -318,6 +321,11 @@ def no_stray_background_threads(monkeypatch):
     # worker, against *its* database: seen on 2026-10-21 as an extra agent turn in
     # `test_an_agent_is_a_conversation`'s whole-loop test, a run in which nothing failed by itself.
     monkeypatch.setattr(app, "_resume_agents", lambda: None)
+    # And the MCP connect, which `create_app` starts on a thread that reads the plugins folder
+    # whenever it gets round to it — often after the test is over and `DATA_DIR` is the real
+    # one again, so it made `server/data/plugins` on a fresh checkout. No test connects a server
+    # through `create_app`; the ones about MCP call the manager directly.
+    monkeypatch.setattr(app, "connect_mcp_async", lambda config_db: None)
     yield
 
 
@@ -333,6 +341,42 @@ def no_leftover_turn_queue():
     turns.reset()
     yield
     turns.reset()
+
+
+@pytest.fixture(autouse=True)
+def no_turn_outlives_its_test(never_the_real_database, never_the_real_data_folder):
+    """A turn a test started has finished before the test's redirects are taken down.
+
+    A turn runs on its own thread, and a test that waits for the state it asserts on is not
+    waiting for the thread: the turn still has to record that it ended, and an agent's ending
+    mails its handler, which starts another. Whatever was still running when the test returned
+    carried on after `monkeypatch` had put `DATA_DIR` and `AGENT_DB_PATH` back — and wrote a
+    transcript, a database and the seeded skills into the real `server/data`. On a fresh
+    checkout that made `test_skills_are_still_reachable_through_the_redirect` fail whenever
+    another worker's leftover turn seeded the real skills folder after this worker had made its
+    copy: seen on 2026-10-27 in the 0.8.0 release build, with `./check` green the same commit.
+
+    Requesting the redirect fixtures is what makes this tear down while they are still in place.
+    Only threads this test started are waited on, and the queue is emptied first so a turn that
+    ends cannot hand its slot to the next one.
+    """
+    before = set(threading.enumerate())
+    yield
+    from kith.kernel import turns
+
+    turns.reset()
+    deadline = time.monotonic() + 10
+    while True:
+        left = [
+            one
+            for one in threading.enumerate()
+            if one.name.startswith("kith-turn-") and one not in before and one.is_alive()
+        ]
+        if not left or time.monotonic() >= deadline:
+            break
+        left[0].join(timeout=max(0.0, deadline - time.monotonic()))
+    if left:
+        warnings.warn(f"{len(left)} turn thread(s) still running after the test: {left}", stacklevel=1)
 
 
 @pytest.fixture(autouse=True)

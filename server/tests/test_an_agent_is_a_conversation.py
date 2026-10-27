@@ -524,7 +524,9 @@ class TestRestart:
             "tool_call",
             {"id": "c1", "name": "ask", "arguments": {"questions": [{"question": "q?", "options": ["a"]}]}},
         )
-        assert questions.recover_interrupted() == 1
+        # Not `== 1`: recovery sweeps every transcript in the session's shared folder, so a parked
+        # conversation from `test_a_question_survives_a_restart` on the same worker counts too.
+        assert questions.recover_interrupted() >= 1
         assert questions.open_question(agent["id"]) is None
         closed = [e for e in conversations.read(agent["id"]) if e.get("type") == "tool_result"]
         assert "your handler" in closed[-1]["result"]["note"]
