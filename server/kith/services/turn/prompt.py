@@ -231,7 +231,9 @@ def framing(config, conversation_id: str = "") -> Callable[[list[dict]], list[di
     """
     persona = (config.system or "").strip()
     head = (
-        [{"role": "system", "content": f"{persona}\n\n{directive_for(conversation_id)}".strip()}] if persona else []
+        [{"role": "system", "content": f"{persona}\n\n{directive_for(conversation_id)}".strip()}]
+        if persona
+        else []
     )
     return lambda part: [*head, *_replayed(part)]
 

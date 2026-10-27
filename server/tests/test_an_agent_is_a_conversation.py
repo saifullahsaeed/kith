@@ -178,7 +178,9 @@ class TestTheWorktree:
     def test_several_at_once_all_open(self, repo_dir: Path):
         made: list = []
         threads = [
-            threading.Thread(target=lambda n=n: made.append(worktrees.open_branch(f"many{n}", repo_dir, f"a{n}")))
+            threading.Thread(
+                target=lambda n=n: made.append(worktrees.open_branch(f"many{n}", repo_dir, f"a{n}"))
+            )
             for n in range(4)
         ]
         for one in threads:
@@ -299,9 +301,13 @@ class TestWhereTheWorkIs:
         assert row["agent_source"].splitlines()[-1] == str(repo_dir.resolve())
         assert (Path(row["agent_worktree"]) / "app.py").exists()
 
-    def test_a_shared_agent_works_in_the_folder_without_being_granted_it(self, db, repo_dir, no_turns, monkeypatch):
+    def test_a_shared_agent_works_in_the_folder_without_being_granted_it(
+        self, db, repo_dir, no_turns, monkeypatch
+    ):
         monkeypatch.setattr(agents, "base_dir", lambda: paths.root())
-        answer = agents.start(_chat(db), [{"name": "r", "task": "t", "workspace": "shared"}], folder=str(repo_dir))
+        answer = agents.start(
+            _chat(db), [{"name": "r", "task": "t", "workspace": "shared"}], folder=str(repo_dir)
+        )
         with agents.pinned(answer["agents"][0]["id"]):
             assert session_context.isolated_base() == str(repo_dir)
             assert session_context.isolated_copy() == ""
@@ -311,7 +317,9 @@ class TestWhereTheWorkIs:
 
         monkeypatch.setattr(agents, "base_dir", lambda: repo_dir)
         seen = {}
-        monkeypatch.setattr(agents, "wait_for", lambda here, minutes=20: seen.setdefault("waited", here) and {"ok": True})
+        monkeypatch.setattr(
+            agents, "wait_for", lambda here, minutes=20: seen.setdefault("waited", here) and {"ok": True}
+        )
         chat = _chat(db)
         with session_context.working_in(chat):
             answer = tool.start_agents(Path("x"), {"agents": [{"name": "a", "task": "t"}]})
@@ -485,7 +493,7 @@ class TestClosing:
         assert agents.children(chat) == []
 
     def test_a_working_agent_is_refused_unless_forced(self, db, started, no_turns):
-        chat, agent = started
+        chat, _ = started
         assert agents.close(chat, ["api"])["refused"][0]["why"].startswith("still working")
         assert agents.close(chat, ["api"], force=True)["closed"] == ["api"]
 
@@ -507,12 +515,15 @@ class TestRestart:
         resumed = _transcript(agent["id"])[-1]
         assert "Kith restarted" in resumed["content"]
 
-
     def test_an_interrupted_ask_in_an_agent_is_closed_without_a_card(self, started):
         from kith.services import questions
 
         _, agent = started
-        conversations.record_event(agent["id"], "tool_call", {"id": "c1", "name": "ask", "arguments": {"questions": [{"question": "q?", "options": ["a"]}]}})
+        conversations.record_event(
+            agent["id"],
+            "tool_call",
+            {"id": "c1", "name": "ask", "arguments": {"questions": [{"question": "q?", "options": ["a"]}]}},
+        )
         assert questions.recover_interrupted() == 1
         assert questions.open_question(agent["id"]) is None
         closed = [e for e in conversations.read(agent["id"]) if e.get("type") == "tool_result"]
@@ -542,7 +553,9 @@ class TestWhatItIsTold:
 
     def test_the_map_carries_each_agent_s_figures_and_task(self, db, started, client):
         chat, agent = started
-        repo.conversations.add_usage(db, agent["id"], tokens=446_512, cost=0.73, context=120_000, model="m/one")
+        repo.conversations.add_usage(
+            db, agent["id"], tokens=446_512, cost=0.73, context=120_000, model="m/one"
+        )
         repo.conversations.add_usage(db, agent["id"], tokens=1_000, seconds=12.5)
         repo.conversations.add_usage(db, chat, context=522_600, model="m/conductor")
         body = client.get(f"/api/conversations/{chat}/agents").get_json()
@@ -578,7 +591,9 @@ class TestTheTools:
 
         _, agent = started
         seen = {}
-        monkeypatch.setattr(agents, "ask_up", lambda conversation_id, questions: seen.setdefault("up", conversation_id))
+        monkeypatch.setattr(
+            agents, "ask_up", lambda conversation_id, questions: seen.setdefault("up", conversation_id)
+        )
         with session_context.working_in(agent["id"]):
             asking.ask(Path("x"), {"questions": [{"question": "q", "options": ["a"]}]})
         assert seen["up"] == agent["id"]
@@ -594,7 +609,9 @@ class TestTheTools:
 
     def test_an_agent_can_not_be_typed_at(self, started, client):
         _, agent = started
-        refused = client.post("/api/chat", json={"messages": [{"role": "user", "content": "hi"}], "conversationId": agent["id"]})
+        refused = client.post(
+            "/api/chat", json={"messages": [{"role": "user", "content": "hi"}], "conversationId": agent["id"]}
+        )
         assert refused.status_code == 409
 
 
@@ -609,7 +626,9 @@ class TestTheWholeLoop:
 
         turns: list[tuple[str, str, str]] = []
 
-        def fake_turn(recorder, messages, config, conversation_id, opening="", *, stop_switch=None, tool_host=None):
+        def fake_turn(
+            recorder, messages, config, conversation_id, opening="", *, stop_switch=None, tool_host=None
+        ):
             turns.append((conversation_id, opening, session_context.isolated_copy()))
             reply = "Done: added api.py." if agents.is_agent(conversation_id) else "Merged it."
             if agents.is_agent(conversation_id):
@@ -644,4 +663,6 @@ class TestTheWholeLoop:
         assert "Report from your agent “api”" in turns[1][1]
         assert "Done: added api.py." in turns[1][1]
         assert repo.conversations.get(db, agent["id"])["agent_state"] == agents.DONE
-        assert _git(Path(row["agent_worktree"]), "log", "-1", "--format=%s").endswith("left uncommitted when it reported")
+        assert _git(Path(row["agent_worktree"]), "log", "-1", "--format=%s").endswith(
+            "left uncommitted when it reported"
+        )

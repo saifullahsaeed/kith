@@ -328,7 +328,11 @@ def recover_interrupted() -> int:
             conversations.record_event(
                 conversation_id,
                 "tool_result",
-                {"id": call_id, "name": "ask", "result": {"ok": True, "answered": False, "note": _AGENT_INTERRUPTED}},
+                {
+                    "id": call_id,
+                    "name": "ask",
+                    "result": {"ok": True, "answered": False, "note": _AGENT_INTERRUPTED},
+                },
             )
             found += 1
             continue

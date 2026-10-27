@@ -289,7 +289,6 @@ def run(path: str = ".", filter_: str = "", wait: float | None = None) -> dict[s
     command = _narrowed(runner, filter_, root)
     full_command = f"cd {shlex.quote(str(root))} && {command}"
 
-
     # Checked before starting, rather than started-and-caught, so a *different* reason
     # `start` might refuse (the whole registry is full, say) surfaces as itself instead of
     # being misread as this same collision — both errors happen to say "already running".

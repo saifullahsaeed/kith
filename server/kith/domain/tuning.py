@@ -247,7 +247,7 @@ TUNABLES: tuple[Tunable, ...] = (
         key="scout_model",
         env="KITH_SCOUT_MODEL",
         label="Fast model for agents",
-        help="The model an agent runs on when it is started with model=\"fast\" — for reading, "
+        help='The model an agent runs on when it is started with model="fast" — for reading, '
         "searching and reporting, where a smaller model is usually the right trade. Blank means "
         "the same model as everything else. (Kept under its old key, from when the only agents "
         "that used it were scouts.)",
@@ -259,7 +259,7 @@ TUNABLES: tuple[Tunable, ...] = (
         key="strong_model",
         env="KITH_STRONG_MODEL",
         label="Strong model for agents",
-        help="The model an agent runs on when it is started with model=\"strong\" — for "
+        help='The model an agent runs on when it is started with model="strong" — for '
         "checking work against what was asked, or for the hardest part of a split. Blank means "
         "the same model as everything else.",
         default="",

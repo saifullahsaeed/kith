@@ -298,7 +298,9 @@ class TestEveryRequestCarriesOnlyTheNewest:
             [],
             ContextBudget(window=1_000_000),
             take_reading=lambda: ledger.take(convo, [], window=1_000_000),
-            config=Config(model="m", num_ctx=0, num_predict=0, system="", think=False, context_window=1_000_000),
+            config=Config(
+                model="m", num_ctx=0, num_predict=0, system="", think=False, context_window=1_000_000
+            ),
             host="",
         )
         while True:

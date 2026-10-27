@@ -186,7 +186,9 @@ def working_on(project_id: int | None) -> Iterator[None]:
 #: **And where in the copy the work is.** A copy is always of a whole repository, and the
 #: project is not always the whole repository — every project made under the workspace is a
 #: folder of the one repository the workspace is.
-_isolated: ContextVar[tuple[tuple[str, ...], str, str]] = ContextVar("kith_isolated_base", default=((), "", ""))
+_isolated: ContextVar[tuple[tuple[str, ...], str, str]] = ContextVar(
+    "kith_isolated_base", default=((), "", "")
+)
 
 
 def isolated_base() -> str:

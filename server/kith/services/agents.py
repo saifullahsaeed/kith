@@ -120,7 +120,9 @@ def root_of(conversation_id: str) -> str:
 
 def find_child(handler_id: str, name: str) -> dict | None:
     wanted = str(name or "").strip().casefold()
-    return next((one for one in children(handler_id) if str(one.get("agent_name") or "").casefold() == wanted), None)
+    return next(
+        (one for one in children(handler_id) if str(one.get("agent_name") or "").casefold() == wanted), None
+    )
 
 
 def asking(conversation_id: str) -> bool:
@@ -221,7 +223,10 @@ def start(handler_id: str, specs: list[dict], folder: str = "") -> dict:
             continue
         if find_child(handler_id, name):
             started.append(
-                {"name": name, "error": "you already have an open agent with that name — message it, or pick another"}
+                {
+                    "name": name,
+                    "error": "you already have an open agent with that name — message it, or pick another",
+                }
             )
             continue
         try:
@@ -263,7 +268,11 @@ def _where(asked: str) -> Path | str:
         bare = False
     if bare:
         typed = session_context.sent_from_directory()
-        hint = f" This message came from a terminal in {typed} — if the work is there, pass that." if typed else ""
+        hint = (
+            f" This message came from a terminal in {typed} — if the work is there, pass that."
+            if typed
+            else ""
+        )
         return (
             "Say which folder the work is in: pass `folder` (the project or repository the agents "
             f"should work from). This conversation is not bound to a project, so it is working from "
@@ -794,7 +803,9 @@ def close(handler_id: str, names: list[str], *, force: bool = False) -> dict:
         if not force:
             working = [label(one) for one in group if busy(one) and one.get("agent_state") != STOPPED]
             if working:
-                refused.append({"agent": name, "why": f"still working: {', '.join(working)} — stop first, or force"})
+                refused.append(
+                    {"agent": name, "why": f"still working: {', '.join(working)} — stop first, or force"}
+                )
                 continue
             unmerged = [str(one.get("agent_branch")) for one in group if not _merged_home(one)]
             if unmerged:
@@ -870,7 +881,9 @@ def recover() -> int:
     """
     for found in repo.conversations.agents_in(AGENT_DB_PATH, (WORKING,)):
         conversation_id = str(found["id"])
-        if live_turns.current(conversation_id) is None and not repo.agent_mail.waiting(AGENT_DB_PATH, conversation_id):
+        if live_turns.current(conversation_id) is None and not repo.agent_mail.waiting(
+            AGENT_DB_PATH, conversation_id
+        ):
             repo.agent_mail.post(AGENT_DB_PATH, conversation_id, "", "resume", RESTART_NOTE)
     handed = 0
     for conversation_id in repo.agent_mail.addressees(AGENT_DB_PATH):
